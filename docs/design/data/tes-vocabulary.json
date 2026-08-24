@@ -1,0 +1,61 @@
+{
+  "_source": "Captured from the Tes uploader DOM and the public taxonomy API on 2026-08-25 (account EBMC, International market). Subject/topic tree is fully crawlable at GET /taxonomy/v4/{country}/{id}, unauthenticated.",
+  "_status": "partial: fixed option sets are complete; the subject/topic tree is sampled and awaits a full per-country crawl",
+  "resourceTypes": {
+    "field": "mainType",
+    "options": {
+      "99001": "Assembly",
+      "99002": "Assessment and revision",
+      "99003": "Game/puzzle/quiz",
+      "99004": "Audio, music & video",
+      "99005": "Lesson (complete)",
+      "99006": "Other",
+      "99007": "Unit of work",
+      "99008": "Visual aid/Display",
+      "99009": "Worksheet/Activity"
+    }
+  },
+  "ageRanges": {
+    "field": "ageRanges (main-age-range)",
+    "options": {
+      "1": {"label": "3-5", "ageLow": 3, "ageHigh": 5},
+      "2": {"label": "5-7", "ageLow": 5, "ageHigh": 7},
+      "3": {"label": "7-11", "ageLow": 7, "ageHigh": 11},
+      "4": {"label": "11-14", "ageLow": 11, "ageHigh": 14},
+      "5": {"label": "14-16", "ageLow": 14, "ageHigh": 16},
+      "6": {"label": "16+", "ageLow": 16, "ageHigh": null},
+      "7": {"label": "Age not applicable", "ageLow": null, "ageHigh": null}
+    },
+    "note": "The draft body also carries a literal `ages` array (e.g. [16,17,18]) derived from the selected range."
+  },
+  "curriculum": {
+    "field": "curriculum",
+    "options": ["none", "No curriculum", "American", "Australian", "Canadian", "English", "International", "Irish", "New Zealand", "Northern Irish", "Scottish", "Welsh", "Zambian"],
+    "note": "The market/audience of a resource is a Curriculum value on one account, not a separate login. 'American' is the likely US-inventory lever, unconfirmed."
+  },
+  "subjectsTopics": {
+    "field": "categories:[{id}]",
+    "api": "GET /taxonomy/v4/{country}/{id} (public JSON: id, country, parentId, path, leaf-depth)",
+    "limit": "~10 subject/topic pairs per resource",
+    "sample": {
+      "1001595": "Aboriginal studies (root)",
+      "1001586": "Aboriginal studies / Autonomy (topic)",
+      "mathematicsTopics": {
+        "1000448": "Algebra",
+        "1000897": "Number",
+        "1000903": "Geometry and measures",
+        "1000977": "Data and statistics",
+        "1000453": "Advanced decision",
+        "1000452": "Advanced mechanics",
+        "1000450": "Advanced pure",
+        "1000451": "Advanced statistics"
+      }
+    }
+  },
+  "fileConstraints": {
+    "supportedTypes": ["PDF", "Word", "Smartboards", "JPEG", "Powerpoint", "Excel", "ePub"],
+    "maxFileSizeMB": 200
+  },
+  "descriptionFormat": "Markdown (descriptionRawType: md); external search shows first 155 chars; title guidance 35-45 chars",
+  "durableKey": "numeric resource id, minted at creation; URL fixed to original title and never changes"
+}
