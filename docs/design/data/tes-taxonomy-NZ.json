@@ -1,0 +1,5178 @@
+{
+ "_source": "GET https://www.tes.com/taxonomy/v4/NZ crawl 2026-08-25, subjects+topics (subtopics omitted)",
+ "country": "NZ",
+ "subjectCount": 43,
+ "topicCount": 451,
+ "subjects": [
+  {
+   "id": 7000454,
+   "description": "Maths for early years",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary"
+   ],
+   "mapTo": [
+    "91000454"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000732,
+     "description": "Time",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000732"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7000733,
+     "description": "Addition and subtraction",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000733"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7000734,
+     "description": "Counting",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000734"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7000735,
+     "description": "Matching",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000735"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7000736,
+     "description": "Numbers",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000736"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7000737,
+     "description": "Comparing, sorting and ordering",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000737"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7000738,
+     "description": "Patterns and symmetry",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000738"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7000739,
+     "description": "Shape, space and measure",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000739"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7001366,
+     "description": "Number stories and rhymes",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001366"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7001367,
+     "description": "Maths games",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001367"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7001368,
+     "description": "Doubling, halving and sharing",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001368"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7001369,
+     "description": "Money",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001369"
+     ],
+     "parentId": 7000454
+    },
+    {
+     "id": 7001370,
+     "description": "Position",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001370"
+     ],
+     "parentId": 7000454
+    }
+   ]
+  },
+  {
+   "id": 7000484,
+   "description": "Philosophy and ethics",
+   "leafDepth": "0",
+   "phases": [
+    "secondary"
+   ],
+   "mapTo": [
+    "91000484"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001487,
+     "description": "Epistemology and metaphysics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001487"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001488,
+     "description": "Moral philosophy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001488"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001489,
+     "description": "Philosophical problems",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001489"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001490,
+     "description": "Philosophy and art",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001490"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001491,
+     "description": "Philosophy and society",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001491"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001492,
+     "description": "Philosophy of mind",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001492"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001493,
+     "description": "Philosophy of religion",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001493"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001494,
+     "description": "Political philosophy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001494"
+     ],
+     "parentId": 7000484
+    },
+    {
+     "id": 7001532,
+     "description": "History of philosophy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001532"
+     ],
+     "parentId": 7000484
+    }
+   ]
+  },
+  {
+   "id": 7000652,
+   "description": "Vocational studies",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000652"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000639,
+     "description": "Beauty and complementary therapies",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000639"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000640,
+     "description": "Building services industry",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000640"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000641,
+     "description": "Built environment services",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000641"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000642,
+     "description": "Business skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000642"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000643,
+     "description": "Children",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000643"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000644,
+     "description": "Creative",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000644"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000645,
+     "description": "Hairdressing",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000645"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000646,
+     "description": "Justice",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000646"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000647,
+     "description": "Oil and gas",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000647"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000648,
+     "description": "Retail and warehousing",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000648"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000649,
+     "description": "Security industry",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000649"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000650,
+     "description": "Transport maintenance",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000650"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7000651,
+     "description": "Utilities",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000651"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7001130,
+     "description": "Hospitality and catering",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001130"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7001131,
+     "description": "Health and social care",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001131"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7001133,
+     "description": "Land-based services",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001133"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7001136,
+     "description": "Travel, tourism and aviation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001136"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7001137,
+     "description": "Manufacturing",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001137"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7001200,
+     "description": "Construction",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001200"
+     ],
+     "parentId": 7000652
+    },
+    {
+     "id": 7001418,
+     "description": "Sport and recreation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001418"
+     ],
+     "parentId": 7000652
+    }
+   ]
+  },
+  {
+   "id": 7000694,
+   "description": "Literacy for early years",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary"
+   ],
+   "mapTo": [
+    "91000694"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000695,
+     "description": "Alphabet",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000695"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000696,
+     "description": "Drama and role play",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000696"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000697,
+     "description": "Speaking and listening",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000697"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000698,
+     "description": "Handwriting",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000698"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000699,
+     "description": "Phonics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000699"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000700,
+     "description": "Reading",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000700"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000701,
+     "description": "Songs, rhymes and poems",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000701"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000702,
+     "description": "Stories and books",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000702"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7000703,
+     "description": "Writing",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000703"
+     ],
+     "parentId": 7000694
+    },
+    {
+     "id": 7001365,
+     "description": "Non-fiction texts",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001365"
+     ],
+     "parentId": 7000694
+    }
+   ]
+  },
+  {
+   "id": 7000704,
+   "description": "Expressive arts and design",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000704"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000705,
+     "description": "Colour and pattern",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000705"
+     ],
+     "parentId": 7000704
+    },
+    {
+     "id": 7000706,
+     "description": "Media and materials",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000706"
+     ],
+     "parentId": 7000704
+    },
+    {
+     "id": 7000707,
+     "description": "Movement and dance",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000707"
+     ],
+     "parentId": 7000704
+    },
+    {
+     "id": 7000708,
+     "description": "Music and instruments",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000708"
+     ],
+     "parentId": 7000704
+    },
+    {
+     "id": 7000711,
+     "description": "Construction and tools",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000711"
+     ],
+     "parentId": 7000704
+    },
+    {
+     "id": 7001362,
+     "description": "Creative and expressive play",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001362"
+     ],
+     "parentId": 7000704
+    },
+    {
+     "id": 7001431,
+     "description": "Storymaking",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001431"
+     ],
+     "parentId": 7000704
+    }
+   ]
+  },
+  {
+   "id": 7000709,
+   "description": "Understanding the world",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000709"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000710,
+     "description": "Animals",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000710"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000712,
+     "description": "People and communities",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000712"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000713,
+     "description": "Festivals and celebrations",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000713"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000714,
+     "description": "Homes and buildings",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000714"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000715,
+     "description": "Technology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000715"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000716,
+     "description": "Minibeasts",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000716"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000717,
+     "description": "Ourselves",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000717"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000718,
+     "description": "People who help us",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000718"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000719,
+     "description": "Plants",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000719"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000720,
+     "description": "Seasons and weather",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000720"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000721,
+     "description": "Toys",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000721"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000722,
+     "description": "The World",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000722"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7000723,
+     "description": "Where we live",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000723"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7001364,
+     "description": "Space and planets",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001364"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7001397,
+     "description": "Special days",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001397"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7001398,
+     "description": "Transport",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001398"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7001399,
+     "description": "Friends",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001399"
+     ],
+     "parentId": 7000709
+    },
+    {
+     "id": 7002000,
+     "description": "Refugee education",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91002000"
+     ],
+     "parentId": 7000709
+    }
+   ]
+  },
+  {
+   "id": 7000724,
+   "description": "Personal, social and health education",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000724"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000725,
+     "description": "About you",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000725"
+     ],
+     "parentId": 7000724
+    },
+    {
+     "id": 7000923,
+     "description": "Healthy lifestyle",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000923"
+     ],
+     "parentId": 7000724
+    },
+    {
+     "id": 7000924,
+     "description": "Sex and relationships",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000924"
+     ],
+     "parentId": 7000724
+    },
+    {
+     "id": 7000925,
+     "description": "Diversity",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000925"
+     ],
+     "parentId": 7000724
+    },
+    {
+     "id": 7001148,
+     "description": "Drugs and alcohol",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001148"
+     ],
+     "parentId": 7000724
+    },
+    {
+     "id": 7001149,
+     "description": "Money management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001149"
+     ],
+     "parentId": 7000724
+    },
+    {
+     "id": 7001150,
+     "description": "World of work",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001150"
+     ],
+     "parentId": 7000724
+    }
+   ]
+  },
+  {
+   "id": 7000726,
+   "description": "Physical development",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000726"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000727,
+     "description": "Gymnastics and dance",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000727"
+     ],
+     "parentId": 7000726
+    },
+    {
+     "id": 7000728,
+     "description": "Food and eating",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000728"
+     ],
+     "parentId": 7000726
+    },
+    {
+     "id": 7000729,
+     "description": "Moving and handling",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000729"
+     ],
+     "parentId": 7000726
+    },
+    {
+     "id": 7000730,
+     "description": "Our bodies",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000730"
+     ],
+     "parentId": 7000726
+    },
+    {
+     "id": 7000731,
+     "description": "Games",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000731"
+     ],
+     "parentId": 7000726
+    },
+    {
+     "id": 7001373,
+     "description": "Clothes and getting dressed",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001373"
+     ],
+     "parentId": 7000726
+    },
+    {
+     "id": 7001374,
+     "description": "Hygiene",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001374"
+     ],
+     "parentId": 7000726
+    }
+   ]
+  },
+  {
+   "id": 7000740,
+   "description": "-1",
+   "leafDepth": "-1",
+   "phases": [],
+   "mapTo": [
+    "91000740"
+   ],
+   "parentId": null,
+   "topics": []
+  },
+  {
+   "id": 7000741,
+   "description": "Art and design",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000741"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000742,
+     "description": "Art movements",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000742"
+     ],
+     "parentId": 7000741
+    },
+    {
+     "id": 7000743,
+     "description": "Art forms and skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000743"
+     ],
+     "parentId": 7000741
+    },
+    {
+     "id": 7000744,
+     "description": "Elements of art",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000744"
+     ],
+     "parentId": 7000741
+    },
+    {
+     "id": 7000990,
+     "description": "Art in different cultures",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000990"
+     ],
+     "parentId": 7000741
+    },
+    {
+     "id": 7000991,
+     "description": "Artists and artefacts",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000991"
+     ],
+     "parentId": 7000741
+    },
+    {
+     "id": 7000992,
+     "description": "Visiting art",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000992"
+     ],
+     "parentId": 7000741
+    },
+    {
+     "id": 7001129,
+     "description": "Art history",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001129"
+     ],
+     "parentId": 7000741
+    },
+    {
+     "id": 7001254,
+     "description": "Analysing art",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001254"
+     ],
+     "parentId": 7000741
+    }
+   ]
+  },
+  {
+   "id": 7000745,
+   "description": "Citizenship",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000745"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000746,
+     "description": "Rights and responsibilites",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000746"
+     ],
+     "parentId": 7000745
+    },
+    {
+     "id": 7000747,
+     "description": "Community, identity and diversity",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000747"
+     ],
+     "parentId": 7000745
+    },
+    {
+     "id": 7000748,
+     "description": "Democracy and government",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000748"
+     ],
+     "parentId": 7000745
+    },
+    {
+     "id": 7000749,
+     "description": "Body and mind",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000749"
+     ],
+     "parentId": 7000745
+    },
+    {
+     "id": 7000750,
+     "description": "Rules, laws and justice",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000750"
+     ],
+     "parentId": 7000745
+    },
+    {
+     "id": 7001011,
+     "description": "Global issues",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001011"
+     ],
+     "parentId": 7000745
+    }
+   ]
+  },
+  {
+   "id": 7000751,
+   "description": "Design, engineering and technology",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000751"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000752,
+     "description": "Food technology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000752"
+     ],
+     "parentId": 7000751
+    },
+    {
+     "id": 7000753,
+     "description": "Electronics, systems and control",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000753"
+     ],
+     "parentId": 7000751
+    },
+    {
+     "id": 7000754,
+     "description": "Textile technology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000754"
+     ],
+     "parentId": 7000751
+    },
+    {
+     "id": 7000755,
+     "description": "Resistant materials",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000755"
+     ],
+     "parentId": 7000751
+    },
+    {
+     "id": 7001032,
+     "description": "Computer-aided technologies",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001032"
+     ],
+     "parentId": 7000751
+    },
+    {
+     "id": 7001033,
+     "description": "General design considerations",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001033"
+     ],
+     "parentId": 7000751
+    },
+    {
+     "id": 7001034,
+     "description": "Graphic and product design",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001034"
+     ],
+     "parentId": 7000751
+    },
+    {
+     "id": 7001125,
+     "description": "Engineering",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001125"
+     ],
+     "parentId": 7000751
+    }
+   ]
+  },
+  {
+   "id": 7000756,
+   "description": "English",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000756"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000198,
+     "description": "Guided reading",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000198"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000199,
+     "description": "Whole School Literacy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000199"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000759,
+     "description": "Handwriting",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000759"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000760,
+     "description": "Fiction",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000760"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000761,
+     "description": "Non-fiction",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000761"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000762,
+     "description": "Phonics and spelling",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000762"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000763,
+     "description": "Poetry",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000763"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000764,
+     "description": "Grammar and punctuation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000764"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000765,
+     "description": "Speaking and listening",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000765"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7000968,
+     "description": "Plays",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000968"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7001038,
+     "description": "Language and linguistics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001038"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7001039,
+     "description": "Research and essay skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001039"
+     ],
+     "parentId": 7000756
+    },
+    {
+     "id": 7001040,
+     "description": "Creative writing",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001040"
+     ],
+     "parentId": 7000756
+    }
+   ]
+  },
+  {
+   "id": 7000757,
+   "description": "Drama",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000757"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000758,
+     "description": "Dramatic style and form",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000758"
+     ],
+     "parentId": 7000757
+    },
+    {
+     "id": 7000967,
+     "description": "Scriptwriting",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000967"
+     ],
+     "parentId": 7000757
+    },
+    {
+     "id": 7001035,
+     "description": "Plays",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001035"
+     ],
+     "parentId": 7000757
+    },
+    {
+     "id": 7001036,
+     "description": "Stagecraft",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001036"
+     ],
+     "parentId": 7000757
+    },
+    {
+     "id": 7001037,
+     "description": "Warm-ups and games",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001037"
+     ],
+     "parentId": 7000757
+    },
+    {
+     "id": 7001201,
+     "description": "Practitioners",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001201"
+     ],
+     "parentId": 7000757
+    }
+   ]
+  },
+  {
+   "id": 7000792,
+   "description": "Geography",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000792"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000800,
+     "description": "People and environment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000800"
+     ],
+     "parentId": 7000792
+    },
+    {
+     "id": 7000808,
+     "description": "Natural hazards",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000808"
+     ],
+     "parentId": 7000792
+    },
+    {
+     "id": 7000810,
+     "description": "Geography skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000810"
+     ],
+     "parentId": 7000792
+    },
+    {
+     "id": 7000813,
+     "description": "Locational knowledge",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000813"
+     ],
+     "parentId": 7000792
+    },
+    {
+     "id": 7000821,
+     "description": "Geomorphic processes and landforms",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000821"
+     ],
+     "parentId": 7000792
+    },
+    {
+     "id": 7001067,
+     "description": "Weather and climate",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001067"
+     ],
+     "parentId": 7000792
+    },
+    {
+     "id": 7001416,
+     "description": "Development and urbanisation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001416"
+     ],
+     "parentId": 7000792
+    }
+   ]
+  },
+  {
+   "id": 7000849,
+   "description": "History",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000849"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000319,
+     "description": "Ancient history",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000319"
+     ],
+     "parentId": 7000849
+    },
+    {
+     "id": 7000321,
+     "description": "Mid-modern history (1750 \u2013 1900)",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000321"
+     ],
+     "parentId": 7000849
+    },
+    {
+     "id": 7000856,
+     "description": "Historical skills and investigation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000856"
+     ],
+     "parentId": 7000849
+    },
+    {
+     "id": 7001225,
+     "description": "Thematic and breadth studies",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001225"
+     ],
+     "parentId": 7000849
+    },
+    {
+     "id": 7001277,
+     "description": "Contemporary history (1901 \u2013 Present Day)",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001277"
+     ],
+     "parentId": 7000849
+    },
+    {
+     "id": 7001278,
+     "description": "Medieval history (500 -1500)",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001278"
+     ],
+     "parentId": 7000849
+    },
+    {
+     "id": 7001424,
+     "description": "Early-modern history (1500 -1750)",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001424"
+     ],
+     "parentId": 7000849
+    }
+   ]
+  },
+  {
+   "id": 7000865,
+   "description": "Computing",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000865"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000053,
+     "description": "Computer science",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000053"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7000059,
+     "description": "Computational thinking",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000059"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7000866,
+     "description": "Algorithms and programming",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000866"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7000870,
+     "description": "Functional IT skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000870"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7000871,
+     "description": "Hardware and platforms",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000871"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7000872,
+     "description": "Software use",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000872"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7000873,
+     "description": "Data and information",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000873"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7000876,
+     "description": "Digital literacy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000876"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7001110,
+     "description": "Communications and networks",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001110"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7001111,
+     "description": "Information technology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001111"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7001112,
+     "description": "Evaluating digital content",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001112"
+     ],
+     "parentId": 7000865
+    },
+    {
+     "id": 7001281,
+     "description": "Binary",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001281"
+     ],
+     "parentId": 7000865
+    }
+   ]
+  },
+  {
+   "id": 7000880,
+   "description": "Cross-curricular topics",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000880"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000061,
+     "description": "Africa",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000061"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000062,
+     "description": "Australia",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000062"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000063,
+     "description": "Castles",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000063"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000064,
+     "description": "Circus",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000064"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000067,
+     "description": "Explorers and adventurers",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000067"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000069,
+     "description": "Going for gold",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000069"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000070,
+     "description": "Holidays",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000070"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000071,
+     "description": "In the news",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000071"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000072,
+     "description": "India",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000072"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000073,
+     "description": "Invaders and settlers",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000073"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000074,
+     "description": "Journeys",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000074"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000075,
+     "description": "Keeping healthy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000075"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000076,
+     "description": "Material world",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000076"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000078,
+     "description": "Rainforest",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000078"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000079,
+     "description": "Sound and vision",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000079"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000881,
+     "description": "Buildings",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000881"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000882,
+     "description": "Celebrations",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000882"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000883,
+     "description": "Countries and cultures",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000883"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000884,
+     "description": "Gardens and parks",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000884"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000885,
+     "description": "Transport",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000885"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000886,
+     "description": "Feelings",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000886"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000887,
+     "description": "Community",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000887"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000888,
+     "description": "Space",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000888"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000889,
+     "description": "Myths, legends and beliefs",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000889"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000890,
+     "description": "Paintings, pictures and photographs",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000890"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000891,
+     "description": "Family and friends",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000891"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000892,
+     "description": "Me",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000892"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000893,
+     "description": "Famous people",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000893"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000894,
+     "description": "Time detectives",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000894"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000895,
+     "description": "Our world",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000895"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7000970,
+     "description": "Chocolate",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000970"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001375,
+     "description": "Animals and pets",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001375"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001378,
+     "description": "Clothes",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001378"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001379,
+     "description": "Colour",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001379"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001380,
+     "description": "Dinosaurs",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001380"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001381,
+     "description": "Farm",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001381"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001382,
+     "description": "Food",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001382"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001383,
+     "description": "Growing up",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001383"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001384,
+     "description": "Day and night",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001384"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001385,
+     "description": "Minibeasts",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001385"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001386,
+     "description": "Pirates",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001386"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001387,
+     "description": "Plants and flowers",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001387"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001388,
+     "description": "Oceans and seas",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001388"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001389,
+     "description": "Seaside",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001389"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001390,
+     "description": "Seasons",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001390"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001391,
+     "description": "Shopping",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001391"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001394,
+     "description": "Superheroes",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001394"
+     ],
+     "parentId": 7000880
+    },
+    {
+     "id": 7001395,
+     "description": "Toys",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001395"
+     ],
+     "parentId": 7000880
+    }
+   ]
+  },
+  {
+   "id": 7000896,
+   "description": "Mathematics",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000896"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000448,
+     "description": "Algebra",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000448"
+     ],
+     "parentId": 7000896
+    },
+    {
+     "id": 7000450,
+     "description": "Advanced pure",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000450"
+     ],
+     "parentId": 7000896
+    },
+    {
+     "id": 7000451,
+     "description": "Advanced statistics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000451"
+     ],
+     "parentId": 7000896
+    },
+    {
+     "id": 7000452,
+     "description": "Advanced mechanics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000452"
+     ],
+     "parentId": 7000896
+    },
+    {
+     "id": 7000453,
+     "description": "Advanced decision",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000453"
+     ],
+     "parentId": 7000896
+    },
+    {
+     "id": 7000897,
+     "description": "Number",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000897"
+     ],
+     "parentId": 7000896
+    },
+    {
+     "id": 7000903,
+     "description": "Geometry and measures",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000903"
+     ],
+     "parentId": 7000896
+    },
+    {
+     "id": 7000977,
+     "description": "Data and statistics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000977"
+     ],
+     "parentId": 7000896
+    }
+   ]
+  },
+  {
+   "id": 7000912,
+   "description": "Music",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000912"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000913,
+     "description": "Composing, performing and listening skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000913"
+     ],
+     "parentId": 7000912
+    },
+    {
+     "id": 7000914,
+     "description": "Musical history, styles and forms",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000914"
+     ],
+     "parentId": 7000912
+    },
+    {
+     "id": 7000915,
+     "description": "Musical theory and elements",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000915"
+     ],
+     "parentId": 7000912
+    },
+    {
+     "id": 7000916,
+     "description": "Instruments and voice",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000916"
+     ],
+     "parentId": 7000912
+    },
+    {
+     "id": 7001119,
+     "description": "Music technology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001119"
+     ],
+     "parentId": 7000912
+    },
+    {
+     "id": 7001233,
+     "description": "Composers and musicians",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001233"
+     ],
+     "parentId": 7000912
+    }
+   ]
+  },
+  {
+   "id": 7000917,
+   "description": "Physical education",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000917"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000918,
+     "description": "Games and sports",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000918"
+     ],
+     "parentId": 7000917
+    },
+    {
+     "id": 7000919,
+     "description": "Healthy, active lifestyle",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000919"
+     ],
+     "parentId": 7000917
+    },
+    {
+     "id": 7000920,
+     "description": "Fitness training",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000920"
+     ],
+     "parentId": 7000917
+    },
+    {
+     "id": 7000921,
+     "description": "Gymnastics and dance",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000921"
+     ],
+     "parentId": 7000917
+    },
+    {
+     "id": 7000922,
+     "description": "Outdoor and adventure activities",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000922"
+     ],
+     "parentId": 7000917
+    },
+    {
+     "id": 7001140,
+     "description": "Anatomy, biomechanics and physiology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001140"
+     ],
+     "parentId": 7000917
+    },
+    {
+     "id": 7001317,
+     "description": "Performance and sport psychology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001317"
+     ],
+     "parentId": 7000917
+    },
+    {
+     "id": 7001318,
+     "description": "History of sport and socio-cultural studies",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001318"
+     ],
+     "parentId": 7000917
+    }
+   ]
+  },
+  {
+   "id": 7000926,
+   "description": "Religious education",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91000926"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000927,
+     "description": "World religions",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000927"
+     ],
+     "parentId": 7000926
+    },
+    {
+     "id": 7001151,
+     "description": "Meaning and purpose",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001151"
+     ],
+     "parentId": 7000926
+    },
+    {
+     "id": 7001152,
+     "description": "Ethics and values",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001152"
+     ],
+     "parentId": 7000926
+    },
+    {
+     "id": 7001153,
+     "description": "Religion and society",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001153"
+     ],
+     "parentId": 7000926
+    }
+   ]
+  },
+  {
+   "id": 7000928,
+   "description": "Primary science",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary"
+   ],
+   "mapTo": [
+    "91000928"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000930,
+     "description": "Plants",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000930"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000931,
+     "description": "Animals and habitats",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000931"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000932,
+     "description": "Materials",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000932"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000933,
+     "description": "Forces and motion",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000933"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000934,
+     "description": "Earth and space",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000934"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000935,
+     "description": "Electricity",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000935"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000936,
+     "description": "Light and sound",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000936"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000937,
+     "description": "Scientific methodology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000937"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000988,
+     "description": "Health",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000988"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7000989,
+     "description": "States of matter",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000989"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7001495,
+     "description": "Organ systems",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001495"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7001583,
+     "description": "Weather and seasons",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001583"
+     ],
+     "parentId": 7000928
+    },
+    {
+     "id": 7001584,
+     "description": "Evolution and inheritance",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001584"
+     ],
+     "parentId": 7000928
+    }
+   ]
+  },
+  {
+   "id": 7000993,
+   "description": "Biology",
+   "leafDepth": "0",
+   "phases": [
+    "secondary"
+   ],
+   "mapTo": [
+    "91000993"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000994,
+     "description": "Cells",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000994"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7000995,
+     "description": "Ecology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000995"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7000996,
+     "description": "Health",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000996"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7000997,
+     "description": "Organ systems",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000997"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7000998,
+     "description": "Scientific methodology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000998"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7000999,
+     "description": "Micro-organisms",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000999"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7001000,
+     "description": "Plants",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001000"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7001001,
+     "description": "Genetics and evolution",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001001"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7001189,
+     "description": "Biological molecules",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001189"
+     ],
+     "parentId": 7000993
+    },
+    {
+     "id": 7001190,
+     "description": "Homeostasis",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001190"
+     ],
+     "parentId": 7000993
+    }
+   ]
+  },
+  {
+   "id": 7001002,
+   "description": "Chemistry",
+   "leafDepth": "0",
+   "phases": [
+    "secondary"
+   ],
+   "mapTo": [
+    "91001002"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001003,
+     "description": "Acids and bases",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001003"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001004,
+     "description": "Atoms and elements",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001004"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001005,
+     "description": "Compounds and mixtures",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001005"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001006,
+     "description": "Environmental chemistry",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001006"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001007,
+     "description": "Scientific methodology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001007"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001008,
+     "description": "Rates and reactivity",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001008"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001009,
+     "description": "Metals",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001009"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001010,
+     "description": "Chemical reactions",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001010"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001197,
+     "description": "Analysis",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001197"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001198,
+     "description": "Carbon chemistry",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001198"
+     ],
+     "parentId": 7001002
+    },
+    {
+     "id": 7001199,
+     "description": "Energy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001199"
+     ],
+     "parentId": 7001002
+    }
+   ]
+  },
+  {
+   "id": 7001122,
+   "description": "Student careers advice",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001122"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000583,
+     "description": "Applications and interviews",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000583"
+     ],
+     "parentId": 7001122
+    },
+    {
+     "id": 7000584,
+     "description": "Apprenticeships",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000584"
+     ],
+     "parentId": 7001122
+    },
+    {
+     "id": 7000585,
+     "description": "Careers planning",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000585"
+     ],
+     "parentId": 7001122
+    },
+    {
+     "id": 7000586,
+     "description": "Personal skills development",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000586"
+     ],
+     "parentId": 7001122
+    },
+    {
+     "id": 7000587,
+     "description": "Self-employment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000587"
+     ],
+     "parentId": 7001122
+    },
+    {
+     "id": 7000588,
+     "description": "Volunteering",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000588"
+     ],
+     "parentId": 7001122
+    },
+    {
+     "id": 7000589,
+     "description": "Work experience",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000589"
+     ],
+     "parentId": 7001122
+    },
+    {
+     "id": 7000590,
+     "description": "Workplace information",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000590"
+     ],
+     "parentId": 7001122
+    }
+   ]
+  },
+  {
+   "id": 7001123,
+   "description": "Classics",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001123"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000049,
+     "description": "Ancient Greek language and literature",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000049"
+     ],
+     "parentId": 7001123
+    },
+    {
+     "id": 7001121,
+     "description": "Archaeology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001121"
+     ],
+     "parentId": 7001123
+    },
+    {
+     "id": 7001134,
+     "description": "Latin language and literature",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001134"
+     ],
+     "parentId": 7001123
+    },
+    {
+     "id": 7001430,
+     "description": "Greek society and civilisation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001430"
+     ],
+     "parentId": 7001123
+    },
+    {
+     "id": 7001432,
+     "description": "Roman society and civilisation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001432"
+     ],
+     "parentId": 7001123
+    }
+   ]
+  },
+  {
+   "id": 7001141,
+   "description": "Physics",
+   "leafDepth": "0",
+   "phases": [
+    "secondary"
+   ],
+   "mapTo": [
+    "91001141"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001142,
+     "description": "Earth and space",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001142"
+     ],
+     "parentId": 7001141
+    },
+    {
+     "id": 7001143,
+     "description": "Energy and electricity",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001143"
+     ],
+     "parentId": 7001141
+    },
+    {
+     "id": 7001144,
+     "description": "Force and motion",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001144"
+     ],
+     "parentId": 7001141
+    },
+    {
+     "id": 7001145,
+     "description": "Scientific methodology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001145"
+     ],
+     "parentId": 7001141
+    },
+    {
+     "id": 7001146,
+     "description": "Waves",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001146"
+     ],
+     "parentId": 7001141
+    },
+    {
+     "id": 7001147,
+     "description": "Matter",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001147"
+     ],
+     "parentId": 7001141
+    }
+   ]
+  },
+  {
+   "id": 7001191,
+   "description": "Business and finance",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001191"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001120,
+     "description": "Accounting and finance",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001120"
+     ],
+     "parentId": 7001191
+    },
+    {
+     "id": 7001192,
+     "description": "Business management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001192"
+     ],
+     "parentId": 7001191
+    },
+    {
+     "id": 7001193,
+     "description": "Business economics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001193"
+     ],
+     "parentId": 7001191
+    },
+    {
+     "id": 7001194,
+     "description": "Strategic management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001194"
+     ],
+     "parentId": 7001191
+    },
+    {
+     "id": 7001195,
+     "description": "International business",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001195"
+     ],
+     "parentId": 7001191
+    },
+    {
+     "id": 7001196,
+     "description": "Marketing",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001196"
+     ],
+     "parentId": 7001191
+    }
+   ]
+  },
+  {
+   "id": 7001202,
+   "description": "Economics",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001202"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001203,
+     "description": "UK economy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001203"
+     ],
+     "parentId": 7001202
+    },
+    {
+     "id": 7001204,
+     "description": "Global economy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001204"
+     ],
+     "parentId": 7001202
+    },
+    {
+     "id": 7001205,
+     "description": "Microeconomics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001205"
+     ],
+     "parentId": 7001202
+    },
+    {
+     "id": 7001543,
+     "description": "Macroeconomics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001543"
+     ],
+     "parentId": 7001202
+    },
+    {
+     "id": 7001544,
+     "description": "US economy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001544"
+     ],
+     "parentId": 7001202
+    },
+    {
+     "id": 7001545,
+     "description": "Australia economy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001545"
+     ],
+     "parentId": 7001202
+    }
+   ]
+  },
+  {
+   "id": 7001228,
+   "description": "Media studies",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001228"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001229,
+     "description": "Media concepts and theory",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001229"
+     ],
+     "parentId": 7001228
+    },
+    {
+     "id": 7001230,
+     "description": "Audio and audio-visual media",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001230"
+     ],
+     "parentId": 7001228
+    },
+    {
+     "id": 7001231,
+     "description": "Print-based media",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001231"
+     ],
+     "parentId": 7001228
+    },
+    {
+     "id": 7001232,
+     "description": "Production skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001232"
+     ],
+     "parentId": 7001228
+    },
+    {
+     "id": 7001312,
+     "description": "Interactive and web-based media",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001312"
+     ],
+     "parentId": 7001228
+    }
+   ]
+  },
+  {
+   "id": 7001234,
+   "description": "Pedagogy and professional development",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001234"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000459,
+     "description": "Classroom practice",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000459"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7000460,
+     "description": "Education research",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000460"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7000461,
+     "description": "Job hunting and interviews",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000461"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7000462,
+     "description": "Progression to leadership",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000462"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7001124,
+     "description": "Theories of teaching and learning",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001124"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7001371,
+     "description": "Child development",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001371"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7001372,
+     "description": "Curriculum",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001372"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7001485,
+     "description": "Purpose of education",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001485"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7001486,
+     "description": "Staff mentoring and coaching",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001486"
+     ],
+     "parentId": 7001234
+    },
+    {
+     "id": 7001537,
+     "description": "In-school training",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001537"
+     ],
+     "parentId": 7001234
+    }
+   ]
+  },
+  {
+   "id": 7001235,
+   "description": "Psychology",
+   "leafDepth": "0",
+   "phases": [
+    "secondary"
+   ],
+   "mapTo": [
+    "91001235"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001236,
+     "description": "Social psychology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001236"
+     ],
+     "parentId": 7001235
+    },
+    {
+     "id": 7001237,
+     "description": "Research methods",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001237"
+     ],
+     "parentId": 7001235
+    },
+    {
+     "id": 7001238,
+     "description": "Developmental psychology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001238"
+     ],
+     "parentId": 7001235
+    },
+    {
+     "id": 7001239,
+     "description": "Cognitive psychology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001239"
+     ],
+     "parentId": 7001235
+    },
+    {
+     "id": 7001240,
+     "description": "Psychodynamic psychology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001240"
+     ],
+     "parentId": 7001235
+    },
+    {
+     "id": 7001241,
+     "description": "Biological psychology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001241"
+     ],
+     "parentId": 7001235
+    },
+    {
+     "id": 7001319,
+     "description": "Humanistic psychology",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001319"
+     ],
+     "parentId": 7001235
+    },
+    {
+     "id": 7001320,
+     "description": "Psychological debates",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001320"
+     ],
+     "parentId": 7001235
+    }
+   ]
+  },
+  {
+   "id": 7001242,
+   "description": "Sociology",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001242"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001139,
+     "description": "Key sociological issues",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001139"
+     ],
+     "parentId": 7001242
+    },
+    {
+     "id": 7001243,
+     "description": "Agents of socialisation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001243"
+     ],
+     "parentId": 7001242
+    },
+    {
+     "id": 7001244,
+     "description": "Sociological perspectives",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001244"
+     ],
+     "parentId": 7001242
+    },
+    {
+     "id": 7001245,
+     "description": "Sociological methods",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001245"
+     ],
+     "parentId": 7001242
+    }
+   ]
+  },
+  {
+   "id": 7001264,
+   "description": "Law and legal studies",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001264"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001135,
+     "description": "UK law",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001135"
+     ],
+     "parentId": 7001264
+    },
+    {
+     "id": 7001417,
+     "description": "International law",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001417"
+     ],
+     "parentId": 7001264
+    },
+    {
+     "id": 7001581,
+     "description": "US law",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001581"
+     ],
+     "parentId": 7001264
+    },
+    {
+     "id": 7001582,
+     "description": "Australia law",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001582"
+     ],
+     "parentId": 7001264
+    }
+   ]
+  },
+  {
+   "id": 7001265,
+   "description": "Government and politics",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001265"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001272,
+     "description": "British politics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001272"
+     ],
+     "parentId": 7001265
+    },
+    {
+     "id": 7001273,
+     "description": "Political ideas and concepts",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001273"
+     ],
+     "parentId": 7001265
+    },
+    {
+     "id": 7001274,
+     "description": "People and politics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001274"
+     ],
+     "parentId": 7001265
+    },
+    {
+     "id": 7001275,
+     "description": "Global politics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001275"
+     ],
+     "parentId": 7001265
+    },
+    {
+     "id": 7001276,
+     "description": "US politics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001276"
+     ],
+     "parentId": 7001265
+    },
+    {
+     "id": 7001558,
+     "description": "Australia politics",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001558"
+     ],
+     "parentId": 7001265
+    }
+   ]
+  },
+  {
+   "id": 7001327,
+   "description": "Special educational needs",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001327"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000579,
+     "description": "Independent living",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000579"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7000580,
+     "description": "Individual planning",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000580"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7000581,
+     "description": "Organisation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000581"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7000582,
+     "description": "Social skills",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000582"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001328,
+     "description": "Attention deficit / and hyperactivity disorder (ADD / ADHD)",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001328"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001329,
+     "description": "Autism spectrum disorders (ASD)",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001329"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001330,
+     "description": "Special-needs behaviour management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001330"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001331,
+     "description": "Cognitive impairment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001331"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001332,
+     "description": "Down's Syndrome",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001332"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001333,
+     "description": "Gifted and talented",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001333"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001334,
+     "description": "Hearing impairment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001334"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001335,
+     "description": "Mental health",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001335"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001336,
+     "description": "Physical aids",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001336"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001337,
+     "description": "Sensory impairment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001337"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001338,
+     "description": "Specific learning difficulty",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001338"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001339,
+     "description": "Speech and language",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001339"
+     ],
+     "parentId": 7001327
+    },
+    {
+     "id": 7001340,
+     "description": "Visual impairment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001340"
+     ],
+     "parentId": 7001327
+    }
+   ]
+  },
+  {
+   "id": 7001341,
+   "description": "Whole school",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001341"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001012,
+     "description": "Parents and community",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001012"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001342,
+     "description": "Assemblies",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001342"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001343,
+     "description": "Assessment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001343"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001345,
+     "description": "Behaviour and classroom management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001345"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001346,
+     "description": "Bullying",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001346"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001347,
+     "description": "Behaviour and classroom management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001347"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001348,
+     "description": "Health and safety",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001348"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001349,
+     "description": "Child protection",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001349"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001350,
+     "description": "Internet safety",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001350"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001351,
+     "description": "School trips",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001351"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001353,
+     "description": "Governors",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001353"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001354,
+     "description": "Performance management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001354"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001355,
+     "description": "Business and financial management",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001355"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001358,
+     "description": "Planning and report templates",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001358"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001359,
+     "description": "Leadership",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001359"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001361,
+     "description": "Work/life balance",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001361"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001419,
+     "description": "Classroom templates",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001419"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001421,
+     "description": "School inspection",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001421"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001422,
+     "description": "Learning support and paraprofessionals",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001422"
+     ],
+     "parentId": 7001341
+    },
+    {
+     "id": 7001585,
+     "description": "Tutor time",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001585"
+     ],
+     "parentId": 7001341
+    }
+   ]
+  },
+  {
+   "id": 7001356,
+   "description": "New teachers",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001356"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000455,
+     "description": "Jobseeking advice for trainee teachers",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000455"
+     ],
+     "parentId": 7001356
+    },
+    {
+     "id": 7000456,
+     "description": "Subject knowledge",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000456"
+     ],
+     "parentId": 7001356
+    },
+    {
+     "id": 7000457,
+     "description": "Teaching standards",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000457"
+     ],
+     "parentId": 7001356
+    },
+    {
+     "id": 7000458,
+     "description": "Teacher training",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91000458"
+     ],
+     "parentId": 7001356
+    },
+    {
+     "id": 7001357,
+     "description": "Induction and observation",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001357"
+     ],
+     "parentId": 7001356
+    }
+   ]
+  },
+  {
+   "id": 7001595,
+   "description": "Aboriginal studies",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [
+    "91001595"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7001586,
+     "description": "Autonomy",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001586"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001587,
+     "description": "Media, film and television",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001587"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001588,
+     "description": "Interaction with legal and political systems",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001588"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001589,
+     "description": "Technologies and the environment",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001589"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001590,
+     "description": "Identities",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001590"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001591,
+     "description": "Oral and written expression",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001591"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001592,
+     "description": "Sport",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001592"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001593,
+     "description": "Visual and performing arts",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001593"
+     ],
+     "parentId": 7001595
+    },
+    {
+     "id": 7001594,
+     "description": "Enterprises and organisations",
+     "leafDepth": "1",
+     "phases": [],
+     "mapTo": [
+      "91001594"
+     ],
+     "parentId": 7001595
+    }
+   ]
+  },
+  {
+   "id": 7100000,
+   "description": "Languages",
+   "leafDepth": "0",
+   "phases": [
+    "preschool",
+    "primary",
+    "secondary"
+   ],
+   "mapTo": [],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7000015,
+     "description": "Arabic",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000015"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000031,
+     "description": "Bengali",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000031"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000048,
+     "description": "Cantonese",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000048"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000095,
+     "description": "Danish",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000095"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000111,
+     "description": "Dutch",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000111"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000215,
+     "description": "Finnish",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000215"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000269,
+     "description": "Greek",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000269"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000285,
+     "description": "Gujarati",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000285"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000301,
+     "description": "Hebrew",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000301"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000316,
+     "description": "Hindi",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000316"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000338,
+     "description": "Irish Gaelic",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000338"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000354,
+     "description": "Italian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000354"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000370,
+     "description": "Japanese",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000370"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000478,
+     "description": "Persian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000478"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000500,
+     "description": "Polish",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000500"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000516,
+     "description": "Portuguese",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000516"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000532,
+     "description": "Punjabi",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000532"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000548,
+     "description": "Russian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000548"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000564,
+     "description": "Scottish Gaelic",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000564"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000606,
+     "description": "Swedish",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000606"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000622,
+     "description": "Turkish",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000622"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000638,
+     "description": "Urdu",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000638"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000693,
+     "description": "Welsh",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000693"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000766,
+     "description": "French",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000766"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000822,
+     "description": "German",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000822"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7000938,
+     "description": "Spanish",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91000938"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7001400,
+     "description": "English language learning",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91001400"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7001411,
+     "description": "Mandarin",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91001411"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7001612,
+     "description": "Korean",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91001612"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7001629,
+     "description": "Indonesian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91001629"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7001646,
+     "description": "Vietnamese",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91001646"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7001663,
+     "description": "Aboriginal and Islander languages",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91001663"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100025,
+     "description": "Afrikaans",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002025"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100055,
+     "description": "Albanian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002055"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100085,
+     "description": "Amharic",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002085"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100128,
+     "description": "Belarussian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002128"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100171,
+     "description": "Bosnian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002171"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100201,
+     "description": "Bulgarian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002201"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100244,
+     "description": "Catalan",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002244"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100274,
+     "description": "Croatian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002274"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100304,
+     "description": "Czech",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002304"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100360,
+     "description": "Estonian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002360"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100481,
+     "description": "Hungarian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002481"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100511,
+     "description": "Icelandic",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002511"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100606,
+     "description": "Latvian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002606"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100636,
+     "description": "Lithuanian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002636"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100666,
+     "description": "Macedonian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002666"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100696,
+     "description": "Malay",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002696"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100739,
+     "description": "Nepali",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002739"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100769,
+     "description": "Norwegian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002769"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100812,
+     "description": "Pilipino ",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002812"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100881,
+     "description": "Romanian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002881"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100924,
+     "description": "Serbian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002924"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100954,
+     "description": "Sesotho",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002954"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7100984,
+     "description": "Sinhalese",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002984"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7101014,
+     "description": "Siswati",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91003014"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7101044,
+     "description": "Slovak",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91003044"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7101100,
+     "description": "Swahili",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91003100"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7101143,
+     "description": "Tamil",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91003143"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7101173,
+     "description": "Thai",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91003173"
+     ],
+     "parentId": 7100000
+    },
+    {
+     "id": 7101216,
+     "description": "Ukranian",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91003216"
+     ],
+     "parentId": 7100000
+    }
+   ]
+  },
+  {
+   "id": 7100001,
+   "description": "Core IB",
+   "leafDepth": "0",
+   "phases": [],
+   "mapTo": [
+    "91002001"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7100002,
+     "description": "Theory of knowledge",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002002"
+     ],
+     "parentId": 7100001
+    },
+    {
+     "id": 7100005,
+     "description": "CAS Creativity, activity, service",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002005"
+     ],
+     "parentId": 7100001
+    },
+    {
+     "id": 7100006,
+     "description": "Extended essay",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002006"
+     ],
+     "parentId": 7100001
+    }
+   ]
+  },
+  {
+   "id": 7100007,
+   "description": "Anthropology",
+   "leafDepth": "0",
+   "phases": [],
+   "mapTo": [
+    "91002007"
+   ],
+   "parentId": null,
+   "topics": [
+    {
+     "id": 7100008,
+     "description": "Social and cultural anthropology",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002008"
+     ],
+     "parentId": 7100007
+    },
+    {
+     "id": 7100011,
+     "description": "Physical anthropology",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002011"
+     ],
+     "parentId": 7100007
+    }
+   ]
+  }
+ ]
+}

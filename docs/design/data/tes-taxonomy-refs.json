@@ -1,0 +1,2399 @@
+{
+ "_source": "GET https://www.tes.com/taxonomy/v4/{country} subject roots only, 2026-08-25",
+ "countries": {
+  "US": {
+   "subjectCount": 43,
+   "subjects": [
+    {
+     "id": 5000454,
+     "description": "Math for early childhood",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school"
+     ],
+     "mapTo": [
+      "91000454"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000484,
+     "description": "Philosophy and ethics",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000484"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000652,
+     "description": "Vocational studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000652"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000694,
+     "description": "Literacy for early childhood",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school"
+     ],
+     "mapTo": [
+      "91000694"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000704,
+     "description": "Expressive arts and design",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000704"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000709,
+     "description": "Understanding the world",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000709"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000724,
+     "description": "Personal, social and health education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000724"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000726,
+     "description": "Physical development",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000726"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000740,
+     "description": "-1",
+     "leafDepth": "-1",
+     "phases": [],
+     "mapTo": [
+      "91000740"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000741,
+     "description": "Art and design",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000741"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000745,
+     "description": "Citizenship",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000745"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000751,
+     "description": "Design, engineering and technology",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000751"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000756,
+     "description": "English language arts",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000756"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000757,
+     "description": "Drama",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000757"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000792,
+     "description": "Geography",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000792"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000849,
+     "description": "History",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000849"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000865,
+     "description": "Computing",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000865"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000880,
+     "description": "Cross-curricular topics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000880"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000896,
+     "description": "Math",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000896"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000912,
+     "description": "Music",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000912"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000917,
+     "description": "Physical education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000917"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000926,
+     "description": "Religious education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000926"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000928,
+     "description": "Elementary science",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school"
+     ],
+     "mapTo": [
+      "91000928"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5000993,
+     "description": "Biology",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000993"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001002,
+     "description": "Chemistry",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001002"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001122,
+     "description": "Student careers advice",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001122"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001123,
+     "description": "Classics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001123"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001141,
+     "description": "Physics",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001141"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001191,
+     "description": "Business and finance",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001191"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001202,
+     "description": "Economics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001202"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001228,
+     "description": "Media studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001228"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001234,
+     "description": "Pedagogy and professional development",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001234"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001235,
+     "description": "Psychology",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001235"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001242,
+     "description": "Sociology",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001242"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001264,
+     "description": "Law and legal studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001264"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001265,
+     "description": "Government and politics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001265"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001327,
+     "description": "Special educational needs",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001327"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001341,
+     "description": "Whole school",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001341"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001356,
+     "description": "New teachers",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001356"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5001595,
+     "description": "Aboriginal studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001595"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5100000,
+     "description": "World languages",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [],
+     "parentId": null
+    },
+    {
+     "id": 5100001,
+     "description": "Core IB",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002001"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 5100007,
+     "description": "Anthropology",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002007"
+     ],
+     "parentId": null
+    }
+   ]
+  },
+  "AU": {
+   "subjectCount": 43,
+   "subjects": [
+    {
+     "id": 4000454,
+     "description": "Maths for early years",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary"
+     ],
+     "mapTo": [
+      "91000454"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000484,
+     "description": "Philosophy and ethics",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91000484"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000652,
+     "description": "Vocational studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000652"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000694,
+     "description": "Literacy for early years",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary"
+     ],
+     "mapTo": [
+      "91000694"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000704,
+     "description": "Expressive arts and design",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000704"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000709,
+     "description": "Understanding the world",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000709"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000724,
+     "description": "Personal, social and health education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000724"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000726,
+     "description": "Physical development",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000726"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000740,
+     "description": "-1",
+     "leafDepth": "-1",
+     "phases": [],
+     "mapTo": [
+      "91000740"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000741,
+     "description": "Art and design",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000741"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000745,
+     "description": "Citizenship",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000745"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000751,
+     "description": "Design, engineering and technology",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000751"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000756,
+     "description": "English",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000756"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000757,
+     "description": "Drama",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000757"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000792,
+     "description": "Geography",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000792"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000849,
+     "description": "History",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000849"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000865,
+     "description": "Computing",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000865"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000880,
+     "description": "Cross-curricular topics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000880"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000896,
+     "description": "Mathematics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000896"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000912,
+     "description": "Music",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000912"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000917,
+     "description": "Physical education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000917"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000926,
+     "description": "Religious education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000926"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000928,
+     "description": "Primary science",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary"
+     ],
+     "mapTo": [
+      "91000928"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4000993,
+     "description": "Biology",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91000993"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001002,
+     "description": "Chemistry",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91001002"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001122,
+     "description": "Student careers advice",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001122"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001123,
+     "description": "Classics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001123"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001141,
+     "description": "Physics",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91001141"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001191,
+     "description": "Business and finance",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001191"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001202,
+     "description": "Economics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001202"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001228,
+     "description": "Media studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001228"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001234,
+     "description": "Pedagogy and professional development",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001234"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001235,
+     "description": "Psychology",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91001235"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001242,
+     "description": "Sociology",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001242"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001264,
+     "description": "Law and legal studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001264"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001265,
+     "description": "Government and politics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001265"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001327,
+     "description": "Special educational needs",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001327"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001341,
+     "description": "Whole school",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001341"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001356,
+     "description": "New teachers",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001356"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4001595,
+     "description": "Aboriginal studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001595"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4100000,
+     "description": "Languages",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [],
+     "parentId": null
+    },
+    {
+     "id": 4100001,
+     "description": "Core IB",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002001"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 4100007,
+     "description": "Anthropology",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002007"
+     ],
+     "parentId": null
+    }
+   ]
+  },
+  "IE": {
+   "subjectCount": 43,
+   "subjects": [
+    {
+     "id": 3000454,
+     "description": "Maths for early years",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary"
+     ],
+     "mapTo": [
+      "91000454"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000484,
+     "description": "Philosophy and ethics",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91000484"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000652,
+     "description": "Vocational studies",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000652"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000694,
+     "description": "Literacy for early years",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary"
+     ],
+     "mapTo": [
+      "91000694"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000704,
+     "description": "Expressive arts and design",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000704"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000709,
+     "description": "Understanding the world",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000709"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000724,
+     "description": "Personal, social and health education",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000724"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000726,
+     "description": "Physical development",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000726"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000740,
+     "description": "-1",
+     "leafDepth": "-1",
+     "phases": [],
+     "mapTo": [
+      "91000740"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000741,
+     "description": "Art and design",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000741"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000745,
+     "description": "Citizenship",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000745"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000751,
+     "description": "Design, engineering and technology",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000751"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000756,
+     "description": "English",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000756"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000757,
+     "description": "Drama",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000757"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000792,
+     "description": "Geography",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000792"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000849,
+     "description": "History",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000849"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000865,
+     "description": "Computing",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000865"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000880,
+     "description": "Cross-curricular topics",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000880"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000896,
+     "description": "Mathematics",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000896"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000912,
+     "description": "Music",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000912"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000917,
+     "description": "Physical education",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000917"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000926,
+     "description": "Religious education",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91000926"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000928,
+     "description": "Primary science",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary"
+     ],
+     "mapTo": [
+      "91000928"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3000993,
+     "description": "Biology",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91000993"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001002,
+     "description": "Chemistry",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91001002"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001122,
+     "description": "Student careers advice",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001122"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001123,
+     "description": "Classics",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001123"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001141,
+     "description": "Physics",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91001141"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001191,
+     "description": "Business and finance",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001191"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001202,
+     "description": "Economics",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001202"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001228,
+     "description": "Media studies",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001228"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001234,
+     "description": "Pedagogy and professional development",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001234"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001235,
+     "description": "Psychology",
+     "leafDepth": "0",
+     "phases": [
+      "secondary"
+     ],
+     "mapTo": [
+      "91001235"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001242,
+     "description": "Sociology",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001242"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001264,
+     "description": "Law and legal studies",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001264"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001265,
+     "description": "Government and politics",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001265"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001327,
+     "description": "Special educational needs",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001327"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001341,
+     "description": "Whole school",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001341"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001356,
+     "description": "New teachers",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001356"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3001595,
+     "description": "Aboriginal studies",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [
+      "91001595"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3100000,
+     "description": "Languages",
+     "leafDepth": "0",
+     "phases": [
+      "early-years",
+      "primary",
+      "secondary"
+     ],
+     "mapTo": [],
+     "parentId": null
+    },
+    {
+     "id": 3100001,
+     "description": "Core IB",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002001"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 3100007,
+     "description": "Anthropology",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002007"
+     ],
+     "parentId": null
+    }
+   ]
+  },
+  "CA": {
+   "subjectCount": 43,
+   "subjects": [
+    {
+     "id": 8000454,
+     "description": "Math for early childhood",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school"
+     ],
+     "mapTo": [
+      "91000454"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000484,
+     "description": "Philosophy and ethics",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000484"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000652,
+     "description": "Vocational studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000652"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000694,
+     "description": "Literacy for early childhood",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school"
+     ],
+     "mapTo": [
+      "91000694"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000704,
+     "description": "Expressive arts and design",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000704"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000709,
+     "description": "Understanding the world",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000709"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000724,
+     "description": "Personal, social and health education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000724"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000726,
+     "description": "Physical development",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000726"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000740,
+     "description": "-1",
+     "leafDepth": "-1",
+     "phases": [],
+     "mapTo": [
+      "91000740"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000741,
+     "description": "Art and design",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000741"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000745,
+     "description": "Citizenship",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000745"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000751,
+     "description": "Design, engineering and technology",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000751"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000756,
+     "description": "English language arts",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000756"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000757,
+     "description": "Drama",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000757"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000792,
+     "description": "Geography",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000792"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000849,
+     "description": "History",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000849"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000865,
+     "description": "Computing",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000865"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000880,
+     "description": "Cross-curricular topics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000880"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000896,
+     "description": "Math",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000896"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000912,
+     "description": "Music",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000912"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000917,
+     "description": "Physical education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000917"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000926,
+     "description": "Religious education",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000926"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000928,
+     "description": "Elementary science",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school"
+     ],
+     "mapTo": [
+      "91000928"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8000993,
+     "description": "Biology",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91000993"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001002,
+     "description": "Chemistry",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001002"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001122,
+     "description": "Student careers advice",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001122"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001123,
+     "description": "Classics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001123"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001141,
+     "description": "Physics",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001141"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001191,
+     "description": "Business and finance",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001191"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001202,
+     "description": "Economics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001202"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001228,
+     "description": "Media studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001228"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001234,
+     "description": "Pedagogy and professional development",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001234"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001235,
+     "description": "Psychology",
+     "leafDepth": "0",
+     "phases": [
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001235"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001242,
+     "description": "Sociology",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001242"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001264,
+     "description": "Law and legal studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001264"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001265,
+     "description": "Government and politics",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001265"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001327,
+     "description": "Special educational needs",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001327"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001341,
+     "description": "Whole school",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001341"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001356,
+     "description": "New teachers",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001356"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8001595,
+     "description": "Aboriginal studies",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [
+      "91001595"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8100000,
+     "description": "World languages",
+     "leafDepth": "0",
+     "phases": [
+      "preschool",
+      "elementary-school",
+      "middle-school",
+      "high-school"
+     ],
+     "mapTo": [],
+     "parentId": null
+    },
+    {
+     "id": 8100001,
+     "description": "Core IB",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002001"
+     ],
+     "parentId": null
+    },
+    {
+     "id": 8100007,
+     "description": "Anthropology",
+     "leafDepth": "0",
+     "phases": [],
+     "mapTo": [
+      "91002007"
+     ],
+     "parentId": null
+    }
+   ]
+  }
+ }
+}

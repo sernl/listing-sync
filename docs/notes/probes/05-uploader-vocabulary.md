@@ -25,3 +25,8 @@ The full per-country vocabulary crawl needs no founder session and is a clean fo
 
 High for the resource-type, age-range and curriculum sets, which are read directly from the DOM.
 High that the subject and topic tree is publicly crawlable, which is directly probed; medium on total size until the crawl runs.
+
+## Update, full crawl captured
+
+The subject and topic tree was crawled for GB and NZ: 43 subjects each, 453 and 451 topics, in docs/design/data/tes-taxonomy-{GB,NZ}.json, with US, AU, IE and CA subject roots in tes-taxonomy-refs.json.
+See [10-taxonomy-crosswalk.md](10-taxonomy-crosswalk.md): the GB-to-NZ crosswalk is a deterministic id-prefix transform, so the taxonomy work for the founder's markets is largely mechanical.
