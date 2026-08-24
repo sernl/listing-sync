@@ -16,3 +16,6 @@ result-*
 /logs
 *.log
 .DS_Store
+
+# probe-local secrets (session cookies, exported HARs)
+probes/local/
