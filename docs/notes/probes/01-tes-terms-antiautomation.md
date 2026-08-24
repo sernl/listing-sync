@@ -19,7 +19,8 @@ The Additional Terms state "You should only upload your own content to Tes Resou
 The Additional Terms indemnity attaches to authors who are corporations, companies, partnerships or institutions, who "agree to fully indemnify, defend and hold Tes ... harmless", which is a liability allocation the customer terms must mirror rather than an access restriction.
 
 Two operational signals are recorded rather than gating.
-The discretionary fair-usage upload limit is the only volume lever and carries no numeric threshold, so the enforcement risk is an account restriction rather than a clause breach.
+The enforcement lever is a broad discretionary power rather than a specific upload limit: the en-gb General Terms clause 5.6 lets Tes "at Our sole discretion suspend or permanently remove Your right to access and use any Tes Products", and the Additional Terms carry a "Termination or suspension of your account" section citing an "excessive refunds" example.
+The specific "breach in fair usage" upload-limit phrasing prior research quoted was not relocated in these fetched binding terms and may live in a help article, so the enforcement risk is recorded as a discretionary account restriction with no numeric threshold and no gradient rather than as a named upload cap.
 `robots.txt` sets `Disallow: /uploader/` for all crawlers, which is crawler-scoped and governs unauthenticated access, so the design's commitment to honour robots on unauthenticated read paths stands and the authenticated-upload path is governed by the terms above rather than by robots.
 
 ## Answer to the gated question
