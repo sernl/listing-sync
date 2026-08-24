@@ -117,3 +117,10 @@ The mechanism is unchanged from the reframed wedge: the same cookie-authenticate
 The commercial and localisation profile improves relative to the research's US premise, because English (UK) and New Zealand are British-English variants close to the founder's International base, so the AI layer changes spelling, curriculum and key-stage framing and year levels rather than performing a full US-English and Common Core rewrite.
 The taxonomy crawl targets the country codes for these markets, GB and NZ, against the public `GET /taxonomy/v4/{country}/{id}` tree.
 The research's US-centric market sizing is therefore no longer the operative commercial case; the founder is customer zero validating the UK and New Zealand targets against their own maths catalogue directly.
+
+## M0 outcomes, 2026-08-25
+
+The M0 spike proved the entire Tes draft write path server-side in Rust with no browser: create via `POST /api/v2/resources`, metadata via `POST /api/v2/resources/{id}/draft`, a three-step AWS presigned S3 file upload, read-back via `GET /api/v2/resources/{id}/draft`, and delete via `DELETE /api/v2/resources/{id}/draft`.
+Both milestone kill gates passed: the server-side session authenticates from Rust, and an interrupted write classifies as ambiguous through a tested three-valued `WriteOutcome` type.
+The decision is go for M1: the confirmed endpoints, the S3 handshake and the classifier promote into the production `tam-marketplace-tes` crate under the enforcement gate, and the throwaway `spikes/tes-spike/` is deleted at that point.
+Publish is deferred to a later supervised step, so M0 deviated from the milestone document's live-state condition by the founder's decision not to publish, and both kill gates that do not require publishing were met in full.
