@@ -124,3 +124,11 @@ The M0 spike proved the entire Tes draft write path server-side in Rust with no 
 Both milestone kill gates passed: the server-side session authenticates from Rust, and an interrupted write classifies as ambiguous through a tested three-valued `WriteOutcome` type.
 The decision is go for M1: the confirmed endpoints, the S3 handshake and the classifier promote into the production `tam-marketplace-tes` crate under the enforcement gate, and the throwaway `spikes/tes-spike/` is deleted at that point.
 Publish is deferred to a later supervised step, so M0 deviated from the milestone document's live-state condition by the founder's decision not to publish, and both kill gates that do not require publishing were met in full.
+
+## Publish and delete captured, 2026-08-25
+
+A single free test resource was published live to the founder's store, confirmed by the founder, and deleted, capturing the two transitions M0 deferred.
+Publish is `POST /api/v2/resources/{id}/publish` and requires a valid `licence` set on the draft first; free resources use a Creative Commons licence (`CC-BY`, `CC-BY-SA`, `CC-BY-ND`), while `TES-PAID` requires a price.
+The authoritative published-resource delete is `DELETE /api/v2/resources/{id}`; the `/draft`-suffixed delete only removes the draft overlay and returns a misleading 204.
+Verification of publish and delete must read the authoritative API, because the public resource URL soft-404s with HTTP 200, and a mutating call's own 2xx is not evidence the mutation took effect.
+This is a live confirmation of the correctness discipline: the sync engine treats a marketplace's own success signal as untrusted and asserts state from an independent read.

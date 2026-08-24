@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
-mod attachment;
-mod draft;
-mod http;
-mod outcome;
 use anyhow::Result;
+use tes_spike::{attachment, draft, http, outcome};
 
 async fn run_path(client: &reqwest::Client, id: i64) -> Result<()> {
     let saved = draft::set_metadata(client, id).await?;
