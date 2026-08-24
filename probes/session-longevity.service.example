@@ -1,0 +1,5 @@
+[Unit]
+Description=Tes session-longevity probe
+[Service]
+Type=oneshot
+ExecStart=%h/projects/edtech-workspace/listing-sync/probes/session-longevity.sh
