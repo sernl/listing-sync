@@ -19,3 +19,6 @@ result-*
 
 # probe-local secrets (session cookies, exported HARs)
 probes/local/
+
+# spike build artifacts
+spikes/tes-spike/target/
