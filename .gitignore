@@ -1,0 +1,18 @@
+# Rust
+/target
+Cargo.lock.bak
+
+# Nix
+result
+result-*
+.direnv/
+
+# secrets and local env
+.env
+.env.*
+!.env.example
+
+# logs and scratch
+/logs
+*.log
+.DS_Store

@@ -1,0 +1,41 @@
+[licenses]
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+confidence-threshold = 0.93
+
+# Measured, not anticipated: reqwest with rustls-tls reaches webpki-roots,
+# whose licence covers Mozilla's CA set as data.
+# Scoped to the one crate so the decision stays a greppable line rather than
+# a licence added to the list above.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
+[licenses.private]
+ignore = true          # the workspace's own unpublished crates
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+  # Architectural edges. `wrappers` names every crate allowed to depend
+  # directly on the banned one; any other direct dependent fails the check.
+  { crate = "thirtyfour", wrappers = ["browser-driver"], reason = "one crate speaks WebDriver and every adapter goes through it" },
+  { crate = "browser-driver", wrappers = ["automation-worker"], reason = "no axum, client-facing or telemetry crate may reach a live session" },
+  { crate = "llm-client", wrappers = ["listing-copy"], reason = "every provider call goes through LlmBudget::reserve, which lives in listing-copy" },
+  # The provider SDK takes its own entry, wrapped by llm-client, once a
+  # provider is chosen. No crate name is written here before then.
+]
+
+# The JSON depth bound is a feature rather than a call site: with this feature
+# off, the method that disables the 128-deep limit does not exist at all.
+[[bans.features]]
+crate = "serde_json"
+deny  = ["unbounded_depth"]
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

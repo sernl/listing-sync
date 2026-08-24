@@ -1,0 +1,73 @@
+[workspace]
+resolver = "2"
+members = ["crates/tam-limits"]
+
+[workspace.lints.rust]
+unsafe_code                = "forbid"
+rust_2018_idioms           = { level = "deny", priority = -1 }
+unused_must_use            = "deny"
+let_underscore_drop        = "deny"
+unreachable_pub            = "deny"
+trivial_casts              = "deny"
+elided_lifetimes_in_paths  = "deny"
+unused_lifetimes           = "deny"
+
+[workspace.lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+# Pedantic exceptions. In a railway-oriented codebase where nearly every
+# function returns Result, the doc lints demand a paragraph per function for
+# no defect yield. `wildcard_imports` is deliberately NOT here: it is the one
+# pedantic lint whose purpose is making a name's provenance visible in the
+# file that uses it, which is worth more to an agent than to a human.
+missing_errors_doc          = "allow"
+missing_panics_doc          = "allow"
+doc_markdown                = "allow"
+module_name_repetitions     = "allow"
+
+# Hand-picked from `restriction`; never enable that group wholesale.
+unwrap_used                 = "deny"
+expect_used                 = "deny"
+panic                       = "deny"
+todo                        = "deny"
+unimplemented               = "deny"
+unreachable                 = "deny"
+integer_division            = "deny"
+string_slice                = "deny"
+dbg_macro                   = "deny"
+mem_forget                  = "deny"
+exit                        = "deny"
+infinite_loop               = "deny"
+missing_assert_message      = "deny"
+
+# Async and concurrency hazards.
+let_underscore_must_use     = "deny"
+let_underscore_future       = "deny"
+await_holding_lock          = "deny"
+await_holding_refcell_ref   = "deny"
+async_yields_async          = "deny"
+significant_drop_tightening = "deny"
+unused_async                = "deny"
+large_futures               = "deny"
+
+# Structure and exhaustiveness.
+wildcard_enum_match_arm     = "deny"
+missing_asserts_for_indexing = "deny"
+disallowed_methods          = "deny"
+disallowed_types            = "deny"
+disallowed_macros           = "deny"
+
+# Advisory: allowed here, raised in the second clippy invocation.
+too_many_lines              = "allow"
+type_complexity             = "allow"
+cognitive_complexity        = "allow"
+
+# Deliberate allows, argued in charter section 4.
+must_use_candidate          = "allow"
+panic_in_result_fn          = "allow"
+indexing_slicing            = "allow"
+
+[profile.release]
+overflow-checks = true
+debug-assertions = true
