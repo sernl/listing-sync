@@ -1,0 +1,17 @@
+[package]
+name    = "tam-pipeline"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+blake3 = "1"
+tam-limits = { path = "../tam-limits" }
+tam-types = { path = "../tam-types" }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true
