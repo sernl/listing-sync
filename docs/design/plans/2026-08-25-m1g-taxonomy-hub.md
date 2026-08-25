@@ -28,11 +28,10 @@ The design of record is `docs/design/taxonomy-projection.md` (the five-row proje
 
 ## Tasks
 
-### Task 1: the vocabulary
+### Task 1: the inventory ripple
 
-`tam-types`: `TermKind`, `CanonicalTerm`, `VocabularyId`, `VocabularyPath`, `EdgeKind`, `Decider`, `ProjectionEdge`, `TermProjection`, `ReconciliationItem`, `ReconciliationState`, `GradeDeclaration`, `DeclarationSource`, `AgeInterval` (private fields, smart constructor `new(low, high)` requiring `low <= high`, serde through the raw-struct pattern like `Money`), `NAMESPACE_TAM_TAXONOMY`, `InventoryId::TesNz`, `CurrencyRule::Unmeasured`.
-Ripple: `tam-storage/src/codec.rs` gains `tes_nz` both directions and the round-trip proptest strategy gains `TesNz`; `tam-marketplace/src/idempotency.rs` ordinal `TesNz => 4` with the pinned-ordinal test extended.
-Tests: serde round-trips for the new types, the `AgeInterval` constructor law, the idempotency ordinal pin.
+The taxonomy and grade vocabulary (`TermKind` through `AgeInterval`) was already promoted verbatim into `tam-domain` during M1a, so this task is the inventory ripple alone: `InventoryId::TesNz`, `CurrencyRule::Unmeasured`, `NAMESPACE_TAM_TAXONOMY` in `tam-types`; `tes_nz` in the storage codec both directions and in the round-trip proptest strategy; the idempotency ordinal `TesNz => 4` with the pinned-ordinal test extended; and migration `0012_tes_nz_inventory.sql` inserting the inventory row so the proptest's foreign key holds.
+The hub schema therefore lands as `0013_taxonomy_hub.sql`, and `tam-taxonomy` depends on `tam-domain` for the vocabulary rather than duplicating it.
 
 ### Task 2: the pure hub
 

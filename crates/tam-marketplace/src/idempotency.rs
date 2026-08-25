@@ -24,6 +24,7 @@ const fn inventory_ordinal(inventory: InventoryId) -> u8 {
         InventoryId::TesUs => 1,
         InventoryId::Etsy => 2,
         InventoryId::Tpt => 3,
+        InventoryId::TesNz => 4,
     }
 }
 
@@ -62,6 +63,7 @@ mod tests {
             (InventoryId::TesUs, 1),
             (InventoryId::Etsy, 2),
             (InventoryId::Tpt, 3),
+            (InventoryId::TesNz, 4),
         ] {
             assert_eq!(
                 inventory_ordinal(inventory),

@@ -239,6 +239,7 @@ fn arb_inventory() -> impl Strategy<Value = InventoryId> {
     prop_oneof![
         Just(InventoryId::TesGb),
         Just(InventoryId::TesUs),
+        Just(InventoryId::TesNz),
         Just(InventoryId::Etsy),
         Just(InventoryId::Tpt),
     ]

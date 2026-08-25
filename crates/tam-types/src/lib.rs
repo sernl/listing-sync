@@ -66,6 +66,7 @@ pub enum Marketplace {
 pub enum InventoryId {
     TesGb,
     TesUs,
+    TesNz,
     Etsy,
     Tpt,
 }
@@ -87,13 +88,17 @@ pub enum CurrencyRule {
     /// Set by the seller at shop level. Unverified for Etsy and TPT; must be
     /// established before either connector is built.
     SellerScoped,
+    /// Not yet probed. `ProjectionBlocked::CurrencyUnknown` is the designed
+    /// consumer: a projection into an unmeasured inventory blocks rather than
+    /// assuming a currency, and the variant is removed by a probe, not a guess.
+    Unmeasured,
 }
 
 impl InventoryId {
     #[must_use]
     pub const fn marketplace(self) -> Marketplace {
         match self {
-            Self::TesGb | Self::TesUs => Marketplace::Tes,
+            Self::TesGb | Self::TesUs | Self::TesNz => Marketplace::Tes,
             Self::Etsy => Marketplace::Etsy,
             Self::Tpt => Marketplace::Tpt,
         }
@@ -104,6 +109,10 @@ impl InventoryId {
         match self {
             Self::TesGb => CurrencyRule::Fixed(Currency::Gbp),
             Self::TesUs => CurrencyRule::Fixed(Currency::Usd),
+            // Measured for US only; the NZ inventory has not been probed, and
+            // the wedge's same-account Curriculum-tag mechanism makes the
+            // answer genuinely unobvious, so the gate stays closed.
+            Self::TesNz => CurrencyRule::Unmeasured,
             Self::Etsy | Self::Tpt => CurrencyRule::SellerScoped,
         }
     }
@@ -356,6 +365,14 @@ pub struct FailureDetail(pub String);
 /// never rotated, because rotating it would re-key every item in flight.
 pub const NAMESPACE_TAM_INTENT: Uuid = Uuid([
     0x1d, 0xe8, 0xf6, 0xc1, 0x9f, 0x8b, 0x4a, 0x55, 0x9b, 0x52, 0x7a, 0x1c, 0x3d, 0x1f, 0x5a, 0x10,
+]);
+
+/// The UUIDv5 namespace for canonical taxonomy term ids, generated once and
+/// never rotated, because rotating it would orphan every stored term and edge.
+/// Deterministic ids are what make reseeding idempotent and make independent
+/// GB and NZ crawls converge on the same canonical term.
+pub const NAMESPACE_TAM_TAXONOMY: Uuid = Uuid([
+    0x7b, 0x3a, 0x22, 0x9e, 0x5d, 0x41, 0x4c, 0x8a, 0x8f, 0x0d, 0x6e, 0x2b, 0x91, 0x54, 0xc7, 0x33,
 ]);
 
 /// The body carried beside each `job_event.kind`. The serde tag of each

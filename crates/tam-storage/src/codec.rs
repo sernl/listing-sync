@@ -274,6 +274,7 @@ pub(crate) const fn inventory_to_db(inventory: InventoryId) -> &'static str {
     match inventory {
         InventoryId::TesGb => "tes_gb",
         InventoryId::TesUs => "tes_us",
+        InventoryId::TesNz => "tes_nz",
         InventoryId::Etsy => "etsy",
         InventoryId::Tpt => "tpt",
     }
@@ -283,6 +284,7 @@ pub(crate) fn inventory_from_db(raw: &str) -> Result<InventoryId, StorageError> 
     match raw {
         "tes_gb" => Ok(InventoryId::TesGb),
         "tes_us" => Ok(InventoryId::TesUs),
+        "tes_nz" => Ok(InventoryId::TesNz),
         "etsy" => Ok(InventoryId::Etsy),
         "tpt" => Ok(InventoryId::Tpt),
         other => Err(StorageError::CorruptRow {
