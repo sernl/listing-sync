@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 
 pub mod breaker;
+pub mod broker_client;
 pub mod canary;
 pub mod driver;
 pub mod outbox;
+pub mod seed;

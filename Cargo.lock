@@ -2270,15 +2270,37 @@ name = "tam-engine"
 version = "0.0.0"
 dependencies = [
  "futures",
+ "serde",
  "serde_json",
  "sqlx",
  "tam-domain",
  "tam-limits",
  "tam-marketplace",
+ "tam-pipeline",
  "tam-storage",
+ "tam-taxonomy",
  "tam-types",
  "tokio",
  "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "tam-import"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tam-domain",
+ "tam-marketplace",
+ "tam-marketplace-tes",
+ "tam-pipeline",
+ "tam-secrets",
+ "tam-storage",
+ "tam-taxonomy",
+ "tam-types",
+ "tokio",
  "uuid",
 ]
 
@@ -2365,8 +2387,12 @@ dependencies = [
  "axum",
  "sqlx",
  "tam-api",
+ "tam-engine",
+ "tam-limits",
+ "tam-storage",
  "tam-types",
  "tokio",
+ "tokio-util",
  "tower-http",
 ]
 
