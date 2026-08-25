@@ -17,7 +17,7 @@ tam-domain = { path = "../tam-domain" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "net", "io-util"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

@@ -11,6 +11,7 @@
 
 pub mod blobs;
 mod codec;
+pub mod connections;
 pub mod job_reads;
 pub mod jobs;
 mod mapping;
@@ -19,6 +20,7 @@ pub mod sessions;
 pub mod taxonomy;
 
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
+pub use connections::{ConnectionRepo, ConnectionRow};
 pub use job_reads::{
     payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, JobListRow, JobReadRepo,
     JobSnapshot, LedgerCursor, MappingSeed,

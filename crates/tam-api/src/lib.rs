@@ -13,6 +13,7 @@
 
 pub mod error;
 pub mod jobs;
+pub mod resources;
 pub mod session;
 pub mod stream;
 pub mod version;
@@ -35,9 +36,12 @@ pub use crate::{
 /// Everything the serving binary decides and the library consumes. One value
 /// crosses the boundary so a decision cannot arrive ambiently; handlers read
 /// it from router state. Its `Default` is the fail-closed posture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
     pub disclosure: Disclosure,
+    /// The credential broker's unix socket; revocation answers 503 without
+    /// it rather than pretending.
+    pub broker_socket: Option<std::path::PathBuf>,
 }
 
 /// How the current instant enters a handler: as a function the binary
@@ -97,6 +101,32 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/jobs/{job}/items", get(jobs::job_items))
         .route("/{version}/jobs/{job}/items/{item}", get(jobs::item_detail))
         .route("/{version}/events/stream", get(stream::events_stream))
+        .route("/{version}/products", get(resources::list_products))
+        .route(
+            "/{version}/products/{product}",
+            get(resources::product_view),
+        )
+        .route("/{version}/connections", get(resources::list_connections))
+        .route(
+            "/{version}/connections/{connection}/revoke",
+            post(resources::revoke_connection),
+        )
+        .route(
+            "/{version}/reconciliation/items",
+            get(resources::list_queue),
+        )
+        .route(
+            "/{version}/reconciliation/items/{item}/resolve",
+            post(resources::resolve_item),
+        )
+        .route(
+            "/{version}/reconciliation/items/{item}/no-counterpart",
+            post(resources::no_counterpart_item),
+        )
+        .route(
+            "/{version}/reconciliation/stats",
+            get(resources::queue_stats),
+        )
         .with_state(state)
 }
 

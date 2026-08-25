@@ -572,3 +572,57 @@ fn decode_grades(row: &GradeRow, paths: Vec<PathRow>) -> Result<GradeDeclaration
         derived,
     })
 }
+
+impl ProductRepo {
+    /// The catalogue page: keyset on `(created_at, id)` strictly above the
+    /// cursor, oldest first, matching the unpaginated listing's order.
+    pub async fn list_page(
+        &self,
+        org: OrgId,
+        cursor: Option<crate::job_reads::LedgerCursor>,
+        limit: i64,
+    ) -> Result<Vec<ProductSummary>, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let (cursor_at, cursor_id) = match cursor {
+            Some(cursor) => (
+                Some(timestamp_to_db(cursor.created_at)?),
+                Some(uuid_to_db(cursor.id)),
+            ),
+            None => (None, None),
+        };
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query_as!(
+            SummaryRow,
+            "SELECT org_id, id, title, price_kind, price_minor_units, price_currency, \
+             created_at, updated_at \
+             FROM product \
+             WHERE org_id = $1 AND deleted_at IS NULL \
+               AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) \
+             ORDER BY created_at, id LIMIT $4",
+            org_db,
+            cursor_at,
+            cursor_id,
+            limit,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ProductSummary {
+                    org: OrgId(uuid_from_db(row.org_id)),
+                    id: ProductId(uuid_from_db(row.id)),
+                    title: Title(row.title),
+                    price: price_from_db(
+                        &row.price_kind,
+                        row.price_minor_units,
+                        row.price_currency,
+                    )?,
+                    created_at: timestamp_from_db(row.created_at),
+                    updated_at: timestamp_from_db(row.updated_at),
+                })
+            })
+            .collect()
+    }
+}

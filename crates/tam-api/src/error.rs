@@ -56,6 +56,7 @@ pub enum APIErrorCode {
     SyncMappingsInvalid,
     DuplicateSyncItem,
     ResourceMissing,
+    BrokerUnavailable,
     Internal,
 }
 
@@ -71,6 +72,7 @@ impl APIErrorCode {
             Self::SyncMappingsInvalid => "sync_mappings_invalid",
             Self::DuplicateSyncItem => "duplicate_sync_item",
             Self::ResourceMissing => "resource_missing",
+            Self::BrokerUnavailable => "broker_unavailable",
             Self::Internal => "internal",
         }
     }
@@ -268,7 +270,7 @@ mod tests {
     /// the client has never seen.
     #[test]
     fn every_code_serialises_to_its_own_str() {
-        const ALL: [APIErrorCode; 9] = [
+        const ALL: [APIErrorCode; 10] = [
             APIErrorCode::UnsupportedApiVersion,
             APIErrorCode::VersionParameterMissing,
             APIErrorCode::VersionParameterUnreadable,
@@ -277,6 +279,7 @@ mod tests {
             APIErrorCode::SyncMappingsInvalid,
             APIErrorCode::DuplicateSyncItem,
             APIErrorCode::ResourceMissing,
+            APIErrorCode::BrokerUnavailable,
             APIErrorCode::Internal,
         ];
         for code in ALL {
@@ -289,6 +292,7 @@ mod tests {
                 | APIErrorCode::SyncMappingsInvalid
                 | APIErrorCode::DuplicateSyncItem
                 | APIErrorCode::ResourceMissing
+                | APIErrorCode::BrokerUnavailable
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

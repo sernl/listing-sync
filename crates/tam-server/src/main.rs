@@ -2,7 +2,7 @@
 //! router `tam-api` builds. Every route, extractor and error mapping lives in
 //! the library, so this binary holds nothing a test would want to reach.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -20,6 +20,10 @@ const DEFAULT_BIND: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)
 /// `debug-assertions = true` in release, so no `cfg` can tell production
 /// apart; redaction is the default in every build.
 const DISCLOSE_FLAG: &str = "--disclose-internals";
+
+/// The credential broker's unix socket; without it the revoke endpoint
+/// answers 503 rather than pretending.
+const BROKER_FLAG: &str = "--broker-socket";
 
 /// The instant, read at the one process boundary the lint table permits and
 /// handed to the library as data. A clock before the epoch saturates to zero,
@@ -44,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let state = AppState {
         pool,
-        config: invocation.config,
+        config: invocation.config.clone(),
         wall: wall_now,
     };
 
@@ -74,9 +78,15 @@ struct Invocation {
 fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut positional = Vec::new();
     let mut config = Config::default();
-    for argument in std::env::args().skip(1) {
+    let mut arguments = std::env::args().skip(1);
+    while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
             config.disclosure = Disclosure::Full;
+        } else if argument == BROKER_FLAG {
+            let path = arguments
+                .next()
+                .ok_or("--broker-socket needs a path argument")?;
+            config.broker_socket = Some(std::path::PathBuf::from(path));
         } else {
             positional.push(argument);
         }
