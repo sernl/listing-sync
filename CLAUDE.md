@@ -41,7 +41,10 @@ the dependencies they govern.
 ## Build
 
 ```
-just check         # the gated lane: fmt, clippy --deny warnings, tests
+just check         # the gated lane: fmt, clippy --deny warnings, purity, tests
+just db-setup      # once per machine: rootless-podman signature policy
+just dev           # full local environment: postgres (podman), migrations, API server
+just db-test       # the database-backed lane: two-tenant RLS isolation
 nix flake check    # everything
 ```
 

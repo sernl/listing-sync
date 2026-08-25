@@ -31,7 +31,16 @@
           rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-          src = craneLib.cleanCargoSource ./.;
+          # cleanCargoSource would drop sqlx's offline query metadata and the
+          # SQL migrations, which the sandboxed build needs.
+          src = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            filter =
+              path: type:
+              (craneLib.filterCargoSources path type)
+              || (builtins.match ".*/\\.sqlx/query-.*\\.json" path != null)
+              || (builtins.match ".*/migrations/.*\\.sql" path != null);
+          };
           commonArgs = {
             inherit src;
             strictDeps = true;
@@ -62,6 +71,11 @@
               pkgs.cargo-deny
               pkgs.cargo-machete
               pkgs.just
+              pkgs.podman
+              pkgs.podman-compose
+              pkgs.postgresql_17
+              pkgs.shellcheck
+              pkgs.sqlx-cli
             ];
           };
 

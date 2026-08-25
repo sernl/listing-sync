@@ -22,3 +22,6 @@ probes/local/
 
 # spike build artifacts
 spikes/tes-spike/target/
+
+# local dev state (ephemeral postgres, broker sockets)
+.dev/
