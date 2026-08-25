@@ -10,8 +10,10 @@
 #![forbid(unsafe_code)]
 
 mod codec;
+mod mapping;
 mod product;
 
+pub use mapping::{MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 
 use sqlx::{Postgres, Transaction};

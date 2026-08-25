@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO binding_candidate (org_id, mapping_id, position, remote_id_kind, remote_url, remote_numeric_id) VALUES ($1, $2, $3, $4, $5, $6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "439ed92d66b586a9340acd4ff52456281cd8d37dd1ac8a8601c797b7d3e38c1a"
+}

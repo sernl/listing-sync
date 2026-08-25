@@ -262,6 +262,14 @@ pub(crate) fn failure_code_from_db(raw: &str) -> Result<FailureCode, StorageErro
         })
 }
 
+pub(crate) const fn marketplace_to_db(marketplace: tam_types::Marketplace) -> &'static str {
+    match marketplace {
+        tam_types::Marketplace::Tes => "tes",
+        tam_types::Marketplace::Etsy => "etsy",
+        tam_types::Marketplace::Tpt => "tpt",
+    }
+}
+
 pub(crate) const fn inventory_to_db(inventory: InventoryId) -> &'static str {
     match inventory {
         InventoryId::TesGb => "tes_gb",

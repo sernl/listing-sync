@@ -1,0 +1,233 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT org_id, id, product_id, inventory, binding_state, remote_id_kind, remote_url, remote_numeric_id, binding_attempt, binding_marker, first_seen_at, ambiguous_since, severed_at, sever_cause, verify_state, verified_at, verify_stale_since, normaliser_version, policy_title, policy_description, policy_price, policy_taxonomy, policy_grades, policy_files, price_rule_kind, price_rate_micros, price_rounding, price_explicit_kind, price_explicit_minor_units, price_explicit_currency, publish_mode, lifecycle_state, lifecycle_since, lifecycle_reason, created_at, updated_at FROM mapping WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "binding_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "remote_id_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "remote_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "remote_numeric_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "binding_attempt",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "binding_marker",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "first_seen_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "ambiguous_since",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "severed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "sever_cause",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "verify_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "verified_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "verify_stale_since",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "normaliser_version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 18,
+        "name": "policy_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 19,
+        "name": "policy_description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 20,
+        "name": "policy_price",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "policy_taxonomy",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 22,
+        "name": "policy_grades",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 23,
+        "name": "policy_files",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "price_rule_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 25,
+        "name": "price_rate_micros",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 26,
+        "name": "price_rounding",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 27,
+        "name": "price_explicit_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 28,
+        "name": "price_explicit_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 29,
+        "name": "price_explicit_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 30,
+        "name": "publish_mode",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 31,
+        "name": "lifecycle_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 32,
+        "name": "lifecycle_since",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 33,
+        "name": "lifecycle_reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 34,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 35,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "99b456d9dad4d4a39c5c164a069e8d40c0d06258a471c14aa5c063376d72590f"
+}

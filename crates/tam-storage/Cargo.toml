@@ -19,11 +19,13 @@ sqlx = { version = "0.8", default-features = false, features = [
   "macros",
 ] }
 tam-domain = { path = "../tam-domain" }
+tam-marketplace = { path = "../tam-marketplace" }
 tam-types = { path = "../tam-types" }
 thiserror = "2"
 uuid = "1"
 
 [dev-dependencies]
+proptest = "1"
 serde_json = "1"
 
 [lints]

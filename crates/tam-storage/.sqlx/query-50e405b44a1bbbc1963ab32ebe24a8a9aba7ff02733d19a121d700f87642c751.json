@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mapping (org_id, id, product_id, inventory, marketplace, binding_state, remote_id_kind, remote_url, remote_numeric_id, binding_attempt, binding_marker, first_seen_at, ambiguous_since, severed_at, sever_cause, verify_state, verified_at, verify_stale_since, normaliser_version, policy_title, policy_description, policy_price, policy_taxonomy, policy_grades, policy_files, price_rule_kind, price_rate_micros, price_rounding, price_explicit_kind, price_explicit_minor_units, price_explicit_currency, publish_mode, lifecycle_state, lifecycle_since, lifecycle_reason, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "50e405b44a1bbbc1963ab32ebe24a8a9aba7ff02733d19a121d700f87642c751"
+}
