@@ -1,0 +1,15 @@
+[package]
+name    = "tam-taxonomy-seed"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-storage = { path = "../tam-storage" }
+tam-taxonomy = { path = "../tam-taxonomy" }
+tam-types = { path = "../tam-types" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

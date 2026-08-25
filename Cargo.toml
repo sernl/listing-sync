@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/tam-marketplace", "crates/tam-marketplace-tes", "crates/tam-domain", "crates/tam-secrets", "crates/tam-pipeline", "crates/tam-storage", "crates/tam-taxonomy",
+members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/tam-marketplace", "crates/tam-marketplace-tes", "crates/tam-domain", "crates/tam-secrets", "crates/tam-pipeline", "crates/tam-storage", "crates/tam-taxonomy", "crates/tam-taxonomy-seed",
     "crates/tam-engine",
     "crates/tam-canary",
     "crates/tam-pipeline-worker",

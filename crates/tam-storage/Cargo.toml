@@ -26,11 +26,12 @@ tam-secrets = { path = "../tam-secrets" }
 tam-types = { path = "../tam-types" }
 serde_json = "1"
 thiserror = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 
 [dev-dependencies]
 proptest = "1"
 serde_json = "1"
+tam-taxonomy = { path = "../tam-taxonomy" }
 
 [lints]
 workspace = true

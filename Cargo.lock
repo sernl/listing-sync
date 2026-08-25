@@ -2391,6 +2391,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-taxonomy-seed"
+version = "0.0.0"
+dependencies = [
+ "sqlx",
+ "tam-storage",
+ "tam-taxonomy",
+ "tam-types",
+ "tokio",
+]
+
+[[package]]
 name = "tam-types"
 version = "0.0.0"
 dependencies = [
