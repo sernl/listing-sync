@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cassette;
+pub mod idempotency;
 pub mod transport;
 
 use tam_types::{

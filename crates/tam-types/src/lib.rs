@@ -352,6 +352,84 @@ pub enum FailureCode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureDetail(pub String);
 
+/// The UUIDv5 namespace for idempotency-key derivation, generated once and
+/// never rotated, because rotating it would re-key every item in flight.
+pub const NAMESPACE_TAM_INTENT: Uuid = Uuid([
+    0x1d, 0xe8, 0xf6, 0xc1, 0x9f, 0x8b, 0x4a, 0x55, 0x9b, 0x52, 0x7a, 0x1c, 0x3d, 0x1f, 0x5a, 0x10,
+]);
+
+/// The body carried beside each `job_event.kind`. The serde tag of each
+/// variant is exactly one `JobEventKind` name — the agreement test below is
+/// the tripwire — and the pair is one tagged union split across the two
+/// columns. Bodies stay lean here; the client-facing contract for them is
+/// M1h's to version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobEventPayload {
+    JobQueued {
+        items: u32,
+    },
+    JobStarted {
+        items: u32,
+    },
+    ItemQueued {
+        mapping: MappingId,
+    },
+    ItemLeased {
+        worker: String,
+        lease_epoch: i64,
+    },
+    ItemActionStarted {
+        sequence: u32,
+        label: String,
+    },
+    ItemActionFinished {
+        sequence: u32,
+    },
+    ItemBlocked {
+        cause: String,
+    },
+    ItemParked {
+        expires_ms: i64,
+    },
+    ItemResumed,
+    ItemSettled {
+        outcome: String,
+    },
+    JobSettled {
+        succeeded: u32,
+        degraded: u32,
+        failed: u32,
+        ambiguous: u32,
+        skipped: u32,
+        blocked: u32,
+    },
+    JobHalted {
+        scope: String,
+    },
+}
+
+impl JobEventPayload {
+    /// The serde tag, which is the `job_event.kind` column value. Total, so
+    /// adding a variant without a kind string fails to compile here.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::JobQueued { .. } => "JobQueued",
+            Self::JobStarted { .. } => "JobStarted",
+            Self::ItemQueued { .. } => "ItemQueued",
+            Self::ItemLeased { .. } => "ItemLeased",
+            Self::ItemActionStarted { .. } => "ItemActionStarted",
+            Self::ItemActionFinished { .. } => "ItemActionFinished",
+            Self::ItemBlocked { .. } => "ItemBlocked",
+            Self::ItemParked { .. } => "ItemParked",
+            Self::ItemResumed => "ItemResumed",
+            Self::ItemSettled { .. } => "ItemSettled",
+            Self::JobSettled { .. } => "JobSettled",
+            Self::JobHalted { .. } => "JobHalted",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Currency, FailureCode, Money};
@@ -414,6 +492,60 @@ mod tests {
             back, money,
             "Money must survive a serde round trip unchanged"
         );
+    }
+
+    /// The twelve serde tags and the twelve kind strings are one set; the
+    /// wildcard-free construction plus this agreement loop is the tripwire.
+    #[test]
+    fn every_job_event_tag_is_its_kind_string() {
+        let samples = [
+            super::JobEventPayload::JobQueued { items: 1 },
+            super::JobEventPayload::JobStarted { items: 1 },
+            super::JobEventPayload::ItemQueued {
+                mapping: super::MappingId(super::Uuid([1; 16])),
+            },
+            super::JobEventPayload::ItemLeased {
+                worker: "w".to_owned(),
+                lease_epoch: 1,
+            },
+            super::JobEventPayload::ItemActionStarted {
+                sequence: 1,
+                label: "submit".to_owned(),
+            },
+            super::JobEventPayload::ItemActionFinished { sequence: 1 },
+            super::JobEventPayload::ItemBlocked {
+                cause: "reauth".to_owned(),
+            },
+            super::JobEventPayload::ItemParked { expires_ms: 1 },
+            super::JobEventPayload::ItemResumed,
+            super::JobEventPayload::ItemSettled {
+                outcome: "succeeded".to_owned(),
+            },
+            super::JobEventPayload::JobSettled {
+                succeeded: 1,
+                degraded: 0,
+                failed: 0,
+                ambiguous: 0,
+                skipped: 0,
+                blocked: 0,
+            },
+            super::JobEventPayload::JobHalted {
+                scope: "org_inventory".to_owned(),
+            },
+        ];
+        assert_eq!(samples.len(), 12, "one sample per JobEventKind");
+        for payload in samples {
+            let encoded = serde_json::to_value(&payload).expect("a payload serialises");
+            let tag = encoded
+                .as_object()
+                .and_then(|object| object.keys().next().cloned())
+                .unwrap_or_else(|| encoded.as_str().unwrap_or_default().to_owned());
+            assert_eq!(
+                tag,
+                payload.kind(),
+                "the serde tag and the kind string must agree"
+            );
+        }
     }
 
     #[test]
