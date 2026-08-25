@@ -2373,8 +2373,20 @@ dependencies = [
  "tam-marketplace",
  "tam-pipeline",
  "tam-secrets",
+ "tam-taxonomy",
  "tam-types",
  "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "tam-taxonomy"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tam-domain",
+ "tam-types",
  "uuid",
 ]
 

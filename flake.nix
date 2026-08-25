@@ -32,8 +32,8 @@
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
 
           # cleanCargoSource would drop sqlx's offline query metadata, the
-          # SQL migrations and the cassette fixtures, all of which the
-          # sandboxed build needs.
+          # SQL migrations, the cassette fixtures and the captured taxonomy
+          # data, all of which the sandboxed build needs.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             filter =
@@ -41,7 +41,8 @@
               (craneLib.filterCargoSources path type)
               || (builtins.match ".*/\\.sqlx/query-.*\\.json" path != null)
               || (builtins.match ".*/migrations/.*\\.sql" path != null)
-              || (builtins.match ".*/tests/cassettes/.*\\.json" path != null);
+              || (builtins.match ".*/tests/cassettes/.*\\.json" path != null)
+              || (builtins.match ".*/docs/design/data/.*\\.json" path != null);
           };
           commonArgs = {
             inherit src;
