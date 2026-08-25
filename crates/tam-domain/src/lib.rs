@@ -1,34 +1,20 @@
-//! Compilable sketch of the canonical-product domain model.
+//! The pure correctness core: taxonomy projection, the canonical product, the
+//! mapping aggregate, the job-ledger vocabulary and the sans-IO `SyncMachine`.
 //!
-//! This file exists because an adversarial review of the first engineering
-//! charter found that its flagship artefact had never been compiled. Every type
-//! quoted in `../2026-08-25-listing-sync-design.md` and its live siblings is
-//! taken from here verbatim. Verify with:
-//!
-//! ```text
-//! rustc --edition 2021 --crate-type lib -D warnings docs/design/sketches/domain.rs -o /dev/null
-//! ```
-//!
-//! Stand-in types stand where a real crate type will go, so that the sketch
-//! compiles with no dependency graph at all.
+//! Every definition is promoted verbatim from `docs/design/sketches/domain.rs`,
+//! the artefact of record for the domain types. Nothing here performs I/O;
+//! every action the machine wants done is an `Effect` in a returned
+//! `EffectList`, and the transition table is specified in
+//! `docs/design/sync-machine.md`.
 
 #![forbid(unsafe_code)]
 
-// ---------------------------------------------------------------- stand-ins
-
-/// Stands in for the `uuid` crate's type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Uuid(pub [u8; 16]);
-
-/// Stands in for a real instant type. Milliseconds since the Unix epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Timestamp(pub i64);
-
-/// Stands in for a blake3 digest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ContentHash(pub [u8; 32]);
-
-// ------------------------------------------------------------------ identity
+use tam_types::{
+    AttemptId, CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail, FieldKey,
+    FieldMismatch, FileId, InventoryId, ListingCopy, LogicalInstant, MappingId, Marketplace,
+    MismatchClass, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, Timestamp,
+    Title, UserId, Uuid,
+};
 
 macro_rules! id_newtype {
     ($($name:ident),* $(,)?) => {
@@ -39,199 +25,7 @@ macro_rules! id_newtype {
     };
 }
 
-id_newtype!(
-    OrgId,
-    ProductId,
-    FileId,
-    MappingId,
-    AttemptId,
-    JobId,
-    ConnectionId,
-    CanonicalTermId,
-    UserId,
-);
-
-// -------------------------------------------------------- marketplace target
-
-/// A marketplace as an account and a login.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Marketplace {
-    Tes,
-    Etsy,
-    Tpt,
-}
-
-/// The inventory a listing is actually created in, which is the unit the model
-/// keys on. Tes runs disjoint GB and US inventories under one marketplace, so
-/// keying projections on `Marketplace` would make the entire first chargeable
-/// product unrepresentable. Whether one author login reaches both inventories
-/// is an assumption rather than a research finding, and it is settled by the
-/// M-1 probe on the founder's own account; `Connection` scope depends on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum InventoryId {
-    TesGb,
-    TesUs,
-    Etsy,
-    Tpt,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Currency {
-    Gbp,
-    Usd,
-}
-
-/// How an inventory decides the currency a price is denominated in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CurrencyRule {
-    /// Fixed by the inventory itself. Measured on Tes: fetching two US-inventory
-    /// resources from a New Zealand client with `geoCurrency=AUD` cookies still
-    /// returned USD offers, so currency follows the inventory rather than the
-    /// viewer. The GB-cookie case specifically has not been tested.
-    Fixed(Currency),
-    /// Set by the seller at shop level. Unverified for Etsy and TPT; must be
-    /// established before either connector is built.
-    SellerScoped,
-}
-
-impl InventoryId {
-    #[must_use]
-    pub const fn marketplace(self) -> Marketplace {
-        match self {
-            Self::TesGb | Self::TesUs => Marketplace::Tes,
-            Self::Etsy => Marketplace::Etsy,
-            Self::Tpt => Marketplace::Tpt,
-        }
-    }
-
-    #[must_use]
-    pub const fn currency_rule(self) -> CurrencyRule {
-        match self {
-            Self::TesGb => CurrencyRule::Fixed(Currency::Gbp),
-            Self::TesUs => CurrencyRule::Fixed(Currency::Usd),
-            Self::Etsy | Self::Tpt => CurrencyRule::SellerScoped,
-        }
-    }
-}
-
-// --------------------------------------------------------------------- money
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Money {
-    minor_units: i64,
-    currency: Currency,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MoneyError {
-    NotPositive,
-}
-
-impl Money {
-    /// A positive amount. Zero is not a price; it is the `Free` variant of
-    /// `PriceIntent`, which the marketplace parity rules treat differently.
-    pub fn new(minor_units: i64, currency: Currency) -> Result<Self, MoneyError> {
-        if minor_units <= 0 {
-            return Err(MoneyError::NotPositive);
-        }
-        Ok(Self {
-            minor_units,
-            currency,
-        })
-    }
-
-    #[must_use]
-    pub const fn minor_units(self) -> i64 {
-        self.minor_units
-    }
-
-    #[must_use]
-    pub const fn currency(self) -> Currency {
-        self.currency
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PriceIntent {
-    Free,
-    Paid(Money),
-}
-
-/// How one inventory's price is derived. Separate from the parity invariant,
-/// which is a cross-inventory check rather than a derivation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PriceRule {
-    /// Convert the canonical price at a rate recorded on the mapping.
-    Converted {
-        rate_micros: i64,
-        rounding: Rounding,
-    },
-    /// The seller set this inventory's price by hand.
-    Explicit(PriceIntent),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Rounding {
-    Nearest,
-    UpToCharm,
-}
-
-// --------------------------------------------------------------------- files
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileRole {
-    Payload,
-    Preview,
-    Cover,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileKind {
-    Pdf,
-    Pptx,
-    Docx,
-    Zip,
-    Image,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScanOutcome {
-    Pending,
-    Clean { at: Timestamp },
-    Infected { signature: String },
-    Failed { code: FailureCode },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductFile {
-    pub id: FileId,
-    pub role: FileRole,
-    pub kind: FileKind,
-    pub hash: ContentHash,
-    pub byte_len: u64,
-    pub scan: ScanOutcome,
-}
-
-/// A product with no payload cannot be listed anywhere, so the empty case is
-/// removed rather than validated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PayloadSet {
-    head: ProductFile,
-    tail: Vec<ProductFile>,
-}
-
-impl PayloadSet {
-    #[must_use]
-    pub fn new(head: ProductFile, tail: Vec<ProductFile>) -> Self {
-        Self { head, tail }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &ProductFile> {
-        std::iter::once(&self.head).chain(self.tail.iter())
-    }
-}
-
-// ------------------------------------------------------------------ taxonomy
+id_newtype!(WriteAttemptId, JobItemId, FormId, ActionId, GrantId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TermKind {
@@ -329,8 +123,6 @@ pub enum ReconciliationState {
     },
 }
 
-// -------------------------------------------------------------------- grades
-
 /// The seller's own grade or phase declaration, kept verbatim. The age interval
 /// is derived from it; the declaration is the fact, and re-emitting to the
 /// vocabulary it came from uses the declaration rather than a round trip.
@@ -379,31 +171,6 @@ impl AgeInterval {
         self.high_years
     }
 }
-
-// ---------------------------------------------------------- listing copy
-
-/// A title as the seller authored it. Per-inventory caps and character rules
-/// are applied at projection time, never at authoring time.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Title(pub String);
-
-/// How a marketplace counts a title against its cap. Unverified on TPT, whose
-/// 80-character cap was established from a sample containing no astral-plane
-/// characters and therefore cannot distinguish these cases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LengthUnit {
-    Bytes,
-    Utf16CodeUnits,
-    Codepoints,
-    GraphemeClusters,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListingCopy {
-    pub body: String,
-}
-
-// -------------------------------------------------------------- remote identity
 
 /// A marketplace's durable identifier for a listing, one variant per
 /// marketplace, so a TPT identifier cannot be stored where a Tes one belongs.
@@ -495,8 +262,6 @@ pub enum FetchReason {
     StructuralProbe { grant: CanaryGrant },
 }
 
-// ------------------------------------------------------------------- binding
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorrelationMarker(pub String);
 
@@ -550,62 +315,6 @@ pub enum Verification {
         rest: Vec<FieldMismatch>,
     },
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FieldKey {
-    Title,
-    Description,
-    Price,
-    Taxonomy,
-    Grades,
-    Files,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FieldMismatch {
-    pub field: FieldKey,
-    pub class: MismatchClass,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MismatchClass {
-    /// Entity re-encoding, Unicode normalisation, curly quotes, whitespace
-    /// collapse, tag reordering. Expected, and not a defect.
-    Normalised,
-    Truncated {
-        limit_observed: usize,
-    },
-    Missing,
-    WrongField {
-        observed_in: FieldKey,
-    },
-    Unexpected,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MismatchResponse {
-    Accept,
-    Degrade,
-    HaltInventory,
-    HaltAndPage,
-}
-
-impl MismatchClass {
-    /// The response is a total function of the class rather than a runbook
-    /// paragraph, so an agent editing the classifier cannot leave a class
-    /// without an action.
-    #[must_use]
-    pub const fn response(&self) -> MismatchResponse {
-        match self {
-            Self::Normalised => MismatchResponse::Accept,
-            Self::Truncated { .. } => MismatchResponse::Degrade,
-            Self::Missing => MismatchResponse::HaltInventory,
-            Self::WrongField { .. } | Self::Unexpected => MismatchResponse::HaltAndPage,
-        }
-    }
-}
-
-// ------------------------------------------------------------------- mapping
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldPolicy {
@@ -697,8 +406,6 @@ impl Mapping {
     }
 }
 
-// ------------------------------------------------------- canonical product
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalProduct {
     pub id: ProductId,
@@ -734,8 +441,6 @@ pub enum ProjectionBlocked {
     CoverMissing,
     ScanIncomplete { file: FileId },
 }
-
-// -------------------------------------------------------------- write outcome
 
 /// A submit has three answers, not two, and the third is not a kind of failure:
 /// it landed, it did not land, or we do not know. An ambiguous attempt is never
@@ -804,36 +509,6 @@ pub enum ChallengeKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceRef(pub String);
 
-/// Closed, versioned and low-cardinality, with an explicit other-case, so a
-/// failure list of two hundred items is filterable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FailureCode {
-    SelectorNotFound,
-    SelectorAmbiguous,
-    SelectorResolvedViaFallback,
-    PreconditionElementAbsent,
-    NavigationCancelled,
-    UnexpectedOrigin,
-    SubmitNoConfirmation,
-    ChallengePresented,
-    SessionExpired,
-    UploadRejected,
-    RateLimited,
-    VerificationMismatch,
-    FormSchemaDrift,
-    /// The loaded selector pack's declared adapter version is not one this
-    /// build accepts. Replaces the client-fleet-era `PackExpired`/`PackRejected`.
-    AdapterVersionRejected,
-    Other,
-}
-
-/// Adapter-supplied free text accompanying a `FailureCode`. Never parsed, never
-/// crosswalked to copy, and never permitted to decide an outcome.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FailureDetail(pub String);
-
-// --------------------------------------------------------------- job ledger
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemOutcome {
     Succeeded,
@@ -876,8 +551,6 @@ pub enum BlockCause {
     RateGovernor,
 }
 
-// ------------------------------------------------------------ the write path
-
 /// The only place a `WriteReceipt` is minted. In the real workspace this module
 /// is the `tam-marketplace` crate, which is why `WriteReceipt` and `FetchReason`
 /// live beside the write path rather than in `tam-types`: Rust's finest
@@ -916,8 +589,6 @@ pub mod adapter {
         FetchReason::VerifyWrite { receipt }
     }
 }
-
-// ------------------------------------------------------------ create strategy
 
 /// Whether an inventory can be driven into `RemoteLifecycle::Draft`. The M-1
 /// probe sets it; until then it is `Unprobed` and `DraftThenPublish` may not be
@@ -977,8 +648,6 @@ pub enum RemoteLifecycleKind {
     Withdrawn,
 }
 
-// -------------------------------------------------------------- adapter seam
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaDrift {
     pub form: FormId,
@@ -1019,15 +688,6 @@ pub enum AdapterError {
     /// The request provably never left. The only class that is safe to retry.
     NotSent(ConnectFailure),
 }
-
-// ------------------------------------------------------------ the sync machine
-
-/// A clock reading passed into the machine rather than read by it, which is
-/// what makes replay exact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LogicalInstant(pub i64);
-
-id_newtype!(WriteAttemptId, JobItemId, FormId, ActionId, GrantId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IdempotencyKey(pub Uuid);
@@ -1228,15 +888,13 @@ impl SyncMachine {
     /// Consumes the machine so a stale state cannot be stepped twice, and takes
     /// `now` as a parameter rather than reading a clock.
     ///
-    /// The body here is a stub: this file is the artefact of record for the
-    /// types, and the transition table is specified in `../sync-machine.md`.
+    /// The body is a stub until the transition table specified in
+    /// `docs/design/sync-machine.md` is implemented later in M1.
     pub fn step(self, input: Input, now: LogicalInstant) -> Result<Transition, MachineError> {
         drop((self, input, now));
         Err(MachineError::InputNotApplicable)
     }
 }
-
-// ------------------------------------------------------------- custody seam
 
 /// How a seller's marketplace access is held. `StoredCredential` is today's
 /// model and the founder recorded it as interim, so the two better models are
@@ -1296,8 +954,6 @@ pub trait ConnectionProvider: Send + Sync {
     ) -> impl std::future::Future<Output = Result<SessionLease, CustodyError>> + Send;
 }
 
-// --------------------------------------------------------------- job ledger
-
 /// The closed event vocabulary the progress stream carries. `job_event.kind` is
 /// the serde tag of this enum and holds no other value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1340,8 +996,6 @@ pub enum JobStatus {
     Halted,
     Settled(OutcomeSummary),
 }
-
-// ------------------------------------------------- adapter and fault seams
 
 /// The adapter seam. Keyed on `InventoryId` rather than `Marketplace`, so the
 /// Tes crate registers two adapters that share markup, a login and an upload
