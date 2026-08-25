@@ -20,8 +20,6 @@ result-*
 # probe-local secrets (session cookies, exported HARs)
 probes/local/
 
-# spike build artifacts
-spikes/tes-spike/target/
 
 # local dev state (ephemeral postgres, broker sockets)
 .dev/
