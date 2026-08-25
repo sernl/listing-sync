@@ -3,6 +3,7 @@ resolver = "2"
 members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/tam-marketplace", "crates/tam-marketplace-tes", "crates/tam-domain", "crates/tam-secrets", "crates/tam-pipeline", "crates/tam-storage",
     "crates/tam-engine",
     "crates/tam-canary",
+    "crates/tam-pipeline-worker",
     "crates/tam-worker", "crates/tam-api", "crates/tam-server", "crates/tam-session-broker"]
 
 [workspace.lints.rust]

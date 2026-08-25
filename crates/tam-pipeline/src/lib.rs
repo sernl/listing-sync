@@ -7,6 +7,7 @@
 
 pub mod archive;
 pub mod hash;
+pub mod pipeline;
 pub mod probe;
 pub mod render;
 pub mod scan;

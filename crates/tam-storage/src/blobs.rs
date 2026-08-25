@@ -143,6 +143,116 @@ impl<S: ObjectStore> BlobRepo<S> {
     }
 }
 
+/// A `BlobSink` bound to one tenant, so the pipeline can store blobs without
+/// knowing the tenant plumbing. The pipeline seals nothing itself; the repo
+/// does, per tenant.
+pub struct TenantBlobSink<'a, S> {
+    pub repo: &'a BlobRepo<S>,
+    pub org: OrgId,
+    pub at: Timestamp,
+}
+
+impl<S: ObjectStore> tam_pipeline::pipeline::BlobSink for TenantBlobSink<'_, S> {
+    async fn store(&self, bytes: Vec<u8>) -> Result<ContentHash, String> {
+        self.repo
+            .put(self.org, &bytes, self.at)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The `FileSource` the Tes adapter calls into: it reads a stored, encrypted
+/// blob back as `FileContent` for upload, closing the seam M1c left as a stub.
+pub struct PipelineFileSource<S> {
+    repo: BlobRepo<S>,
+    org: OrgId,
+    catalogue: PgPool,
+}
+
+impl<S: ObjectStore> PipelineFileSource<S> {
+    #[must_use]
+    pub fn new(repo: BlobRepo<S>, org: OrgId, catalogue: PgPool) -> Self {
+        Self {
+            repo,
+            org,
+            catalogue,
+        }
+    }
+}
+
+impl<S: ObjectStore> tam_marketplace::FileSource for PipelineFileSource<S> {
+    async fn fetch(
+        &self,
+        file: tam_types::FileId,
+    ) -> Result<tam_marketplace::FileContent, tam_marketplace::FileSourceError> {
+        // The product_file row carries the hash and kind; the blob carries the
+        // bytes. One join keyed on the tenant.
+        let mut tx = self.catalogue.begin().await.map_err(|error| {
+            tam_marketplace::FileSourceError::Unreadable {
+                file,
+                detail: error.to_string(),
+            }
+        })?;
+        crate::pin_org(&mut tx, self.org).await.map_err(|error| {
+            tam_marketplace::FileSourceError::Unreadable {
+                file,
+                detail: error.to_string(),
+            }
+        })?;
+        let row = sqlx::query!(
+            "SELECT hash, kind FROM product_file WHERE org_id = $1 AND id = $2",
+            uuid_to_db(self.org.0),
+            uuid_to_db(file.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| tam_marketplace::FileSourceError::Unreadable {
+            file,
+            detail: error.to_string(),
+        })?;
+        drop(tx);
+        let row = row.ok_or(tam_marketplace::FileSourceError::Missing(file))?;
+        let hash = crate::codec::hash_from_db(&row.hash).map_err(|error| {
+            tam_marketplace::FileSourceError::Unreadable {
+                file,
+                detail: error.to_string(),
+            }
+        })?;
+        let bytes = self.repo.get(self.org, hash).await.map_err(|error| {
+            tam_marketplace::FileSourceError::Unreadable {
+                file,
+                detail: error.to_string(),
+            }
+        })?;
+        Ok(tam_marketplace::FileContent {
+            file_name: format!("{}.{}", crate::codec::hash_hex(hash), extension(&row.kind)),
+            content_type: content_type(&row.kind),
+            bytes,
+        })
+    }
+}
+
+fn extension(kind: &str) -> &'static str {
+    match kind {
+        "pdf" => "pdf",
+        "pptx" => "pptx",
+        "docx" => "docx",
+        "zip" => "zip",
+        _ => "bin",
+    }
+}
+
+fn content_type(kind: &str) -> String {
+    match kind {
+        "pdf" => "application/pdf",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image" => "image/png",
+        _ => "application/octet-stream",
+    }
+    .to_owned()
+}
+
 fn object_key(org: OrgId, hash: ContentHash) -> String {
     // A flat key the LocalObjectStore accepts: the tenant prefix keeps a
     // shared dev directory legible, the hash makes it content-addressed, and

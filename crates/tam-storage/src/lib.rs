@@ -15,7 +15,7 @@ pub mod jobs;
 mod mapping;
 mod product;
 
-pub use blobs::{BlobError, BlobRepo};
+pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use jobs::{
     append_event, AttemptIntent, AttemptVerdict, BudgetGrant, EventScope, HaltCause, HaltRepo,
     InventoryFailureWindow, JobRepo, LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob,

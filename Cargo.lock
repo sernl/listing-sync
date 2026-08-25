@@ -2313,6 +2313,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-pipeline-worker"
+version = "0.0.0"
+dependencies = [
+ "sqlx",
+ "tam-limits",
+ "tam-pipeline",
+ "tam-secrets",
+ "tam-storage",
+ "tam-types",
+ "tokio",
+]
+
+[[package]]
 name = "tam-secrets"
 version = "0.0.0"
 dependencies = [
