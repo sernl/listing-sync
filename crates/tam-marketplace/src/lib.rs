@@ -9,6 +9,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cassette;
+pub mod transport;
+
 use tam_types::{
     AttemptId, ConnectionId, ContentHash, FailureCode, FailureDetail, FieldKey, FieldMismatch,
     FileId, InventoryId, LogicalInstant, Marketplace, MismatchClass, OrgId, Timestamp, Uuid,

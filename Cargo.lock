@@ -1989,6 +1989,9 @@ version = "0.1.0"
 name = "tam-marketplace"
 version = "0.0.0"
 dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
  "tam-types",
 ]
 
