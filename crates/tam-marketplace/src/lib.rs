@@ -412,11 +412,15 @@ pub trait MarketplaceAdapter: Send + Sync {
         fields: FieldSet,
     ) -> impl std::future::Future<Output = Result<SubmitEvidence, AdapterError>> + Send;
 
+    /// `observed_at` is the driver's clock reading passed in as data — an
+    /// adapter holds no clock — and it is what an observed lifecycle instant
+    /// is attested against.
     fn read_back(
         &self,
         org: OrgId,
         locator: ListingLocator,
         reason: FetchReason,
+        observed_at: Timestamp,
     ) -> impl std::future::Future<Output = Result<ObservedListing, AdapterError>> + Send;
 }
 
@@ -476,6 +480,31 @@ pub trait ConnectionProvider: Send + Sync {
         purpose: LeasePurpose,
         grant: GrantId,
     ) -> impl std::future::Future<Output = Result<SessionLease, CustodyError>> + Send;
+}
+
+/// File content an adapter uploads, resolved through [`FileSource`]. The
+/// name and content type travel with the bytes because the S3 policy signs
+/// form fields derived from them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileContent {
+    pub file_name: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileSourceError {
+    Missing(FileId),
+    Unreadable { file: FileId, detail: String },
+}
+
+/// Resolves a `FileId` to its content. The file pipeline (M1f) implements
+/// this over object storage; tests hand bytes straight back.
+pub trait FileSource: Send + Sync {
+    fn fetch(
+        &self,
+        file: FileId,
+    ) -> impl std::future::Future<Output = Result<FileContent, FileSourceError>> + Send;
 }
 
 /// The six transport faults the research names, plus the two ambiguity faults

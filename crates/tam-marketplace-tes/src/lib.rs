@@ -12,7 +12,11 @@
 
 pub mod classify;
 pub mod endpoints;
+pub mod flows;
+pub mod live;
 pub mod schema;
 pub mod session;
 
+pub use flows::{NotATesInventory, TesAdapter};
+pub use live::ReqwestTransport;
 pub use session::{SessionError, TesSession};

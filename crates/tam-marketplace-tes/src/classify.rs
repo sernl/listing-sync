@@ -8,6 +8,8 @@ use tam_marketplace::transport::{HttpResponse, TransportError};
 use tam_marketplace::{AdapterError, AmbiguityCause};
 use tam_types::{FailureCode, FailureDetail};
 
+use crate::endpoints::DraftId;
+
 fn detail(status: u16, body: &str) -> FailureDetail {
     let snippet: String = body.chars().take(200).collect();
     FailureDetail(format!("{status}: {snippet}"))
@@ -65,6 +67,45 @@ pub fn classify_write(response: &HttpResponse, expected_id: i64) -> Result<Value
             AmbiguityCause::ReadBackIndeterminate,
         )),
     }
+}
+
+/// Classifies a mutating call whose positive assertion is JSON of any
+/// shape; the id assertion lives with the caller where one exists.
+pub fn classify_write_json(response: &HttpResponse) -> Result<Value, AdapterError> {
+    classify_write_status(response)?;
+    serde_json::from_str::<Value>(&response.body)
+        .map_err(|_| AdapterError::Ambiguous(AmbiguityCause::ReadBackIndeterminate))
+}
+
+/// Classifies a mutating call by status alone, for steps whose real
+/// verification is a separate read (publish) or a later confirm (the S3
+/// POST, which answers with XML or nothing).
+pub fn classify_write_status(response: &HttpResponse) -> Result<(), AdapterError> {
+    match response.status {
+        200..=299 => Ok(()),
+        408 => Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut)),
+        400 | 404 | 422 => Err(AdapterError::Rejected {
+            code: FailureCode::UploadRejected,
+            detail: detail(response.status, &response.body),
+        }),
+        // 401, 403 and 429 land here deliberately: the write may have landed
+        // before the refusal.
+        _ => Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate,
+        )),
+    }
+}
+
+/// Classifies a create: the positive assertion is a JSON body carrying the
+/// new identifier, and a 2xx without one is precisely the
+/// no-durable-identifier ambiguity.
+pub fn classify_create(response: &HttpResponse) -> Result<DraftId, AdapterError> {
+    let value = classify_write_json(response)?;
+    value
+        .get("id")
+        .and_then(Value::as_i64)
+        .map(DraftId)
+        .ok_or(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier))
 }
 
 /// Classifies a NON-mutating read, where no write state is at stake and the
