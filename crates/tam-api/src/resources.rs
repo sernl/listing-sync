@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{ConnectionRepo, DrainStats, LedgerCursor, ProductRepo, TaxonomyRepo};
 use tam_types::{
-    CanonicalTermId, ConnectionId, InventoryId, Marketplace, OrgId, PriceIntent, ProductId,
-    ScanOutcome, Timestamp, Uuid,
+    CanonicalTermId, ConnectionId, InventoryId, MappingId, Marketplace, OrgId, PriceIntent,
+    ProductId, ScanOutcome, Timestamp, Uuid,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -523,5 +523,97 @@ pub(crate) async fn queue_stats(
         open,
         resolved,
         no_counterpart,
+    }))
+}
+
+// ----------------------------------------------------------------- mappings
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MappingsView {
+    pub mappings: Vec<MappingHeadView>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MappingHeadView {
+    pub id: MappingId,
+    pub product: ProductId,
+    pub inventory: InventoryId,
+    pub binding_state: String,
+    pub lifecycle_state: String,
+    pub updated_at: Timestamp,
+}
+
+pub(crate) async fn list_mappings(
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<MappingsView>, APIError> {
+    let rows = tam_storage::MappingRepo::new(state.pool.clone())
+        .list_heads(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(MappingsView {
+        mappings: rows
+            .into_iter()
+            .map(|row| MappingHeadView {
+                id: row.id,
+                product: row.product,
+                inventory: row.inventory,
+                binding_state: row.binding_state,
+                lifecycle_state: row.lifecycle_state,
+                updated_at: row.updated_at,
+            })
+            .collect(),
+    }))
+}
+
+// ------------------------------------------------------------------- status
+
+/// The public per-marketplace status: every inventory the closed set knows,
+/// with its halt if one is raised. Deliberately session-free — a status page
+/// exists precisely for when logging in is what is broken — and it carries
+/// no tenant data, only the fleet kill switch's own state.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StatusView {
+    pub inventories: Vec<InventoryStatusView>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InventoryStatusView {
+    pub inventory: InventoryId,
+    pub marketplace: Marketplace,
+    pub halted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raised_at: Option<Timestamp>,
+}
+
+const ALL_INVENTORIES: [InventoryId; 5] = [
+    InventoryId::TesGb,
+    InventoryId::TesUs,
+    InventoryId::TesNz,
+    InventoryId::Etsy,
+    InventoryId::Tpt,
+];
+
+pub(crate) async fn status(State(state): State<AppState>) -> Result<Json<StatusView>, APIError> {
+    let halts = tam_storage::HaltRepo::new(state.pool.clone())
+        .inventory_halts()
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(StatusView {
+        inventories: ALL_INVENTORIES
+            .into_iter()
+            .map(|inventory| {
+                let halt = halts.iter().find(|halt| halt.inventory == inventory);
+                InventoryStatusView {
+                    inventory,
+                    marketplace: inventory.marketplace(),
+                    halted: halt.is_some(),
+                    reason: halt.map(|halt| halt.reason.clone()),
+                    raised_at: halt.map(|halt| halt.raised_at),
+                }
+            })
+            .collect(),
     }))
 }

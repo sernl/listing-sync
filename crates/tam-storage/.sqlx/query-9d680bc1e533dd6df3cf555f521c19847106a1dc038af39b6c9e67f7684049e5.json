@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at FROM mapping WHERE org_id = $1 ORDER BY product_id, inventory",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "binding_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "lifecycle_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9d680bc1e533dd6df3cf555f521c19847106a1dc038af39b6c9e67f7684049e5"
+}

@@ -1052,3 +1052,34 @@ impl JobRepo {
         Ok(found.map(|id| JobId(uuid_from_db(id))))
     }
 }
+
+/// One inventory's halt, for the public status page: global reference state,
+/// no tenant data, readable without a session by design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryHaltRow {
+    pub inventory: InventoryId,
+    pub raised_by: String,
+    pub reason: String,
+    pub raised_at: Timestamp,
+}
+
+impl HaltRepo {
+    pub async fn inventory_halts(&self) -> Result<Vec<InventoryHaltRow>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT inventory, raised_by, reason, raised_at FROM inventory_halt \
+             ORDER BY inventory",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(InventoryHaltRow {
+                    inventory: inventory_from_db(&row.inventory)?,
+                    raised_by: row.raised_by,
+                    reason: row.reason,
+                    raised_at: crate::codec::timestamp_from_db(row.raised_at),
+                })
+            })
+            .collect()
+    }
+}

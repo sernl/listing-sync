@@ -926,3 +926,43 @@ fn decode_mapping(
         updated_at: timestamp_from_db(row.updated_at),
     })
 }
+
+/// The flat row the client's product-by-inventory table joins on: one query,
+/// no aggregate hydration, because the table renders state labels rather
+/// than the mapping aggregate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappingHead {
+    pub id: MappingId,
+    pub product: ProductId,
+    pub inventory: InventoryId,
+    pub binding_state: String,
+    pub lifecycle_state: String,
+    pub updated_at: Timestamp,
+}
+
+impl MappingRepo {
+    pub async fn list_heads(&self, org: OrgId) -> Result<Vec<MappingHead>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at \
+             FROM mapping WHERE org_id = $1 ORDER BY product_id, inventory",
+            uuid_to_db(org.0),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(MappingHead {
+                    id: MappingId(uuid_from_db(row.id)),
+                    product: ProductId(uuid_from_db(row.product_id)),
+                    inventory: crate::codec::inventory_from_db(&row.inventory)?,
+                    binding_state: row.binding_state,
+                    lifecycle_state: row.lifecycle_state,
+                    updated_at: timestamp_from_db(row.updated_at),
+                })
+            })
+            .collect()
+    }
+}

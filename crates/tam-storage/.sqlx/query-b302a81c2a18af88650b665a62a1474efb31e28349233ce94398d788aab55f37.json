@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, user_id FROM user_session WHERE token_digest = $1 AND expires_at > $2",
+  "query": "SELECT org_id, user_id, expires_at FROM user_session WHERE token_digest = $1 AND expires_at > $2",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "user_id",
         "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -22,8 +27,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "ec8a1bd70e4105a8f9c812b81bb30064a619c39d26307c47b2790ea08f3c958c"
+  "hash": "b302a81c2a18af88650b665a62a1474efb31e28349233ce94398d788aab55f37"
 }

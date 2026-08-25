@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inventory, raised_by, reason, raised_at FROM inventory_halt ORDER BY inventory",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "raised_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "raised_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "401ee6c2ee40931d52d6cfe6f47a6a4f27025a546bea8ce16a72f04a00825bef"
+}

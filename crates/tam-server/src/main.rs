@@ -2,7 +2,7 @@
 //! router `tam-api` builds. Every route, extractor and error mapping lives in
 //! the library, so this binary holds nothing a test would want to reach.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--ui-dir <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -24,6 +24,11 @@ const DISCLOSE_FLAG: &str = "--disclose-internals";
 /// The credential broker's unix socket; without it the revoke endpoint
 /// answers 503 rather than pretending.
 const BROKER_FLAG: &str = "--broker-socket";
+
+/// The built client directory, served as the router's fallback so the API
+/// and the UI share one origin; unknown paths fall through to index.html,
+/// which is what a single-page app's client router needs.
+const UI_FLAG: &str = "--ui-dir";
 
 /// The instant, read at the one process boundary the lint table permits and
 /// handed to the library as data. A clock before the epoch saturates to zero,
@@ -59,7 +64,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("tam-server disclosing fault internals ({DISCLOSE_FLAG}); development only");
     }
 
-    axum::serve(listener, tam_api::router(state))
+    let app = match &invocation.ui_dir {
+        Some(dir) => {
+            eprintln!("tam-server serving the client from {}", dir.display());
+            tam_api::router(state).fallback_service(
+                tower_http::services::ServeDir::new(dir).not_found_service(
+                    tower_http::services::ServeFile::new(dir.join("index.html")),
+                ),
+            )
+        }
+        None => tam_api::router(state),
+    };
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
@@ -69,6 +85,7 @@ struct Invocation {
     db_url: String,
     bind: SocketAddr,
     config: Config,
+    ui_dir: Option<std::path::PathBuf>,
 }
 
 /// The database url first, then an optional bind address and the disclosure
@@ -78,6 +95,7 @@ struct Invocation {
 fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut positional = Vec::new();
     let mut config = Config::default();
+    let mut ui_dir = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -87,6 +105,10 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                 .next()
                 .ok_or("--broker-socket needs a path argument")?;
             config.broker_socket = Some(std::path::PathBuf::from(path));
+        } else if argument == UI_FLAG {
+            ui_dir = Some(std::path::PathBuf::from(
+                arguments.next().ok_or("--ui-dir needs a path argument")?,
+            ));
         } else {
             positional.push(argument);
         }
@@ -103,6 +125,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         db_url,
         bind,
         config,
+        ui_dir,
     })
 }
 

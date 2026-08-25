@@ -122,3 +122,76 @@ mod tests {
         );
     }
 }
+
+/// The exchange that turns the mint tool's printed token into the HttpOnly
+/// cookie the browser will carry: the client cannot set an HttpOnly cookie
+/// itself, so the server does, with `Max-Age` honest to the session's own
+/// expiry. `Secure` is unconditional — localhost is a secure context in the
+/// browsers that matter, and production is TLS.
+#[derive(Debug, serde::Deserialize)]
+pub struct ExchangeBody {
+    pub token: String,
+}
+
+fn cookie_header(token_hex: &str, max_age_seconds: i64) -> String {
+    format!(
+        "{SESSION_COOKIE}={token_hex}; Path=/; HttpOnly; SameSite=Lax; Secure; \
+         Max-Age={max_age_seconds}"
+    )
+}
+
+pub(crate) async fn exchange(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::Json(body): axum::Json<ExchangeBody>,
+) -> Result<axum::response::Response, APIError> {
+    use axum::response::IntoResponse;
+    let raw = body.token.trim();
+    let raw = raw
+        .strip_prefix(&format!("{SESSION_COOKIE}="))
+        .unwrap_or(raw);
+    let token = SessionToken::from_hex(raw).ok_or_else(unauthenticated)?;
+    let now = (state.wall)();
+    let identity = SessionRepo::new(state.pool.clone())
+        .resolve(&token, now)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?
+        .ok_or_else(unauthenticated)?;
+    #[expect(
+        clippy::integer_division,
+        reason = "milliseconds to whole cookie seconds; truncation only shortens the cookie's life toward safety"
+    )]
+    let max_age = identity.expires_at.0.saturating_sub(now.0) / 1_000;
+    let body = crate::Whoami {
+        org: identity.org,
+        user: identity.user,
+    };
+    Ok((
+        [(axum::http::header::SET_COOKIE, cookie_header(raw, max_age))],
+        axum::Json(body),
+    )
+        .into_response())
+}
+
+/// Logout: expire the session server-side and clear the cookie. Always 204 —
+/// logging out twice is not an error anyone needs reported.
+pub(crate) async fn logout(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    parts: axum::http::HeaderMap,
+) -> Result<axum::response::Response, APIError> {
+    use axum::response::IntoResponse;
+    if let Some(token) = parts
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(token_from_cookie_header)
+    {
+        SessionRepo::new(state.pool.clone())
+            .expire(&token)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?;
+    }
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(axum::http::header::SET_COOKIE, cookie_header("", 0))],
+    )
+        .into_response())
+}

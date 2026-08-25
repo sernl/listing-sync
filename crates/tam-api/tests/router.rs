@@ -35,6 +35,7 @@ impl Answer {
 fn test_state() -> AppState {
     AppState {
         pool: sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(core::time::Duration::from_millis(200))
             .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
             .expect("a lazy pool parses its url without dialling"),
         config: Config::default(),

@@ -95,6 +95,10 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/healthz", get(versioned_healthz))
         .route("/{version}/whoami", get(whoami))
         .route(
+            "/{version}/session",
+            post(session::exchange).delete(session::logout),
+        )
+        .route(
             "/{version}/jobs",
             post(jobs::create_job).get(jobs::list_jobs),
         )
@@ -128,6 +132,8 @@ pub fn router(state: AppState) -> Router {
             "/{version}/reconciliation/stats",
             get(resources::queue_stats),
         )
+        .route("/{version}/mappings", get(resources::list_mappings))
+        .route("/{version}/status", get(resources::status))
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }

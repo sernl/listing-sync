@@ -55,11 +55,12 @@ impl SessionToken {
     }
 }
 
-/// Who a resolved session speaks for.
+/// Who a resolved session speaks for, and until when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionIdentity {
     pub org: OrgId,
     pub user: UserId,
+    pub expires_at: Timestamp,
 }
 
 pub struct SessionRepo {
@@ -132,7 +133,7 @@ impl SessionRepo {
         now: Timestamp,
     ) -> Result<Option<SessionIdentity>, StorageError> {
         let row = sqlx::query!(
-            "SELECT org_id, user_id FROM user_session \
+            "SELECT org_id, user_id, expires_at FROM user_session \
              WHERE token_digest = $1 AND expires_at > $2",
             token.digest(),
             timestamp_to_db(now)?,
@@ -142,6 +143,7 @@ impl SessionRepo {
         Ok(row.map(|row| SessionIdentity {
             org: OrgId(crate::codec::uuid_from_db(row.org_id)),
             user: UserId(crate::codec::uuid_from_db(row.user_id)),
+            expires_at: crate::codec::timestamp_from_db(row.expires_at),
         }))
     }
 

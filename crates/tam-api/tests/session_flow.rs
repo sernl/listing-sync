@@ -100,3 +100,141 @@ async fn an_expired_session_refuses_with_the_closed_vocabulary(pool: PgPool) {
         "expiry and absence are the same refusal"
     );
 }
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn call_json(
+    pool: PgPool,
+    method: axum::http::Method,
+    path: &str,
+    cookie: Option<&str>,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, Vec<u8>, Option<String>) {
+    let mut request = Request::builder().method(method).uri(path);
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    let request = match body {
+        Some(json) => request
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json.to_string())),
+        None => request.body(Body::empty()),
+    }
+    .expect("the request builds");
+    let response = router(state(pool))
+        .oneshot(request)
+        .await
+        .expect("the router serves");
+    let status = response.status();
+    let set_cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes()
+        .to_vec();
+    (status, body, set_cookie)
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_exchange_turns_the_minted_token_into_the_cookie_and_logout_clears_it(pool: PgPool) {
+    provision(&pool, Timestamp(100_000)).await;
+
+    // A bad token is the same refusal as no session.
+    let (status, _body, _cookie) = call_json(
+        pool.clone(),
+        axum::http::Method::POST,
+        "/v1/session",
+        None,
+        Some(serde_json::json!({ "token": "zz".repeat(32) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The mint tool prints "tam_session=<hex>"; the exchange accepts that
+    // form verbatim, so the founder pastes the whole line.
+    let (status, body, set_cookie) = call_json(
+        pool.clone(),
+        axum::http::Method::POST,
+        "/v1/session",
+        None,
+        Some(serde_json::json!({ "token": format!("tam_session={}", TOKEN.to_hex()) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let whoami: Whoami = serde_json::from_slice(&body).expect("the exchange echoes whoami");
+    assert_eq!(whoami.org, ORG);
+    let cookie = set_cookie.expect("the exchange sets the cookie");
+    assert!(
+        cookie.contains("HttpOnly") && cookie.contains("SameSite=Lax") && cookie.contains("Secure"),
+        "the cookie carries its protections: {cookie}"
+    );
+    assert!(
+        cookie.contains("Max-Age=95"),
+        "Max-Age is honest to the session's expiry (95s left): {cookie}"
+    );
+
+    // The set cookie authenticates; logout expires it server-side and the
+    // same cookie is then refused.
+    let pair = cookie.split(';').next().expect("the cookie has a pair");
+    let (status, _body, _cookie) = call_json(
+        pool.clone(),
+        axum::http::Method::GET,
+        "/v1/whoami",
+        Some(pair),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the exchanged cookie authenticates");
+
+    let (status, _body, clearing) = call_json(
+        pool.clone(),
+        axum::http::Method::DELETE,
+        "/v1/session",
+        Some(pair),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        clearing.is_some_and(|cookie| cookie.contains("Max-Age=0")),
+        "logout clears the browser's copy"
+    );
+    let (status, _body, _cookie) = call_json(
+        pool,
+        axum::http::Method::GET,
+        "/v1/whoami",
+        Some(pair),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the expired session is gone server-side, not merely from the browser"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_status_page_needs_no_session(pool: PgPool) {
+    provision(&pool, Timestamp(100_000)).await;
+    let (status, body, _cookie) =
+        call_json(pool, axum::http::Method::GET, "/v1/status", None, None).await;
+    assert_eq!(status, StatusCode::OK, "the status page is public");
+    let view: serde_json::Value = serde_json::from_slice(&body).expect("the status parses");
+    let inventories = view["inventories"]
+        .as_array()
+        .expect("the inventories array");
+    assert_eq!(inventories.len(), 5, "every inventory in the closed set");
+    assert!(
+        inventories.iter().all(|entry| entry["halted"] == false),
+        "a fresh fleet has no halts"
+    );
+}
