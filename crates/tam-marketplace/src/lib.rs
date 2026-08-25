@@ -115,6 +115,11 @@ pub enum FetchReason {
     /// Tier two: one fetch of one listing by a durable identifier already held,
     /// caused by and immediately following an authorised write.
     VerifyWrite { receipt: WriteReceipt },
+    /// The pre-settle verification read, justified by the open `write_attempt`
+    /// fencing row rather than by a receipt — the receipt cannot exist yet
+    /// because minting it needs this read's result. The attempt is the
+    /// authorisation trail: the row was written before the click.
+    VerifyAttempt { attempt: WriteAttemptId },
     /// Tier two, stretched: a listing whose moderation outcome is still pending
     /// is polled by the same durable identifier on a bounded schedule.
     PollLifecycle { receipt: WriteReceipt },
@@ -367,6 +372,11 @@ pub struct SubmitEvidence {
     pub http_status: Option<u16>,
     pub response_body_digest: Option<ContentHash>,
     pub landed_on_route: Option<String>,
+    /// The durable identifier the submit landed on, when the adapter can
+    /// state it — Tes can, because its create returns the resource id. This
+    /// is what lets the pre-settle verification read address the listing by a
+    /// durable id rather than by a marker search no adapter can serve yet.
+    pub landed: Option<RemoteListingId>,
     pub observed_lag: bool,
 }
 

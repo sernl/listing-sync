@@ -276,6 +276,9 @@ async fn the_happy_path_settles_succeeded(app: PgPool) {
             http_status: Some(200),
             response_body_digest: None,
             landed_on_route: Some("https://www.tes.com/api/v2/resources/9001".to_owned()),
+            landed: Some(RemoteListingId::Tes {
+                url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+            }),
             observed_lag: false,
         })],
         submit_cursor: AtomicUsize::new(0),

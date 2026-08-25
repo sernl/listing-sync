@@ -713,7 +713,7 @@ impl SyncMachine {
         now: LogicalInstant,
     ) -> Result<Transition, MachineError> {
         match input {
-            Input::SubmitResult(Ok(_)) => self.await_read_back(attempt),
+            Input::SubmitResult(Ok(evidence)) => self.await_read_back(attempt, evidence.landed),
             Input::SubmitResult(Err(AdapterError::Ambiguous(_))) => self.reconcile(attempt),
             Input::SubmitResult(Err(AdapterError::Rejected { code, detail })) => self.advance(
                 SyncState::Terminal(Outcome::Rejected { code, detail }),
@@ -914,16 +914,39 @@ impl SyncMachine {
     /// convention and justified as a first-party read. The receipt-gated
     /// `verify_after` is reachable only after `settle`, which is the
     /// post-settle read on the reconciled row.
-    fn await_read_back(self, attempt: WriteAttemptId) -> Result<Transition, MachineError> {
-        let locator = ListingLocator::Marker {
-            marker: marker_for(attempt),
-            inventory: self.inventory,
+    /// The pre-settle verification read. When the submit stated the durable
+    /// identifier it landed on, the read addresses it directly under
+    /// `VerifyAttempt`, justified by the open `write_attempt` row. When it did
+    /// not, only a marker strategy can search for the landing; any other
+    /// strategy has nothing to verify against, so the write that cannot be
+    /// verified halts as ambiguous rather than guessing — the stall bias.
+    /// A submit that landed with no statable identifier and no marker to
+    /// search: nothing can verify it, so it halts as the no-durable-identifier
+    /// ambiguity — the governing axiom, a stalled queue over a duplicate storm.
+    fn ambiguous_no_identifier(self, attempt: WriteAttemptId) -> Result<Transition, MachineError> {
+        self.halt_ambiguous(
+            attempt,
+            AmbiguityCause::NoDurableIdentifier,
+            Capture::Diagnostics,
+        )
+    }
+
+    fn await_read_back(
+        self,
+        attempt: WriteAttemptId,
+        landed: Option<RemoteListingId>,
+    ) -> Result<Transition, MachineError> {
+        let locator = match (landed, &self.strategy) {
+            (Some(id), _) => ListingLocator::Durable(id),
+            (None, CreateStrategy::CorrelationMarker { .. }) => ListingLocator::Marker {
+                marker: marker_for(attempt),
+                inventory: self.inventory,
+            },
+            (None, _) => return self.ambiguous_no_identifier(attempt),
         };
         let effects = vec![Effect::ReadBack {
             locator: locator.clone(),
-            reason: FetchReason::FirstPartyExport {
-                inventory: self.inventory,
-            },
+            reason: FetchReason::VerifyAttempt { attempt },
         }];
         self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects)
     }
@@ -1256,6 +1279,17 @@ mod machine_tests {
             http_status: Some(200),
             response_body_digest: None,
             landed_on_route: None,
+            landed: None,
+            observed_lag: false,
+        }
+    }
+
+    fn evidence_landed() -> SubmitEvidence {
+        SubmitEvidence {
+            http_status: Some(200),
+            response_body_digest: None,
+            landed_on_route: None,
+            landed: Some(listing()),
             observed_lag: false,
         }
     }
@@ -1509,17 +1543,69 @@ mod machine_tests {
                 attempt: attempt(),
                 locator: marker_locator(),
             },
-            "a landed submit leaves no durable identifier, so the marker addresses the read-back"
+            "with no stated identifier under a marker strategy, the marker addresses the read-back"
         );
         assert_eq!(
             transition.effects,
             EffectList(vec![Effect::ReadBack {
                 locator: marker_locator(),
-                reason: FetchReason::FirstPartyExport {
-                    inventory: InventoryId::TesGb,
-                },
+                reason: FetchReason::VerifyAttempt { attempt: attempt() },
             }]),
-            "the pre-settle read-back cannot be receipt-justified, because no receipt exists yet"
+            "the pre-settle read-back is justified by the open write-attempt row, not a receipt"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_submit_ok_with_a_durable_id_reads_it_directly() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::SubmitResult(Ok(evidence_landed())), now())
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: ListingLocator::Durable(listing()),
+            },
+            "a submit that stated its landing is verified by that durable identifier"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::ReadBack {
+                locator: ListingLocator::Durable(listing()),
+                reason: FetchReason::VerifyAttempt { attempt: attempt() },
+            }]),
+            "the durable read-back rides the write-attempt capability"
+        );
+    }
+
+    #[test]
+    fn a_landless_submit_under_a_non_marker_strategy_halts_ambiguous() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            CreateStrategy::HaltOnAmbiguity,
+            10,
+        )
+        .step(Input::SubmitResult(Ok(evidence())), now())
+        .expect("a submit result applies in IntentRecorded");
+        assert!(
+            matches!(
+                transition.next.state,
+                SyncState::Terminal(Outcome::Ambiguous {
+                    cause: AmbiguityCause::NoDurableIdentifier,
+                    ..
+                })
+            ),
+            "a submit that cannot be verified halts as ambiguous rather than guessing"
         );
     }
 

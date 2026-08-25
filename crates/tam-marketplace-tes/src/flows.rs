@@ -363,9 +363,13 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         Ok(SubmitEvidence {
             http_status: Some(200),
             response_body_digest: Some(ContentHash(digest)),
-            // The durable identifier rides here: it is what the driver
-            // observed, and the settle step derives the receipt from it.
             landed_on_route: Some(format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0)),
+            // The durable identifier the create returned, so the pre-settle
+            // verification read addresses the resource directly rather than
+            // search for a marker the JSON API never carried.
+            landed: Some(RemoteListingId::Tes {
+                url: format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0),
+            }),
             observed_lag: false,
         })
     }
