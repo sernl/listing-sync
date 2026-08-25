@@ -14,6 +14,7 @@
 pub mod error;
 pub mod jobs;
 pub mod session;
+pub mod stream;
 pub mod version;
 
 use axum::{
@@ -95,6 +96,7 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/jobs/{job}", get(jobs::job_view))
         .route("/{version}/jobs/{job}/items", get(jobs::job_items))
         .route("/{version}/jobs/{job}/items/{item}", get(jobs::item_detail))
+        .route("/{version}/events/stream", get(stream::events_stream))
         .with_state(state)
 }
 
