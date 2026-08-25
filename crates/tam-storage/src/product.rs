@@ -85,44 +85,22 @@ impl ProductRepo {
         .execute(&mut *tx)
         .await?;
 
+        let write = FileWrite {
+            org: org_db,
+            product: product_db,
+            at: at_db,
+        };
         let mut position: i32 = 0;
         for file in product.payload.iter() {
-            insert_file(
-                &mut tx,
-                org_db,
-                product_db,
-                position,
-                FileRole::Payload,
-                file,
-                at_db,
-            )
-            .await?;
+            insert_file(&mut tx, &write, position, FileRole::Payload, file).await?;
             position += 1;
         }
         if let Some(cover) = &product.cover {
-            insert_file(
-                &mut tx,
-                org_db,
-                product_db,
-                position,
-                FileRole::Cover,
-                cover,
-                at_db,
-            )
-            .await?;
+            insert_file(&mut tx, &write, position, FileRole::Cover, cover).await?;
             position += 1;
         }
         for preview in &product.previews {
-            insert_file(
-                &mut tx,
-                org_db,
-                product_db,
-                position,
-                FileRole::Preview,
-                preview,
-                at_db,
-            )
-            .await?;
+            insert_file(&mut tx, &write, position, FileRole::Preview, preview).await?;
             position += 1;
         }
 
@@ -233,7 +211,7 @@ impl ProductRepo {
         let grade = grade.ok_or_else(|| StorageError::CorruptRow {
             reason: "product without a grade_declaration row".to_owned(),
         })?;
-        let grades = decode_grades(grade, paths)?;
+        let grades = decode_grades(&grade, paths)?;
         let price = price_from_db(&row.price_kind, row.price_minor_units, row.price_currency)?;
 
         Ok(Some(ProductRecord {
@@ -289,15 +267,24 @@ impl ProductRepo {
     }
 }
 
+struct FileWrite {
+    org: uuid::Uuid,
+    product: uuid::Uuid,
+    at: DateTime<Utc>,
+}
+
 async fn insert_file(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    org_db: uuid::Uuid,
-    product_db: uuid::Uuid,
+    write: &FileWrite,
     position: i32,
     slot: FileRole,
     file: &ProductFile,
-    at_db: DateTime<Utc>,
 ) -> Result<(), StorageError> {
+    let FileWrite {
+        org: org_db,
+        product: product_db,
+        at: at_db,
+    } = *write;
     if file.role != slot {
         return Err(StorageError::Inconsistent {
             reason: format!(
@@ -500,10 +487,6 @@ fn decode_file(row: FileRow) -> Result<(FileRole, ProductFile), StorageError> {
     ))
 }
 
-#[expect(
-    clippy::type_complexity,
-    reason = "the triple is this function's whole point"
-)]
 fn partition_files(
     rows: Vec<FileRow>,
 ) -> Result<(PayloadSet, Option<ProductFile>, Vec<ProductFile>), StorageError> {
@@ -531,7 +514,7 @@ fn partition_files(
     Ok((PayloadSet::new(head, payload.collect()), cover, previews))
 }
 
-fn decode_grades(row: GradeRow, paths: Vec<PathRow>) -> Result<GradeDeclaration, StorageError> {
+fn decode_grades(row: &GradeRow, paths: Vec<PathRow>) -> Result<GradeDeclaration, StorageError> {
     let source = match (
         row.source.as_str(),
         row.source_inventory.as_deref(),

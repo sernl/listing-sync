@@ -44,6 +44,10 @@ fn file(
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a malformed fixture is a broken test and should panic"
+)]
 fn sample_product(org: OrgId) -> CanonicalProduct {
     let interval = AgeInterval::new(7, 11).expect("7..11 is an ordered interval");
     CanonicalProduct {
@@ -216,12 +220,11 @@ async fn tenant_b_sees_nothing_of_tenant_a(pool: PgPool) {
     );
 
     for table in ["product", "product_file", "blob", "grade_declaration"] {
-        assert_eq!(
-            visible_rows(&pool, table, Some(ORG_A))
-                .await
-                .expect("the pinned probe runs")
-                > 0,
-            true,
+        let a_rows = visible_rows(&pool, table, Some(ORG_A))
+            .await
+            .expect("the pinned probe runs");
+        assert!(
+            a_rows > 0,
             "probe control: the unfiltered {table} probe must see A's rows under A's pin"
         );
         assert_eq!(
