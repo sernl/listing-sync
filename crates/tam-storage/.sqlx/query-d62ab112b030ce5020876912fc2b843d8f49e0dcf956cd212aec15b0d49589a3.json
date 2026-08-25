@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_halt (org_id, raised_by, reason, raised_at)              VALUES ($1, $2, $3, $4) ON CONFLICT (org_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d62ab112b030ce5020876912fc2b843d8f49e0dcf956cd212aec15b0d49589a3"
+}

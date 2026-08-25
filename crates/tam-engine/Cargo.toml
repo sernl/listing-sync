@@ -1,0 +1,27 @@
+[package]
+name    = "tam-engine"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-domain = { path = "../tam-domain" }
+tam-limits = { path = "../tam-limits" }
+tam-marketplace = { path = "../tam-marketplace" }
+tam-storage = { path = "../tam-storage" }
+tam-types = { path = "../tam-types" }
+tokio-util = "0.7"
+uuid = { version = "1", features = ["v4"] }
+
+[features]
+pg-tests = []
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate"] }
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

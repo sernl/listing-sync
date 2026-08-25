@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Text",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "33fdb2cb9c8081b938c6746ce88091a04e28f7908d94ea79ab8d19a32a290f34"
+}

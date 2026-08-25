@@ -200,6 +200,46 @@ impl JobRepo {
     }
 }
 
+/// One inventory's recent terminal outcomes, for the fleet breaker: how
+/// many items settled at all and how many settled failed or ambiguous.
+/// Cross-tenant by construction; runs on the engine role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryFailureWindow {
+    pub inventory: InventoryId,
+    pub settled: i64,
+    pub failed_or_ambiguous: i64,
+}
+
+impl JobRepo {
+    pub async fn recent_outcomes(
+        &self,
+        since: Timestamp,
+    ) -> Result<Vec<InventoryFailureWindow>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT j.inventory AS "inventory!",
+                 count(*) AS "settled!",
+                 count(*) FILTER (WHERE ji.outcome IN ('failed', 'ambiguous'))
+                     AS "failed_or_ambiguous!"
+             FROM job_item ji
+             JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
+             WHERE ji.state = 'settled' AND ji.settled_at >= $1
+             GROUP BY j.inventory"#,
+            timestamp_to_db(since)?,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(InventoryFailureWindow {
+                    inventory: inventory_from_db(&row.inventory)?,
+                    settled: row.settled,
+                    failed_or_ambiguous: row.failed_or_ambiguous,
+                })
+            })
+            .collect()
+    }
+}
+
 /// Appends one event inside the caller's transaction, allocating `org_seq`
 /// by locking the per-organisation counter row — identity values are
 /// allocated before commit and can appear out of order, which is exactly the
@@ -437,6 +477,23 @@ impl LeaseRepo {
         Ok(failed.rows_affected() + stolen.rows_affected())
     }
 
+    /// The tenant's connection for a marketplace, if one is linked.
+    pub async fn connection_for(
+        &self,
+        org: OrgId,
+        inventory: InventoryId,
+    ) -> Result<Option<tam_types::ConnectionId>, StorageError> {
+        let row = sqlx::query_scalar!(
+            r#"SELECT id AS "id!" FROM connection
+             WHERE org_id = $1 AND marketplace = $2 AND state = 'linked'"#,
+            uuid_to_db(org.0),
+            marketplace_to_db(inventory.marketplace()),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|id| tam_types::ConnectionId(uuid_from_db(id))))
+    }
+
     /// Flips the tenant's connection to needs_reauth; the lease scan's
     /// linked-connection gate then holds every sibling item back, which is
     /// what RequeueBehindGate means.
@@ -495,6 +552,24 @@ impl HaltRepo {
         Ok(())
     }
 
+    pub async fn raise_org(&self, org: OrgId, cause: &HaltCause) -> Result<(), StorageError> {
+        let HaltCause {
+            raised_by,
+            reason,
+            at,
+        } = cause;
+        sqlx::query!(
+            "INSERT INTO org_halt (org_id, raised_by, reason, raised_at)              VALUES ($1, $2, $3, $4) ON CONFLICT (org_id) DO NOTHING",
+            uuid_to_db(org.0),
+            raised_by,
+            reason,
+            timestamp_to_db(*at)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn raise_fleet_inventory(
         &self,
         inventory: InventoryId,
@@ -517,6 +592,93 @@ impl HaltRepo {
         )
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+}
+
+/// What a write attempt intends: the projected body and its hash.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttemptIntent {
+    pub body: serde_json::Value,
+    pub hash: Vec<u8>,
+}
+
+/// How an attempt settled in the ledger's own vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttemptVerdict {
+    pub state: String,
+    pub failure_code: Option<FailureCode>,
+}
+
+/// The fencing token's ledger: the row is written before the click, because
+/// the commit boundary is intent recorded rather than response received.
+pub struct WriteAttemptRepo {
+    pool: PgPool,
+}
+
+impl WriteAttemptRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Opens the in-flight row and mints its identifier. The partial unique
+    /// index refuses a second in-flight attempt for the mapping, which is
+    /// the duplicate-upload storm failing at the database.
+    pub async fn open(
+        &self,
+        lease: &LeaseRef,
+        mapping: MappingId,
+        intent: &AttemptIntent,
+        at: Timestamp,
+    ) -> Result<tam_types::Uuid, StorageError> {
+        let AttemptIntent { body, hash } = intent;
+        let attempt = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
+        let inserted = sqlx::query!(
+            "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8)",
+            uuid_to_db(lease.org.0),
+            uuid_to_db(attempt),
+            uuid_to_db(lease.item.0),
+            uuid_to_db(mapping.0),
+            lease.lease_epoch,
+            body,
+            hash.as_slice(),
+            timestamp_to_db(at)?,
+        )
+        .execute(&self.pool)
+        .await;
+        map_unique(inserted, "write_attempt_one_in_flight", || {
+            StorageError::AttemptInFlight
+        })?;
+        Ok(attempt)
+    }
+
+    /// Epoch-fenced settlement of the attempt row.
+    pub async fn settle(
+        &self,
+        lease: &LeaseRef,
+        attempt: tam_types::Uuid,
+        verdict: &AttemptVerdict,
+        at: Timestamp,
+    ) -> Result<(), StorageError> {
+        let AttemptVerdict {
+            state,
+            failure_code,
+        } = verdict;
+        let updated = sqlx::query!(
+            "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
+            uuid_to_db(lease.org.0),
+            uuid_to_db(attempt),
+            lease.lease_epoch,
+            state.as_str(),
+            timestamp_to_db(at)?,
+            failure_code.map(failure_code_to_db),
+        )
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(StorageError::StaleLease);
+        }
         Ok(())
     }
 }

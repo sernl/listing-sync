@@ -15,9 +15,9 @@ mod mapping;
 mod product;
 
 pub use jobs::{
-    append_event, BudgetGrant, EventScope, HaltCause, HaltRepo, JobRepo, LeaseRef, LeaseRepo,
-    LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo,
-    RateBudgetRepo,
+    append_event, AttemptIntent, AttemptVerdict, BudgetGrant, EventScope, HaltCause, HaltRepo,
+    InventoryFailureWindow, JobRepo, LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob,
+    NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo,
 };
 pub use mapping::{MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
@@ -41,6 +41,8 @@ pub enum StorageError {
     StaleLease,
     #[error("idempotency key {key} already has an item")]
     DuplicateIdempotencyKey { key: uuid::Uuid },
+    #[error("another write attempt is in flight for this mapping")]
+    AttemptInFlight,
 }
 
 /// Declares the tenant for the rest of this transaction. `set_config` with

@@ -1,0 +1,17 @@
+[package]
+name    = "tam-worker"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-engine = { path = "../tam-engine" }
+tam-limits = { path = "../tam-limits" }
+tam-storage = { path = "../tam-storage" }
+tam-types = { path = "../tam-types" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio-util = "0.7"
+
+[lints]
+workspace = true
