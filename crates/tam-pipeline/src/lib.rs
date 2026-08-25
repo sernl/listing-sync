@@ -8,4 +8,5 @@
 pub mod archive;
 pub mod hash;
 pub mod probe;
+pub mod render;
 pub mod scan;
