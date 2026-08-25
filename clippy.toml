@@ -8,6 +8,11 @@ allow-panic-in-tests  = true
 allow-print-in-tests  = true
 allow-dbg-in-tests    = true
 
+# allow-invalid marks entries behind cargo features: package-scoped clippy
+# resolves each path against that package's own graph, so a feature-gated
+# method warns as unreachable wherever the feature is off. The ban still
+# applies wherever the path exists, and ban-probe arms each such entry by
+# call site so a typo still fails the lane.
 disallowed-methods = [
   { path = "tokio::spawn",                            reason = "use spawn_supervised; a dropped JoinHandle discards the panic" },
   { path = "tokio::task::spawn",                      reason = "use spawn_supervised" },
@@ -21,13 +26,13 @@ disallowed-methods = [
   { path = "tokio::task::JoinSet::spawn",             reason = "route through spawn_supervised so the panic counter sees it" },
   { path = "tokio::task::JoinSet::spawn_blocking",    reason = "route through spawn_supervised_blocking" },
   { path = "tokio::task::JoinSet::spawn_local",       reason = "route through spawn_supervised" },
-  { path = "tokio::sync::mpsc::unbounded_channel",    reason = "bound it: see crates/limits" },
+  { path = "tokio::sync::mpsc::unbounded_channel",    allow-invalid = true, reason = "bound it: see crates/limits" },
   { path = "futures::channel::mpsc::unbounded",       reason = "bound it: see crates/limits" },
   { path = "reqwest::Client::new",                    reason = "no default timeout; build it with .timeout() and .connect_timeout()" },
   { path = "reqwest::get",                            reason = "no default timeout; use a configured client" },
   { path = "std::fs::read",                           reason = "stream it; uploads are bounded but not small" },
   { path = "std::fs::read_to_string",                 reason = "stream it; uploads are bounded but not small" },
-  { path = "tokio::io::AsyncReadExt::read_to_end",    reason = "stream it under a byte cap" },
+  { path = "tokio::io::AsyncReadExt::read_to_end",    allow-invalid = true, reason = "stream it under a byte cap" },
   { path = "str::split_at",                           reason = "panics off a char boundary; use split_at_checked" },
   { path = "str::split_at_mut",                       reason = "panics off a char boundary; use split_at_mut_checked" },
   { path = "serde_json::Deserializer::disable_recursion_limit", allow-invalid = true, reason = "the 128 default is the depth bound; exists only under unbounded_depth, which deny.toml denies" },
