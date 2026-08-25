@@ -10,14 +10,15 @@
 #![forbid(unsafe_code)]
 
 use tam_marketplace::{
-    AdapterError, ChallengeKind, CorrelationMarker, CreateStrategy, FetchReason, FieldSet, FormId,
+    settle, verify_after, AdapterError, AmbiguityCause, ChallengeKind, CorrelationMarker,
+    CreateStrategy, EvidenceRef, FetchReason, FieldDiffReport, FieldSet, FormId,
     FormSchemaFingerprint, IdempotencyKey, ListingLocator, ObservedListing, Outcome,
     RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence, WriteAttemptId,
 };
 use tam_types::{
-    AttemptId, CanonicalTermId, ConnectionId, ContentHash, FieldMismatch, FileId, InventoryId,
-    ListingCopy, LogicalInstant, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, Timestamp, Title, UserId, Uuid,
+    AttemptId, CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail,
+    FieldMismatch, FileId, InventoryId, ListingCopy, LogicalInstant, MappingId, OrgId, PayloadSet,
+    PriceIntent, PriceRule, ProductFile, ProductId, Timestamp, Title, UserId, Uuid,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -400,8 +401,12 @@ pub enum SyncState {
     PreflightAsserted {
         schema: FormSchemaFingerprint,
     },
+    /// Carries the asserted fingerprint alongside the attempt, because a
+    /// provably-never-sent submit returns to `PreflightAsserted`, and that
+    /// state is defined by the fingerprint a later drift is measured against.
     IntentRecorded {
         attempt: WriteAttemptId,
+        schema: FormSchemaFingerprint,
     },
     Submitted {
         attempt: WriteAttemptId,
@@ -440,8 +445,12 @@ pub enum Effect {
     AssertFormSchema {
         form: FormId,
     },
+    /// Names no attempt, because the machine holds no randomness and cannot
+    /// mint one. The driver opens the `write_attempt` row and reports the
+    /// identifier back as `Input::IntentRecorded`, which is the direction the
+    /// transition table already runs in and is what lets a never-sent submit
+    /// ask for a second intent without inventing its identity.
     RecordIntent {
-        attempt: WriteAttemptId,
         intent_hash: ContentHash,
     },
     Submit {
@@ -471,8 +480,10 @@ pub enum Effect {
         connection: ConnectionId,
         cause: BlockCause,
     },
+    /// The attempt is optional because a preflight that fails on schema drift
+    /// captures its diagnostics before any attempt exists.
     CaptureDiagnostics {
-        attempt: WriteAttemptId,
+        attempt: Option<WriteAttemptId>,
         cause: CaptureCause,
     },
     Halt {
@@ -499,31 +510,611 @@ pub enum MachineError {
     InputNotApplicable,
     /// An input named a write attempt this machine does not own.
     AttemptMismatch,
-    /// A transition would emit more effects than the budget permits.
+    /// A transition would emit more effects than the budget permits. The
+    /// machine is consumed and unchanged: the caller held a budget it had
+    /// already spent and should have sent `Input::BudgetExhausted` instead.
     EffectBudgetExceeded,
 }
+
+/// Whether a halting-ambiguous row captures diagnostics before it halts. The
+/// table varies this by row rather than by cause: the ambiguous-submit row
+/// captures, the two reconcile rows do not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    Diagnostics,
+    Skip,
+}
+
+/// A park waits on the seller rather than on us, and a day is the window
+/// `ItemState::ParkedLive` is dimensioned for.
+const PARK_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncMachine {
     pub org: OrgId,
     pub inventory: InventoryId,
+    /// Held because `Effect::RequeueBehindGate` names it, and the machine can
+    /// only emit what it holds.
+    pub connection: ConnectionId,
+    /// Held because `Effect::AssertFormSchema` names it, on the entry row and
+    /// again when a cleared challenge re-enters the flow.
+    pub form: FormId,
     pub item: JobItemId,
     pub key: IdempotencyKey,
+    /// The hash over `fields`, held because `Effect::RecordIntent` names it.
+    pub intent_hash: ContentHash,
+    /// The projected values a submit writes, held because `Effect::Submit`
+    /// names them and a resubmit after a never-sent request writes the same set.
+    pub fields: FieldSet,
     pub strategy: CreateStrategy,
     pub state: SyncState,
     pub budget: StepBudget,
 }
 
 impl SyncMachine {
+    /// The entry row: a machine in `AwaitingPreflight` that has already asked
+    /// for the form schema to be asserted. The entry effect is charged against
+    /// the budget like any other, so a machine started with no allowance is
+    /// refused here rather than one transition later.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "these are the machine's construction data; a parameter struct \
+                  would be a second name for the machine itself"
+    )]
+    pub fn initial(
+        org: OrgId,
+        inventory: InventoryId,
+        connection: ConnectionId,
+        form: FormId,
+        item: JobItemId,
+        key: IdempotencyKey,
+        intent_hash: ContentHash,
+        fields: FieldSet,
+        strategy: CreateStrategy,
+        budget: StepBudget,
+    ) -> Result<Transition, MachineError> {
+        let machine = Self {
+            org,
+            inventory,
+            connection,
+            form,
+            item,
+            key,
+            intent_hash,
+            fields,
+            strategy,
+            state: SyncState::AwaitingPreflight,
+            budget,
+        };
+        let effects = vec![Effect::AssertFormSchema { form }];
+        machine.advance(SyncState::AwaitingPreflight, effects)
+    }
+
     /// Consumes the machine so a stale state cannot be stepped twice, and takes
     /// `now` as a parameter rather than reading a clock.
     ///
-    /// The body is a stub until the transition table specified in
-    /// `docs/design/sync-machine.md` is implemented later in M1.
+    /// Implements the table in `docs/design/sync-machine.md`. Every business
+    /// outcome including ambiguity is a value in `Outcome` on the success
+    /// channel; `Err` means the transition was impossible, never unsuccessful.
     pub fn step(self, input: Input, now: LogicalInstant) -> Result<Transition, MachineError> {
-        drop((self, input, now));
-        Err(MachineError::InputNotApplicable)
+        if let Some(conflict) = self.attempt_conflict(&input) {
+            return Err(conflict);
+        }
+        if matches!(input, Input::BudgetExhausted) {
+            return self.exhaust_budget();
+        }
+        match self.state.clone() {
+            SyncState::AwaitingPreflight => self.awaiting_preflight_rows(input),
+            SyncState::PreflightAsserted { schema } => self.preflight_asserted_rows(&input, schema),
+            SyncState::IntentRecorded { attempt, schema } => {
+                self.intent_recorded_rows(input, attempt, schema, now)
+            }
+            SyncState::Submitted { .. } | SyncState::Terminal(_) => {
+                Err(MachineError::InputNotApplicable)
+            }
+            SyncState::AwaitingReadBack { attempt, .. } => {
+                self.awaiting_read_back_rows(input, attempt, now)
+            }
+            SyncState::Parked { challenge, .. } => self.parked_rows(&input, challenge),
+        }
     }
+
+    /// Only `Input::IntentRecorded` names an attempt. A state that owns none
+    /// accepts and stores whatever it is given; a state that owns a different
+    /// one refuses; a state re-offered the identifier it already holds is being
+    /// replayed a consumed input, which is inapplicable rather than a mismatch.
+    fn attempt_conflict(&self, input: &Input) -> Option<MachineError> {
+        let Input::IntentRecorded(offered) = input else {
+            return None;
+        };
+        let owned = match &self.state {
+            SyncState::AwaitingPreflight
+            | SyncState::PreflightAsserted { .. }
+            | SyncState::Terminal(_) => None,
+            SyncState::IntentRecorded { attempt, .. }
+            | SyncState::Submitted { attempt, .. }
+            | SyncState::AwaitingReadBack { attempt, .. } => Some(*attempt),
+            SyncState::Parked { attempt, .. } => *attempt,
+        };
+        match owned {
+            None => None,
+            Some(held) if held == *offered => Some(MachineError::InputNotApplicable),
+            Some(_) => Some(MachineError::AttemptMismatch),
+        }
+    }
+
+    fn awaiting_preflight_rows(self, input: Input) -> Result<Transition, MachineError> {
+        match input {
+            Input::PreflightResult(Ok(schema)) => {
+                let effects = vec![Effect::RecordIntent {
+                    intent_hash: self.intent_hash,
+                }];
+                self.advance(SyncState::PreflightAsserted { schema }, effects)
+            }
+            Input::PreflightResult(Err(drift)) => {
+                let effects = vec![
+                    Effect::CaptureDiagnostics {
+                        attempt: None,
+                        cause: CaptureCause::SchemaDrift,
+                    },
+                    Effect::Halt {
+                        scope: self.halt_scope(),
+                    },
+                    Effect::Notify {
+                        org: self.org,
+                        event: SellerEvent::InventoryHalted,
+                    },
+                ];
+                let outcome = Outcome::Rejected {
+                    code: FailureCode::FormSchemaDrift,
+                    detail: drift_detail(&drift),
+                };
+                self.advance(SyncState::Terminal(outcome), effects)
+            }
+            Input::IntentRecorded(_)
+            | Input::SubmitResult(_)
+            | Input::ReadBackResult(_)
+            | Input::ReconcileResult(_)
+            | Input::ChallengeCleared
+            | Input::ParkExpired
+            | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
+        }
+    }
+
+    fn preflight_asserted_rows(
+        self,
+        input: &Input,
+        schema: FormSchemaFingerprint,
+    ) -> Result<Transition, MachineError> {
+        match *input {
+            Input::IntentRecorded(attempt) => {
+                let effects = vec![Effect::Submit {
+                    attempt,
+                    key: self.key,
+                    fields: self.fields.clone(),
+                }];
+                self.advance(SyncState::IntentRecorded { attempt, schema }, effects)
+            }
+            Input::PreflightResult(_)
+            | Input::SubmitResult(_)
+            | Input::ReadBackResult(_)
+            | Input::ReconcileResult(_)
+            | Input::ChallengeCleared
+            | Input::ParkExpired
+            | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
+        }
+    }
+
+    fn intent_recorded_rows(
+        self,
+        input: Input,
+        attempt: WriteAttemptId,
+        schema: FormSchemaFingerprint,
+        now: LogicalInstant,
+    ) -> Result<Transition, MachineError> {
+        match input {
+            Input::SubmitResult(Ok(_)) => self.await_read_back(attempt),
+            Input::SubmitResult(Err(AdapterError::Ambiguous(_))) => self.reconcile(attempt),
+            Input::SubmitResult(Err(AdapterError::Rejected { code, detail })) => self.advance(
+                SyncState::Terminal(Outcome::Rejected { code, detail }),
+                vec![],
+            ),
+            Input::SubmitResult(Err(AdapterError::Challenge(challenge))) => {
+                self.park(attempt, challenge, now)
+            }
+            Input::SubmitResult(Err(AdapterError::SessionExpired)) => {
+                self.park(attempt, ChallengeKind::ReauthRequired, now)
+            }
+            Input::SubmitResult(Err(AdapterError::SchemaDrift(drift))) => {
+                let effects = vec![
+                    Effect::CaptureDiagnostics {
+                        attempt: Some(attempt),
+                        cause: CaptureCause::SchemaDrift,
+                    },
+                    Effect::Halt {
+                        scope: self.halt_scope(),
+                    },
+                ];
+                let outcome = Outcome::Rejected {
+                    code: FailureCode::FormSchemaDrift,
+                    detail: drift_detail(&drift),
+                };
+                self.advance(SyncState::Terminal(outcome), effects)
+            }
+            Input::SubmitResult(Err(AdapterError::RateLimited { .. })) => self.advance(
+                SyncState::Terminal(Outcome::Skipped {
+                    code: FailureCode::RateLimited,
+                }),
+                vec![],
+            ),
+            Input::SubmitResult(Err(AdapterError::NotSent(_))) => {
+                let effects = vec![Effect::RecordIntent {
+                    intent_hash: self.intent_hash,
+                }];
+                self.advance(SyncState::PreflightAsserted { schema }, effects)
+            }
+            Input::PreflightResult(_)
+            | Input::IntentRecorded(_)
+            | Input::ReadBackResult(_)
+            | Input::ReconcileResult(_)
+            | Input::ChallengeCleared
+            | Input::ParkExpired
+            | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
+        }
+    }
+
+    fn awaiting_read_back_rows(
+        self,
+        input: Input,
+        attempt: WriteAttemptId,
+        now: LogicalInstant,
+    ) -> Result<Transition, MachineError> {
+        match input {
+            Input::ReadBackResult(Ok(observed)) => {
+                let outcome = settle(
+                    as_attempt_id(attempt),
+                    observed.id,
+                    Timestamp(now.0),
+                    unnormalised_report(),
+                );
+                self.advance(SyncState::Terminal(outcome), vec![])
+            }
+            Input::ReadBackResult(Err(AdapterError::Ambiguous(cause))) => {
+                let effects = vec![
+                    Effect::CaptureDiagnostics {
+                        attempt: Some(attempt),
+                        cause: CaptureCause::Ambiguity,
+                    },
+                    Effect::Halt {
+                        scope: self.halt_scope(),
+                    },
+                    Effect::Notify {
+                        org: self.org,
+                        event: SellerEvent::InventoryHalted,
+                    },
+                ];
+                self.advance(SyncState::Terminal(ambiguous(attempt, cause)), effects)
+            }
+            Input::ReconcileResult(Ok(Some(id))) => {
+                let outcome = settle(
+                    as_attempt_id(attempt),
+                    id.clone(),
+                    Timestamp(now.0),
+                    unnormalised_report(),
+                );
+                // The receipt the settle just minted is the only thing that can
+                // justify the post-settle verification read, and `settle`
+                // returns nothing but the two committed-class outcomes; the
+                // remaining arms exist so the match is total.
+                let effects = match &outcome {
+                    Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => {
+                        vec![Effect::ReadBack {
+                            locator: ListingLocator::Durable(id),
+                            reason: verify_after(receipt.clone()),
+                        }]
+                    }
+                    Outcome::Rejected { .. }
+                    | Outcome::Ambiguous { .. }
+                    | Outcome::Blocked { .. }
+                    | Outcome::Skipped { .. } => vec![],
+                };
+                self.advance(SyncState::Terminal(outcome), effects)
+            }
+            Input::ReconcileResult(Ok(None)) => {
+                self.halt_ambiguous(attempt, AmbiguityCause::NoDurableIdentifier, Capture::Skip)
+            }
+            Input::ReconcileResult(Err(_)) => self.halt_ambiguous(
+                attempt,
+                AmbiguityCause::ReadBackIndeterminate,
+                Capture::Skip,
+            ),
+            Input::PreflightResult(_)
+            | Input::IntentRecorded(_)
+            | Input::SubmitResult(_)
+            | Input::ReadBackResult(Err(
+                AdapterError::Rejected { .. }
+                | AdapterError::Challenge(_)
+                | AdapterError::SessionExpired
+                | AdapterError::SchemaDrift(_)
+                | AdapterError::RateLimited { .. }
+                | AdapterError::NotSent(_),
+            ))
+            | Input::ChallengeCleared
+            | Input::ParkExpired
+            | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
+        }
+    }
+
+    fn parked_rows(
+        self,
+        input: &Input,
+        challenge: ChallengeKind,
+    ) -> Result<Transition, MachineError> {
+        match *input {
+            Input::ChallengeCleared => {
+                let effects = vec![Effect::AssertFormSchema { form: self.form }];
+                self.advance(SyncState::AwaitingPreflight, effects)
+            }
+            Input::ParkExpired => {
+                let effects = vec![Effect::Notify {
+                    org: self.org,
+                    event: SellerEvent::ItemParked,
+                }];
+                self.advance(SyncState::Terminal(Outcome::Blocked { challenge }), effects)
+            }
+            Input::PreflightResult(_)
+            | Input::IntentRecorded(_)
+            | Input::SubmitResult(_)
+            | Input::ReadBackResult(_)
+            | Input::ReconcileResult(_)
+            | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
+        }
+    }
+
+    /// The budget report is driver-injected and exempt from the charge check:
+    /// a report that the allowance ran out must never be blocked by the
+    /// allowance running out.
+    ///
+    /// It settles as `Ambiguous` from the states where a submit was possible
+    /// and as `Skipped` from the states where it was not. `FailureCode` carries
+    /// no budget variant, so the skipped rows use `Other` until the closed
+    /// vocabulary grows one.
+    fn exhaust_budget(self) -> Result<Transition, MachineError> {
+        let (attempt, outcome) = match &self.state {
+            SyncState::AwaitingPreflight | SyncState::PreflightAsserted { .. } => (
+                None,
+                Outcome::Skipped {
+                    code: FailureCode::Other,
+                },
+            ),
+            SyncState::Parked { attempt, .. } => (
+                *attempt,
+                Outcome::Skipped {
+                    code: FailureCode::Other,
+                },
+            ),
+            SyncState::IntentRecorded { attempt, .. }
+            | SyncState::Submitted { attempt, .. }
+            | SyncState::AwaitingReadBack { attempt, .. } => (
+                Some(*attempt),
+                ambiguous(*attempt, AmbiguityCause::ProcessKilledByBackstop),
+            ),
+            SyncState::Terminal(_) => return Err(MachineError::InputNotApplicable),
+        };
+        let effects = vec![Effect::CaptureDiagnostics {
+            attempt,
+            cause: CaptureCause::Ambiguity,
+        }];
+        Ok(self.emit_unbilled(SyncState::Terminal(outcome), effects))
+    }
+
+    /// A successful submit leaves no durable identifier behind — `SubmitEvidence`
+    /// carries none, and turning a landed route into one is per-marketplace
+    /// adapter knowledge — so the read-back is addressed by the marker
+    /// convention and justified as a first-party read. The receipt-gated
+    /// `verify_after` is reachable only after `settle`, which is the
+    /// post-settle read on the reconciled row.
+    fn await_read_back(self, attempt: WriteAttemptId) -> Result<Transition, MachineError> {
+        let locator = ListingLocator::Marker {
+            marker: marker_for(attempt),
+            inventory: self.inventory,
+        };
+        let effects = vec![Effect::ReadBack {
+            locator: locator.clone(),
+            reason: FetchReason::FirstPartyExport {
+                inventory: self.inventory,
+            },
+        }];
+        self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects)
+    }
+
+    /// Only a marker strategy can reconcile an ambiguous create in this
+    /// milestone: reconciliation searches for something the driver embedded,
+    /// and neither `DraftThenPublish` nor `HaltOnAmbiguity` embeds anything.
+    /// Where there is nothing to search for, the strategy's meaning is to stop,
+    /// which is what `HaltOnAmbiguity` says in its name.
+    fn reconcile(self, attempt: WriteAttemptId) -> Result<Transition, MachineError> {
+        let marker = match self.strategy {
+            CreateStrategy::CorrelationMarker { .. } => marker_for(attempt),
+            CreateStrategy::DraftThenPublish { .. } | CreateStrategy::HaltOnAmbiguity => {
+                return self.halt_ambiguous(
+                    attempt,
+                    AmbiguityCause::NoDurableIdentifier,
+                    Capture::Diagnostics,
+                );
+            }
+        };
+        let locator = ListingLocator::Marker {
+            marker,
+            inventory: self.inventory,
+        };
+        let effects = vec![
+            Effect::Reconcile {
+                attempt,
+                locator: locator.clone(),
+            },
+            Effect::CaptureDiagnostics {
+                attempt: Some(attempt),
+                cause: CaptureCause::Ambiguity,
+            },
+        ];
+        self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects)
+    }
+
+    fn halt_ambiguous(
+        self,
+        attempt: WriteAttemptId,
+        cause: AmbiguityCause,
+        capture: Capture,
+    ) -> Result<Transition, MachineError> {
+        let mut effects = Vec::with_capacity(3);
+        if matches!(capture, Capture::Diagnostics) {
+            effects.push(Effect::CaptureDiagnostics {
+                attempt: Some(attempt),
+                cause: CaptureCause::Ambiguity,
+            });
+        }
+        effects.push(Effect::Halt {
+            scope: self.halt_scope(),
+        });
+        effects.push(Effect::Notify {
+            org: self.org,
+            event: SellerEvent::InventoryHalted,
+        });
+        self.advance(SyncState::Terminal(ambiguous(attempt, cause)), effects)
+    }
+
+    fn park(
+        self,
+        attempt: WriteAttemptId,
+        challenge: ChallengeKind,
+        now: LogicalInstant,
+    ) -> Result<Transition, MachineError> {
+        let reauth = matches!(challenge, ChallengeKind::ReauthRequired);
+        let effects = vec![
+            Effect::ParkItem {
+                item: self.item,
+                challenge,
+                expires: LogicalInstant(now.0.saturating_add(PARK_TTL_MS)),
+            },
+            Effect::RequeueBehindGate {
+                connection: self.connection,
+                cause: if reauth {
+                    BlockCause::Reauth
+                } else {
+                    BlockCause::Challenge
+                },
+            },
+            Effect::Notify {
+                org: self.org,
+                event: if reauth {
+                    SellerEvent::ReauthRequired
+                } else {
+                    SellerEvent::ItemParked
+                },
+            },
+        ];
+        self.advance(
+            SyncState::Parked {
+                attempt: Some(attempt),
+                challenge,
+            },
+            effects,
+        )
+    }
+
+    fn halt_scope(&self) -> HaltScope {
+        HaltScope::OrgInventory {
+            org: self.org,
+            inventory: self.inventory,
+        }
+    }
+
+    /// Every emitted effect is one interpreter action, so a transition that
+    /// would emit more than the allowance permits is refused outright rather
+    /// than emitting a prefix.
+    fn advance(
+        mut self,
+        state: SyncState,
+        effects: Vec<Effect>,
+    ) -> Result<Transition, MachineError> {
+        let cost = u32::try_from(effects.len()).unwrap_or(u32::MAX);
+        if cost > self.budget.actions_remaining {
+            return Err(MachineError::EffectBudgetExceeded);
+        }
+        self.budget = StepBudget {
+            actions_remaining: self.budget.actions_remaining.saturating_sub(cost),
+        };
+        self.state = state;
+        Ok(Transition {
+            next: self,
+            effects: EffectList(effects),
+        })
+    }
+
+    fn emit_unbilled(mut self, state: SyncState, effects: Vec<Effect>) -> Transition {
+        let cost = u32::try_from(effects.len()).unwrap_or(u32::MAX);
+        self.budget = StepBudget {
+            actions_remaining: self.budget.actions_remaining.saturating_sub(cost),
+        };
+        self.state = state;
+        Transition {
+            next: self,
+            effects: EffectList(effects),
+        }
+    }
+}
+
+/// The two newtypes are one identity seen from two layers: the machine holds
+/// the fencing token as `WriteAttemptId` and the ledger and the receipt name
+/// the same uuid `AttemptId`.
+fn as_attempt_id(attempt: WriteAttemptId) -> AttemptId {
+    AttemptId(attempt.0)
+}
+
+/// The attempt is the key the captured diagnostics are stored under, so the
+/// attempt rendered deterministically is the evidence reference.
+fn ambiguous(attempt: WriteAttemptId, cause: AmbiguityCause) -> Outcome {
+    Outcome::Ambiguous {
+        attempt: as_attempt_id(attempt),
+        cause,
+        evidence: EvidenceRef(format!("write-attempt:{}", hex(attempt.0))),
+    }
+}
+
+/// The driver embeds this same rendering at submit time, so the machine can
+/// name a marker it never watched being written.
+fn marker_for(attempt: WriteAttemptId) -> CorrelationMarker {
+    CorrelationMarker(format!("tam-{}", hex(attempt.0)))
+}
+
+fn hex(uuid: Uuid) -> String {
+    const DIGITS: [u8; 16] = *b"0123456789abcdef";
+    let mut rendered = String::with_capacity(32);
+    for byte in uuid.0 {
+        rendered.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        rendered.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    rendered
+}
+
+/// The M1g seam. There is no normaliser yet, so every settled read-back is
+/// reported as clean and `settle` classifies it `Committed`. M1g replaces this
+/// with the real per-field comparison, which is the only thing that can produce
+/// a `Degraded`, and raises `normaliser_version` off zero.
+fn unnormalised_report() -> FieldDiffReport {
+    FieldDiffReport {
+        normaliser_version: 0,
+        mismatches: vec![],
+    }
+}
+
+fn drift_detail(drift: &SchemaDrift) -> FailureDetail {
+    FailureDetail(format!(
+        "form schema drift: added [{}], removed [{}]",
+        drift.added.join(", "),
+        drift.removed.join(", ")
+    ))
 }
 
 /// The closed event vocabulary the progress stream carries. `job_event.kind` is
@@ -596,6 +1187,1465 @@ mod prop_tests {
             if let Ok(iv) = AgeInterval::new(low, high) {
                 prop_assert!(iv.low_years() <= iv.high_years());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod machine_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use tam_marketplace::{ConnectFailure, MarkerField, MarkerLifetime, RemoteLifecycleKind};
+    use tam_types::FieldKey;
+
+    fn org() -> OrgId {
+        OrgId(Uuid([1; 16]))
+    }
+
+    fn connection() -> ConnectionId {
+        ConnectionId(Uuid([2; 16]))
+    }
+
+    fn form() -> FormId {
+        FormId(Uuid([3; 16]))
+    }
+
+    fn item() -> JobItemId {
+        JobItemId(Uuid([4; 16]))
+    }
+
+    fn key() -> IdempotencyKey {
+        IdempotencyKey(Uuid([5; 16]))
+    }
+
+    fn intent_hash() -> ContentHash {
+        ContentHash([6; 32])
+    }
+
+    fn attempt() -> WriteAttemptId {
+        WriteAttemptId(Uuid([7; 16]))
+    }
+
+    fn other_attempt() -> WriteAttemptId {
+        WriteAttemptId(Uuid([8; 16]))
+    }
+
+    fn fields() -> FieldSet {
+        FieldSet {
+            entries: vec![(FieldKey::Title, "a resource".to_owned())],
+            files: vec![],
+        }
+    }
+
+    fn schema() -> FormSchemaFingerprint {
+        FormSchemaFingerprint(ContentHash([9; 32]))
+    }
+
+    fn drift() -> SchemaDrift {
+        SchemaDrift {
+            form: form(),
+            expected: schema(),
+            observed: FormSchemaFingerprint(ContentHash([10; 32])),
+            added: vec!["consent".to_owned()],
+            removed: vec!["subtitle".to_owned()],
+        }
+    }
+
+    fn evidence() -> SubmitEvidence {
+        SubmitEvidence {
+            http_status: Some(200),
+            response_body_digest: None,
+            landed_on_route: None,
+            observed_lag: false,
+        }
+    }
+
+    fn listing() -> RemoteListingId {
+        RemoteListingId::Tes {
+            url: "https://www.tes.com/teaching-resource/x-1".to_owned(),
+        }
+    }
+
+    fn observed() -> ObservedListing {
+        ObservedListing {
+            id: listing(),
+            fields: vec![],
+            lifecycle: RemoteLifecycle::Live {
+                since: Timestamp(1),
+            },
+        }
+    }
+
+    fn now() -> LogicalInstant {
+        LogicalInstant(1_000)
+    }
+
+    fn marker_strategy() -> CreateStrategy {
+        CreateStrategy::CorrelationMarker {
+            field: MarkerField::DescriptionTail,
+            ttl: MarkerLifetime { seconds: 3_600 },
+        }
+    }
+
+    fn draft_strategy() -> CreateStrategy {
+        CreateStrategy::DraftThenPublish {
+            draft_state: RemoteLifecycleKind::Draft,
+        }
+    }
+
+    fn machine(state: SyncState, strategy: CreateStrategy, actions_remaining: u32) -> SyncMachine {
+        SyncMachine {
+            org: org(),
+            inventory: InventoryId::TesGb,
+            connection: connection(),
+            form: form(),
+            item: item(),
+            key: key(),
+            intent_hash: intent_hash(),
+            fields: fields(),
+            strategy,
+            state,
+            budget: StepBudget { actions_remaining },
+        }
+    }
+
+    fn marker_locator() -> ListingLocator {
+        ListingLocator::Marker {
+            marker: marker_for(attempt()),
+            inventory: InventoryId::TesGb,
+        }
+    }
+
+    fn halt() -> Effect {
+        Effect::Halt {
+            scope: HaltScope::OrgInventory {
+                org: org(),
+                inventory: InventoryId::TesGb,
+            },
+        }
+    }
+
+    fn notify(event: SellerEvent) -> Effect {
+        Effect::Notify { org: org(), event }
+    }
+
+    /// The outcome the machine is expected to mint for a settled read-back,
+    /// built by calling the same public constructor the machine calls.
+    fn settled() -> Outcome {
+        settle(
+            as_attempt_id(attempt()),
+            listing(),
+            Timestamp(now().0),
+            unnormalised_report(),
+        )
+    }
+
+    fn receipt_of(outcome: &Outcome) -> tam_marketplace::WriteReceipt {
+        match outcome {
+            Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => {
+                receipt.clone()
+            }
+            Outcome::Rejected { .. }
+            | Outcome::Ambiguous { .. }
+            | Outcome::Blocked { .. }
+            | Outcome::Skipped { .. } => {
+                panic!("settle returns only the two committed-class outcomes")
+            }
+        }
+    }
+
+    fn entry() -> Transition {
+        SyncMachine::initial(
+            org(),
+            InventoryId::TesGb,
+            connection(),
+            form(),
+            item(),
+            key(),
+            intent_hash(),
+            fields(),
+            marker_strategy(),
+            StepBudget {
+                actions_remaining: 10,
+            },
+        )
+        .expect("a ten-action budget affords the single entry effect")
+    }
+
+    #[test]
+    fn row_entry_asserts_the_form_schema() {
+        let transition = entry();
+        assert_eq!(
+            transition.next.state,
+            SyncState::AwaitingPreflight,
+            "the entry row is the entry state and does not leave it"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::AssertFormSchema { form: form() }]),
+            "the entry row asserts the form schema and asks for nothing else"
+        );
+        assert_eq!(
+            transition.next.budget,
+            StepBudget {
+                actions_remaining: 9
+            },
+            "the entry effect is charged against the budget like any other"
+        );
+    }
+
+    #[test]
+    fn row_entry_is_refused_when_the_budget_affords_nothing() {
+        let refused = SyncMachine::initial(
+            org(),
+            InventoryId::TesGb,
+            connection(),
+            form(),
+            item(),
+            key(),
+            intent_hash(),
+            fields(),
+            marker_strategy(),
+            StepBudget {
+                actions_remaining: 0,
+            },
+        );
+        assert_eq!(
+            refused,
+            Err(MachineError::EffectBudgetExceeded),
+            "a machine with no allowance cannot even ask for the form schema"
+        );
+    }
+
+    #[test]
+    fn row_awaiting_preflight_ok_records_intent() {
+        let transition = machine(SyncState::AwaitingPreflight, marker_strategy(), 10)
+            .step(Input::PreflightResult(Ok(schema())), now())
+            .expect("a preflight result applies in AwaitingPreflight");
+        assert_eq!(
+            transition.next.state,
+            SyncState::PreflightAsserted { schema: schema() },
+            "the asserted fingerprint is what a later drift is measured against"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::RecordIntent {
+                intent_hash: intent_hash()
+            }]),
+            "an asserted schema asks the driver to open the write attempt"
+        );
+    }
+
+    #[test]
+    fn row_awaiting_preflight_drift_rejects_halts_and_notifies() {
+        let transition = machine(SyncState::AwaitingPreflight, marker_strategy(), 10)
+            .step(Input::PreflightResult(Err(drift())), now())
+            .expect("a preflight result applies in AwaitingPreflight");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(Outcome::Rejected {
+                code: FailureCode::FormSchemaDrift,
+                detail: drift_detail(&drift()),
+            }),
+            "drift before any attempt is a rejection, not an ambiguity"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::CaptureDiagnostics {
+                    attempt: None,
+                    cause: CaptureCause::SchemaDrift,
+                },
+                halt(),
+                notify(SellerEvent::InventoryHalted),
+            ]),
+            "the drift row captures, halts and notifies, in that order, with no attempt to name"
+        );
+    }
+
+    #[test]
+    fn row_preflight_asserted_intent_recorded_submits() {
+        let transition = machine(
+            SyncState::PreflightAsserted { schema: schema() },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::IntentRecorded(attempt()), now())
+        .expect("a state owning no attempt accepts the one it is given");
+        assert_eq!(
+            transition.next.state,
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            "the recorded intent carries the fingerprint a never-sent submit returns to"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::Submit {
+                attempt: attempt(),
+                key: key(),
+                fields: fields(),
+            }]),
+            "a committed intent is followed by exactly one submit"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_submit_ok_awaits_read_back() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::SubmitResult(Ok(evidence())), now())
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            "a landed submit leaves no durable identifier, so the marker addresses the read-back"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::ReadBack {
+                locator: marker_locator(),
+                reason: FetchReason::FirstPartyExport {
+                    inventory: InventoryId::TesGb,
+                },
+            }]),
+            "the pre-settle read-back cannot be receipt-justified, because no receipt exists yet"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_submit_ambiguous_reconciles_under_a_marker() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            "an ambiguous submit is reconciled, never retried"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::Reconcile {
+                    attempt: attempt(),
+                    locator: marker_locator(),
+                },
+                Effect::CaptureDiagnostics {
+                    attempt: Some(attempt()),
+                    cause: CaptureCause::Ambiguity,
+                },
+            ]),
+            "the reconcile precedes the capture, in the order the table lists them"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_submit_ambiguous_halts_without_a_marker() {
+        for strategy in [CreateStrategy::HaltOnAmbiguity, draft_strategy()] {
+            let transition = machine(
+                SyncState::IntentRecorded {
+                    attempt: attempt(),
+                    schema: schema(),
+                },
+                strategy,
+                10,
+            )
+            .step(
+                Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+                now(),
+            )
+            .expect("a submit result applies in IntentRecorded");
+            assert_eq!(
+                transition.next.state,
+                SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::NoDurableIdentifier)),
+                "a strategy that embedded nothing has nothing to reconcile against"
+            );
+            assert_eq!(
+                transition.effects,
+                EffectList(vec![
+                    Effect::CaptureDiagnostics {
+                        attempt: Some(attempt()),
+                        cause: CaptureCause::Ambiguity,
+                    },
+                    halt(),
+                    notify(SellerEvent::InventoryHalted),
+                ]),
+                "stopping is what HaltOnAmbiguity means, and a draft strategy has no marker either"
+            );
+        }
+    }
+
+    #[test]
+    fn row_intent_recorded_submit_rejected_passes_the_code_through() {
+        let detail = FailureDetail("the upload was refused".to_owned());
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::Rejected {
+                code: FailureCode::UploadRejected,
+                detail: detail.clone(),
+            })),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(Outcome::Rejected {
+                code: FailureCode::UploadRejected,
+                detail,
+            }),
+            "the adapter's code and detail travel unchanged into the outcome"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![]),
+            "a clean rejection asks for nothing"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_submit_challenge_parks() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::Challenge(ChallengeKind::Captcha))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Parked {
+                attempt: Some(attempt()),
+                challenge: ChallengeKind::Captcha,
+            },
+            "a park holds the attempt it was interrupted mid-flight for"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::ParkItem {
+                    item: item(),
+                    challenge: ChallengeKind::Captcha,
+                    expires: LogicalInstant(now().0 + PARK_TTL_MS),
+                },
+                Effect::RequeueBehindGate {
+                    connection: connection(),
+                    cause: BlockCause::Challenge,
+                },
+                notify(SellerEvent::ItemParked),
+            ]),
+            "the park, the gate and the notification, in the order the table lists them"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_session_expired_parks_on_reauth() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::SessionExpired)),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Parked {
+                attempt: Some(attempt()),
+                challenge: ChallengeKind::ReauthRequired,
+            },
+            "an expired session is the reauth challenge under another name"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::ParkItem {
+                    item: item(),
+                    challenge: ChallengeKind::ReauthRequired,
+                    expires: LogicalInstant(now().0 + PARK_TTL_MS),
+                },
+                Effect::RequeueBehindGate {
+                    connection: connection(),
+                    cause: BlockCause::Reauth,
+                },
+                notify(SellerEvent::ReauthRequired),
+            ]),
+            "a reauth park gates on reauth and tells the seller so"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_schema_drift_rejects_and_halts_without_notifying() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::SchemaDrift(Box::new(drift())))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(Outcome::Rejected {
+                code: FailureCode::FormSchemaDrift,
+                detail: drift_detail(&drift()),
+            }),
+            "drift found at submit is the same rejection as drift found at preflight"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::CaptureDiagnostics {
+                    attempt: Some(attempt()),
+                    cause: CaptureCause::SchemaDrift,
+                },
+                halt(),
+            ]),
+            "this row captures and halts, and the table does not notify on it"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_rate_limited_skips() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::RateLimited { retry_after: None })),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(Outcome::Skipped {
+                code: FailureCode::RateLimited,
+            }),
+            "a rate-limited submit is skipped rather than failed"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![]),
+            "a skip asks for nothing"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_not_sent_returns_for_a_fresh_intent() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::NotSent(ConnectFailure::TcpRefused))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::PreflightAsserted { schema: schema() },
+            "the only class that provably never left is the only one that returns pre-submit"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::RecordIntent {
+                intent_hash: intent_hash()
+            }]),
+            "the machine asks for another intent and lets the driver name it"
+        );
+    }
+
+    #[test]
+    fn row_awaiting_read_back_ok_settles() {
+        let transition = machine(
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ReadBackResult(Ok(observed())), now())
+        .expect("a read-back result applies in AwaitingReadBack");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(settled()),
+            "the observed identifier is what the receipt is minted over"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![]),
+            "a settled read-back asks for nothing"
+        );
+    }
+
+    #[test]
+    fn row_awaiting_read_back_ambiguous_halts() {
+        let transition = machine(
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::ReadBackResult(Err(AdapterError::Ambiguous(
+                AmbiguityCause::ReadBackIndeterminate,
+            ))),
+            now(),
+        )
+        .expect("a read-back result applies in AwaitingReadBack");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::ReadBackIndeterminate)),
+            "the adapter's own cause travels into the outcome"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::CaptureDiagnostics {
+                    attempt: Some(attempt()),
+                    cause: CaptureCause::Ambiguity,
+                },
+                halt(),
+                notify(SellerEvent::InventoryHalted),
+            ]),
+            "capture, halt, notify, in the order the table lists them"
+        );
+    }
+
+    #[test]
+    fn row_awaiting_read_back_reconciled_settles_and_verifies() {
+        let transition = machine(
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ReconcileResult(Ok(Some(listing()))), now())
+        .expect("a reconcile result applies in AwaitingReadBack");
+        let expected = settled();
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(expected.clone()),
+            "a reconciled identifier settles the write"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::ReadBack {
+                locator: ListingLocator::Durable(listing()),
+                reason: verify_after(receipt_of(&expected)),
+            }]),
+            "the post-settle verification is justified by the receipt just minted"
+        );
+    }
+
+    #[test]
+    fn row_awaiting_read_back_reconciled_to_nothing_halts() {
+        let transition = machine(
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ReconcileResult(Ok(None)), now())
+        .expect("a reconcile result applies in AwaitingReadBack");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::NoDurableIdentifier)),
+            "reconciliation that finds nothing has not proved the write did not land"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![halt(), notify(SellerEvent::InventoryHalted)]),
+            "this row halts and notifies, and the table does not capture on it"
+        );
+    }
+
+    #[test]
+    fn row_awaiting_read_back_reconcile_failed_halts() {
+        let transition = machine(
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::ReconcileResult(Err(AdapterError::RateLimited { retry_after: None })),
+            now(),
+        )
+        .expect("a reconcile result applies in AwaitingReadBack");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::ReadBackIndeterminate)),
+            "a reconciliation that could not run leaves the write indeterminate"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![halt(), notify(SellerEvent::InventoryHalted)]),
+            "this row halts and notifies, and the table does not capture on it"
+        );
+    }
+
+    #[test]
+    fn row_parked_cleared_reasserts_the_form_schema() {
+        let transition = machine(
+            SyncState::Parked {
+                attempt: Some(attempt()),
+                challenge: ChallengeKind::Captcha,
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ChallengeCleared, now())
+        .expect("a cleared challenge applies in Parked");
+        assert_eq!(
+            transition.next.state,
+            SyncState::AwaitingPreflight,
+            "the markup may have changed while the item was parked"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::AssertFormSchema { form: form() }]),
+            "re-entry re-asserts the schema rather than resuming mid-flow"
+        );
+    }
+
+    #[test]
+    fn row_parked_expired_blocks() {
+        let transition = machine(
+            SyncState::Parked {
+                attempt: Some(attempt()),
+                challenge: ChallengeKind::Captcha,
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ParkExpired, now())
+        .expect("an expired park applies in Parked");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(Outcome::Blocked {
+                challenge: ChallengeKind::Captcha,
+            }),
+            "an unanswered park is the only way a park becomes terminal"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![notify(SellerEvent::ItemParked)]),
+            "the closed event vocabulary's nearest true statement about an expired park"
+        );
+    }
+
+    #[test]
+    fn row_budget_exhausted_settles_every_non_terminal_state() {
+        let expectations = vec![
+            (
+                SyncState::AwaitingPreflight,
+                None,
+                Outcome::Skipped {
+                    code: FailureCode::Other,
+                },
+            ),
+            (
+                SyncState::PreflightAsserted { schema: schema() },
+                None,
+                Outcome::Skipped {
+                    code: FailureCode::Other,
+                },
+            ),
+            (
+                SyncState::Parked {
+                    attempt: Some(attempt()),
+                    challenge: ChallengeKind::Captcha,
+                },
+                Some(attempt()),
+                Outcome::Skipped {
+                    code: FailureCode::Other,
+                },
+            ),
+            (
+                SyncState::IntentRecorded {
+                    attempt: attempt(),
+                    schema: schema(),
+                },
+                Some(attempt()),
+                ambiguous(attempt(), AmbiguityCause::ProcessKilledByBackstop),
+            ),
+            (
+                SyncState::Submitted {
+                    attempt: attempt(),
+                    evidence: evidence(),
+                },
+                Some(attempt()),
+                ambiguous(attempt(), AmbiguityCause::ProcessKilledByBackstop),
+            ),
+            (
+                SyncState::AwaitingReadBack {
+                    attempt: attempt(),
+                    locator: marker_locator(),
+                },
+                Some(attempt()),
+                ambiguous(attempt(), AmbiguityCause::ProcessKilledByBackstop),
+            ),
+        ];
+        for (state, captured, outcome) in expectations {
+            let transition = machine(state.clone(), marker_strategy(), 0)
+                .step(Input::BudgetExhausted, now())
+                .expect("the budget report is exempt from the budget it reports on");
+            assert_eq!(
+                transition.next.state,
+                SyncState::Terminal(outcome),
+                "budget exhaustion settles {state:?} in one transition"
+            );
+            assert_eq!(
+                transition.effects,
+                EffectList(vec![Effect::CaptureDiagnostics {
+                    attempt: captured,
+                    cause: CaptureCause::Ambiguity,
+                }]),
+                "budget exhaustion captures diagnostics from {state:?} and asks nothing else"
+            );
+        }
+    }
+
+    #[test]
+    fn a_terminal_machine_accepts_nothing_at_all() {
+        for input in input_pool() {
+            let refused = machine(
+                SyncState::Terminal(Outcome::Skipped {
+                    code: FailureCode::Other,
+                }),
+                marker_strategy(),
+                10,
+            )
+            .step(input.clone(), now());
+            assert_eq!(
+                refused,
+                Err(MachineError::InputNotApplicable),
+                "a terminal machine cannot be stepped by {input:?}, budget exhaustion included"
+            );
+        }
+    }
+
+    #[test]
+    fn an_input_naming_another_machines_attempt_is_a_mismatch() {
+        let refused = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::IntentRecorded(other_attempt()), now());
+        assert_eq!(
+            refused,
+            Err(MachineError::AttemptMismatch),
+            "a machine owning one attempt refuses an input naming another"
+        );
+    }
+
+    #[test]
+    fn replaying_the_attempt_the_machine_already_owns_is_inapplicable() {
+        let refused = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::IntentRecorded(attempt()), now());
+        assert_eq!(
+            refused,
+            Err(MachineError::InputNotApplicable),
+            "a consumed input replayed is inapplicable rather than a mismatch"
+        );
+    }
+
+    #[test]
+    fn a_transition_costing_more_than_the_allowance_is_refused_whole() {
+        let refused = machine(SyncState::AwaitingPreflight, marker_strategy(), 2)
+            .step(Input::PreflightResult(Err(drift())), now());
+        assert_eq!(
+            refused,
+            Err(MachineError::EffectBudgetExceeded),
+            "a three-effect row does not emit a two-effect prefix"
+        );
+        let afforded = machine(SyncState::AwaitingPreflight, marker_strategy(), 3)
+            .step(Input::PreflightResult(Err(drift())), now())
+            .expect("three actions afford a three-effect row exactly");
+        assert_eq!(
+            afforded.next.budget,
+            StepBudget {
+                actions_remaining: 0
+            },
+            "the allowance is decremented by the number of effects emitted"
+        );
+    }
+
+    #[test]
+    fn the_attempt_renders_deterministically_as_marker_and_as_evidence() {
+        let uniform = WriteAttemptId(Uuid([0xab; 16]));
+        assert_eq!(
+            marker_for(uniform),
+            CorrelationMarker("tam-abababababababababababababababab".to_owned()),
+            "the driver embeds this exact marker at submit time"
+        );
+        assert_eq!(
+            ambiguous(uniform, AmbiguityCause::NoDurableIdentifier),
+            Outcome::Ambiguous {
+                attempt: AttemptId(Uuid([0xab; 16])),
+                cause: AmbiguityCause::NoDurableIdentifier,
+                evidence: EvidenceRef("write-attempt:abababababababababababababababab".to_owned()),
+            },
+            "the evidence reference is the attempt the diagnostics are stored under"
+        );
+    }
+
+    /// Every pair the table does not list is inapplicable, and none of them
+    /// panics. The states below are every non-terminal variant.
+    #[test]
+    fn every_state_and_input_pair_is_total() {
+        let states = vec![
+            SyncState::AwaitingPreflight,
+            SyncState::PreflightAsserted { schema: schema() },
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: schema(),
+            },
+            SyncState::Submitted {
+                attempt: attempt(),
+                evidence: evidence(),
+            },
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            SyncState::Parked {
+                attempt: Some(attempt()),
+                challenge: ChallengeKind::Captcha,
+            },
+            SyncState::Terminal(Outcome::Blocked {
+                challenge: ChallengeKind::Captcha,
+            }),
+        ];
+        for state in states {
+            for input in input_pool() {
+                let outcome =
+                    machine(state.clone(), marker_strategy(), 50).step(input.clone(), now());
+                assert!(
+                    outcome.is_ok()
+                        || matches!(
+                            outcome,
+                            Err(MachineError::InputNotApplicable
+                                | MachineError::AttemptMismatch
+                                | MachineError::EffectBudgetExceeded)
+                        ),
+                    "stepping {state:?} with {input:?} must answer rather than panic"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_back_failure_the_table_does_not_list_is_inapplicable() {
+        let refused = machine(
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(
+            Input::ReadBackResult(Err(AdapterError::RateLimited { retry_after: None })),
+            now(),
+        );
+        assert_eq!(
+            refused,
+            Err(MachineError::InputNotApplicable),
+            "the table lists only the ambiguous read-back failure, so the rest are the driver's"
+        );
+    }
+
+    /// A never-sent submit returns to `PreflightAsserted`, which owns no attempt
+    /// and so accepts whatever identifier it is next handed. Handing it the one
+    /// already submitted therefore submits that fencing token a second time.
+    /// The machine holds no set of spent attempts and cannot detect this; not
+    /// reusing a token is the driver's obligation, backed by the partial index
+    /// on `write_attempt` that refuses a second in-flight row per item. This
+    /// test pins the exposure so it stays visible rather than implicit.
+    #[test]
+    fn a_reused_fencing_token_is_the_drivers_obligation() {
+        let first = machine(
+            SyncState::PreflightAsserted { schema: schema() },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::IntentRecorded(attempt()), now())
+        .expect("a state owning no attempt accepts the one it is given");
+        let returned = first
+            .next
+            .step(
+                Input::SubmitResult(Err(AdapterError::NotSent(ConnectFailure::TcpRefused))),
+                now(),
+            )
+            .expect("a never-sent submit returns to PreflightAsserted");
+        let second = returned
+            .next
+            .step(Input::IntentRecorded(attempt()), now())
+            .expect("the returned state owns no attempt and cannot refuse the reused one");
+        assert_eq!(
+            second.effects,
+            EffectList(vec![Effect::Submit {
+                attempt: attempt(),
+                key: key(),
+                fields: fields(),
+            }]),
+            "the machine resubmits a reused token, so the driver must never reuse one"
+        );
+    }
+
+    /// The properties above are only worth anything if the generator reaches the
+    /// terminals they quantify over, so each class is walked here explicitly.
+    #[test]
+    fn the_harness_reaches_every_terminal_class_the_properties_assert_about() {
+        let start = || machine(SyncState::AwaitingPreflight, marker_strategy(), 40);
+        let preflight = Input::PreflightResult(Ok(schema()));
+        let intent = Input::IntentRecorded(attempt());
+
+        let committed = drive(
+            start(),
+            &[
+                preflight.clone(),
+                intent.clone(),
+                Input::SubmitResult(Ok(evidence())),
+                Input::ReadBackResult(Ok(observed())),
+            ],
+        );
+        assert!(
+            matches!(committed.terminal, Some(Outcome::Committed { .. })),
+            "the happy path settles as committed, got {:?}",
+            committed.terminal
+        );
+
+        let ambiguous_run = drive(
+            machine(
+                SyncState::AwaitingPreflight,
+                CreateStrategy::HaltOnAmbiguity,
+                40,
+            ),
+            &[
+                preflight.clone(),
+                intent.clone(),
+                Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+            ],
+        );
+        assert!(
+            matches!(ambiguous_run.terminal, Some(Outcome::Ambiguous { .. })),
+            "an unreconcilable ambiguous submit settles as ambiguous, got {:?}",
+            ambiguous_run.terminal
+        );
+
+        let blocked = drive(
+            start(),
+            &[
+                preflight.clone(),
+                intent.clone(),
+                Input::SubmitResult(Err(AdapterError::SessionExpired)),
+                Input::ParkExpired,
+            ],
+        );
+        assert!(
+            matches!(blocked.terminal, Some(Outcome::Blocked { .. })),
+            "an unanswered park settles as blocked, got {:?}",
+            blocked.terminal
+        );
+
+        let skipped = drive(
+            start(),
+            &[
+                preflight.clone(),
+                intent.clone(),
+                Input::SubmitResult(Err(AdapterError::RateLimited { retry_after: None })),
+            ],
+        );
+        assert!(
+            matches!(skipped.terminal, Some(Outcome::Skipped { .. })),
+            "a rate-limited submit settles as skipped, got {:?}",
+            skipped.terminal
+        );
+
+        let rejected = drive(start(), &[Input::PreflightResult(Err(drift()))]);
+        assert!(
+            matches!(rejected.terminal, Some(Outcome::Rejected { .. })),
+            "drift at preflight settles as rejected, got {:?}",
+            rejected.terminal
+        );
+
+        let reconciled = drive(
+            start(),
+            &[
+                preflight,
+                intent,
+                Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+                Input::ReconcileResult(Ok(Some(listing()))),
+            ],
+        );
+        assert!(
+            matches!(reconciled.terminal, Some(Outcome::Committed { .. })),
+            "a reconciled ambiguous create settles as committed, got {:?}",
+            reconciled.terminal
+        );
+    }
+
+    /// Four of the five properties are conditional on the run reaching a
+    /// particular terminal, so a generator that rarely reaches one would pass
+    /// that property vacuously. This samples the generator under a
+    /// deterministic RNG and asserts the deep terminals are reached often
+    /// enough for the conditionals to bite at the default case count.
+    #[test]
+    fn the_generator_reaches_the_terminals_the_properties_are_conditional_on() {
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+
+        const SAMPLES: u32 = 2_000;
+        const FLOOR: u32 = 50;
+
+        let mut runner = TestRunner::new_with_rng(
+            Config::default(),
+            TestRng::deterministic_rng(RngAlgorithm::ChaCha),
+        );
+        let mut committed = 0_u32;
+        let mut ambiguous_count = 0_u32;
+        for _ in 0..SAMPLES {
+            let run = arb_run()
+                .new_tree(&mut runner)
+                .expect("the run strategy always produces a value")
+                .current();
+            match &run.terminal {
+                Some(Outcome::Committed { .. } | Outcome::Degraded { .. }) => committed += 1,
+                Some(Outcome::Ambiguous { .. }) => ambiguous_count += 1,
+                None
+                | Some(
+                    Outcome::Rejected { .. } | Outcome::Blocked { .. } | Outcome::Skipped { .. },
+                ) => {}
+            }
+        }
+        assert!(
+            committed >= FLOOR,
+            "the committed-terminal property would be near-vacuous: {committed} in {SAMPLES}"
+        );
+        assert!(
+            ambiguous_count >= FLOOR,
+            "the ambiguous-terminal properties would be near-vacuous: \
+             {ambiguous_count} in {SAMPLES}"
+        );
+    }
+
+    fn input_pool() -> Vec<Input> {
+        vec![
+            Input::PreflightResult(Ok(schema())),
+            Input::PreflightResult(Err(drift())),
+            Input::IntentRecorded(attempt()),
+            Input::IntentRecorded(other_attempt()),
+            Input::SubmitResult(Ok(evidence())),
+            Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+            Input::SubmitResult(Err(AdapterError::Rejected {
+                code: FailureCode::UploadRejected,
+                detail: FailureDetail("refused".to_owned()),
+            })),
+            Input::SubmitResult(Err(AdapterError::Challenge(ChallengeKind::Captcha))),
+            Input::SubmitResult(Err(AdapterError::SessionExpired)),
+            Input::SubmitResult(Err(AdapterError::SchemaDrift(Box::new(drift())))),
+            Input::SubmitResult(Err(AdapterError::RateLimited { retry_after: None })),
+            Input::SubmitResult(Err(AdapterError::NotSent(ConnectFailure::TcpRefused))),
+            Input::ReadBackResult(Ok(observed())),
+            Input::ReadBackResult(Err(AdapterError::Ambiguous(
+                AmbiguityCause::ReadBackIndeterminate,
+            ))),
+            Input::ReadBackResult(Err(AdapterError::RateLimited { retry_after: None })),
+            Input::ReconcileResult(Ok(Some(listing()))),
+            Input::ReconcileResult(Ok(None)),
+            Input::ReconcileResult(Err(AdapterError::Ambiguous(
+                AmbiguityCause::ReadBackIndeterminate,
+            ))),
+            Input::ChallengeCleared,
+            Input::ParkExpired,
+            Input::BudgetExhausted,
+        ]
+    }
+
+    fn fresh_attempt(tick: usize) -> WriteAttemptId {
+        let mut bytes = [0_u8; 16];
+        bytes[0] = u8::try_from(tick).unwrap_or(u8::MAX);
+        WriteAttemptId(Uuid(bytes))
+    }
+
+    fn submit_attempt(effect: &Effect) -> Option<WriteAttemptId> {
+        match effect {
+            Effect::Submit { attempt, .. } => Some(*attempt),
+            Effect::AssertFormSchema { .. }
+            | Effect::RecordIntent { .. }
+            | Effect::ReadBack { .. }
+            | Effect::Reconcile { .. }
+            | Effect::ParkItem { .. }
+            | Effect::RequeueBehindGate { .. }
+            | Effect::CaptureDiagnostics { .. }
+            | Effect::Halt { .. }
+            | Effect::Notify { .. } => None,
+        }
+    }
+
+    #[derive(Debug)]
+    struct Run {
+        effects: Vec<Effect>,
+        terminal: Option<Outcome>,
+        /// Where in `effects` the terminal transition's own effects begin.
+        terminal_at: usize,
+        machine: SyncMachine,
+        start_actions: u32,
+    }
+
+    /// Drives a machine through a sequence, cloning before each step because
+    /// `step` consumes the machine and a refused input must leave it standing.
+    /// Stops at the first terminal, which is what a driver does.
+    fn drive(start: SyncMachine, inputs: &[Input]) -> Run {
+        let start_actions = start.budget.actions_remaining;
+        let mut machine = start;
+        let mut effects = Vec::new();
+        let mut terminal = None;
+        let mut terminal_at = 0;
+        for (tick, input) in inputs.iter().enumerate() {
+            if terminal.is_some() {
+                break;
+            }
+            let at = LogicalInstant(i64::try_from(tick).unwrap_or(i64::MAX));
+            // Every delivery names a fresh attempt, which is the driver's
+            // contract: it opens a new `write_attempt` row per `RecordIntent`
+            // it executes, and the partial index on that table refuses a second
+            // in-flight row for the item. The machine cannot check this itself
+            // -- see `a_reused_fencing_token_is_the_drivers_obligation`.
+            let delivered = if let Input::IntentRecorded(_) = input {
+                Input::IntentRecorded(fresh_attempt(tick))
+            } else {
+                input.clone()
+            };
+            if let Ok(transition) = machine.clone().step(delivered, at) {
+                if let SyncState::Terminal(outcome) = &transition.next.state {
+                    terminal = Some(outcome.clone());
+                    terminal_at = effects.len();
+                }
+                effects.extend(transition.effects.0.iter().cloned());
+                machine = transition.next;
+            }
+        }
+        if terminal.is_none() {
+            terminal_at = effects.len();
+        }
+        Run {
+            effects,
+            terminal,
+            terminal_at,
+            machine,
+            start_actions,
+        }
+    }
+
+    /// The five properties quantify over terminals four and five transitions
+    /// deep, and a uniform draw over the whole input vocabulary reaches
+    /// `Committed` in well under one run in a hundred. The advancing inputs are
+    /// therefore over-represented in the sampling pool, which biases the
+    /// generator towards the deep paths without removing any input from it.
+    fn sampling_pool() -> Vec<Input> {
+        let advancing = [
+            Input::PreflightResult(Ok(schema())),
+            Input::IntentRecorded(attempt()),
+            Input::SubmitResult(Ok(evidence())),
+            Input::ReadBackResult(Ok(observed())),
+            Input::ReconcileResult(Ok(Some(listing()))),
+        ];
+        let mut pool = input_pool();
+        for _ in 0..6 {
+            pool.extend(advancing.iter().cloned());
+        }
+        pool
+    }
+
+    fn arb_run() -> impl Strategy<Value = Run> {
+        (
+            proptest::collection::vec(proptest::sample::select(sampling_pool()), 0..30),
+            1u32..50,
+            proptest::sample::select(vec![
+                marker_strategy(),
+                draft_strategy(),
+                CreateStrategy::HaltOnAmbiguity,
+            ]),
+        )
+            .prop_map(|(inputs, actions_remaining, strategy)| {
+                let start = machine(SyncState::AwaitingPreflight, strategy, actions_remaining);
+                drive(start, &inputs)
+            })
+    }
+
+    proptest! {
+        /// No `Submit` effect is ever emitted twice for one `WriteAttemptId`.
+        #[test]
+        fn no_attempt_is_ever_submitted_twice(run in arb_run()) {
+            let mut seen = std::collections::HashSet::new();
+            for effect in &run.effects {
+                if let Some(attempt) = submit_attempt(effect) {
+                    prop_assert!(
+                        seen.insert(attempt),
+                        "one write attempt must never be submitted twice"
+                    );
+                }
+            }
+        }
+
+        /// Every terminal `Ambiguous` is preceded by a `RecordIntent`, so a
+        /// crash from an ambiguous write always leaves something to reconcile.
+        #[test]
+        fn every_ambiguous_terminal_follows_a_recorded_intent(run in arb_run()) {
+            if matches!(run.terminal, Some(Outcome::Ambiguous { .. })) {
+                let recorded = run.effects[..run.terminal_at]
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::RecordIntent { .. }));
+                prop_assert!(
+                    recorded,
+                    "an ambiguous outcome with no recorded intent is unreconcilable"
+                );
+            }
+        }
+
+        /// No path leads from `Ambiguous` back to `Submit`.
+        #[test]
+        fn nothing_is_submitted_at_or_after_an_ambiguous_terminal(run in arb_run()) {
+            if matches!(run.terminal, Some(Outcome::Ambiguous { .. })) {
+                let resubmitted = run.effects[run.terminal_at..]
+                    .iter()
+                    .any(|effect| submit_attempt(effect).is_some());
+                prop_assert!(
+                    !resubmitted,
+                    "an ambiguous write is reconciled or escalated, never retried"
+                );
+                prop_assert!(
+                    matches!(run.machine.state, SyncState::Terminal(_)),
+                    "the run stopped at the terminal it reached"
+                );
+            }
+        }
+
+        /// Every `Committed` and every `Degraded` is preceded by the read that
+        /// settled it: the read-back itself, or the reconcile that found the
+        /// identifier the read-back then confirmed.
+        #[test]
+        fn every_committed_terminal_follows_a_read(run in arb_run()) {
+            if matches!(
+                run.terminal,
+                Some(Outcome::Committed { .. } | Outcome::Degraded { .. })
+            ) {
+                let read = run.effects[..run.terminal_at].iter().any(|effect| {
+                    matches!(effect, Effect::ReadBack { .. } | Effect::Reconcile { .. })
+                });
+                prop_assert!(
+                    read,
+                    "a committed outcome that no read preceded was never verified"
+                );
+            }
+        }
+
+        /// A `BudgetExhausted` input always reaches a terminal state in one
+        /// transition, whatever non-terminal state the run left the machine in.
+        #[test]
+        fn budget_exhaustion_is_terminal_in_one_transition(run in arb_run()) {
+            if !matches!(run.machine.state, SyncState::Terminal(_)) {
+                let transition = run
+                    .machine
+                    .step(Input::BudgetExhausted, now())
+                    .expect("a live machine always accepts the budget report");
+                prop_assert!(
+                    matches!(transition.next.state, SyncState::Terminal(_)),
+                    "the budget report settles the item rather than deferring it"
+                );
+            }
+        }
+
+        /// The allowance is monotone: no transition ever hands back more
+        /// actions than it was given.
+        #[test]
+        fn the_allowance_never_grows(run in arb_run()) {
+            prop_assert!(
+                run.machine.budget.actions_remaining <= run.start_actions,
+                "a run cannot end with more allowance than it started with"
+            );
+            prop_assert!(
+                u32::try_from(run.effects.len()).unwrap_or(u32::MAX)
+                    <= run.start_actions.saturating_add(1),
+                "a run emits no more effects than it was allowed, plus the exempt budget report"
+            );
         }
     }
 }
