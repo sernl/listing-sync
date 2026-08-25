@@ -109,10 +109,11 @@ db-prepare:
 db-verify:
     cd crates/tam-storage && SQLX_OFFLINE=false DATABASE_URL={{db_url}} cargo sqlx prepare --check
 
-# The database-backed test lane: tenancy isolation, codecs, structural fences
+# The database-backed test lane: tenancy isolation, codecs, structural fences,
+# and the API driven in-process over per-test databases
 db-test: db-wait db-verify
-    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests
+    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests
 
 # Full local environment: database, migrations, API server
 dev: db-up db-wait db-migrate
-    cargo run -p tam-server
+    cargo run -p tam-server -- {{db_url}}

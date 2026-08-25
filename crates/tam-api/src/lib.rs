@@ -13,6 +13,7 @@
 
 pub mod error;
 pub mod jobs;
+pub mod openapi;
 pub mod resources;
 pub mod session;
 pub mod stream;
@@ -127,6 +128,7 @@ pub fn router(state: AppState) -> Router {
             "/{version}/reconciliation/stats",
             get(resources::queue_stats),
         )
+        .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }
 

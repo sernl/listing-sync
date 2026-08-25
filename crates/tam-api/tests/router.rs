@@ -175,3 +175,39 @@ async fn a_protected_route_without_a_session_is_a_structured_401() {
         "the refusal is the closed vocabulary, not a bare status"
     );
 }
+
+/// The structural half of the OpenAPI parity: every documented operation must
+/// be mounted. (The reverse — every mounted route documented — has no
+/// introspection hook in axum and is held by review plus the one-constant
+/// discipline.) A bare 404 means unmounted; a 405 means the documented method
+/// is wrong; anything else, including 401 and 204, proves the route exists.
+#[tokio::test]
+async fn every_documented_operation_is_mounted() {
+    for route in tam_api::openapi::ROUTES {
+        let path = route
+            .path
+            .replace("{version}", "v1")
+            .replace("{job}", "11111111-1111-4111-8111-111111111111")
+            .replace("{item}", "11111111-1111-4111-8111-111111111111")
+            .replace("{product}", "11111111-1111-4111-8111-111111111111")
+            .replace("{connection}", "11111111-1111-4111-8111-111111111111");
+        let method = route.method.to_uppercase();
+        let request = Request::builder()
+            .method(method.as_str())
+            .uri(&path)
+            .body(Body::empty())
+            .expect("the probe request builds");
+        let response = router(test_state())
+            .oneshot(request)
+            .await
+            .expect("the router serves");
+        assert!(
+            response.status() != StatusCode::NOT_FOUND
+                && response.status() != StatusCode::METHOD_NOT_ALLOWED,
+            "documented {} {} is not mounted (answered {})",
+            route.method,
+            route.path,
+            response.status()
+        );
+    }
+}
