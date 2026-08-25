@@ -2154,7 +2154,17 @@ dependencies = [
 name = "tam-session-broker"
 version = "0.0.0"
 dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tam-limits",
+ "tam-secrets",
+ "tam-types",
  "tokio",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]
