@@ -21,6 +21,8 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 tam-domain = { path = "../tam-domain" }
 tam-marketplace = { path = "../tam-marketplace" }
+tam-pipeline = { path = "../tam-pipeline" }
+tam-secrets = { path = "../tam-secrets" }
 tam-types = { path = "../tam-types" }
 serde_json = "1"
 thiserror = "2"

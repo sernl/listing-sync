@@ -10,3 +10,4 @@ pub mod hash;
 pub mod probe;
 pub mod render;
 pub mod scan;
+pub mod store;

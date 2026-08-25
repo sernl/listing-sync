@@ -9,11 +9,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod blobs;
 mod codec;
 pub mod jobs;
 mod mapping;
 mod product;
 
+pub use blobs::{BlobError, BlobRepo};
 pub use jobs::{
     append_event, AttemptIntent, AttemptVerdict, BudgetGrant, EventScope, HaltCause, HaltRepo,
     InventoryFailureWindow, JobRepo, LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob,

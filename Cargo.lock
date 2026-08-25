@@ -2358,6 +2358,8 @@ dependencies = [
  "sqlx",
  "tam-domain",
  "tam-marketplace",
+ "tam-pipeline",
+ "tam-secrets",
  "tam-types",
  "thiserror",
  "uuid",

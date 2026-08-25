@@ -160,6 +160,27 @@ impl core::fmt::Display for OpenError {
 
 impl core::error::Error for OpenError {}
 
+/// A blob's encryption context: the tenant and the content hash bind the
+/// object bytes, so a blob lifted into another tenant fails authentication.
+/// Separate from `AadContext` because a blob has no marketplace or connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlobAad {
+    pub org: OrgId,
+    pub hash: [u8; 32],
+    pub key_version: i32,
+}
+
+impl BlobAad {
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut aad = Vec::with_capacity(52);
+        aad.extend_from_slice(&self.org.0 .0);
+        aad.extend_from_slice(&self.hash);
+        aad.extend_from_slice(&self.key_version.to_be_bytes());
+        aad
+    }
+}
+
 const XNONCE_LEN: usize = 24;
 
 fn random_nonce() -> XNonce {
@@ -258,6 +279,73 @@ pub fn open(kek: &Kek, context: &AadContext, sealed: &Sealed) -> Result<Secret, 
         .map_err(|_| OpenError::NotUtf8)
 }
 
+/// Seals raw bytes under a caller-supplied AAD, for blob objects. Same
+/// two-layer envelope as `seal`; the payload is binary rather than a UTF-8
+/// secret.
+pub fn seal_bytes(kek: &Kek, aad: &[u8], plaintext: &[u8]) -> Result<Sealed, SealError> {
+    let mut dek = [0u8; 32];
+    OsRng.fill_bytes(&mut dek);
+
+    let payload_cipher = XChaCha20Poly1305::new((&dek).into());
+    let payload_nonce = random_nonce();
+    let ciphertext = payload_cipher
+        .encrypt(
+            &payload_nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| SealError::Crypto)?;
+
+    let wrap_cipher = XChaCha20Poly1305::new((&kek.0).into());
+    let wrap_nonce = random_nonce();
+    let wrapped = wrap_cipher
+        .encrypt(&wrap_nonce, Payload { msg: &dek, aad })
+        .map_err(|_| SealError::Crypto)?;
+    dek.zeroize();
+
+    let mut wrapped_dek = Vec::with_capacity(XNONCE_LEN + wrapped.len());
+    wrapped_dek.extend_from_slice(wrap_nonce.as_slice());
+    wrapped_dek.extend_from_slice(&wrapped);
+
+    Ok(Sealed {
+        key_version: 1,
+        wrapped_dek,
+        nonce: payload_nonce.as_slice().to_vec(),
+        ciphertext,
+    })
+}
+
+/// Opens bytes sealed by `seal_bytes` under the same AAD.
+pub fn open_bytes(kek: &Kek, aad: &[u8], sealed: &Sealed) -> Result<Vec<u8>, OpenError> {
+    if sealed.wrapped_dek.len() <= XNONCE_LEN || sealed.nonce.len() != XNONCE_LEN {
+        return Err(OpenError::Truncated);
+    }
+    let (wrap_nonce, wrapped) = sealed.wrapped_dek.split_at(XNONCE_LEN);
+
+    let wrap_cipher = XChaCha20Poly1305::new((&kek.0).into());
+    let mut dek = wrap_cipher
+        .decrypt(
+            XNonce::from_slice(wrap_nonce),
+            Payload { msg: wrapped, aad },
+        )
+        .map_err(|_| OpenError::Authentication)?;
+
+    let payload_cipher = XChaCha20Poly1305::new(dek.as_slice().into());
+    let plaintext = payload_cipher
+        .decrypt(
+            XNonce::from_slice(&sealed.nonce),
+            Payload {
+                msg: &sealed.ciphertext,
+                aad,
+            },
+        )
+        .map_err(|_| OpenError::Authentication);
+    dek.zeroize();
+    plaintext
+}
+
 #[cfg(test)]
 mod tests {
     use super::{open, seal, AadContext, Kek, OpenError, Secret};
@@ -351,6 +439,31 @@ mod tests {
             open(&kek(0x06), &context(0xAA), &sealed).err(),
             Some(OpenError::Truncated),
             "malformed material fails closed"
+        );
+    }
+
+    #[test]
+    fn blob_bytes_round_trip_and_resist_cross_tenant_replay() {
+        use super::{open_bytes, seal_bytes, BlobAad};
+        let kek = kek(0x07);
+        let aad_a = BlobAad {
+            org: OrgId(Uuid([0xAA; 16])),
+            hash: [0x11; 32],
+            key_version: 1,
+        };
+        let sealed = seal_bytes(&kek, &aad_a.encode(), b"a resource file's bytes").expect("seal");
+        let opened = open_bytes(&kek, &aad_a.encode(), &sealed).expect("open");
+        assert_eq!(opened, b"a resource file's bytes", "blob bytes round-trip");
+
+        let aad_b = BlobAad {
+            org: OrgId(Uuid([0xBB; 16])),
+            hash: [0x11; 32],
+            key_version: 1,
+        };
+        assert_eq!(
+            open_bytes(&kek, &aad_b.encode(), &sealed).err(),
+            Some(super::OpenError::Authentication),
+            "a blob object lifted into another tenant fails authentication"
         );
     }
 
