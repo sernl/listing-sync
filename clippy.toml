@@ -1,0 +1,44 @@
+too-many-lines-threshold       = 70
+too-many-arguments-threshold   = 5
+cognitive-complexity-threshold = 30
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+allow-print-in-tests  = true
+allow-dbg-in-tests    = true
+
+disallowed-methods = [
+  { path = "tokio::spawn",                            reason = "use spawn_supervised; a dropped JoinHandle discards the panic" },
+  { path = "tokio::task::spawn",                      reason = "use spawn_supervised" },
+  { path = "tokio::task::spawn_blocking",             reason = "use spawn_supervised_blocking" },
+  { path = "tokio::task::spawn_local",                reason = "use spawn_supervised" },
+  { path = "tokio::task::LocalSet::spawn_local",      reason = "use spawn_supervised" },
+  { path = "tokio::runtime::Handle::spawn",           reason = "use spawn_supervised" },
+  { path = "tokio::runtime::Handle::spawn_blocking",  reason = "use spawn_supervised_blocking" },
+  { path = "tokio::runtime::Runtime::spawn",          reason = "use spawn_supervised" },
+  { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use spawn_supervised_blocking" },
+  { path = "tokio::task::JoinSet::spawn",             reason = "route through spawn_supervised so the panic counter sees it" },
+  { path = "tokio::task::JoinSet::spawn_blocking",    reason = "route through spawn_supervised_blocking" },
+  { path = "tokio::task::JoinSet::spawn_local",       reason = "route through spawn_supervised" },
+  { path = "tokio::sync::mpsc::unbounded_channel",    reason = "bound it: see crates/limits" },
+  { path = "futures::channel::mpsc::unbounded",       reason = "bound it: see crates/limits" },
+  { path = "reqwest::Client::new",                    reason = "no default timeout; build it with .timeout() and .connect_timeout()" },
+  { path = "reqwest::get",                            reason = "no default timeout; use a configured client" },
+  { path = "std::fs::read",                           reason = "stream it; uploads are bounded but not small" },
+  { path = "std::fs::read_to_string",                 reason = "stream it; uploads are bounded but not small" },
+  { path = "tokio::io::AsyncReadExt::read_to_end",    reason = "stream it under a byte cap" },
+  { path = "str::split_at",                           reason = "panics off a char boundary; use split_at_checked" },
+  { path = "str::split_at_mut",                       reason = "panics off a char boundary; use split_at_mut_checked" },
+  { path = "serde_json::Deserializer::disable_recursion_limit", allow-invalid = true, reason = "the 128 default is the depth bound; exists only under unbounded_depth, which deny.toml denies" },
+  { path = "std::env::var",                           reason = "configuration is read in one crate; expect-attribute the site that legitimately does" },
+  { path = "std::env::vars",                          reason = "configuration is read in one crate; expect-attribute the site that legitimately does" },
+  { path = "std::time::SystemTime::now",              reason = "time enters the engine as data; expect-attribute the driver that reads the clock" },
+  { path = "std::time::Instant::now",                 reason = "time enters the engine as data; expect-attribute the driver that reads the clock" },
+  { path = "std::panic::catch_unwind",                reason = "only the worker boundary may contain a panic" },
+]
+
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "poisoning turns one unwound request into a cascading outage; use tokio::sync::Mutex" },
+  { path = "std::any::Any",    reason = "downcasting defeats both static analysis and an agent tracing control flow" },
+]
