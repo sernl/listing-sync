@@ -12,10 +12,15 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod jobs;
 pub mod session;
 pub mod version;
 
-use axum::{http::StatusCode, routing::get, Json, Router};
+use axum::{
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tam_types::{OrgId, Timestamp, UserId};
@@ -83,6 +88,13 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/{version}/healthz", get(versioned_healthz))
         .route("/{version}/whoami", get(whoami))
+        .route(
+            "/{version}/jobs",
+            post(jobs::create_job).get(jobs::list_jobs),
+        )
+        .route("/{version}/jobs/{job}", get(jobs::job_view))
+        .route("/{version}/jobs/{job}/items", get(jobs::job_items))
+        .route("/{version}/jobs/{job}/items/{item}", get(jobs::item_detail))
         .with_state(state)
 }
 

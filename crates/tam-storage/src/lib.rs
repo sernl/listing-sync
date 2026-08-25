@@ -11,6 +11,7 @@
 
 pub mod blobs;
 mod codec;
+pub mod job_reads;
 pub mod jobs;
 mod mapping;
 mod product;
@@ -18,9 +19,13 @@ pub mod sessions;
 pub mod taxonomy;
 
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
+pub use job_reads::{
+    payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, JobListRow, JobReadRepo,
+    JobSnapshot, LedgerCursor, MappingSeed,
+};
 pub use jobs::{
-    append_event, AttemptIntent, AttemptVerdict, BudgetGrant, EventScope, HaltCause, HaltRepo,
-    InventoryFailureWindow, JobRepo, LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob,
+    append_event, AttemptIntent, AttemptVerdict, BudgetGrant, CreatedJob, EventScope, HaltCause,
+    HaltRepo, InventoryFailureWindow, JobRepo, LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob,
     NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo,
 };
 pub use mapping::{MappingRecord, MappingRepo};

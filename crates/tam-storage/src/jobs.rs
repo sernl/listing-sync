@@ -13,7 +13,9 @@
 use sqlx::{PgPool, Postgres, Transaction};
 use tam_domain::{ItemOutcome, JobItemId};
 use tam_marketplace::IdempotencyKey;
-use tam_types::{FailureCode, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp};
+use tam_types::{
+    FailureCode, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp, Uuid,
+};
 
 use crate::codec::{
     failure_code_to_db, inventory_from_db, inventory_to_db, marketplace_to_db, timestamp_to_db,
@@ -928,5 +930,125 @@ pub(crate) fn map_unique<T>(
             Err(to_error())
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+/// What the operation-resource create answered: the job the key names, and
+/// whether this request had already run. The retry and the double-click are
+/// the same request, so they get the same job back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatedJob {
+    pub job: JobId,
+    pub replay: bool,
+}
+
+impl JobRepo {
+    /// `enqueue` under a client-supplied request idempotency key. A key seen
+    /// before returns the original job untouched; a race between two
+    /// carriers of one key resolves at the unique constraint, and the loser
+    /// reads the winner's job.
+    pub async fn create_with_request_key(
+        &self,
+        org: OrgId,
+        request_key: Uuid,
+        new: &NewJob,
+        items: &[NewJobItem],
+    ) -> Result<CreatedJob, StorageError> {
+        if let Some(existing) = self.job_for_request_key(org, request_key).await? {
+            return Ok(CreatedJob {
+                job: existing,
+                replay: true,
+            });
+        }
+        let NewJob { job, inventory, at } = *new;
+        let org_db = uuid_to_db(org.0);
+        let at_db = timestamp_to_db(at)?;
+        let mut tx = self.pool.begin().await?;
+        crate::pin_org(&mut tx, org).await?;
+        let inserted = sqlx::query!(
+            "INSERT INTO job \
+             (org_id, id, inventory, marketplace, created_at, request_idempotency_key) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            org_db,
+            uuid_to_db(job.0),
+            inventory_to_db(inventory),
+            marketplace_to_db(inventory.marketplace()),
+            at_db,
+            uuid_to_db(request_key),
+        )
+        .execute(&mut *tx)
+        .await;
+        match inserted {
+            Ok(_) => {}
+            Err(sqlx::Error::Database(database))
+                if database.constraint() == Some("job_request_idempotent") =>
+            {
+                drop(tx);
+                let existing = self.job_for_request_key(org, request_key).await?.ok_or(
+                    StorageError::Inconsistent {
+                        reason: "the winning request's job must exist".to_owned(),
+                    },
+                )?;
+                return Ok(CreatedJob {
+                    job: existing,
+                    replay: true,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        }
+        for item in items {
+            let inserted = sqlx::query!(
+                "INSERT INTO job_item \
+                 (org_id, id, job_id, mapping_id, idempotency_key, state, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, 'queued', $6)",
+                org_db,
+                uuid_to_db(item.item.0),
+                uuid_to_db(job.0),
+                uuid_to_db(item.mapping.0),
+                uuid_to_db(item.idempotency_key.0),
+                at_db,
+            )
+            .execute(&mut *tx)
+            .await;
+            map_unique(inserted, "job_item_idempotent", || {
+                StorageError::DuplicateIdempotencyKey {
+                    key: uuid_to_db(item.idempotency_key.0),
+                }
+            })?;
+        }
+        let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
+            reason: format!("{} items exceed the event range", items.len()),
+        })?;
+        append_event(
+            &mut tx,
+            &EventScope {
+                org,
+                job,
+                item: None,
+            },
+            &JobEventPayload::JobQueued { items: item_count },
+            at,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(CreatedJob { job, replay: false })
+    }
+
+    async fn job_for_request_key(
+        &self,
+        org: OrgId,
+        request_key: Uuid,
+    ) -> Result<Option<JobId>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        crate::pin_org(&mut tx, org).await?;
+        let found = sqlx::query_scalar!(
+            "SELECT id FROM job WHERE org_id = $1 AND request_idempotency_key = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(request_key),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(found.map(|id| JobId(uuid_from_db(id))))
     }
 }

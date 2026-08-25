@@ -1,0 +1,80 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, mapping_id, state, outcome, failure_code, failure_detail, blocked_on, attempt_count, created_at, settled_at FROM job_item WHERE org_id = $1 AND job_id = $2 AND ($3::timestamptz IS NULL OR (created_at, id) > ($3, $4)) ORDER BY created_at, id LIMIT $5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "outcome",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "failure_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "failure_detail",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "blocked_on",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "attempt_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "settled_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "8e554b5b7f266e413280a786c0cfc9e12c8a7806e5e63ce41f6525e3db056422"
+}

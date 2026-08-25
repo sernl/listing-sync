@@ -10,9 +10,58 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Stands in for the `uuid` crate's type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Stands in for the `uuid` crate's type. On the wire it is the canonical
+/// lowercase hyphenated string, not a byte array: identifiers cross the API
+/// to a web client, and the client's form is the contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Uuid(pub [u8; 16]);
+
+impl Uuid {
+    /// The canonical 8-4-4-4-12 lowercase form.
+    #[must_use]
+    pub fn to_hyphenated(&self) -> String {
+        use core::fmt::Write;
+        let mut out = String::with_capacity(36);
+        for (index, byte) in self.0.iter().enumerate() {
+            if matches!(index, 4 | 6 | 8 | 10) {
+                out.push('-');
+            }
+            // infallible on String; the Result is the trait's, not the writer's
+            let _unused: core::fmt::Result = write!(out, "{byte:02x}");
+        }
+        out
+    }
+
+    /// Parses the hyphenated form (either case); anything else is `None`.
+    #[must_use]
+    pub fn parse_hyphenated(raw: &str) -> Option<Self> {
+        let bytes_hex: Vec<u8> = raw.bytes().filter(|byte| *byte != b'-').collect();
+        if raw.len() != 36 || bytes_hex.len() != 32 {
+            return None;
+        }
+        let hex = core::str::from_utf8(&bytes_hex).ok()?;
+        let mut bytes = [0u8; 16];
+        for (index, slot) in bytes.iter_mut().enumerate() {
+            let pair = hex.get(index * 2..index * 2 + 2)?;
+            *slot = u8::from_str_radix(pair, 16).ok()?;
+        }
+        Some(Self(bytes))
+    }
+}
+
+impl Serialize for Uuid {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hyphenated())
+    }
+}
+
+impl<'de> Deserialize<'de> for Uuid {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_hyphenated(&raw)
+            .ok_or_else(|| serde::de::Error::custom("expected a hyphenated UUID"))
+    }
+}
 
 /// Stands in for a real instant type. Milliseconds since the Unix epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

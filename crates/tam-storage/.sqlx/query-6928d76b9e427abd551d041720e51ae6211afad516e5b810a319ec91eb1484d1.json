@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.id AS mapping_id, m.product_id, f.hash FROM mapping m JOIN product_file f ON f.org_id = m.org_id AND f.product_id = m.product_id WHERE m.org_id = $1 AND m.inventory = $2 AND m.id = ANY($3) AND f.role = 'payload' AND f.deleted_at IS NULL ORDER BY m.id, f.position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "hash",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6928d76b9e427abd551d041720e51ae6211afad516e5b810a319ec91eb1484d1"
+}

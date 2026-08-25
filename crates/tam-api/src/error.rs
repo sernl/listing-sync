@@ -52,6 +52,10 @@ pub enum APIErrorCode {
     VersionParameterMissing,
     VersionParameterUnreadable,
     SessionRequired,
+    IdempotencyKeyRequired,
+    SyncMappingsInvalid,
+    DuplicateSyncItem,
+    ResourceMissing,
     Internal,
 }
 
@@ -63,6 +67,10 @@ impl APIErrorCode {
             Self::VersionParameterMissing => "version_parameter_missing",
             Self::VersionParameterUnreadable => "version_parameter_unreadable",
             Self::SessionRequired => "session_required",
+            Self::IdempotencyKeyRequired => "idempotency_key_required",
+            Self::SyncMappingsInvalid => "sync_mappings_invalid",
+            Self::DuplicateSyncItem => "duplicate_sync_item",
+            Self::ResourceMissing => "resource_missing",
             Self::Internal => "internal",
         }
     }
@@ -260,11 +268,15 @@ mod tests {
     /// the client has never seen.
     #[test]
     fn every_code_serialises_to_its_own_str() {
-        const ALL: [APIErrorCode; 5] = [
+        const ALL: [APIErrorCode; 9] = [
             APIErrorCode::UnsupportedApiVersion,
             APIErrorCode::VersionParameterMissing,
             APIErrorCode::VersionParameterUnreadable,
             APIErrorCode::SessionRequired,
+            APIErrorCode::IdempotencyKeyRequired,
+            APIErrorCode::SyncMappingsInvalid,
+            APIErrorCode::DuplicateSyncItem,
+            APIErrorCode::ResourceMissing,
             APIErrorCode::Internal,
         ];
         for code in ALL {
@@ -273,6 +285,10 @@ mod tests {
                 | APIErrorCode::VersionParameterMissing
                 | APIErrorCode::VersionParameterUnreadable
                 | APIErrorCode::SessionRequired
+                | APIErrorCode::IdempotencyKeyRequired
+                | APIErrorCode::SyncMappingsInvalid
+                | APIErrorCode::DuplicateSyncItem
+                | APIErrorCode::ResourceMissing
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");
