@@ -4,14 +4,21 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+pg-tests = []
+
 [dependencies]
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
 
 [dev-dependencies]
 http-body-util = "0.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid"] }
+uuid = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
 tower = { version = "0.5", features = ["util"] }
 

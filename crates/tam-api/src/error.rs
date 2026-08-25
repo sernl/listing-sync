@@ -51,6 +51,7 @@ pub enum APIErrorCode {
     UnsupportedApiVersion,
     VersionParameterMissing,
     VersionParameterUnreadable,
+    SessionRequired,
     Internal,
 }
 
@@ -61,6 +62,7 @@ impl APIErrorCode {
             Self::UnsupportedApiVersion => "unsupported_api_version",
             Self::VersionParameterMissing => "version_parameter_missing",
             Self::VersionParameterUnreadable => "version_parameter_unreadable",
+            Self::SessionRequired => "session_required",
             Self::Internal => "internal",
         }
     }
@@ -78,6 +80,7 @@ impl core::fmt::Display for APIErrorCode {
 #[serde(rename_all = "snake_case")]
 pub enum APIErrorKind {
     Validation,
+    Unauthenticated,
     NotFound,
     Internal,
 }
@@ -87,6 +90,7 @@ impl APIErrorKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Validation => "validation",
+            Self::Unauthenticated => "unauthenticated",
             Self::NotFound => "not_found",
             Self::Internal => "internal",
         }
@@ -256,10 +260,11 @@ mod tests {
     /// the client has never seen.
     #[test]
     fn every_code_serialises_to_its_own_str() {
-        const ALL: [APIErrorCode; 4] = [
+        const ALL: [APIErrorCode; 5] = [
             APIErrorCode::UnsupportedApiVersion,
             APIErrorCode::VersionParameterMissing,
             APIErrorCode::VersionParameterUnreadable,
+            APIErrorCode::SessionRequired,
             APIErrorCode::Internal,
         ];
         for code in ALL {
@@ -267,6 +272,7 @@ mod tests {
                 APIErrorCode::UnsupportedApiVersion
                 | APIErrorCode::VersionParameterMissing
                 | APIErrorCode::VersionParameterUnreadable
+                | APIErrorCode::SessionRequired
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");
@@ -280,14 +286,18 @@ mod tests {
 
     #[test]
     fn every_kind_serialises_to_its_own_str() {
-        const ALL: [APIErrorKind; 3] = [
+        const ALL: [APIErrorKind; 4] = [
             APIErrorKind::Validation,
+            APIErrorKind::Unauthenticated,
             APIErrorKind::NotFound,
             APIErrorKind::Internal,
         ];
         for kind in ALL {
             match kind {
-                APIErrorKind::Validation | APIErrorKind::NotFound | APIErrorKind::Internal => {}
+                APIErrorKind::Validation
+                | APIErrorKind::Unauthenticated
+                | APIErrorKind::NotFound
+                | APIErrorKind::Internal => {}
             }
             let encoded = serde_json::to_string(&kind).expect("an error kind serialises");
             assert_eq!(

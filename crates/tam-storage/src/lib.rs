@@ -14,6 +14,7 @@ mod codec;
 pub mod jobs;
 mod mapping;
 mod product;
+pub mod sessions;
 pub mod taxonomy;
 
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
@@ -24,6 +25,7 @@ pub use jobs::{
 };
 pub use mapping::{MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
+pub use sessions::{SessionIdentity, SessionRepo, SessionToken};
 pub use taxonomy::{DrainStats, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo};
 
 use sqlx::{Postgres, Transaction};

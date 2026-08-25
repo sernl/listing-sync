@@ -2226,9 +2226,12 @@ dependencies = [
  "http-body-util",
  "serde",
  "serde_json",
+ "sqlx",
+ "tam-storage",
  "tam-types",
  "tokio",
  "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -2301,6 +2304,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-mint-session"
+version = "0.0.0"
+dependencies = [
+ "sqlx",
+ "tam-storage",
+ "tam-types",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "tam-pipeline"
 version = "0.0.0"
 dependencies = [
@@ -2340,7 +2354,9 @@ name = "tam-server"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "sqlx",
  "tam-api",
+ "tam-types",
  "tokio",
 ]
 

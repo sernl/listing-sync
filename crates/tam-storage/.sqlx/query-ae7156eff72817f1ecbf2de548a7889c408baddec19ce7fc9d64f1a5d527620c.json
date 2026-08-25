@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO user_session (token_digest, user_id, org_id, expires_at, created_at) SELECT $1, id, org_id, $3, $4 FROM app_user WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ae7156eff72817f1ecbf2de548a7889c408baddec19ce7fc9d64f1a5d527620c"
+}

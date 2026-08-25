@@ -6,7 +6,8 @@ use axum::{
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use tam_api::{router, APIError, APIErrorCode, APIErrorKind, APIVersion, Config, Health};
+use tam_api::{router, APIError, APIErrorCode, APIErrorKind, APIVersion, AppState, Config, Health};
+use tam_types::Timestamp;
 use tower::ServiceExt;
 
 struct Answer {
@@ -25,6 +26,22 @@ impl Answer {
     }
 }
 
+/// A state whose pool never dials: `connect_lazy` defers until first use,
+/// and the hermetic routes here never use it.
+#[expect(
+    clippy::expect_used,
+    reason = "clippy's allow-expect-in-tests reaches #[test] functions and #[cfg(test)] modules, not a free helper in an integration-test crate; a malformed fixture is a broken test and should panic"
+)]
+fn test_state() -> AppState {
+    AppState {
+        pool: sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("a lazy pool parses its url without dialling"),
+        config: Config::default(),
+        wall: || Timestamp(0),
+    }
+}
+
 #[expect(
     clippy::expect_used,
     reason = "clippy's allow-expect-in-tests reaches #[test] functions and #[cfg(test)] modules, not a free helper in an integration-test crate; a malformed fixture is a broken test and should panic"
@@ -34,7 +51,7 @@ async fn get(path: &str) -> Answer {
         .uri(path)
         .body(Body::empty())
         .expect("the test request is well formed");
-    let response = router(Config::default())
+    let response = router(test_state())
         .oneshot(request)
         .await
         .expect("the router is infallible as a service");
@@ -141,5 +158,20 @@ async fn an_unmounted_path_is_a_bare_not_found() {
     assert!(
         answer.body.is_empty(),
         "the router's own not-found carries no structured body"
+    );
+}
+
+#[tokio::test]
+async fn a_protected_route_without_a_session_is_a_structured_401() {
+    let answer = get("/v1/whoami").await;
+    assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
+    let error: APIError = answer.json();
+    assert_eq!(
+        (error.errors[0].code, error.errors[0].kind),
+        (
+            Some(APIErrorCode::SessionRequired),
+            Some(APIErrorKind::Unauthenticated)
+        ),
+        "the refusal is the closed vocabulary, not a bare status"
     );
 }

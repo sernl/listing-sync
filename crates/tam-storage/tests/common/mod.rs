@@ -9,8 +9,12 @@ use tam_types::{
 };
 
 pub(crate) const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
+// Each integration binary compiles this module separately and uses a
+// different subset, so unuse is per-binary and expected here.
+#[allow(dead_code)]
 pub(crate) const PRODUCT_1: ProductId = ProductId(Uuid([0x01; 16]));
 
+#[allow(dead_code)]
 pub(crate) fn minimal_product() -> CanonicalProduct {
     CanonicalProduct {
         id: PRODUCT_1,
@@ -42,6 +46,7 @@ pub(crate) fn minimal_product() -> CanonicalProduct {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) async fn seed_org_a(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
         .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))

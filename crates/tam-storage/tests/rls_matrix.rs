@@ -36,17 +36,22 @@ const TENANT_TABLES: [&str; 22] = [
 ];
 
 /// organisation is the tenant root itself (it has no org_id column); the
-/// auth milestone revisits whether it needs its own read fence. The rest are
-/// genuinely global: reference data, the canonical taxonomy, the fleet kill
-/// switch, and sqlx's migration bookkeeping.
-const GLOBAL_TABLES: [&str; 7] = [
+/// auth milestone revisits whether it needs its own read fence. app_user and
+/// user_session are the authentication root: a session row must be readable
+/// before any tenant pin exists, and the stored token digest is the
+/// capability's verifier, not tenant data. The rest are genuinely global:
+/// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
+/// migration bookkeeping.
+const GLOBAL_TABLES: [&str; 9] = [
     "_sqlx_migrations",
+    "app_user",
     "canonical_term",
     "inventory_halt",
     "marketplace_inventory",
     "organisation",
     "projection_edge",
     "projection_no_counterpart",
+    "user_session",
 ];
 
 #[sqlx::test(migrations = "./migrations")]
