@@ -79,11 +79,22 @@ fn classify_reqwest(error: &reqwest::Error) -> TransportError {
 
 impl Transport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        send_over(&self.client, request).await
+    }
+}
+
+/// One wire path for every reqwest-backed transport; which client — cookied
+/// or gateway-bound — is the caller's construction.
+async fn send_over(
+    client: &reqwest::Client,
+    request: HttpRequest,
+) -> Result<HttpResponse, TransportError> {
+    {
         let builder = match request.method {
-            Method::Get => self.client.get(&request.url),
-            Method::Post => self.client.post(&request.url),
-            Method::Put => self.client.put(&request.url),
-            Method::Delete => self.client.delete(&request.url),
+            Method::Get => client.get(&request.url),
+            Method::Post => client.post(&request.url),
+            Method::Put => client.put(&request.url),
+            Method::Delete => client.delete(&request.url),
         };
         let builder = match request.body {
             RequestBody::Empty => builder,
@@ -120,5 +131,41 @@ impl Transport for ReqwestTransport {
                 detail: error.to_string(),
             })?;
         Ok(HttpResponse { status, body })
+    }
+}
+
+/// The gateway-facing transport: no cookie of its own — the broker's gateway
+/// injects the session server-side — and every request rebased from the
+/// canonical origin onto the leased loopback endpoint.
+pub struct GatewayTransport {
+    inner: reqwest::Client,
+    base: String,
+}
+
+impl GatewayTransport {
+    pub fn new(base: String) -> Result<Self, TransportBuildError> {
+        let inner = reqwest::Client::builder()
+            .timeout(core::time::Duration::from_secs(30))
+            .connect_timeout(core::time::Duration::from_secs(10))
+            .build()
+            .map_err(|error| TransportBuildError(error.to_string()))?;
+        Ok(Self { inner, base })
+    }
+
+    fn rebase(&self, url: &str) -> String {
+        match url.strip_prefix("https://www.tes.com") {
+            Some(path) => format!("{}{path}", self.base),
+            None => url.to_owned(),
+        }
+    }
+}
+
+impl Transport for GatewayTransport {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        let rebased = HttpRequest {
+            url: self.rebase(&request.url),
+            ..request
+        };
+        send_over(&self.inner, rebased).await
     }
 }

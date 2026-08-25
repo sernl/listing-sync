@@ -435,6 +435,23 @@ pub trait MarketplaceAdapter: Send + Sync {
     ) -> impl std::future::Future<Output = Result<ObservedListing, AdapterError>> + Send;
 }
 
+/// A seller's own listing as the first-party import read yields it:
+/// verbatim marketplace vocabulary for canonicalisation, no interpretation.
+/// Read only under [`FetchReason::FirstPartyExport`]; the adapter refuses
+/// any other reason.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedListing {
+    pub remote: RemoteListingId,
+    pub title: String,
+    pub body: String,
+    pub licence: Option<String>,
+    pub price: Option<f64>,
+    pub category_native_ids: Vec<String>,
+    pub age_range_native_ids: Vec<String>,
+    pub year_groups: Vec<String>,
+    pub curriculum: Vec<String>,
+}
+
 /// How a seller's marketplace access is held. `StoredCredential` is today's
 /// model and the founder recorded it as interim, so the two better models are
 /// variants of this enum rather than a redesign.

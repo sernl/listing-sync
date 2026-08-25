@@ -187,6 +187,29 @@ fn merge_loss(
     }
 }
 
+/// The inbound direction by the marketplace's own numeric id rather than by
+/// segments: the import reads `categories: [{id}]`, and the id is what the
+/// edge's `native_id` retains. Reverse of `Exact` edges only, and a
+/// duplicated claim (impossible under the database's reverse-uniqueness
+/// index) reads as unmapped rather than picking a winner.
+#[must_use]
+pub fn ingest_by_native_id(
+    native_id: &str,
+    vocabulary: VocabularyId,
+    edges: &[ProjectionEdge],
+) -> Option<CanonicalTermId> {
+    let mut matches = edges.iter().filter(|edge| {
+        edge.kind == EdgeKind::Exact
+            && edge.to.vocabulary == vocabulary
+            && edge.to.native_id.as_deref() == Some(native_id)
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first.from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ingest, project, project_terms, BlockedTerm};

@@ -1,0 +1,29 @@
+[package]
+name    = "tam-import"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+pg-tests = ["tam-storage/pg-tests"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-domain = { path = "../tam-domain" }
+tam-marketplace = { path = "../tam-marketplace" }
+tam-marketplace-tes = { path = "../tam-marketplace-tes" }
+tam-pipeline = { path = "../tam-pipeline" }
+tam-secrets = { path = "../tam-secrets" }
+tam-storage = { path = "../tam-storage" }
+tam-taxonomy = { path = "../tam-taxonomy" }
+tam-types = { path = "../tam-types" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid"] }
+
+[lints]
+workspace = true

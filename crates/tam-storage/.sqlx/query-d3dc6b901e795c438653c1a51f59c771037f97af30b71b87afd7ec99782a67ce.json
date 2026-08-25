@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH doomed AS (\n                   SELECT id FROM job_event\n                    WHERE created_at < $1\n                    ORDER BY created_at, id\n                    LIMIT $2\n               ),\n               gone AS (\n                   DELETE FROM job_event WHERE id IN (SELECT id FROM doomed)\n                   RETURNING org_id, org_seq\n               ),\n               highest AS (\n                   SELECT org_id, max(org_seq) AS max_seq FROM gone GROUP BY org_id\n               ),\n               advanced AS (\n                   UPDATE org_event_counter c\n                      SET prune_watermark = GREATEST(c.prune_watermark, h.max_seq)\n                     FROM highest h\n                    WHERE c.org_id = h.org_id AND h.max_seq > c.prune_watermark\n                   RETURNING c.org_id\n               )\n               SELECT (SELECT count(*) FROM gone)     AS \"deleted!\",\n                      (SELECT count(*) FROM advanced) AS \"advances!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "deleted!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "advances!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "d3dc6b901e795c438653c1a51f59c771037f97af30b71b87afd7ec99782a67ce"
+}

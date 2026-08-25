@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use tam_marketplace::transport::Transport;
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FormId,
-    FormSchemaFingerprint, IdempotencyKey, ListingLocator, MarketplaceAdapter, ObservedListing,
-    RemoteLifecycle, RemoteListingId, SubmitEvidence,
+    FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, MarketplaceAdapter,
+    ObservedListing, RemoteLifecycle, RemoteListingId, SubmitEvidence,
 };
 use tam_types::{ContentHash, FailureCode, FailureDetail, FieldKey, InventoryId, OrgId, Timestamp};
 
@@ -412,5 +412,85 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
             fields,
             lifecycle,
         })
+    }
+}
+
+impl<T: Transport, F: FileSource> TesAdapter<T, F> {
+    /// The first-party import read: the seller's own listing, verbatim, for
+    /// canonicalisation. Refuses any reason but `FirstPartyExport`, because
+    /// this is the tier-one capability and nothing else justifies an
+    /// enumeration-shaped read.
+    pub async fn fetch_for_import(
+        &self,
+        reason: &FetchReason,
+        id: DraftId,
+    ) -> Result<ImportedListing, AdapterError> {
+        if !matches!(reason, FetchReason::FirstPartyExport { .. }) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(
+                    "an import read is justified only by the first-party-export capability"
+                        .to_owned(),
+                ),
+            });
+        }
+        let state = self.resource_state(id).await?;
+        let title = state
+            .get("title")
+            .and_then(Value::as_str)
+            .ok_or(AdapterError::Ambiguous(
+                AmbiguityCause::ReadBackIndeterminate,
+            ))?
+            .to_owned();
+        let body = state
+            .get("descriptionRaw")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let category_native_ids = state
+            .get("categories")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.get("id"))
+                    .filter_map(native_id_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(ImportedListing {
+            remote: RemoteListingId::Tes {
+                url: format!("https://www.tes.com/teaching-resource/-{}", id.0),
+            },
+            title,
+            body,
+            licence: state
+                .get("licence")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            price: state.get("price").and_then(Value::as_f64),
+            category_native_ids,
+            age_range_native_ids: string_list(state.get("ageRanges")),
+            year_groups: string_list(state.get("yearGroups")),
+            curriculum: string_list(state.get("curriculum")),
+        })
+    }
+}
+
+/// The marketplace serialises ids sometimes as numbers and sometimes as
+/// strings; the import keeps them as strings, the edge relation's own form.
+fn native_id_string(value: &Value) -> Option<String> {
+    match value {
+        Value::Number(number) => Some(number.to_string()),
+        Value::String(text) => Some(text.clone()),
+        Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(entries)) => entries.iter().filter_map(native_id_string).collect(),
+        Some(single) => native_id_string(single).into_iter().collect(),
+        None => Vec::new(),
     }
 }

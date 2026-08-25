@@ -421,3 +421,25 @@ impl TaxonomyRepo {
         Ok(stats)
     }
 }
+
+impl TaxonomyRepo {
+    /// Every canonical term, for the projection's kind lookup. Global
+    /// reference data; bounded by the seeded vocabulary's own size.
+    pub async fn terms(&self) -> Result<Vec<CanonicalTerm>, StorageError> {
+        let rows = sqlx::query!("SELECT id, kind, parent, label FROM canonical_term ORDER BY id")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(CanonicalTerm {
+                    id: CanonicalTermId(uuid_from_db(row.id)),
+                    kind: term_kind_from_db(&row.kind)?,
+                    parent: row
+                        .parent
+                        .map(|parent| CanonicalTermId(uuid_from_db(parent))),
+                    label: row.label,
+                })
+            })
+            .collect()
+    }
+}
