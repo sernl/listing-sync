@@ -47,8 +47,9 @@ Tests (`tests/taxonomy.rs`, pg lane): seed idempotence; the drain (raise, resolv
 
 ### Task 4: grade provenance
 
-`tam-storage/src/grades.rs`: `GradeRepo` writing `grade_declaration` plus ordered `grade_declaration_path` rows and reading the declaration back verbatim; codec for `DeclarationSource`.
-Tests (pg lane): the round-trip law — a stored declaration reads back with segments, order, native ids and source intact, and the derived interval only when the pure derivation produced one; RLS isolation.
+Corrected in flight: M1b's `ProductRepo` already writes and reads the grade declaration as part of the product aggregate — one unit by design — so a separate `GradeRepo` would split what belongs together and is not built.
+The pure derivation (`derive_interval` and the Tes age-range table) ships in Task 2's crate.
+This task is the law coverage the aggregate round-trip's seller fixture does not reach: `tests/grades.rs` pins the imported, multi-path, native-id declaration round-tripping verbatim and ordered, and the open-ended declaration deriving nothing rather than an invented bound.
 
 ### Task 5: seeding and the drain report
 
