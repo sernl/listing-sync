@@ -131,6 +131,13 @@ web-check:
 web-dev:
     cd web && npm run dev
 
+# Mint a development login: ensures the dev organisation and founder user
+# exist, then prints the tam_session=... line the login page asks for
+dev-session: db-wait
+    cargo run -p tam-mint-session -- {{db_url}} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+        founder@example.test --ensure-org founder-dev
+
 # Full local environment: database, migrations, API server
 dev: db-up db-wait db-migrate
+    @echo "need a login? in another terminal:  just dev-session"
     cargo run -p tam-server -- {{db_url}}

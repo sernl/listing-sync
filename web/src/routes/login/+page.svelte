@@ -31,7 +31,8 @@
 	<p class="mb-4 text-sm text-slate-600">
 		Paste the session line the operator minted for you — the whole
 		<code>tam_session=…</code> line works as-is. The exchange sets a secure
-		cookie; the token itself is never stored here.
+		cookie; the token itself is never stored here. Developing locally? Run
+		<code>just dev-session</code> and paste what it prints.
 	</p>
 	<form onsubmit={exchange} class="flex flex-col gap-3">
 		<input

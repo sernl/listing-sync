@@ -3,7 +3,7 @@
 //! Self-serve signup is M5's; until then this one-shot is the login flow.
 //! Entropy and the clock enter the repository as data from this boundary.
 //!
-//! Usage: tam-mint-session <db-url> <org-uuid-hex> <email> [ttl-days]
+//! Usage: tam-mint-session <db-url> <org-uuid-hex> <email> [ttl-days] [--ensure-org <name>]
 
 #![forbid(unsafe_code)]
 
@@ -49,7 +49,16 @@ fn fresh_token() -> SessionToken {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let mut arguments = Vec::new();
+    let mut ensure_org_name: Option<String> = None;
+    let mut raw = std::env::args().skip(1);
+    while let Some(argument) = raw.next() {
+        if argument == "--ensure-org" {
+            ensure_org_name = Some(raw.next().ok_or("--ensure-org needs a name argument")?);
+        } else {
+            arguments.push(argument);
+        }
+    }
     let db_url = arguments.first().ok_or("missing db url")?;
     let org = org_from_hex(arguments.get(1).ok_or("missing org hex")?)?;
     let email = arguments.get(2).ok_or("missing email")?;
@@ -67,6 +76,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let repo = SessionRepo::new(pool);
     let now = wall_now()?;
+
+    if let Some(name) = &ensure_org_name {
+        repo.ensure_org(org, name, now).await?;
+    }
 
     let user = if let Some(existing) = repo.user_by_email(email).await? {
         existing
@@ -89,6 +102,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     repo.mint(&token, user, expires_at, now).await?;
 
     eprintln!("session minted for {email}; expires in {ttl_days} days");
-    eprintln!("cookie: tam_session={}", token.to_hex());
+    // The product goes to stdout so a pipe captures exactly the paste line;
+    // the status above stays on stderr.
+    println!("tam_session={}", token.to_hex());
     Ok(())
 }

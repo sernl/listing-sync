@@ -73,6 +73,27 @@ impl SessionRepo {
         Self { pool }
     }
 
+    /// Ensures the organisation row exists, for the development mint path:
+    /// a fresh database has no tenant until something creates one, and
+    /// self-serve signup is M5's. Idempotent on the id.
+    pub async fn ensure_org(
+        &self,
+        org: OrgId,
+        name: &str,
+        at: Timestamp,
+    ) -> Result<(), StorageError> {
+        sqlx::query!(
+            "INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, $3) \
+             ON CONFLICT (id) DO NOTHING",
+            uuid_to_db(org.0),
+            name,
+            timestamp_to_db(at)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Creates the user row a session hangs off. Minting is an operator
     /// one-shot until M5 lands self-serve signup.
     pub async fn create_user(
