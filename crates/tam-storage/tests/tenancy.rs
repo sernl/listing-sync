@@ -1,36 +1,97 @@
-//! The two-tenant negative test: row-level security, not the queries'
-//! `WHERE org_id` clauses, is what keeps tenant A's rows out of tenant B's
-//! reads. The raw probes below deliberately omit any org filter so the test
-//! fails if the policy is dropped, disabled, or not FORCEd onto the owner.
+//! The two-tenant negative tests: row-level security, not the queries'
+//! `WHERE org_id` clauses, keeps tenant A's rows out of tenant B's reads. The
+//! raw probes deliberately omit any org filter so they fail if a policy is
+//! dropped, disabled, or not FORCEd onto the owner. The catalogue tests also
+//! prove the deferred payload trigger and per-tenant blob deduplication.
 
 #![cfg(feature = "pg-tests")]
 
 use sqlx::PgPool;
-use tam_storage::{NewProduct, ProductRepo};
-use tam_types::{ListingCopy, OrgId, PriceIntent, ProductId, Timestamp, Title, Uuid};
+use tam_domain::{
+    AgeInterval, CanonicalProduct, DeclarationSource, GradeDeclaration, TermKind, VocabularyId,
+    VocabularyPath,
+};
+use tam_storage::ProductRepo;
+use tam_types::{
+    CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, ListingCopy, OrgId,
+    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
+};
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
 const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
 const PRODUCT_1: ProductId = ProductId(Uuid([0x01; 16]));
-
-fn sample_product() -> NewProduct {
-    NewProduct {
-        id: PRODUCT_1,
-        title: Title("Fractions revision pack".to_owned()),
-        body: ListingCopy {
-            body: "A worked example pack.".to_owned(),
-        },
-        price: PriceIntent::Free,
-        created_at: Timestamp(1_756_000_000_000),
-        updated_at: Timestamp(1_756_000_000_000),
-    }
-}
+const TERM_MATHS: CanonicalTermId = CanonicalTermId(Uuid([0x11; 16]));
+const TERM_FRACTIONS: CanonicalTermId = CanonicalTermId(Uuid([0x12; 16]));
 
 fn db_uuid(id: Uuid) -> uuid::Uuid {
     uuid::Uuid::from_bytes(id.0)
 }
 
-async fn seed_organisations(pool: &PgPool) -> Result<(), sqlx::Error> {
+fn file(
+    id_byte: u8,
+    role: FileRole,
+    kind: FileKind,
+    hash_byte: u8,
+    scan: ScanOutcome,
+) -> ProductFile {
+    ProductFile {
+        id: FileId(Uuid([id_byte; 16])),
+        role,
+        kind,
+        hash: ContentHash([hash_byte; 32]),
+        byte_len: 4,
+        scan,
+    }
+}
+
+fn sample_product(org: OrgId) -> CanonicalProduct {
+    let interval = AgeInterval::new(7, 11).expect("7..11 is an ordered interval");
+    CanonicalProduct {
+        id: PRODUCT_1,
+        org,
+        title: Title("Fractions revision pack".to_owned()),
+        body: ListingCopy {
+            body: "A worked example pack.".to_owned(),
+        },
+        payload: PayloadSet::new(
+            file(
+                0x21,
+                FileRole::Payload,
+                FileKind::Pdf,
+                0x51,
+                ScanOutcome::Pending,
+            ),
+            vec![file(
+                0x22,
+                FileRole::Payload,
+                FileKind::Zip,
+                0x51,
+                ScanOutcome::Clean { at: Timestamp(2) },
+            )],
+        ),
+        cover: Some(file(
+            0x23,
+            FileRole::Cover,
+            FileKind::Image,
+            0x52,
+            ScanOutcome::Pending,
+        )),
+        previews: vec![],
+        subjects: vec![TERM_MATHS, TERM_FRACTIONS],
+        grades: GradeDeclaration {
+            source: DeclarationSource::Seller,
+            raw: vec![VocabularyPath {
+                vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+                segments: vec!["primary".to_owned(), "ks2".to_owned()],
+                native_id: None,
+            }],
+            derived: Some(interval),
+        },
+        price: PriceIntent::Free,
+    }
+}
+
+async fn seed_fixture(pool: &PgPool) -> Result<(), sqlx::Error> {
     for (org, name) in [(ORG_A, "org-a"), (ORG_B, "org-b")] {
         sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
             .bind(db_uuid(org.0))
@@ -38,11 +99,21 @@ async fn seed_organisations(pool: &PgPool) -> Result<(), sqlx::Error> {
             .execute(pool)
             .await?;
     }
+    for (term, label) in [(TERM_MATHS, "mathematics"), (TERM_FRACTIONS, "fractions")] {
+        sqlx::query(
+            "INSERT INTO canonical_term (id, kind, parent, label) VALUES ($1, 'subject', NULL, $2)",
+        )
+        .bind(db_uuid(term.0))
+        .bind(label)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
-/// Counts every visible product row with NO org filter, under the given pin.
-async fn visible_rows(pool: &PgPool, pin: Option<OrgId>) -> Result<i64, sqlx::Error> {
+/// Counts every visible row of the named table with NO org filter, under the
+/// given pin. The table name comes from a fixed test-local set, never input.
+async fn visible_rows(pool: &PgPool, table: &str, pin: Option<OrgId>) -> Result<i64, sqlx::Error> {
     let mut tx = pool.begin().await?;
     if let Some(org) = pin {
         sqlx::query("SELECT set_config('app.current_org', $1, true)")
@@ -50,7 +121,7 @@ async fn visible_rows(pool: &PgPool, pin: Option<OrgId>) -> Result<i64, sqlx::Er
             .execute(&mut *tx)
             .await?;
     }
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM product")
+    let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -58,14 +129,82 @@ async fn visible_rows(pool: &PgPool, pin: Option<OrgId>) -> Result<i64, sqlx::Er
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn tenant_b_sees_nothing_of_tenant_a(pool: PgPool) {
-    seed_organisations(&pool)
-        .await
-        .expect("organisation fixture rows insert");
+async fn the_aggregate_round_trips(pool: PgPool) {
+    seed_fixture(&pool).await.expect("fixture rows insert");
     let repo = ProductRepo::new(pool.clone());
-    repo.insert(ORG_A, &sample_product())
+    let product = sample_product(ORG_A);
+    repo.insert(ORG_A, &product, Timestamp(1_756_000_000_000))
         .await
-        .expect("tenant A inserts a product");
+        .expect("tenant A inserts the aggregate");
+
+    let record = repo
+        .get(ORG_A, PRODUCT_1)
+        .await
+        .expect("tenant A reads back")
+        .expect("the product exists for tenant A");
+    assert_eq!(
+        record.product, product,
+        "the aggregate must survive the write-read round trip unchanged"
+    );
+    assert_eq!(
+        record.created_at,
+        Timestamp(1_756_000_000_000),
+        "the write instant enters as data and survives"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn two_files_sharing_a_hash_share_one_blob(pool: PgPool) {
+    seed_fixture(&pool).await.expect("fixture rows insert");
+    let repo = ProductRepo::new(pool.clone());
+    repo.insert(ORG_A, &sample_product(ORG_A), Timestamp(1))
+        .await
+        .expect("tenant A inserts the aggregate");
+
+    assert_eq!(
+        visible_rows(&pool, "blob", Some(ORG_A))
+            .await
+            .expect("the pinned probe runs"),
+        2,
+        "three files over two distinct hashes deduplicate to two blobs"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_product_without_a_payload_cannot_commit(pool: PgPool) {
+    seed_fixture(&pool).await.expect("fixture rows insert");
+
+    let mut tx = pool.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(ORG_A.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO product \
+         (org_id, id, title, body, price_kind, price_minor_units, price_currency, \
+          created_at, updated_at) \
+         VALUES ($1, $2, 't', 'b', 'free', NULL, NULL, now(), now())",
+    )
+    .bind(db_uuid(ORG_A.0))
+    .bind(db_uuid(PRODUCT_1.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the bare row inserts; the deferred trigger has not run yet");
+    let refused = tx.commit().await;
+    assert!(
+        refused.is_err(),
+        "the deferred payload trigger must refuse a payload-less product at commit"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn tenant_b_sees_nothing_of_tenant_a(pool: PgPool) {
+    seed_fixture(&pool).await.expect("fixture rows insert");
+    let repo = ProductRepo::new(pool.clone());
+    repo.insert(ORG_A, &sample_product(ORG_A), Timestamp(1))
+        .await
+        .expect("tenant A inserts the aggregate");
 
     let found = repo
         .get(ORG_A, PRODUCT_1)
@@ -76,20 +215,23 @@ async fn tenant_b_sees_nothing_of_tenant_a(pool: PgPool) {
         "positive control: tenant A must see its own row, or every assertion below is vacuous"
     );
 
-    assert_eq!(
-        visible_rows(&pool, Some(ORG_A))
-            .await
-            .expect("the pinned probe runs"),
-        1,
-        "probe control: the unfiltered probe must see A's row under A's pin"
-    );
-    assert_eq!(
-        visible_rows(&pool, Some(ORG_B))
-            .await
-            .expect("the pinned probe runs"),
-        0,
-        "row-level security must hide tenant A's rows from tenant B even without a WHERE clause"
-    );
+    for table in ["product", "product_file", "blob", "grade_declaration"] {
+        assert_eq!(
+            visible_rows(&pool, table, Some(ORG_A))
+                .await
+                .expect("the pinned probe runs")
+                > 0,
+            true,
+            "probe control: the unfiltered {table} probe must see A's rows under A's pin"
+        );
+        assert_eq!(
+            visible_rows(&pool, table, Some(ORG_B))
+                .await
+                .expect("the pinned probe runs"),
+            0,
+            "row-level security must hide A's {table} rows from B even without a WHERE clause"
+        );
+    }
     let listed = repo.list(ORG_B).await.expect("tenant B lists");
     assert!(
         listed.is_empty(),
@@ -99,16 +241,14 @@ async fn tenant_b_sees_nothing_of_tenant_a(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn an_unpinned_connection_sees_an_empty_table(pool: PgPool) {
-    seed_organisations(&pool)
-        .await
-        .expect("organisation fixture rows insert");
+    seed_fixture(&pool).await.expect("fixture rows insert");
     let repo = ProductRepo::new(pool.clone());
-    repo.insert(ORG_A, &sample_product())
+    repo.insert(ORG_A, &sample_product(ORG_A), Timestamp(1))
         .await
-        .expect("tenant A inserts a product");
+        .expect("tenant A inserts the aggregate");
 
     assert_eq!(
-        visible_rows(&pool, None)
+        visible_rows(&pool, "product", None)
             .await
             .expect("the unpinned probe runs"),
         0,
@@ -118,9 +258,7 @@ async fn an_unpinned_connection_sees_an_empty_table(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn tenant_b_cannot_write_a_row_into_tenant_a(pool: PgPool) {
-    seed_organisations(&pool)
-        .await
-        .expect("organisation fixture rows insert");
+    seed_fixture(&pool).await.expect("fixture rows insert");
 
     let mut tx = pool.begin().await.expect("transaction begins");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
@@ -141,5 +279,17 @@ async fn tenant_b_cannot_write_a_row_into_tenant_a(pool: PgPool) {
     assert!(
         smuggled.is_err(),
         "the WITH CHECK half of the policy must refuse a write into another tenant"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_org_mismatched_aggregate_is_refused(pool: PgPool) {
+    seed_fixture(&pool).await.expect("fixture rows insert");
+    let repo = ProductRepo::new(pool.clone());
+    let product = sample_product(ORG_B);
+    let refused = repo.insert(ORG_A, &product, Timestamp(1)).await;
+    assert!(
+        matches!(refused, Err(tam_storage::StorageError::OrgMismatch)),
+        "an aggregate naming organisation B cannot be written under a pin for A"
     );
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, id, title, body, price_kind, price_minor_units, price_currency, created_at, updated_at FROM product WHERE org_id = $1 AND deleted_at IS NULL ORDER BY created_at, id",
+  "query": "SELECT org_id, id, title, price_kind, price_minor_units, price_currency, created_at, updated_at FROM product WHERE org_id = $1 AND deleted_at IS NULL ORDER BY created_at, id",
   "describe": {
     "columns": [
       {
@@ -20,31 +20,26 @@
       },
       {
         "ordinal": 3,
-        "name": "body",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 4,
         "name": "price_kind",
         "type_info": "Text"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "price_minor_units",
         "type_info": "Int8"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "price_currency",
         "type_info": "Text"
       },
       {
-        "ordinal": 7,
+        "ordinal": 6,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -59,12 +54,11 @@
       false,
       false,
       false,
-      false,
       true,
       true,
       false,
       false
     ]
   },
-  "hash": "253f8493098e67215dfc18f9af96cb5bc6b2e35e6cecc5c02ab5a9a042bbc92a"
+  "hash": "cecc49ac63c6c898fb7151f239612178a878660e27629e870648364d50372ddd"
 }

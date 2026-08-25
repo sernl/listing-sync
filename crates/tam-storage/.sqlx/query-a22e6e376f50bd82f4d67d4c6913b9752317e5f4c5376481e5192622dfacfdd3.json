@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT f.id, f.role, f.kind, f.hash, b.byte_len AS \"byte_len!\", f.scan_state, f.scan_signature, f.scanned_at, f.scan_failure_code FROM product_file f JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash WHERE f.org_id = $1 AND f.product_id = $2 AND f.deleted_at IS NULL ORDER BY f.position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "role",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "byte_len!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "scan_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "scan_signature",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "scanned_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "scan_failure_code",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a22e6e376f50bd82f4d67d4c6913b9752317e5f4c5376481e5192622dfacfdd3"
+}

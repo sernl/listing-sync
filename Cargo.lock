@@ -2013,7 +2013,9 @@ name = "tam-storage"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "serde_json",
  "sqlx",
+ "tam-domain",
  "tam-types",
  "thiserror",
  "uuid",

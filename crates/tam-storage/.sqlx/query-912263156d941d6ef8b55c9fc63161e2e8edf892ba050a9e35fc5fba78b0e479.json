@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO grade_declaration (org_id, product_id, source, source_inventory, source_term_kind, derived_low_years, derived_high_years) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "912263156d941d6ef8b55c9fc63161e2e8edf892ba050a9e35fc5fba78b0e479"
+}

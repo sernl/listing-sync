@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT source, source_inventory, source_term_kind, derived_low_years, derived_high_years FROM grade_declaration WHERE org_id = $1 AND product_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "source_inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_term_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "derived_low_years",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "derived_high_years",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "18ca38668bbd5629668dba95f83d700555d1a595ed9bad90c31a5b5ee7e64104"
+}

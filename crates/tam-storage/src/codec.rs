@@ -1,0 +1,349 @@
+//! Total conversions between domain values and their column renderings.
+//!
+//! Every decode is defensive even where a CHECK constraint guards the column,
+//! because a decode error names corruption precisely instead of panicking on
+//! it. `FailureCode` alone stores its serde name verbatim: schema.md requires
+//! the column and the type to share one name across the worker, the API, the
+//! client and the operator dashboard.
+
+use chrono::{DateTime, Utc};
+use tam_types::{
+    ContentHash, Currency, FailureCode, FileKind, FileRole, InventoryId, Money, PriceIntent,
+    ScanOutcome, Timestamp,
+};
+
+use crate::StorageError;
+
+pub(crate) fn uuid_to_db(id: tam_types::Uuid) -> uuid::Uuid {
+    uuid::Uuid::from_bytes(id.0)
+}
+
+pub(crate) fn uuid_from_db(id: uuid::Uuid) -> tam_types::Uuid {
+    tam_types::Uuid(id.into_bytes())
+}
+
+pub(crate) fn timestamp_to_db(at: Timestamp) -> Result<DateTime<Utc>, StorageError> {
+    DateTime::<Utc>::from_timestamp_millis(at.0)
+        .ok_or(StorageError::TimestampOutOfRange { millis: at.0 })
+}
+
+pub(crate) fn timestamp_from_db(at: DateTime<Utc>) -> Timestamp {
+    Timestamp(at.timestamp_millis())
+}
+
+pub(crate) fn hash_to_db(hash: ContentHash) -> Vec<u8> {
+    hash.0.to_vec()
+}
+
+pub(crate) fn hash_from_db(bytes: &[u8]) -> Result<ContentHash, StorageError> {
+    <[u8; 32]>::try_from(bytes)
+        .map(ContentHash)
+        .map_err(|_| StorageError::CorruptRow {
+            reason: format!("content hash of {} bytes, expected 32", bytes.len()),
+        })
+}
+
+pub(crate) fn hash_hex(hash: ContentHash) -> String {
+    use core::fmt::Write;
+    let mut hex = String::with_capacity(64);
+    for byte in hash.0 {
+        // infallible on String; the Result is the trait's, not the writer's
+        let _unused: core::fmt::Result = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+pub(crate) const PRICE_KIND_FREE: &str = "free";
+pub(crate) const PRICE_KIND_PAID: &str = "paid";
+const CURRENCY_GBP: &str = "gbp";
+const CURRENCY_USD: &str = "usd";
+
+pub(crate) struct PriceColumns {
+    pub(crate) kind: &'static str,
+    pub(crate) minor_units: Option<i64>,
+    pub(crate) currency: Option<&'static str>,
+}
+
+impl PriceColumns {
+    pub(crate) fn from_intent(price: PriceIntent) -> Self {
+        match price {
+            PriceIntent::Free => Self {
+                kind: PRICE_KIND_FREE,
+                minor_units: None,
+                currency: None,
+            },
+            PriceIntent::Paid(money) => Self {
+                kind: PRICE_KIND_PAID,
+                minor_units: Some(money.minor_units()),
+                currency: Some(match money.currency() {
+                    Currency::Gbp => CURRENCY_GBP,
+                    Currency::Usd => CURRENCY_USD,
+                }),
+            },
+        }
+    }
+}
+
+pub(crate) fn price_from_db(
+    kind: &str,
+    minor_units: Option<i64>,
+    currency: Option<String>,
+) -> Result<PriceIntent, StorageError> {
+    match (kind, minor_units, currency) {
+        (k, None, None) if k == PRICE_KIND_FREE => Ok(PriceIntent::Free),
+        (k, Some(units), Some(cur)) if k == PRICE_KIND_PAID => {
+            let currency = match cur.as_str() {
+                c if c == CURRENCY_GBP => Currency::Gbp,
+                c if c == CURRENCY_USD => Currency::Usd,
+                other => {
+                    return Err(StorageError::CorruptRow {
+                        reason: format!("unknown currency {other:?}"),
+                    })
+                }
+            };
+            Money::new(units, currency)
+                .map(PriceIntent::Paid)
+                .map_err(|_| StorageError::CorruptRow {
+                    reason: format!("non-positive paid amount {units}"),
+                })
+        }
+        (k, units, cur) => Err(StorageError::CorruptRow {
+            reason: format!("inconsistent price columns ({k:?}, {units:?}, {cur:?})"),
+        }),
+    }
+}
+
+pub(crate) const fn file_role_to_db(role: FileRole) -> &'static str {
+    match role {
+        FileRole::Payload => "payload",
+        FileRole::Preview => "preview",
+        FileRole::Cover => "cover",
+    }
+}
+
+pub(crate) fn file_role_from_db(raw: &str) -> Result<FileRole, StorageError> {
+    match raw {
+        "payload" => Ok(FileRole::Payload),
+        "preview" => Ok(FileRole::Preview),
+        "cover" => Ok(FileRole::Cover),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown file role {other:?}"),
+        }),
+    }
+}
+
+pub(crate) const fn file_kind_to_db(kind: FileKind) -> &'static str {
+    match kind {
+        FileKind::Pdf => "pdf",
+        FileKind::Pptx => "pptx",
+        FileKind::Docx => "docx",
+        FileKind::Zip => "zip",
+        FileKind::Image => "image",
+    }
+}
+
+pub(crate) fn file_kind_from_db(raw: &str) -> Result<FileKind, StorageError> {
+    match raw {
+        "pdf" => Ok(FileKind::Pdf),
+        "pptx" => Ok(FileKind::Pptx),
+        "docx" => Ok(FileKind::Docx),
+        "zip" => Ok(FileKind::Zip),
+        "image" => Ok(FileKind::Image),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown file kind {other:?}"),
+        }),
+    }
+}
+
+pub(crate) struct ScanColumns {
+    pub(crate) state: &'static str,
+    pub(crate) signature: Option<String>,
+    pub(crate) scanned_at: Option<DateTime<Utc>>,
+    pub(crate) failure_code: Option<&'static str>,
+}
+
+impl ScanColumns {
+    pub(crate) fn from_outcome(scan: &ScanOutcome) -> Result<Self, StorageError> {
+        Ok(match scan {
+            ScanOutcome::Pending => Self {
+                state: "pending",
+                signature: None,
+                scanned_at: None,
+                failure_code: None,
+            },
+            ScanOutcome::Clean { at } => Self {
+                state: "clean",
+                signature: None,
+                scanned_at: Some(timestamp_to_db(*at)?),
+                failure_code: None,
+            },
+            ScanOutcome::Infected { signature } => Self {
+                state: "infected",
+                signature: Some(signature.clone()),
+                scanned_at: None,
+                failure_code: None,
+            },
+            ScanOutcome::Failed { code } => Self {
+                state: "failed",
+                signature: None,
+                scanned_at: None,
+                failure_code: Some(failure_code_to_db(*code)),
+            },
+        })
+    }
+}
+
+pub(crate) fn scan_from_db(
+    state: &str,
+    signature: Option<String>,
+    scanned_at: Option<DateTime<Utc>>,
+    failure_code: Option<&str>,
+) -> Result<ScanOutcome, StorageError> {
+    match (state, signature, scanned_at, failure_code) {
+        ("pending", None, None, None) => Ok(ScanOutcome::Pending),
+        ("clean", None, Some(at), None) => Ok(ScanOutcome::Clean {
+            at: timestamp_from_db(at),
+        }),
+        ("infected", Some(signature), _, None) => Ok(ScanOutcome::Infected { signature }),
+        ("failed", None, _, Some(code)) => Ok(ScanOutcome::Failed {
+            code: failure_code_from_db(code)?,
+        }),
+        (state, signature, scanned_at, failure_code) => Err(StorageError::CorruptRow {
+            reason: format!(
+                "inconsistent scan columns ({state:?}, {signature:?}, {scanned_at:?}, {failure_code:?})"
+            ),
+        }),
+    }
+}
+
+/// The serde name verbatim, per schema.md: one name across every layer.
+pub(crate) const fn failure_code_to_db(code: FailureCode) -> &'static str {
+    match code {
+        FailureCode::SelectorNotFound => "SelectorNotFound",
+        FailureCode::SelectorAmbiguous => "SelectorAmbiguous",
+        FailureCode::SelectorResolvedViaFallback => "SelectorResolvedViaFallback",
+        FailureCode::PreconditionElementAbsent => "PreconditionElementAbsent",
+        FailureCode::NavigationCancelled => "NavigationCancelled",
+        FailureCode::UnexpectedOrigin => "UnexpectedOrigin",
+        FailureCode::SubmitNoConfirmation => "SubmitNoConfirmation",
+        FailureCode::ChallengePresented => "ChallengePresented",
+        FailureCode::SessionExpired => "SessionExpired",
+        FailureCode::UploadRejected => "UploadRejected",
+        FailureCode::RateLimited => "RateLimited",
+        FailureCode::VerificationMismatch => "VerificationMismatch",
+        FailureCode::FormSchemaDrift => "FormSchemaDrift",
+        FailureCode::AdapterVersionRejected => "AdapterVersionRejected",
+        FailureCode::Other => "Other",
+    }
+}
+
+pub(crate) fn failure_code_from_db(raw: &str) -> Result<FailureCode, StorageError> {
+    const ALL: [FailureCode; 15] = [
+        FailureCode::SelectorNotFound,
+        FailureCode::SelectorAmbiguous,
+        FailureCode::SelectorResolvedViaFallback,
+        FailureCode::PreconditionElementAbsent,
+        FailureCode::NavigationCancelled,
+        FailureCode::UnexpectedOrigin,
+        FailureCode::SubmitNoConfirmation,
+        FailureCode::ChallengePresented,
+        FailureCode::SessionExpired,
+        FailureCode::UploadRejected,
+        FailureCode::RateLimited,
+        FailureCode::VerificationMismatch,
+        FailureCode::FormSchemaDrift,
+        FailureCode::AdapterVersionRejected,
+        FailureCode::Other,
+    ];
+    ALL.into_iter()
+        .find(|code| failure_code_to_db(*code) == raw)
+        .ok_or_else(|| StorageError::CorruptRow {
+            reason: format!("unknown failure code {raw:?}"),
+        })
+}
+
+pub(crate) const fn inventory_to_db(inventory: InventoryId) -> &'static str {
+    match inventory {
+        InventoryId::TesGb => "tes_gb",
+        InventoryId::TesUs => "tes_us",
+        InventoryId::Etsy => "etsy",
+        InventoryId::Tpt => "tpt",
+    }
+}
+
+pub(crate) fn inventory_from_db(raw: &str) -> Result<InventoryId, StorageError> {
+    match raw {
+        "tes_gb" => Ok(InventoryId::TesGb),
+        "tes_us" => Ok(InventoryId::TesUs),
+        "etsy" => Ok(InventoryId::Etsy),
+        "tpt" => Ok(InventoryId::Tpt),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown inventory {other:?}"),
+        }),
+    }
+}
+
+pub(crate) const fn term_kind_to_db(kind: tam_domain::TermKind) -> &'static str {
+    match kind {
+        tam_domain::TermKind::Subject => "subject",
+        tam_domain::TermKind::Topic => "topic",
+        tam_domain::TermKind::ResourceType => "resource_type",
+        tam_domain::TermKind::Phase => "phase",
+    }
+}
+
+pub(crate) fn term_kind_from_db(raw: &str) -> Result<tam_domain::TermKind, StorageError> {
+    match raw {
+        "subject" => Ok(tam_domain::TermKind::Subject),
+        "topic" => Ok(tam_domain::TermKind::Topic),
+        "resource_type" => Ok(tam_domain::TermKind::ResourceType),
+        "phase" => Ok(tam_domain::TermKind::Phase),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown term kind {other:?}"),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{failure_code_to_db, hash_hex};
+    use tam_types::{ContentHash, FailureCode};
+
+    /// schema.md: the failure-code column and the type share one name across
+    /// every layer, and the serde tag is that name.
+    #[test]
+    fn failure_code_column_text_is_the_serde_name() {
+        const ALL: [FailureCode; 15] = [
+            FailureCode::SelectorNotFound,
+            FailureCode::SelectorAmbiguous,
+            FailureCode::SelectorResolvedViaFallback,
+            FailureCode::PreconditionElementAbsent,
+            FailureCode::NavigationCancelled,
+            FailureCode::UnexpectedOrigin,
+            FailureCode::SubmitNoConfirmation,
+            FailureCode::ChallengePresented,
+            FailureCode::SessionExpired,
+            FailureCode::UploadRejected,
+            FailureCode::RateLimited,
+            FailureCode::VerificationMismatch,
+            FailureCode::FormSchemaDrift,
+            FailureCode::AdapterVersionRejected,
+            FailureCode::Other,
+        ];
+        for code in ALL {
+            let serde_name = serde_json::to_value(code).expect("a failure code serialises");
+            assert_eq!(
+                serde_name.as_str(),
+                Some(failure_code_to_db(code)),
+                "column text and serde tag must agree for {code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hash_hex_is_lowercase_and_sixty_four_chars() {
+        let hex = hash_hex(ContentHash([0xAB; 32]));
+        assert_eq!(hex.len(), 64, "a 32-byte digest renders as 64 nibbles");
+        assert!(hex.starts_with("abab"), "nibbles render lowercase: {hex}");
+    }
+}

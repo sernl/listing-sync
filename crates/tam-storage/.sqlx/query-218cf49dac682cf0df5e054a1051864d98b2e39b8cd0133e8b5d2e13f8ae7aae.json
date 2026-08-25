@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inventory, term_kind, segments, native_id FROM grade_declaration_path WHERE org_id = $1 AND product_id = $2 ORDER BY position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "term_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "segments",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 3,
+        "name": "native_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "218cf49dac682cf0df5e054a1051864d98b2e39b8cd0133e8b5d2e13f8ae7aae"
+}
