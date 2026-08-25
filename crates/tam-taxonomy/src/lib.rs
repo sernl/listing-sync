@@ -4,9 +4,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod listing;
 pub mod project;
 pub mod tes;
 
+pub use listing::{project_listing, ListingContext};
 pub use project::{ingest, project, project_terms, BlockedTerm, TermsOutcome};
 pub use tes::{
     derive_crosswalk, derive_interval, parse_tree, Crosswalk, CrosswalkError, Mismatch,
