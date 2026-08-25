@@ -114,6 +114,23 @@ db-verify:
 db-test: db-wait db-verify
     DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests
 
+# Regenerate the client's vocabulary from the closed Rust enums
+web-typegen:
+    cargo run -p tam-api --bin typegen > web/src/lib/generated/vocab.ts
+
+# The web lane: lockfile install, vocabulary freshness, types, tests, build
+web-check:
+    cargo run -p tam-api --bin typegen | diff -u web/src/lib/generated/vocab.ts - \
+        || (echo "vocab.ts is stale; run just web-typegen" && exit 1)
+    cd web && npm ci --no-audit --no-fund
+    cd web && npx svelte-kit sync && npx svelte-check --fail-on-warnings
+    cd web && npx vitest run
+    cd web && npm run build
+
+# The client dev server, proxying /v1 to a locally running tam-server
+web-dev:
+    cd web && npm run dev
+
 # Full local environment: database, migrations, API server
 dev: db-up db-wait db-migrate
     cargo run -p tam-server -- {{db_url}}

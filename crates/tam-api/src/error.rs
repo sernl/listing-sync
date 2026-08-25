@@ -61,6 +61,21 @@ pub enum APIErrorCode {
 }
 
 impl APIErrorCode {
+    /// The closed set, in a stable order; the closed-set test and the
+    /// vocabulary generator read this single source.
+    pub const ALL: [Self; 10] = [
+        Self::UnsupportedApiVersion,
+        Self::VersionParameterMissing,
+        Self::VersionParameterUnreadable,
+        Self::SessionRequired,
+        Self::IdempotencyKeyRequired,
+        Self::SyncMappingsInvalid,
+        Self::DuplicateSyncItem,
+        Self::ResourceMissing,
+        Self::BrokerUnavailable,
+        Self::Internal,
+    ];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -96,6 +111,14 @@ pub enum APIErrorKind {
 }
 
 impl APIErrorKind {
+    /// The closed set, in a stable order, for the same two readers.
+    pub const ALL: [Self; 4] = [
+        Self::Validation,
+        Self::Unauthenticated,
+        Self::NotFound,
+        Self::Internal,
+    ];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -270,19 +293,7 @@ mod tests {
     /// the client has never seen.
     #[test]
     fn every_code_serialises_to_its_own_str() {
-        const ALL: [APIErrorCode; 10] = [
-            APIErrorCode::UnsupportedApiVersion,
-            APIErrorCode::VersionParameterMissing,
-            APIErrorCode::VersionParameterUnreadable,
-            APIErrorCode::SessionRequired,
-            APIErrorCode::IdempotencyKeyRequired,
-            APIErrorCode::SyncMappingsInvalid,
-            APIErrorCode::DuplicateSyncItem,
-            APIErrorCode::ResourceMissing,
-            APIErrorCode::BrokerUnavailable,
-            APIErrorCode::Internal,
-        ];
-        for code in ALL {
+        for code in APIErrorCode::ALL {
             match code {
                 APIErrorCode::UnsupportedApiVersion
                 | APIErrorCode::VersionParameterMissing
@@ -306,13 +317,7 @@ mod tests {
 
     #[test]
     fn every_kind_serialises_to_its_own_str() {
-        const ALL: [APIErrorKind; 4] = [
-            APIErrorKind::Validation,
-            APIErrorKind::Unauthenticated,
-            APIErrorKind::NotFound,
-            APIErrorKind::Internal,
-        ];
-        for kind in ALL {
+        for kind in APIErrorKind::ALL {
             match kind {
                 APIErrorKind::Validation
                 | APIErrorKind::Unauthenticated

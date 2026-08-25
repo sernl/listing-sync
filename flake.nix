@@ -77,6 +77,7 @@
               pkgs.podman
               pkgs.podman-compose
               pkgs.postgresql_17
+              pkgs.nodejs_22
               pkgs.shellcheck
               pkgs.sqlx-cli
             ];

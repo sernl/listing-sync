@@ -105,6 +105,11 @@ pub enum Marketplace {
     Tpt,
 }
 
+impl Marketplace {
+    /// The closed set, in a stable order, for the vocabulary generator.
+    pub const ALL: [Self; 3] = [Self::Tes, Self::Etsy, Self::Tpt];
+}
+
 /// The inventory a listing is actually created in, which is the unit the model
 /// keys on. Tes runs disjoint GB and US inventories under one marketplace, so
 /// keying projections on `Marketplace` would make the entire first chargeable
@@ -144,6 +149,10 @@ pub enum CurrencyRule {
 }
 
 impl InventoryId {
+    /// The closed set, in a stable order; the vocabulary generator and the
+    /// closed-set tests read this single source.
+    pub const ALL: [Self; 5] = [Self::TesGb, Self::TesUs, Self::TesNz, Self::Etsy, Self::Tpt];
+
     #[must_use]
     pub const fn marketplace(self) -> Marketplace {
         match self {
@@ -405,6 +414,28 @@ pub enum FailureCode {
     Other,
 }
 
+impl FailureCode {
+    /// The closed set shared with the client, in a stable order; the
+    /// cross-layer test and the vocabulary generator read this single source.
+    pub const ALL: [Self; 15] = [
+        Self::SelectorNotFound,
+        Self::SelectorAmbiguous,
+        Self::SelectorResolvedViaFallback,
+        Self::PreconditionElementAbsent,
+        Self::NavigationCancelled,
+        Self::UnexpectedOrigin,
+        Self::SubmitNoConfirmation,
+        Self::ChallengePresented,
+        Self::SessionExpired,
+        Self::UploadRejected,
+        Self::RateLimited,
+        Self::VerificationMismatch,
+        Self::FormSchemaDrift,
+        Self::AdapterVersionRejected,
+        Self::Other,
+    ];
+}
+
 /// Adapter-supplied free text accompanying a `FailureCode`. Never parsed, never
 /// crosswalked to copy, and never permitted to decide an outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -505,24 +536,7 @@ mod tests {
     /// forces the cross-layer contract to be revisited deliberately.
     #[test]
     fn failure_code_is_a_closed_set_of_fifteen() {
-        const ALL: [FailureCode; 15] = [
-            FailureCode::SelectorNotFound,
-            FailureCode::SelectorAmbiguous,
-            FailureCode::SelectorResolvedViaFallback,
-            FailureCode::PreconditionElementAbsent,
-            FailureCode::NavigationCancelled,
-            FailureCode::UnexpectedOrigin,
-            FailureCode::SubmitNoConfirmation,
-            FailureCode::ChallengePresented,
-            FailureCode::SessionExpired,
-            FailureCode::UploadRejected,
-            FailureCode::RateLimited,
-            FailureCode::VerificationMismatch,
-            FailureCode::FormSchemaDrift,
-            FailureCode::AdapterVersionRejected,
-            FailureCode::Other,
-        ];
-        for code in ALL {
+        for code in FailureCode::ALL {
             match code {
                 FailureCode::SelectorNotFound
                 | FailureCode::SelectorAmbiguous
@@ -542,7 +556,7 @@ mod tests {
             }
         }
         assert_eq!(
-            ALL.len(),
+            FailureCode::ALL.len(),
             15,
             "FailureCode is a closed cross-layer contract; a change must update the client alongside this count"
         );

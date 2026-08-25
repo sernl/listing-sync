@@ -28,6 +28,18 @@ pub enum ItemStateKind {
 }
 
 impl ItemStateKind {
+    /// The closed set, in a stable order, for the vocabulary generator.
+    pub const ALL: [Self; 8] = [
+        Self::Queued,
+        Self::Leased,
+        Self::Running,
+        Self::Blocked,
+        Self::ParkedLive,
+        Self::ParkedCold,
+        Self::Verifying,
+        Self::Settled,
+    ];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

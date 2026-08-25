@@ -246,7 +246,18 @@ pub struct ItemView {
     pub settled_at: Option<Timestamp>,
 }
 
-const fn outcome_str(outcome: ItemOutcome) -> &'static str {
+/// The closed outcome set, in a stable order, for the vocabulary generator.
+pub const ALL_OUTCOMES: [ItemOutcome; 6] = [
+    ItemOutcome::Succeeded,
+    ItemOutcome::Degraded,
+    ItemOutcome::Failed,
+    ItemOutcome::Ambiguous,
+    ItemOutcome::Skipped,
+    ItemOutcome::Blocked,
+];
+
+#[must_use]
+pub const fn outcome_str(outcome: ItemOutcome) -> &'static str {
     match outcome {
         ItemOutcome::Succeeded => "succeeded",
         ItemOutcome::Degraded => "degraded",
