@@ -95,3 +95,12 @@
 - `tam-canary`: one probe run per invocation (systemd timer owns the schedule); exit code carries the verdict so the timer's unit state is the alert.
 
 - [ ] Steps: implement thin; full workspace gate, `just db-test`, `cargo deny check`, `nix flake check` on the committed tree; commit `feat(m1d): tam-worker lease pump and tam-canary probe binaries`.
+
+---
+
+## Known gaps at close, recorded for the M1e/M1j cycle
+
+1. **The pre-settle read-back cannot be capability-justified as typed.** The design's tier-two read ("one fetch by a durable identifier already held, immediately following an authorised write") IS the happy path's verification read, but `FetchReason::VerifyWrite` demands a `WriteReceipt` and receipts only exist after `settle` — which needs that read's result. The machine therefore ships the pre-settle `ReadBack` under `FirstPartyExport` with a marker-form locator, which mislabels the read AND collides with the Tes adapter, which rejects `Marker` locators in this milestone. Latent only because the worker's item pump is off. The founder decision: evolve `SubmitEvidence` to carry the durable `RemoteListingId` the submit landed on, and add a pre-settle fetch reason justified by the open `write_attempt` row. Must land before M1j flips the pump on.
+2. **A non-ambiguous read-back failure (e.g. rate-limited) is `InputNotApplicable`** per the table's totality rule; the driver surfaces it as a machine error and abandons the lease, so the stealer requeues with the attempt counted — safe by the stall bias, but the table may deserve an explicit row once production data shows the frequency.
+3. **`SyncState::Submitted` is unreachable** — no table row produces it; retained for shape stability, arms implemented for totality.
+4. **`cargo-mutants` adequacy lane** waits on the tool entering the devshell.
