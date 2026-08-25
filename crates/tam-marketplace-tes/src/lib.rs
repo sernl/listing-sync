@@ -12,6 +12,7 @@
 
 pub mod classify;
 pub mod endpoints;
+pub mod schema;
 pub mod session;
 
 pub use session::{SessionError, TesSession};
