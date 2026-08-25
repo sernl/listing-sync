@@ -10,9 +10,15 @@
 #![forbid(unsafe_code)]
 
 mod codec;
+pub mod jobs;
 mod mapping;
 mod product;
 
+pub use jobs::{
+    append_event, BudgetGrant, EventScope, HaltCause, HaltRepo, JobRepo, LeaseRef, LeaseRepo,
+    LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo,
+    RateBudgetRepo,
+};
 pub use mapping::{MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 
@@ -31,6 +37,10 @@ pub enum StorageError {
     OrgMismatch,
     #[error("the aggregate is inconsistent: {reason}")]
     Inconsistent { reason: String },
+    #[error("the lease epoch is stale; another worker holds this item")]
+    StaleLease,
+    #[error("idempotency key {key} already has an item")]
+    DuplicateIdempotencyKey { key: uuid::Uuid },
 }
 
 /// Declares the tenant for the rest of this transaction. `set_config` with

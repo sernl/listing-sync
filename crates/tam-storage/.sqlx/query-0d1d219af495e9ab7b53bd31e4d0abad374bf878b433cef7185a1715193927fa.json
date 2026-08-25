@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_message SET state = 'delivered', delivered_at = $4 WHERE org_id = $1 AND id = $2 AND state = 'pending' AND attempts = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d1d219af495e9ab7b53bd31e4d0abad374bf878b433cef7185a1715193927fa"
+}

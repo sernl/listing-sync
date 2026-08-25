@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT outcome AS \"outcome!\", count(*) AS \"count!\" FROM job_item\n             WHERE org_id = $1 AND job_id = $2 AND state = 'settled'\n             GROUP BY outcome",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "outcome!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "d9775b5fec17d7f5a85c5e3ba194b916ed6ca61cce76eac6ae058da406cba443"
+}

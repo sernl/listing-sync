@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO outbox_message (org_id, id, topic, dedupe_key, payload, created_at, available_at) VALUES ($1, $2, $3, $4, $5, $6, $6) ON CONFLICT (org_id, topic, dedupe_key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e6d8a6450ca2f7bc081b1cf87456af05cb73d10565b387ae6e32eb5332484062"
+}

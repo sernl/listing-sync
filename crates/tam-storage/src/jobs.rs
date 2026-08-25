@@ -1,0 +1,770 @@
+//! The job ledger: enqueue, the cross-tenant lease scan, epoch-fenced writes,
+//! the event stream with its per-organisation sequence, halts, the outbox and
+//! the rate budget.
+//!
+//! Every method here runs correctly on either role, but the lease scan and
+//! the stealer are inherently cross-tenant and see nothing under `tam_app`'s
+//! forced row-level security; the engine constructs these repositories over a
+//! `tam_engine` pool (BYPASSRLS, table privileges enumerated in migration
+//! 0007), which is the one deliberate crossing. The governing axiom from the
+//! design: a stalled queue is recoverable and a duplicate-upload storm is
+//! not, so every refusal here biases toward stalling.
+
+use sqlx::{PgPool, Postgres, Transaction};
+use tam_domain::{ItemOutcome, JobItemId};
+use tam_marketplace::IdempotencyKey;
+use tam_types::{FailureCode, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp};
+
+use crate::codec::{
+    failure_code_to_db, inventory_from_db, inventory_to_db, marketplace_to_db, timestamp_to_db,
+    uuid_from_db, uuid_to_db,
+};
+use crate::StorageError;
+
+pub(crate) const fn item_outcome_to_db(outcome: ItemOutcome) -> &'static str {
+    match outcome {
+        ItemOutcome::Succeeded => "succeeded",
+        ItemOutcome::Degraded => "degraded",
+        ItemOutcome::Failed => "failed",
+        ItemOutcome::Ambiguous => "ambiguous",
+        ItemOutcome::Skipped => "skipped",
+        ItemOutcome::Blocked => "blocked",
+    }
+}
+
+/// The job-level half of an enqueue, grouped so call sites read as one
+/// value rather than a parameter list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewJob {
+    pub job: JobId,
+    pub inventory: InventoryId,
+    pub at: Timestamp,
+}
+
+/// Which organisation, item and epoch a fenced write speaks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseRef {
+    pub org: OrgId,
+    pub item: JobItemId,
+    pub lease_epoch: i64,
+}
+
+/// The scope an event is recorded against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventScope {
+    pub org: OrgId,
+    pub job: JobId,
+    pub item: Option<JobItemId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewJobItem {
+    pub item: JobItemId,
+    pub mapping: MappingId,
+    pub idempotency_key: IdempotencyKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeasedItem {
+    pub org: OrgId,
+    pub item: JobItemId,
+    pub job: JobId,
+    pub mapping: MappingId,
+    pub inventory: InventoryId,
+    pub idempotency_key: IdempotencyKey,
+    pub lease_epoch: i64,
+    pub attempt_count: i32,
+}
+
+impl LeasedItem {
+    #[must_use]
+    pub const fn lease_ref(&self) -> LeaseRef {
+        LeaseRef {
+            org: self.org,
+            item: self.item,
+            lease_epoch: self.lease_epoch,
+        }
+    }
+}
+
+pub struct JobRepo {
+    pool: PgPool,
+}
+
+impl JobRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// The job, its items and the `JobQueued` event in one transaction. A
+    /// reused idempotency key surfaces as `DuplicateIdempotencyKey` and
+    /// nothing lands.
+    pub async fn enqueue(
+        &self,
+        org: OrgId,
+        new: &NewJob,
+        items: &[NewJobItem],
+    ) -> Result<(), StorageError> {
+        let NewJob { job, inventory, at } = *new;
+        let org_db = uuid_to_db(org.0);
+        let at_db = timestamp_to_db(at)?;
+        let mut tx = self.pool.begin().await?;
+        crate::pin_org(&mut tx, org).await?;
+        sqlx::query!(
+            "INSERT INTO job (org_id, id, inventory, marketplace, created_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+            org_db,
+            uuid_to_db(job.0),
+            inventory_to_db(inventory),
+            marketplace_to_db(inventory.marketplace()),
+            at_db,
+        )
+        .execute(&mut *tx)
+        .await?;
+        for item in items {
+            let inserted = sqlx::query!(
+                "INSERT INTO job_item \
+                 (org_id, id, job_id, mapping_id, idempotency_key, state, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, 'queued', $6)",
+                org_db,
+                uuid_to_db(item.item.0),
+                uuid_to_db(job.0),
+                uuid_to_db(item.mapping.0),
+                uuid_to_db(item.idempotency_key.0),
+                at_db,
+            )
+            .execute(&mut *tx)
+            .await;
+            map_unique(inserted, "job_item_idempotent", || {
+                StorageError::DuplicateIdempotencyKey {
+                    key: uuid_to_db(item.idempotency_key.0),
+                }
+            })?;
+        }
+        let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
+            reason: format!("{} items exceed the event range", items.len()),
+        })?;
+        append_event(
+            &mut tx,
+            &EventScope {
+                org,
+                job,
+                item: None,
+            },
+            &JobEventPayload::JobQueued { items: item_count },
+            at,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The settled-outcome vector for the roll-up; deliberately no scalar
+    /// verdict, per the design.
+    pub async fn settled_outcomes(
+        &self,
+        org: OrgId,
+        job: JobId,
+    ) -> Result<Vec<(ItemOutcome, i64)>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        crate::pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            r#"SELECT outcome AS "outcome!", count(*) AS "count!" FROM job_item
+             WHERE org_id = $1 AND job_id = $2 AND state = 'settled'
+             GROUP BY outcome"#,
+            uuid_to_db(org.0),
+            uuid_to_db(job.0),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                let outcome = match row.outcome.as_str() {
+                    "succeeded" => ItemOutcome::Succeeded,
+                    "degraded" => ItemOutcome::Degraded,
+                    "failed" => ItemOutcome::Failed,
+                    "ambiguous" => ItemOutcome::Ambiguous,
+                    "skipped" => ItemOutcome::Skipped,
+                    "blocked" => ItemOutcome::Blocked,
+                    other => {
+                        return Err(StorageError::CorruptRow {
+                            reason: format!("unknown item outcome {other:?}"),
+                        })
+                    }
+                };
+                Ok((outcome, row.count))
+            })
+            .collect()
+    }
+}
+
+/// Appends one event inside the caller's transaction, allocating `org_seq`
+/// by locking the per-organisation counter row — identity values are
+/// allocated before commit and can appear out of order, which is exactly the
+/// resume-query unsoundness the counter exists to repair.
+pub async fn append_event(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: &EventScope,
+    payload: &JobEventPayload,
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    let EventScope { org, job, item } = *scope;
+    let org_db = uuid_to_db(org.0);
+    sqlx::query!(
+        "INSERT INTO org_event_counter (org_id) VALUES ($1) ON CONFLICT (org_id) DO NOTHING",
+        org_db,
+    )
+    .execute(&mut **tx)
+    .await?;
+    let seq = sqlx::query_scalar!(
+        r#"UPDATE org_event_counter SET next_seq = next_seq + 1
+         WHERE org_id = $1 RETURNING next_seq - 1 AS "seq!""#,
+        org_db,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    let encoded = serde_json::to_value(payload).map_err(|error| StorageError::Inconsistent {
+        reason: format!("a job event payload must serialise: {error}"),
+    })?;
+    let body = encoded
+        .get(payload.kind())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    sqlx::query!(
+        "INSERT INTO job_event \
+         (org_id, org_seq, job_id, job_item_id, kind, payload, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        org_db,
+        seq,
+        uuid_to_db(job.0),
+        item.map(|item| uuid_to_db(item.0)),
+        payload.kind(),
+        body,
+        timestamp_to_db(at)?,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+pub struct LeaseRepo {
+    pool: PgPool,
+}
+
+impl LeaseRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// The cross-tenant scan. Halts and the connection gate fail closed in
+    /// the candidate filter; the per-tenant mutex is the partial unique index
+    /// from migration 0008, so a concurrent second lease for one tenant fails
+    /// structurally and reports as `None` rather than racing.
+    pub async fn acquire(
+        &self,
+        worker: &str,
+        now: Timestamp,
+        ttl_seconds: i64,
+    ) -> Result<Option<LeasedItem>, StorageError> {
+        let expires = timestamp_to_db(Timestamp(now.0 + ttl_seconds * 1000))?;
+        let mut tx = self.pool.begin().await?;
+        let leased = sqlx::query!(
+            r#"WITH candidate AS (
+                 SELECT ji.org_id, ji.id
+                 FROM job_item ji
+                 JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
+                 WHERE ji.state = 'queued'
+                   AND NOT EXISTS (SELECT 1 FROM inventory_halt ih
+                         WHERE ih.inventory = j.inventory
+                           AND ih.marketplace = j.marketplace)
+                   AND NOT EXISTS (SELECT 1 FROM org_halt oh
+                         WHERE oh.org_id = ji.org_id)
+                   AND NOT EXISTS (SELECT 1 FROM org_inventory_halt oih
+                         WHERE oih.org_id = ji.org_id
+                           AND oih.inventory = j.inventory
+                           AND oih.marketplace = j.marketplace)
+                   AND EXISTS (SELECT 1 FROM connection c
+                         WHERE c.org_id = ji.org_id
+                           AND c.marketplace = j.marketplace
+                           AND c.state = 'linked')
+                   AND NOT EXISTS (SELECT 1 FROM job_item live
+                         WHERE live.org_id = ji.org_id
+                           AND live.state IN ('leased', 'running', 'verifying'))
+                 ORDER BY ji.created_at, ji.id
+                 LIMIT 1
+                 FOR UPDATE OF ji SKIP LOCKED
+               )
+               UPDATE job_item AS item
+               SET state = 'leased', lease_owner = $1, lease_expires_at = $2
+               FROM candidate, job j2
+               WHERE item.org_id = candidate.org_id AND item.id = candidate.id
+                 AND j2.org_id = item.org_id AND j2.id = item.job_id
+               RETURNING item.org_id, item.id, item.job_id, item.mapping_id,
+                 item.idempotency_key, item.lease_epoch, item.attempt_count,
+                 j2.inventory AS "inventory!""#,
+            worker,
+            expires,
+        )
+        .fetch_optional(&mut *tx)
+        .await;
+        let leased = match map_unique(leased, "job_item_one_live_lease_per_org", || {
+            StorageError::StaleLease
+        }) {
+            Ok(row) => row,
+            // The mutex index fired: another worker holds this tenant.
+            Err(StorageError::StaleLease) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        tx.commit().await?;
+        leased
+            .map(|row| {
+                Ok(LeasedItem {
+                    org: OrgId(uuid_from_db(row.org_id)),
+                    item: JobItemId(uuid_from_db(row.id)),
+                    job: JobId(uuid_from_db(row.job_id)),
+                    mapping: MappingId(uuid_from_db(row.mapping_id)),
+                    inventory: inventory_from_db(&row.inventory)?,
+                    idempotency_key: IdempotencyKey(uuid_from_db(row.idempotency_key)),
+                    lease_epoch: row.lease_epoch,
+                    attempt_count: row.attempt_count,
+                })
+            })
+            .transpose()
+    }
+
+    /// Every fenced write shares this shape: the epoch must still match, and
+    /// a zero-row update is the stale worker finding out, not racing.
+    pub async fn settle(
+        &self,
+        lease: &LeaseRef,
+        outcome: ItemOutcome,
+        failure_code: Option<FailureCode>,
+        at: Timestamp,
+    ) -> Result<(), StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        let updated = sqlx::query!(
+            "UPDATE job_item \
+             SET state = 'settled', outcome = $4, failure_code = $5, settled_at = $6, \
+                 lease_owner = NULL, lease_expires_at = NULL \
+             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
+               AND state IN ('leased', 'running', 'verifying')",
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+            item_outcome_to_db(outcome),
+            failure_code.map(failure_code_to_db),
+            timestamp_to_db(at)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(StorageError::StaleLease);
+        }
+        Ok(())
+    }
+
+    pub async fn park(
+        &self,
+        lease: &LeaseRef,
+        blocked_on: &str,
+        park_expires: Timestamp,
+    ) -> Result<(), StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        let updated = sqlx::query!(
+            "UPDATE job_item \
+             SET state = 'parked_live', blocked_on = $4, park_expires_at = $5, \
+                 lease_owner = NULL, lease_expires_at = NULL \
+             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
+               AND state IN ('leased', 'running', 'verifying')",
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+            blocked_on,
+            timestamp_to_db(park_expires)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(StorageError::StaleLease);
+        }
+        Ok(())
+    }
+
+    /// Requeues expired leases with the epoch bumped so the previous holder's
+    /// writes are fenced out, and settles items that exhausted their attempt
+    /// budget as failed rather than requeueing them forever.
+    pub async fn expire_and_steal(
+        &self,
+        now: Timestamp,
+        attempts_max: i32,
+    ) -> Result<u64, StorageError> {
+        let now_db = timestamp_to_db(now)?;
+        let failed = sqlx::query!(
+            "UPDATE job_item \
+             SET state = 'settled', outcome = 'failed', failure_code = 'Other', \
+                 settled_at = $1, lease_owner = NULL, lease_expires_at = NULL, \
+                 lease_epoch = lease_epoch + 1 \
+             WHERE state IN ('leased', 'running', 'verifying') \
+               AND lease_expires_at <= $1 AND attempt_count + 1 >= $2",
+            now_db,
+            attempts_max,
+        )
+        .execute(&self.pool)
+        .await?;
+        let stolen = sqlx::query!(
+            "UPDATE job_item \
+             SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, \
+                 lease_epoch = lease_epoch + 1, attempt_count = attempt_count + 1 \
+             WHERE state IN ('leased', 'running', 'verifying') \
+               AND lease_expires_at <= $1",
+            now_db,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(failed.rows_affected() + stolen.rows_affected())
+    }
+
+    /// Flips the tenant's connection to needs_reauth; the lease scan's
+    /// linked-connection gate then holds every sibling item back, which is
+    /// what RequeueBehindGate means.
+    pub async fn gate_connection(
+        &self,
+        org: OrgId,
+        inventory: InventoryId,
+    ) -> Result<(), StorageError> {
+        sqlx::query!(
+            "UPDATE connection SET state = 'needs_reauth', updated_at = now() \
+             WHERE org_id = $1 AND marketplace = $2 AND state = 'linked'",
+            uuid_to_db(org.0),
+            marketplace_to_db(inventory.marketplace()),
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+pub struct HaltRepo {
+    pool: PgPool,
+}
+
+impl HaltRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn raise_org_inventory(
+        &self,
+        org: OrgId,
+        inventory: InventoryId,
+        cause: &HaltCause,
+    ) -> Result<(), StorageError> {
+        let HaltCause {
+            raised_by,
+            reason,
+            at,
+        } = cause;
+        sqlx::query!(
+            "INSERT INTO org_inventory_halt \
+             (org_id, inventory, marketplace, raised_by, reason, raised_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (org_id, inventory, marketplace) DO NOTHING",
+            uuid_to_db(org.0),
+            inventory_to_db(inventory),
+            marketplace_to_db(inventory.marketplace()),
+            raised_by,
+            reason,
+            timestamp_to_db(*at)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn raise_fleet_inventory(
+        &self,
+        inventory: InventoryId,
+        cause: &HaltCause,
+    ) -> Result<(), StorageError> {
+        let HaltCause {
+            raised_by,
+            reason,
+            at,
+        } = cause;
+        sqlx::query!(
+            "INSERT INTO inventory_halt (inventory, marketplace, raised_by, reason, raised_at) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (inventory, marketplace) DO NOTHING",
+            inventory_to_db(inventory),
+            marketplace_to_db(inventory.marketplace()),
+            raised_by,
+            reason,
+            timestamp_to_db(*at)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// Who raised a halt, why, and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HaltCause {
+    pub raised_by: String,
+    pub reason: String,
+    pub at: Timestamp,
+}
+
+pub struct OutboxRepo {
+    pool: PgPool,
+}
+
+/// One pending message to append, in the causing transaction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewOutboxMessage {
+    pub org: OrgId,
+    pub id: tam_types::Uuid,
+    pub topic: String,
+    pub dedupe_key: String,
+    pub payload: serde_json::Value,
+    pub at: Timestamp,
+}
+
+/// The identity a drainer's compare-and-set speaks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageRef {
+    pub org: OrgId,
+    pub id: tam_types::Uuid,
+    pub attempts_seen: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutboxMessage {
+    pub org: OrgId,
+    pub id: tam_types::Uuid,
+    pub topic: String,
+    pub payload: serde_json::Value,
+    pub attempts: i32,
+}
+
+impl OutboxMessage {
+    #[must_use]
+    pub const fn reference(&self) -> MessageRef {
+        MessageRef {
+            org: self.org,
+            id: self.id,
+            attempts_seen: self.attempts,
+        }
+    }
+}
+
+impl OutboxRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// In the caller's transaction, because the outbox row and the state
+    /// change that caused it must commit together or not at all.
+    pub async fn append(
+        tx: &mut Transaction<'_, Postgres>,
+        message: &NewOutboxMessage,
+    ) -> Result<(), StorageError> {
+        let NewOutboxMessage {
+            org,
+            id,
+            topic,
+            dedupe_key,
+            payload,
+            at,
+        } = message;
+        sqlx::query!(
+            "INSERT INTO outbox_message \
+             (org_id, id, topic, dedupe_key, payload, created_at, available_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $6) \
+             ON CONFLICT (org_id, topic, dedupe_key) DO NOTHING",
+            uuid_to_db(org.0),
+            uuid_to_db(*id),
+            topic,
+            dedupe_key,
+            payload,
+            timestamp_to_db(*at)?,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn claim_due(
+        &self,
+        now: Timestamp,
+        limit: i64,
+    ) -> Result<Vec<OutboxMessage>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT org_id, id, topic, payload, attempts FROM outbox_message \
+             WHERE state = 'pending' AND available_at <= $1 \
+             ORDER BY available_at LIMIT $2",
+            timestamp_to_db(now)?,
+            limit,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| OutboxMessage {
+                org: OrgId(uuid_from_db(row.org_id)),
+                id: uuid_from_db(row.id),
+                topic: row.topic,
+                payload: row.payload,
+                attempts: row.attempts,
+            })
+            .collect())
+    }
+
+    /// Compare-and-set on the attempt count, so two drainers cannot both
+    /// account one delivery; no lock is held across the network call.
+    pub async fn mark_delivered(
+        &self,
+        message: &MessageRef,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let MessageRef {
+            org,
+            id,
+            attempts_seen,
+        } = *message;
+        let updated = sqlx::query!(
+            "UPDATE outbox_message SET state = 'delivered', delivered_at = $4 \
+             WHERE org_id = $1 AND id = $2 AND state = 'pending' AND attempts = $3",
+            uuid_to_db(org.0),
+            uuid_to_db(id),
+            attempts_seen,
+            timestamp_to_db(at)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(updated.rows_affected() == 1)
+    }
+
+    pub async fn retry_later(
+        &self,
+        message: &MessageRef,
+        next_at: Timestamp,
+        error: &str,
+    ) -> Result<bool, StorageError> {
+        let MessageRef {
+            org,
+            id,
+            attempts_seen,
+        } = *message;
+        let updated = sqlx::query!(
+            "UPDATE outbox_message \
+             SET attempts = attempts + 1, available_at = $4, last_error = $5 \
+             WHERE org_id = $1 AND id = $2 AND state = 'pending' AND attempts = $3",
+            uuid_to_db(org.0),
+            uuid_to_db(id),
+            attempts_seen,
+            timestamp_to_db(next_at)?,
+            error,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(updated.rows_affected() == 1)
+    }
+
+    /// Dead-lettering is the poison-message handling: quarantined by attempt
+    /// count alone, raised as an alert, never retried further.
+    pub async fn mark_dead(&self, message: &MessageRef, error: &str) -> Result<bool, StorageError> {
+        let MessageRef {
+            org,
+            id,
+            attempts_seen,
+        } = *message;
+        let updated = sqlx::query!(
+            "UPDATE outbox_message \
+             SET state = 'dead', attempts = attempts + 1, last_error = $4 \
+             WHERE org_id = $1 AND id = $2 AND state = 'pending' AND attempts = $3",
+            uuid_to_db(org.0),
+            uuid_to_db(id),
+            attempts_seen,
+            error,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(updated.rows_affected() == 1)
+    }
+}
+
+pub struct RateBudgetRepo {
+    pool: PgPool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetGrant {
+    Granted { used: i32 },
+    Exhausted,
+}
+
+impl RateBudgetRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// One action against the per-connection window; refusal is the governor
+    /// governing, not an error.
+    pub async fn consume(
+        &self,
+        org: OrgId,
+        connection: tam_types::ConnectionId,
+        window_start: Timestamp,
+        ceiling: i32,
+    ) -> Result<BudgetGrant, StorageError> {
+        let used = sqlx::query_scalar!(
+            r#"INSERT INTO rate_budget (org_id, connection_id, window_start, actions_used)
+             VALUES ($1, $2, $3, 1)
+             ON CONFLICT (org_id, connection_id, window_start)
+             DO UPDATE SET actions_used = rate_budget.actions_used + 1
+             WHERE rate_budget.actions_used < $4
+             RETURNING actions_used AS "used!""#,
+            uuid_to_db(org.0),
+            uuid_to_db(connection.0),
+            timestamp_to_db(window_start)?,
+            ceiling,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(match used {
+            Some(used) => BudgetGrant::Granted { used },
+            None => BudgetGrant::Exhausted,
+        })
+    }
+}
+
+fn map_unique<T>(
+    outcome: Result<T, sqlx::Error>,
+    constraint: &str,
+    to_error: impl FnOnce() -> StorageError,
+) -> Result<T, StorageError> {
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(sqlx::Error::Database(database)) if database.constraint() == Some(constraint) => {
+            Err(to_error())
+        }
+        Err(error) => Err(error.into()),
+    }
+}

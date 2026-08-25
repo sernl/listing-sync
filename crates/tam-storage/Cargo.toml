@@ -17,10 +17,12 @@ sqlx = { version = "0.8", default-features = false, features = [
   "chrono",
   "migrate",
   "macros",
+  "json",
 ] }
 tam-domain = { path = "../tam-domain" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-types = { path = "../tam-types" }
+serde_json = "1"
 thiserror = "2"
 uuid = "1"
 

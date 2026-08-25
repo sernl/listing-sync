@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rate_budget (org_id, connection_id, window_start, actions_used)\n             VALUES ($1, $2, $3, 1)\n             ON CONFLICT (org_id, connection_id, window_start)\n             DO UPDATE SET actions_used = rate_budget.actions_used + 1\n             WHERE rate_budget.actions_used < $4\n             RETURNING actions_used AS \"used!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "37ae1b7fa28c1c6d2776ee7d0244b3b6d0b35b7c54aa436093caed7f26604047"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, lease_epoch = lease_epoch + 1, attempt_count = attempt_count + 1 WHERE state IN ('leased', 'running', 'verifying') AND lease_expires_at <= $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6ae598c76f476f6cf49afb6106fad063b282f26f3303b3998ca40848a1aa7d1a"
+}
