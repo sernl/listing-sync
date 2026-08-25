@@ -5,7 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-tam-types = { path = "../tam-types" }
+tam-marketplace = { path = "../tam-marketplace" }
+tam-types       = { path = "../tam-types" }
 
 [dev-dependencies]
 proptest = "1"

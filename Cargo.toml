@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/tam-domain"]
+members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/tam-marketplace", "crates/tam-domain"]
 
 [workspace.lints.rust]
 unsafe_code                = "forbid"

@@ -1107,12 +1107,20 @@ name = "tam-domain"
 version = "0.0.0"
 dependencies = [
  "proptest",
+ "tam-marketplace",
  "tam-types",
 ]
 
 [[package]]
 name = "tam-limits"
 version = "0.1.0"
+
+[[package]]
+name = "tam-marketplace"
+version = "0.0.0"
+dependencies = [
+ "tam-types",
+]
 
 [[package]]
 name = "tam-types"

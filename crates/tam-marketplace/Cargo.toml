@@ -1,0 +1,11 @@
+[package]
+name    = "tam-marketplace"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tam-types = { path = "../tam-types" }
+
+[lints]
+workspace = true

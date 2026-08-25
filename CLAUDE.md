@@ -44,3 +44,8 @@ the dependencies they govern.
 just check         # the gated lane: fmt, clippy --deny warnings, tests
 nix flake check    # everything
 ```
+
+## Current state
+
+The active milestone plan is the newest file in `docs/design/plans/`.
+Progress against it is recorded in the jj log; the working tree stays green under `just check`.
