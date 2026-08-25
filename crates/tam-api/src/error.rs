@@ -32,21 +32,14 @@ pub enum Disclosure {
     Redacted,
 }
 
-impl Disclosure {
-    /// The mode this build defaults to.
-    ///
-    /// `debug_assertions` is a weaker signal here than it is upstream: the
-    /// workspace release profile sets `debug-assertions = true` deliberately,
-    /// so a release build also selects [`Disclosure::Full`]. Threading the
-    /// value in from configuration is what makes a release withhold, and this
-    /// function is the single site that has to change to make that so.
-    #[must_use]
-    pub const fn for_build() -> Self {
-        if cfg!(debug_assertions) {
-            Self::Full
-        } else {
-            Self::Redacted
-        }
+impl Default for Disclosure {
+    /// Redacted, so a path that never received configuration fails closed.
+    /// There is deliberately no build-type signal here: this workspace ships
+    /// `debug-assertions = true` in release, so `cfg!(debug_assertions)` (the
+    /// reference repository's key) cannot tell production apart. `Full` is
+    /// granted only by explicit configuration at the process boundary.
+    fn default() -> Self {
+        Self::Redacted
     }
 }
 
@@ -382,11 +375,11 @@ mod tests {
     }
 
     #[test]
-    fn this_build_discloses_because_it_asserts() {
+    fn disclosure_defaults_to_redacted() {
         assert_eq!(
-            Disclosure::for_build(),
-            Disclosure::Full,
-            "a test build has debug_assertions on, so it selects full disclosure"
+            Disclosure::default(),
+            Disclosure::Redacted,
+            "an unconfigured path must fail closed rather than disclose"
         );
     }
 

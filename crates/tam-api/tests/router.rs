@@ -6,7 +6,7 @@ use axum::{
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use tam_api::{router, APIError, APIErrorCode, APIErrorKind, APIVersion, Health};
+use tam_api::{router, APIError, APIErrorCode, APIErrorKind, APIVersion, Config, Health};
 use tower::ServiceExt;
 
 struct Answer {
@@ -34,7 +34,7 @@ async fn get(path: &str) -> Answer {
         .uri(path)
         .body(Body::empty())
         .expect("the test request is well formed");
-    let response = router()
+    let response = router(Config::default())
         .oneshot(request)
         .await
         .expect("the router is infallible as a service");

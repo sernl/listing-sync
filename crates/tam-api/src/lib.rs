@@ -20,6 +20,14 @@ pub use crate::{
     version::{APIVersion, VersionError},
 };
 
+/// Everything the serving binary decides and the library consumes. One value
+/// crosses the boundary so a decision cannot arrive ambiently; handlers read
+/// it from router state. Its `Default` is the fail-closed posture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Config {
+    pub disclosure: Disclosure,
+}
+
 /// What a versioned health probe answers with. The version is echoed back
 /// because it is the extractor's own output, which is what the probe exists
 /// to exercise.
@@ -28,11 +36,12 @@ pub struct Health {
     pub version: APIVersion,
 }
 
-/// The whole API surface this build serves.
-pub fn router() -> Router {
+/// The whole API surface this build serves, configured by the binary.
+pub fn router(config: Config) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/{version}/healthz", get(versioned_healthz))
+        .with_state(config)
 }
 
 /// The unversioned liveness probe, which predates any version negotiation and
