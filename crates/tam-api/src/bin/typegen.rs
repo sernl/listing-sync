@@ -9,7 +9,7 @@
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
 use tam_api::{APIErrorCode, APIErrorKind};
 use tam_storage::ItemStateKind;
-use tam_types::{FailureCode, InventoryId, Marketplace};
+use tam_types::{FailureCode, InventoryId, JobEventPayload, Marketplace};
 
 fn union<T, F: Fn(&T) -> String>(name: &str, values: &[T], render: F) -> String {
     let members: Vec<String> = values.iter().map(render).collect();
@@ -46,5 +46,18 @@ fn main() {
         &[JobPhase::Active, JobPhase::Settled],
         serde_name,
     ));
+    out.push('\n');
+    out.push_str(&union(
+        "JobEventKind",
+        &JobEventPayload::ALL_KINDS,
+        |kind| format!("\"{kind}\""),
+    ));
+    out.push_str("\nexport const JOB_EVENT_KINDS: readonly JobEventKind[] = [\n");
+    for kind in JobEventPayload::ALL_KINDS {
+        use core::fmt::Write;
+        // infallible on String; the Result is the trait's, not the writer's
+        let _unused: core::fmt::Result = writeln!(out, "  \"{kind}\",");
+    }
+    out.push_str("];\n");
     print!("{out}");
 }

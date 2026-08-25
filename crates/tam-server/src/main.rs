@@ -67,11 +67,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = match &invocation.ui_dir {
         Some(dir) => {
             eprintln!("tam-server serving the client from {}", dir.display());
-            tam_api::router(state).fallback_service(
-                tower_http::services::ServeDir::new(dir).not_found_service(
-                    tower_http::services::ServeFile::new(dir.join("index.html")),
-                ),
-            )
+            // The single-page shell is read once and served explicitly with
+            // 200 for any path the API and the asset tree do not claim;
+            // tower-http's not_found_service coerces the status to 404 by
+            // design; its `fallback` passes the shell through as the 200 the
+            // client router needs.
+            let shell = read_shell(&dir.join("index.html"))?;
+            let spa = axum::routing::any(move || {
+                let shell = shell.clone();
+                async move {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        shell,
+                    )
+                }
+            });
+            tam_api::router(state)
+                .fallback_service(tower_http::services::ServeDir::new(dir).fallback(spa))
         }
         None => tam_api::router(state),
     };
@@ -127,6 +139,13 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         config,
         ui_dir,
     })
+}
+
+fn read_shell(path: &std::path::Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 async fn shutdown() {

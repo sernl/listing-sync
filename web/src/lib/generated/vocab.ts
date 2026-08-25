@@ -68,3 +68,32 @@ export type ItemOutcome =
 export type JobPhase =
   | "active"
   | "settled";
+
+export type JobEventKind =
+  | "JobQueued"
+  | "JobStarted"
+  | "ItemQueued"
+  | "ItemLeased"
+  | "ItemActionStarted"
+  | "ItemActionFinished"
+  | "ItemBlocked"
+  | "ItemParked"
+  | "ItemResumed"
+  | "ItemSettled"
+  | "JobSettled"
+  | "JobHalted";
+
+export const JOB_EVENT_KINDS: readonly JobEventKind[] = [
+  "JobQueued",
+  "JobStarted",
+  "ItemQueued",
+  "ItemLeased",
+  "ItemActionStarted",
+  "ItemActionFinished",
+  "ItemBlocked",
+  "ItemParked",
+  "ItemResumed",
+  "ItemSettled",
+  "JobSettled",
+  "JobHalted",
+];

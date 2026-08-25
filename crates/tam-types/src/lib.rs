@@ -506,6 +506,23 @@ pub enum JobEventPayload {
 }
 
 impl JobEventPayload {
+    /// Every kind name, in a stable order, for the vocabulary generator and
+    /// the client's stream subscriptions.
+    pub const ALL_KINDS: [&'static str; 12] = [
+        "JobQueued",
+        "JobStarted",
+        "ItemQueued",
+        "ItemLeased",
+        "ItemActionStarted",
+        "ItemActionFinished",
+        "ItemBlocked",
+        "ItemParked",
+        "ItemResumed",
+        "ItemSettled",
+        "JobSettled",
+        "JobHalted",
+    ];
+
     /// The serde tag, which is the `job_event.kind` column value. Total, so
     /// adding a variant without a kind string fails to compile here.
     #[must_use]
