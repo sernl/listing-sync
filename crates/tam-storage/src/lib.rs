@@ -16,6 +16,7 @@ pub mod job_reads;
 pub mod jobs;
 mod mapping;
 mod product;
+pub mod pruning;
 pub mod sessions;
 pub mod taxonomy;
 
@@ -33,6 +34,7 @@ pub use jobs::{
 };
 pub use mapping::{MappingHead, MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
+pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{SessionIdentity, SessionRepo, SessionToken};
 pub use taxonomy::{DrainStats, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo};
 

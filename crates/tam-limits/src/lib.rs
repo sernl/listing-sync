@@ -135,6 +135,31 @@ pub mod job {
     pub const CONCURRENT_JOBS_GLOBAL_MAX: u32 = 8;
 }
 
+pub mod ledger {
+    /// SIZED between `job::WALL_CLOCK_MAX` at the floor and the resync
+    /// contract at the ceiling: a job's events are complete within half an
+    /// hour of enqueue, and a client resuming below the pruning watermark is
+    /// resynced rather than failed, so retention is an audit window rather
+    /// than a correctness bound. A month sits three orders above the floor.
+    pub const JOB_EVENT_RETENTION_DAYS: i64 = 30;
+
+    /// SIZED against the drainer's own 30-second backoff base: polling at a
+    /// third of it keeps the poll from dominating a retried message's latency.
+    pub const OUTBOX_DRAIN_INTERVAL_SECS: u64 = 10;
+
+    /// SIZED against the retention window: hourly is 720 passes inside a
+    /// month, so the batch below has to cover only a fraction of a window's
+    /// events per pass for the pruner to keep pace with the ledger.
+    pub const PRUNE_INTERVAL_SECS: u64 = 3_600;
+
+    /// SIZED against the outbound pacing ceiling: at the interval above this
+    /// erases 240,000 rows a day, several times the events
+    /// `marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX` can cause in one, so a
+    /// tenant's backlog cannot outrun the pruner while bounding the lock
+    /// footprint of any single pass.
+    pub const PRUNE_BATCH: i64 = 10_000;
+}
+
 pub mod browser {
     use std::num::NonZeroU32;
 

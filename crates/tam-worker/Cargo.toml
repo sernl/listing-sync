@@ -8,6 +8,9 @@ publish = false
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-engine = { path = "../tam-engine" }
 tam-limits = { path = "../tam-limits" }
+tam-marketplace-tes = { path = "../tam-marketplace-tes" }
+tam-pipeline = { path = "../tam-pipeline" }
+tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }

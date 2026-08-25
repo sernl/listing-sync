@@ -14,8 +14,7 @@ use std::collections::HashMap;
 
 use tam_domain::{
     CanonicalProduct, CanonicalTerm, ListingProjection, ProjectionBlocked, ProjectionEdge,
-    ReconciliationItem, ReconciliationState, TermKind, TermProjection, VocabularyId,
-    VocabularyPath,
+    ReconciliationItem, ReconciliationState, TermKind, VocabularyId, VocabularyPath,
 };
 use tam_types::{
     CanonicalTermId, CurrencyRule, InventoryId, MappingId, OrgId, PriceIntent, ScanOutcome,

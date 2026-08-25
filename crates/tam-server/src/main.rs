@@ -2,14 +2,20 @@
 //! router `tam-api` builds. Every route, extractor and error mapping lives in
 //! the library, so this binary holds nothing a test would want to reach.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--ui-dir <path>] [--disclose-internals]
+//! Given an engine-role url it also hosts the two service loops the design
+//! puts in this process: the outbox drainer and the job-event pruner.
+//!
+//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--ui-dir <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use tam_api::{AppState, Config, Disclosure};
+use tam_engine::outbox::{drain, LoggingDeliverer};
+use tam_storage::{OutboxRepo, PruneRepo};
 use tam_types::Timestamp;
+use tokio_util::sync::CancellationToken;
 
 /// Loopback rather than `0.0.0.0`, so a development run is not reachable off
 /// the machine by forgetting an argument.
@@ -25,10 +31,23 @@ const DISCLOSE_FLAG: &str = "--disclose-internals";
 /// answers 503 rather than pretending.
 const BROKER_FLAG: &str = "--broker-socket";
 
+/// The engine-role url the service loops run on. They cross tenants — the
+/// drainer claims every organisation's due messages and one prune pass covers
+/// the whole ledger — so they cannot run on the application pool, whose forced
+/// row-level security would show them an empty database. Absent, this process
+/// only serves.
+const ENGINE_DB_FLAG: &str = "--engine-db-url";
+
 /// The built client directory, served as the router's fallback so the API
 /// and the UI share one origin; unknown paths fall through to index.html,
 /// which is what a single-page app's client router needs.
 const UI_FLAG: &str = "--ui-dir";
+
+/// One drain pass claims at most this many messages, so a backlog is worked
+/// off over several passes rather than held in one long transaction.
+const DRAIN_BATCH: i64 = 32;
+
+const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
 
 /// The instant, read at the one process boundary the lint table permits and
 /// handed to the library as data. A clock before the epoch saturates to zero,
@@ -42,6 +61,72 @@ fn wall_now() -> Timestamp {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis());
     Timestamp(i64::try_from(millis).unwrap_or(0))
+}
+
+/// Events older than this are prunable. Either arithmetic failure clamps to
+/// the epoch, which prunes nothing: an overflow must not be able to erase a
+/// ledger.
+fn retention_cutoff(now: Timestamp) -> Timestamp {
+    let millis = tam_limits::ledger::JOB_EVENT_RETENTION_DAYS
+        .checked_mul(MILLIS_PER_DAY)
+        .and_then(|window| now.0.checked_sub(window))
+        .unwrap_or(0);
+    Timestamp(millis.max(0))
+}
+
+/// The drainer the design hosts in this process, through the logging
+/// deliverer until a relay exists, so drained messages are visible rather
+/// than silently accumulating.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the drain loop is owned by the serving process and stopped by its cancellation token, not a fire-and-forget spawn"
+)]
+fn spawn_outbox_drain(outbox: OutboxRepo, cancel: CancellationToken) {
+    let period = core::time::Duration::from_secs(tam_limits::ledger::OUTBOX_DRAIN_INTERVAL_SECS);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(period) => {}
+            }
+            match drain(&outbox, &LoggingDeliverer, wall_now(), DRAIN_BATCH).await {
+                Ok(report) if report.delivered + report.retried + report.dead > 0 => eprintln!(
+                    "tam-server: outbox delivered {} retried {} dead {}",
+                    report.delivered, report.retried, report.dead
+                ),
+                Ok(_) => {}
+                Err(error) => eprintln!("tam-server: outbox drain failed: {error}"),
+            }
+        }
+    });
+}
+
+/// The retention pruner, advancing the watermark the progress stream's resync
+/// decision reads.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the prune loop is owned by the serving process and stopped by its cancellation token, not a fire-and-forget spawn"
+)]
+fn spawn_event_pruner(pruner: PruneRepo, cancel: CancellationToken) {
+    let period = core::time::Duration::from_secs(tam_limits::ledger::PRUNE_INTERVAL_SECS);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(period) => {}
+            }
+            let cutoff = retention_cutoff(wall_now());
+            let batch = tam_limits::ledger::PRUNE_BATCH;
+            match pruner.prune_pass(cutoff, batch).await {
+                Ok(report) if report.deleted + report.watermark_advances > 0 => eprintln!(
+                    "tam-server: pruned {} job events, advanced {} watermarks",
+                    report.deleted, report.watermark_advances
+                ),
+                Ok(_) => {}
+                Err(error) => eprintln!("tam-server: prune pass failed: {error}"),
+            }
+        }
+    });
 }
 
 #[tokio::main]
@@ -62,6 +147,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("tam-server listening on http://{bound}");
     if invocation.config.disclosure == Disclosure::Full {
         eprintln!("tam-server disclosing fault internals ({DISCLOSE_FLAG}); development only");
+    }
+
+    let loops = CancellationToken::new();
+    if let Some(url) = &invocation.engine_db_url {
+        let engine = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(url)
+            .await?;
+        eprintln!("tam-server hosting the outbox drainer and the job-event pruner");
+        spawn_outbox_drain(OutboxRepo::new(engine.clone()), loops.clone());
+        spawn_event_pruner(PruneRepo::new(engine), loops.clone());
     }
 
     let app = match &invocation.ui_dir {
@@ -87,9 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => tam_api::router(state),
     };
-    axum::serve(listener, app)
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
-        .await?;
+        .await;
+    loops.cancel();
+    served?;
     Ok(())
 }
 
@@ -97,6 +195,7 @@ struct Invocation {
     db_url: String,
     bind: SocketAddr,
     config: Config,
+    engine_db_url: Option<String>,
     ui_dir: Option<std::path::PathBuf>,
 }
 
@@ -107,6 +206,7 @@ struct Invocation {
 fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut positional = Vec::new();
     let mut config = Config::default();
+    let mut engine_db_url = None;
     let mut ui_dir = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -117,6 +217,12 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                 .next()
                 .ok_or("--broker-socket needs a path argument")?;
             config.broker_socket = Some(std::path::PathBuf::from(path));
+        } else if argument == ENGINE_DB_FLAG {
+            engine_db_url = Some(
+                arguments
+                    .next()
+                    .ok_or("--engine-db-url needs a url argument")?,
+            );
         } else if argument == UI_FLAG {
             ui_dir = Some(std::path::PathBuf::from(
                 arguments.next().ok_or("--ui-dir needs a path argument")?,
@@ -137,6 +243,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         db_url,
         bind,
         config,
+        engine_db_url,
         ui_dir,
     })
 }
