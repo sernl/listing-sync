@@ -19,6 +19,7 @@ tam-types = { path = "../tam-types" }
 
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["executor"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

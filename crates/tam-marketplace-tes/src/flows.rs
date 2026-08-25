@@ -94,7 +94,15 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         Ok(id)
     }
 
-    async fn upload_file(
+    /// The transport, so a harness can interrogate its cassette.
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    /// One file's presign, S3 POST and confirm handshake. Public because it
+    /// is a meaningful unit of work on its own and the confirm trap deserves
+    /// a direct test.
+    pub async fn upload_file(
         &self,
         id: DraftId,
         index: usize,
@@ -207,7 +215,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     fn draft_id_from_locator(locator: &ListingLocator) -> Result<DraftId, AdapterError> {
         match locator {
             ListingLocator::Durable(RemoteListingId::Tes { url }) => url
-                .rsplit('-')
+                .rsplit(['-', '/'])
                 .next()
                 .and_then(|tail| tail.parse::<i64>().ok())
                 .map(DraftId)

@@ -2019,6 +2019,7 @@ dependencies = [
  "sha2",
  "tam-marketplace",
  "tam-types",
+ "tokio",
 ]
 
 [[package]]

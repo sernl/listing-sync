@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "Delete",
+        "url": "https://www.tes.com/api/v2/resources/9001",
+        "body": "Empty"
+      },
+      "response": { "status": 204, "body": "" }
+    },
+    {
+      "request": {
+        "method": "Get",
+        "url": "https://www.tes.com/api/v2/resources/9001",
+        "body": "Empty"
+      },
+      "response": { "status": 404, "body": "" }
+    }
+  ]
+}
