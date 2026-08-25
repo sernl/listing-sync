@@ -12,58 +12,17 @@ use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
 use sqlx::PgPool;
 use tam_domain::{
-    Binding, CanonicalProduct, DeclarationSource, FieldPolicies, FieldPolicy, GradeDeclaration,
-    Mapping, PublishMode, SeverCause, Verification,
+    Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, SeverCause, Verification,
 };
 use tam_marketplace::{CorrelationMarker, RemoteLifecycle, RemoteListingId};
 use tam_storage::{MappingRepo, ProductRepo};
 use tam_types::{
-    AttemptId, ContentHash, FieldKey, FieldMismatch, FileId, FileKind, FileRole, InventoryId,
-    ListingCopy, MappingId, Marketplace, MismatchClass, Money, OrgId, PayloadSet, PriceIntent,
-    PriceRule, ProductFile, ProductId, Rounding, ScanOutcome, Timestamp, Title, Uuid,
+    AttemptId, FieldKey, FieldMismatch, InventoryId, MappingId, Marketplace, MismatchClass, Money,
+    PriceIntent, PriceRule, Rounding, Timestamp, Uuid,
 };
 
-const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
-const PRODUCT_1: ProductId = ProductId(Uuid([0x01; 16]));
-
-fn minimal_product() -> CanonicalProduct {
-    CanonicalProduct {
-        id: PRODUCT_1,
-        org: ORG_A,
-        title: Title("Fixture product".to_owned()),
-        body: ListingCopy {
-            body: "Fixture body.".to_owned(),
-        },
-        payload: PayloadSet::new(
-            ProductFile {
-                id: FileId(Uuid([0x21; 16])),
-                role: FileRole::Payload,
-                kind: FileKind::Pdf,
-                hash: ContentHash([0x51; 32]),
-                byte_len: 4,
-                scan: ScanOutcome::Pending,
-            },
-            vec![],
-        ),
-        cover: None,
-        previews: vec![],
-        subjects: vec![],
-        grades: GradeDeclaration {
-            source: DeclarationSource::Seller,
-            raw: vec![],
-            derived: None,
-        },
-        price: PriceIntent::Free,
-    }
-}
-
-async fn seed_fixture(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
-        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
-        .execute(pool)
-        .await?;
-    Ok(())
-}
+mod common;
+use common::{minimal_product, seed_org_a, ORG_A, PRODUCT_1};
 
 fn arb_timestamp() -> impl Strategy<Value = Timestamp> {
     (0i64..4_000_000_000_000i64).prop_map(Timestamp)
@@ -317,7 +276,7 @@ fn arb_mapping() -> impl Strategy<Value = Mapping> {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn an_arbitrary_mapping_round_trips(pool: PgPool) {
-    seed_fixture(&pool).await.expect("fixture rows insert");
+    seed_org_a(&pool).await.expect("fixture rows insert");
     let products = ProductRepo::new(pool.clone());
     products
         .insert(ORG_A, &minimal_product(), Timestamp(1))
@@ -371,7 +330,7 @@ async fn an_arbitrary_mapping_round_trips(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn a_bound_row_without_a_remote_id_is_refused(pool: PgPool) {
-    seed_fixture(&pool).await.expect("fixture rows insert");
+    seed_org_a(&pool).await.expect("fixture rows insert");
     let products = ProductRepo::new(pool.clone());
     products
         .insert(ORG_A, &minimal_product(), Timestamp(1))
@@ -408,7 +367,7 @@ async fn a_bound_row_without_a_remote_id_is_refused(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn a_mismatch_claim_without_a_named_field_cannot_commit(pool: PgPool) {
-    seed_fixture(&pool).await.expect("fixture rows insert");
+    seed_org_a(&pool).await.expect("fixture rows insert");
     let products = ProductRepo::new(pool.clone());
     products
         .insert(ORG_A, &minimal_product(), Timestamp(1))
