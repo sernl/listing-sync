@@ -1,0 +1,26 @@
+[package]
+name    = "tam-storage"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+pg-tests = []
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls",
+  "postgres",
+  "uuid",
+  "chrono",
+  "migrate",
+  "macros",
+] }
+tam-types = { path = "../tam-types" }
+thiserror = "2"
+uuid = "1"
+
+[lints]
+workspace = true
