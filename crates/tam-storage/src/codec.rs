@@ -314,6 +314,64 @@ pub(crate) fn term_kind_from_db(raw: &str) -> Result<tam_domain::TermKind, Stora
     }
 }
 
+pub(crate) const fn edge_kind_to_db(kind: tam_domain::EdgeKind) -> &'static str {
+    match kind {
+        tam_domain::EdgeKind::Exact => "exact",
+        tam_domain::EdgeKind::Broader => "broader",
+        tam_domain::EdgeKind::Narrower => "narrower",
+    }
+}
+
+pub(crate) fn edge_kind_from_db(raw: &str) -> Result<tam_domain::EdgeKind, StorageError> {
+    match raw {
+        "exact" => Ok(tam_domain::EdgeKind::Exact),
+        "broader" => Ok(tam_domain::EdgeKind::Broader),
+        "narrower" => Ok(tam_domain::EdgeKind::Narrower),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown edge kind {other:?}"),
+        }),
+    }
+}
+
+/// The four decider columns as one value: `(decided_by, decided_source,
+/// decided_user, decided_org)`. The migration's CHECK makes the split total.
+pub(crate) type DeciderColumns = (
+    &'static str,
+    Option<String>,
+    Option<uuid::Uuid>,
+    Option<uuid::Uuid>,
+);
+
+pub(crate) fn decider_to_db(decider: &tam_domain::Decider) -> DeciderColumns {
+    match decider {
+        tam_domain::Decider::Imported { source } => ("imported", Some(source.clone()), None, None),
+        tam_domain::Decider::Human { user, org } => (
+            "human",
+            None,
+            Some(uuid_to_db(user.0)),
+            Some(uuid_to_db(org.0)),
+        ),
+    }
+}
+
+pub(crate) fn decider_from_db(
+    decided_by: &str,
+    source: Option<String>,
+    user: Option<uuid::Uuid>,
+    org: Option<uuid::Uuid>,
+) -> Result<tam_domain::Decider, StorageError> {
+    match (decided_by, source, user, org) {
+        ("imported", Some(source), None, None) => Ok(tam_domain::Decider::Imported { source }),
+        ("human", None, Some(user), Some(org)) => Ok(tam_domain::Decider::Human {
+            user: tam_types::UserId(uuid_from_db(user)),
+            org: tam_types::OrgId(uuid_from_db(org)),
+        }),
+        (other, _, _, _) => Err(StorageError::CorruptRow {
+            reason: format!("decider columns violate totality for {other:?}"),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{failure_code_to_db, hash_hex};

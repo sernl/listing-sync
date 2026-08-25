@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO projection_edge (from_term, to_inventory, to_term_kind, to_segments, to_native_id, kind, decided_by, decided_source, decided_user, decided_org, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "TextArray",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cfc16d4b9420f9a600bb65d2274ba85339d2f250f2fe7a3ee8a9b153f77364ce"
+}

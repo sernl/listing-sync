@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, term, target_inventory, target_term_kind, raised_by, raised_at FROM reconciliation_item WHERE org_id = $1 AND state = 'open' ORDER BY raised_at, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "term",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "target_inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "target_term_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "raised_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "raised_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d48fac23bd1b54eb81b7b0405998f300b5df440f54630b84d45fa5c16ad2cdc3"
+}

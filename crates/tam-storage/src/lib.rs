@@ -14,6 +14,7 @@ mod codec;
 pub mod jobs;
 mod mapping;
 mod product;
+pub mod taxonomy;
 
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use jobs::{
@@ -23,6 +24,7 @@ pub use jobs::{
 };
 pub use mapping::{MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
+pub use taxonomy::{DrainStats, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo};
 
 use sqlx::{Postgres, Transaction};
 use tam_types::OrgId;

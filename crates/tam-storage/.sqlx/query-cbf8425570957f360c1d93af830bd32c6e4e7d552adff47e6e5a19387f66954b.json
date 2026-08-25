@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT term, target_inventory, target_term_kind FROM reconciliation_item WHERE org_id = $1 AND id = $2 AND state = 'open' FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "term",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "target_inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "target_term_kind",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cbf8425570957f360c1d93af830bd32c6e4e7d552adff47e6e5a19387f66954b"
+}

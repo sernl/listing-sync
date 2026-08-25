@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 21] = [
+const TENANT_TABLES: [&str; 22] = [
     "binding_candidate",
     "blob",
     "connection",
@@ -31,6 +31,7 @@ const TENANT_TABLES: [&str; 21] = [
     "product_file",
     "product_term",
     "rate_budget",
+    "reconciliation_item",
     "write_attempt",
 ];
 
@@ -38,12 +39,14 @@ const TENANT_TABLES: [&str; 21] = [
 /// auth milestone revisits whether it needs its own read fence. The rest are
 /// genuinely global: reference data, the canonical taxonomy, the fleet kill
 /// switch, and sqlx's migration bookkeeping.
-const GLOBAL_TABLES: [&str; 5] = [
+const GLOBAL_TABLES: [&str; 7] = [
     "_sqlx_migrations",
     "canonical_term",
     "inventory_halt",
     "marketplace_inventory",
     "organisation",
+    "projection_edge",
+    "projection_no_counterpart",
 ];
 
 #[sqlx::test(migrations = "./migrations")]

@@ -917,7 +917,7 @@ impl RateBudgetRepo {
     }
 }
 
-fn map_unique<T>(
+pub(crate) fn map_unique<T>(
     outcome: Result<T, sqlx::Error>,
     constraint: &str,
     to_error: impl FnOnce() -> StorageError,

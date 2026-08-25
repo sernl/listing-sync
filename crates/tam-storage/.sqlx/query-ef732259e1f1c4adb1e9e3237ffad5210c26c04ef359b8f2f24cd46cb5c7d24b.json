@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT from_term, to_segments, to_native_id, kind, decided_by, decided_source, decided_user, decided_org, decided_at FROM projection_edge WHERE to_inventory = $1 AND to_term_kind = $2 ORDER BY from_term, kind, to_segments",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_term",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "to_segments",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "to_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "decided_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "decided_source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "decided_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "decided_org",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "ef732259e1f1c4adb1e9e3237ffad5210c26c04ef359b8f2f24cd46cb5c7d24b"
+}

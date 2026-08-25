@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE reconciliation_item SET state = 'no_counterpart', resolved_at = $3 WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dd6683e97b96f8e1ec72a2f9e8eb1c863a40a4d71e7b4c199c9b777bc53602a6"
+}

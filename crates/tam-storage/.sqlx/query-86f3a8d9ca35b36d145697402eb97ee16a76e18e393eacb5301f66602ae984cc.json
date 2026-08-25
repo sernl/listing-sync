@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT term, to_term_kind FROM projection_no_counterpart WHERE to_inventory = $1 ORDER BY term, to_term_kind",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "term",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "to_term_kind",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "86f3a8d9ca35b36d145697402eb97ee16a76e18e393eacb5301f66602ae984cc"
+}
