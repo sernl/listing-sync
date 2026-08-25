@@ -1996,6 +1996,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-marketplace-tes"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "futures",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tam-marketplace",
+ "tam-types",
+]
+
+[[package]]
 name = "tam-server"
 version = "0.0.0"
 dependencies = [

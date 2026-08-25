@@ -337,7 +337,10 @@ pub enum AdapterError {
     },
     Challenge(ChallengeKind),
     SessionExpired,
-    SchemaDrift(SchemaDrift),
+    /// Boxed so the error stays register-sized: the drift report carries the
+    /// full added/removed field lists and would otherwise dominate every
+    /// `Result` on the adapter path.
+    SchemaDrift(Box<SchemaDrift>),
     RateLimited {
         retry_after: Option<DurationSecs>,
     },

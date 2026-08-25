@@ -1,0 +1,19 @@
+[package]
+name    = "tam-marketplace-tes"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tam-marketplace = { path = "../tam-marketplace" }
+tam-types = { path = "../tam-types" }
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+
+[lints]
+workspace = true
