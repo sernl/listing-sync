@@ -104,8 +104,13 @@ db-migrate:
 db-prepare:
     cd crates/tam-storage && SQLX_OFFLINE=false DATABASE_URL={{db_url}} cargo sqlx prepare
 
-# The database-backed test lane: two-tenant row-level-security isolation
-db-test: db-wait
+# Assert the committed offline query metadata matches the source, so schema
+# drift fails here rather than at the first request
+db-verify:
+    cd crates/tam-storage && SQLX_OFFLINE=false DATABASE_URL={{db_url}} cargo sqlx prepare --check
+
+# The database-backed test lane: tenancy isolation, codecs, structural fences
+db-test: db-wait db-verify
     DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests
 
 # Full local environment: database, migrations, API server
