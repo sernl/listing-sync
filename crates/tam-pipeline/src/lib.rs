@@ -6,3 +6,6 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod hash;
+pub mod probe;
+pub mod scan;

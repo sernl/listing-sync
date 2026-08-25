@@ -2222,6 +2222,7 @@ name = "tam-pipeline"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "futures",
  "tam-limits",
  "tam-types",
  "zip",

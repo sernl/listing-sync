@@ -11,6 +11,7 @@ tam-types = { path = "../tam-types" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [lints]
