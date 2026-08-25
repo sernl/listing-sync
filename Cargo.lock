@@ -2269,6 +2269,7 @@ dependencies = [
 name = "tam-engine"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "futures",
  "serde",
  "serde_json",
@@ -2276,6 +2277,7 @@ dependencies = [
  "tam-domain",
  "tam-limits",
  "tam-marketplace",
+ "tam-marketplace-tes",
  "tam-pipeline",
  "tam-storage",
  "tam-taxonomy",
