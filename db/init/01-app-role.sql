@@ -17,6 +17,14 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tam_engine') THEN
         CREATE ROLE tam_engine LOGIN PASSWORD 'tam_engine_dev' BYPASSRLS;
     END IF;
+    -- The broker role: the ONLY role that may read connection_secret. It runs
+    -- inside tam-session-broker, the sole process holding the key-encryption
+    -- key, so ciphertext and key never meet in any other process. BYPASSRLS
+    -- because a lease request names its own tenant explicitly rather than
+    -- through the app.current_org pin the API path uses.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tam_broker') THEN
+        CREATE ROLE tam_broker LOGIN PASSWORD 'tam_broker_dev' BYPASSRLS;
+    END IF;
 END
 $$;
 
