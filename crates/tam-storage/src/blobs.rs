@@ -60,8 +60,11 @@ impl<S: ObjectStore> BlobRepo<S> {
     }
 
     /// Seals the bytes, stores the object, and upserts the row. Per-tenant
-    /// dedup: a second put of identical bytes under one tenant is a no-op on
-    /// the row and rewrites the same object key. Returns the content hash.
+    /// dedup: the row insert is the arbiter, so a second put of identical
+    /// bytes under one tenant writes neither the row nor the object. Rewriting
+    /// the object would leave ciphertext sealed under a fresh DEK beside a row
+    /// that kept the first put's wrapped DEK and nonce, and every later `get`
+    /// would fail to authenticate. Returns the content hash.
     pub async fn put(
         &self,
         org: OrgId,
@@ -77,10 +80,6 @@ impl<S: ObjectStore> BlobRepo<S> {
         let sealed = seal_bytes(&self.kek, &aad.encode(), bytes)
             .map_err(|error| BlobError::Crypto(format!("{error:?}")))?;
         let object_key = object_key(org, hash);
-        self.store
-            .put(&object_key, encode_object(&sealed))
-            .await
-            .map_err(|error| BlobError::Store(error.to_string()))?;
 
         let byte_len = i64::try_from(bytes.len()).map_err(|_| {
             BlobError::Storage(StorageError::Inconsistent {
@@ -89,7 +88,7 @@ impl<S: ObjectStore> BlobRepo<S> {
         })?;
         let mut tx = self.pool.begin().await?;
         crate::pin_org(&mut tx, org).await?;
-        sqlx::query!(
+        let inserted = sqlx::query!(
             "INSERT INTO blob \
              (org_id, hash, byte_len, object_key, dek_key_version, wrapped_dek, nonce, aad, \
               first_seen_at) \
@@ -106,7 +105,17 @@ impl<S: ObjectStore> BlobRepo<S> {
             timestamp_to_db(at)?,
         )
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+        // Written before the commit, so a failed object write rolls the row
+        // back: a committed row whose object never landed would be permanent,
+        // every later put conflicting away without writing it.
+        if inserted == 1 {
+            self.store
+                .put(&object_key, encode_object(&sealed))
+                .await
+                .map_err(|error| BlobError::Store(error.to_string()))?;
+        }
         tx.commit().await?;
         Ok(hash)
     }

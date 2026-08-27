@@ -81,6 +81,15 @@ async fn an_identical_file_dedups_within_a_tenant(pool: PgPool) {
     let second = repo.put(ORG_A, &bytes, T0).await.expect("second put");
     assert_eq!(first, second, "identical bytes hash identically");
 
+    let fetched = repo
+        .get(ORG_A, second)
+        .await
+        .expect("the deduped blob still opens after the second put");
+    assert_eq!(
+        fetched, bytes,
+        "the second put leaves the stored object openable with the row's key material"
+    );
+
     let mut tx = pool.begin().await.expect("tx");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
         .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
