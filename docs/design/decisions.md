@@ -149,3 +149,9 @@ The browser module is deleted rather than calibrated: M-1 removed `tam-browser` 
 `job::ATTEMPTS_MAX` stays 5, sized against `job::WALL_CLOCK_MAX` at the backoff base, over M0's tested fault taxonomy.
 Four constants are held as decided operating points with named re-open triggers: `ingest::ARCHIVE_COMPRESSION_RATIO_MAX` 200 until the customer-zero import samples real bundle ratios, `job::CONCURRENT_JOBS_GLOBAL_MAX` 8 until the per-job RAM footprint is measured, the tier quotas until M5 sets pricing, and `marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX` 30 until the charter's written-terms answer arrives.
 A `DECIDED` marker kind is added to the crate's provenance taxonomy for exactly this class: a deliberate operating point citing a dated entry here, neither a guess nor a measurement.
+
+## Currency observation and charge postponement, 2026-08-28
+
+Founder observation on the live uploader targeted at the New Zealand market: no currency control appears anywhere, price entry is GBP only, and the uploads dashboard displays prices in pounds; the priced-draft read-back and a screenshot of the form itself were not captured.
+From one GB account that observation cannot distinguish a fixed-GBP marketplace from a seller-scoped currency, so `CurrencyRule::Unmeasured` stands for TesNz and the projection's refusal of priced items remains correct behaviour; independently, the adapter's write path carries no price field in M1, so priced duplication is unimplemented whatever the gate says.
+The first charge is postponed by founder decision: no manual Stripe payment link will be sent, and charging waits for a self-serve checkout in a later milestone, so M1's somebody-pays proof is deferred to that point and the runbook's Stripe act is dormant, with both of its preconditions still binding whenever charging begins.
