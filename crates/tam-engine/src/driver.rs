@@ -16,7 +16,7 @@ use tam_marketplace::{
 };
 use tam_storage::{
     append_event, AttemptIntent, AttemptVerdict, BudgetGrant, EventScope, HaltCause, HaltRepo,
-    LeaseRepo, LeasedItem, NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError,
+    ItemVerdict, LeaseRepo, LeasedItem, NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError,
     WriteAttemptRepo,
 };
 use tam_types::{
@@ -102,14 +102,21 @@ fn fields_as_json(fields: &FieldSet) -> serde_json::Value {
     })
 }
 
-const fn outcome_to_item(outcome: &Outcome) -> (ItemOutcome, Option<FailureCode>) {
-    match outcome {
-        Outcome::Committed { .. } => (ItemOutcome::Succeeded, None),
-        Outcome::Degraded { .. } => (ItemOutcome::Degraded, None),
-        Outcome::Rejected { code, .. } => (ItemOutcome::Failed, Some(*code)),
-        Outcome::Ambiguous { .. } => (ItemOutcome::Ambiguous, None),
-        Outcome::Blocked { .. } => (ItemOutcome::Blocked, None),
-        Outcome::Skipped { code } => (ItemOutcome::Skipped, Some(*code)),
+fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
+    let (item_outcome, failure_code, failure_detail) = match outcome {
+        Outcome::Committed { .. } => (ItemOutcome::Succeeded, None, None),
+        Outcome::Degraded { .. } => (ItemOutcome::Degraded, None, None),
+        Outcome::Rejected { code, detail } => {
+            (ItemOutcome::Failed, Some(*code), Some(detail.clone()))
+        }
+        Outcome::Ambiguous { .. } => (ItemOutcome::Ambiguous, None, None),
+        Outcome::Blocked { .. } => (ItemOutcome::Blocked, None, None),
+        Outcome::Skipped { code } => (ItemOutcome::Skipped, Some(*code), None),
+    };
+    ItemVerdict {
+        outcome: item_outcome,
+        failure_code,
+        failure_detail,
     }
 }
 
@@ -329,17 +336,18 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
         match (&next.state, pending) {
             (SyncState::Terminal(outcome), _) => {
                 let now = ctx.clock.now();
-                let (item_outcome, failure_code) = outcome_to_item(outcome);
+                let verdict = outcome_to_item(outcome);
+                let item_outcome = verdict.outcome;
                 if let Some(attempt) = current_attempt {
                     // Best-effort: a fenced-out attempt settle means the item
                     // was stolen, and the steal owns the story from here.
-                    let verdict = AttemptVerdict {
+                    let attempt_verdict = AttemptVerdict {
                         state: outcome_to_attempt_state(outcome).to_owned(),
-                        failure_code,
+                        failure_code: verdict.failure_code,
                     };
                     if let Err(error) = ctx
                         .attempts
-                        .settle(&lease_ref, attempt.0, &verdict, now)
+                        .settle(&lease_ref, attempt.0, &attempt_verdict, now)
                         .await
                     {
                         return Ok(RunVerdict::Abandoned {
@@ -347,9 +355,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                         });
                     }
                 }
-                ctx.leases
-                    .settle(&lease_ref, item_outcome, failure_code, now)
-                    .await?;
+                ctx.leases.settle(&lease_ref, &verdict, now).await?;
                 record_event(
                     ctx,
                     lease,
@@ -451,3 +457,56 @@ async fn notify(
 
 /// Silences the unused-import warning path for OutboxRepo's inherent fn use.
 const _: fn(sqlx::PgPool) -> OutboxRepo = OutboxRepo::new;
+
+#[cfg(test)]
+mod tests {
+    use super::outcome_to_item;
+    use tam_domain::ItemOutcome;
+    use tam_marketplace::Outcome;
+    use tam_types::{FailureCode, FailureDetail};
+
+    #[test]
+    fn a_rejection_carries_its_detail_into_the_verdict() {
+        let detail = FailureDetail("the upload was refused".to_owned());
+        let verdict = outcome_to_item(&Outcome::Rejected {
+            code: FailureCode::UploadRejected,
+            detail: detail.clone(),
+        });
+        assert_eq!(
+            verdict.outcome,
+            ItemOutcome::Failed,
+            "a rejection settles the item failed"
+        );
+        assert_eq!(
+            verdict.failure_code,
+            Some(FailureCode::UploadRejected),
+            "the closed-enum code crosses with it"
+        );
+        assert_eq!(
+            verdict.failure_detail,
+            Some(detail),
+            "the adapter's free text must survive the crossing into the ledger"
+        );
+    }
+
+    #[test]
+    fn an_outcome_with_no_adapter_text_leaves_the_detail_empty() {
+        let verdict = outcome_to_item(&Outcome::Skipped {
+            code: FailureCode::RateLimited,
+        });
+        assert_eq!(
+            verdict.outcome,
+            ItemOutcome::Skipped,
+            "a skip settles the item skipped"
+        );
+        assert_eq!(
+            verdict.failure_code,
+            Some(FailureCode::RateLimited),
+            "a skip still names its code"
+        );
+        assert_eq!(
+            verdict.failure_detail, None,
+            "no detail is written where the adapter supplied none"
+        );
+    }
+}

@@ -28,9 +28,9 @@ pub use job_reads::{
 };
 pub use jobs::{
     append_event, AttemptIntent, AttemptVerdict, BudgetGrant, CreatedJob, EventScope, HaltCause,
-    HaltRepo, InventoryFailureWindow, InventoryHaltRow, JobRepo, LeaseRef, LeaseRepo, LeasedItem,
-    MessageRef, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo, RateBudgetRepo,
-    WriteAttemptRepo,
+    HaltRepo, InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LeaseRef, LeaseRepo,
+    LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo,
+    RateBudgetRepo, WriteAttemptRepo,
 };
 pub use mapping::{MappingHead, MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};

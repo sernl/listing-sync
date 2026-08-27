@@ -14,7 +14,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tam_domain::{ItemOutcome, JobItemId};
 use tam_marketplace::IdempotencyKey;
 use tam_types::{
-    FailureCode, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp, Uuid,
+    FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp,
+    Uuid,
 };
 
 use crate::codec::{
@@ -310,6 +311,15 @@ pub async fn append_event(
     Ok(())
 }
 
+/// How an item settled in the ledger's own vocabulary: the outcome, its
+/// failure code, and the adapter's free text beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemVerdict {
+    pub outcome: ItemOutcome,
+    pub failure_code: Option<FailureCode>,
+    pub failure_detail: Option<FailureDetail>,
+}
+
 pub struct LeaseRepo {
     pool: PgPool,
 }
@@ -403,8 +413,7 @@ impl LeaseRepo {
     pub async fn settle(
         &self,
         lease: &LeaseRef,
-        outcome: ItemOutcome,
-        failure_code: Option<FailureCode>,
+        verdict: &ItemVerdict,
         at: Timestamp,
     ) -> Result<(), StorageError> {
         let LeaseRef {
@@ -412,17 +421,23 @@ impl LeaseRepo {
             item,
             lease_epoch,
         } = *lease;
+        let ItemVerdict {
+            outcome,
+            failure_code,
+            failure_detail,
+        } = verdict;
         let updated = sqlx::query!(
             "UPDATE job_item \
-             SET state = 'settled', outcome = $4, failure_code = $5, settled_at = $6, \
-                 lease_owner = NULL, lease_expires_at = NULL \
+             SET state = 'settled', outcome = $4, failure_code = $5, failure_detail = $6, \
+                 settled_at = $7, lease_owner = NULL, lease_expires_at = NULL \
              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
                AND state IN ('leased', 'running', 'verifying')",
             uuid_to_db(org.0),
             uuid_to_db(item.0),
             lease_epoch,
-            item_outcome_to_db(outcome),
+            item_outcome_to_db(*outcome),
             failure_code.map(failure_code_to_db),
+            failure_detail.as_ref().map(|detail| detail.0.as_str()),
             timestamp_to_db(at)?,
         )
         .execute(&self.pool)

@@ -13,13 +13,13 @@ use tam_domain::{
 };
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
 use tam_storage::{
-    BudgetGrant, HaltCause, HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem,
-    NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo, StorageError,
+    BudgetGrant, HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LeaseRepo, MappingRepo,
+    NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo, StorageError,
 };
 use tam_types::{
-    CanonicalTermId, ConnectionId, ContentHash, FileId, FileKind, FileRole, InventoryId, JobId,
-    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
-    ScanOutcome, Timestamp, Title, Uuid,
+    CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail, FileId, FileKind,
+    FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent,
+    PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -146,6 +146,15 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
     Tenant { org, mapping }
 }
 
+/// An outcome with no failure code and no detail beside it.
+fn verdict(outcome: ItemOutcome) -> ItemVerdict {
+    ItemVerdict {
+        outcome,
+        failure_code: None,
+        failure_detail: None,
+    }
+}
+
 fn item(seed: u8) -> NewJobItem {
     NewJobItem {
         item: JobItemId(Uuid([seed; 16])),
@@ -236,8 +245,7 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
     let stale = leases
         .settle(
             &lease.lease_ref(),
-            ItemOutcome::Succeeded,
-            None,
+            &verdict(ItemOutcome::Succeeded),
             after_expiry,
         )
         .await;
@@ -259,8 +267,7 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
     leases
         .settle(
             &release.lease_ref(),
-            ItemOutcome::Succeeded,
-            None,
+            &verdict(ItemOutcome::Succeeded),
             after_expiry,
         )
         .await
@@ -323,7 +330,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
         .await
         .expect("the gate flips");
     leases
-        .settle(&leased.lease_ref(), ItemOutcome::Blocked, None, T0)
+        .settle(&leased.lease_ref(), &verdict(ItemOutcome::Blocked), T0)
         .await
         .expect("the item settles");
     enqueue_one(&engine, &unlinked, 0x13, 0x23).await;
@@ -363,6 +370,90 @@ async fn the_attempt_budget_settles_failed_rather_than_looping(app: PgPool) {
         (state.0.as_str(), state.1.as_deref()),
         ("settled", Some("failed")),
         "an exhausted attempt budget settles as failed, it does not requeue forever"
+    );
+}
+
+/// The adapter's free text is the only human-readable account of a refusal
+/// the operator ever sees; a settle that drops it leaves the item page with
+/// a code and nothing else.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
+    const DETAIL: &str = "the upload was refused: the file exceeds the size cap";
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xA0, true).await;
+    let job = JobId(Uuid([0x11; 16]));
+    let mut first_item = item(0x21);
+    first_item.mapping = tenant.mapping;
+    let mut second_item = item(0x22);
+    second_item.mapping = tenant.mapping;
+    let (rejected, succeeded) = (first_item.item, second_item.item);
+    JobRepo::new(engine.clone())
+        .enqueue(
+            tenant.org,
+            &NewJob {
+                job,
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            &[first_item, second_item],
+        )
+        .await
+        .expect("the fixture job enqueues");
+
+    let leases = LeaseRepo::new(engine.clone());
+    let first = leases
+        .acquire("w1", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the first item leases");
+    assert_eq!(first.item, rejected, "the oldest item leases first");
+    leases
+        .settle(
+            &first.lease_ref(),
+            &ItemVerdict {
+                outcome: ItemOutcome::Failed,
+                failure_code: Some(FailureCode::UploadRejected),
+                failure_detail: Some(FailureDetail(DETAIL.to_owned())),
+            },
+            T0,
+        )
+        .await
+        .expect("the rejected item settles");
+
+    let second = leases
+        .acquire("w2", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the second item leases");
+    assert_eq!(
+        second.item, succeeded,
+        "the tenant's next item leases once the first has settled"
+    );
+    leases
+        .settle(&second.lease_ref(), &verdict(ItemOutcome::Succeeded), T0)
+        .await
+        .expect("the succeeded item settles");
+
+    let rows = JobReadRepo::new(app.clone())
+        .items_page(tenant.org, job, None, 10)
+        .await
+        .expect("the item page reads");
+    let failed = rows
+        .iter()
+        .find(|row| row.item == rejected)
+        .expect("the rejected item is on the page");
+    assert_eq!(
+        failed.failure_detail.as_deref(),
+        Some(DETAIL),
+        "the adapter's free text must reach the column the API surfaces"
+    );
+    let clean = rows
+        .iter()
+        .find(|row| row.item == succeeded)
+        .expect("the succeeded item is on the page");
+    assert_eq!(
+        clean.failure_detail, None,
+        "a settle with no rejection leaves the detail null"
     );
 }
 
