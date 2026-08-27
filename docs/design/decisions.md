@@ -165,3 +165,11 @@ A draft has no published bundle and the first step redirects to `?error=notfound
 The earlier finding in this section's first draft — that no download exists — was wrong: it probed the resource `attachments` array, which carries only a signed preview-image url and metadata, and missed the `/resource-detail/api/download` flow the resource-detail page's Download button drives.
 The consequence reverses the constraint: the server can fetch a seller's published source files from Tes and re-upload them to build the NZ copy, so a full server-side migration needs no seller-supplied files, and both the listing and the file-fetch legs are now automatable.
 The download returns a zip bundle, so the import fetches the bundle and extracts it through `tam-pipeline`'s existing zip ingest before re-upload.
+
+## The NZ currency, fixed to GBP by observation, 2026-08-28
+
+The founder observed on their own account that the New Zealand upload flow shows no currency control and that prices denominate in GBP.
+`InventoryId::TesNz` is therefore set from `CurrencyRule::Unmeasured` to `CurrencyRule::Fixed(Currency::Gbp)`, which opens the projection's currency gate so a priced GB resource duplicates into the NZ inventory rather than blocking as `CurrencyUnknown`.
+This supersedes the earlier deferral in "Currency observation and charge postponement, 2026-08-28", where the same observation was recorded but the gate deliberately left closed pending a priced-draft read; the founder has now decided the observation is sufficient to fix the currency.
+The measurement is from one GB account, so the re-open trigger is a non-GBP seller whose NZ inventory prices in another currency; the gate is a founder code decision either way.
+The gate's block path is unchanged for the still-unverified seller-scoped inventories (Etsy, Tpt), and a test pins that a priced listing into a seller-scoped inventory still refuses.

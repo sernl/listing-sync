@@ -298,22 +298,17 @@ mod tests {
     }
 
     #[test]
-    fn a_priced_listing_into_an_unmeasured_currency_blocks_and_a_free_one_passes() {
+    fn a_priced_nz_listing_projects_now_that_the_currency_is_fixed_and_a_free_one_always_did() {
         let catalogue = terms();
         let edges = [nz_edge()];
         let paid = PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("a price"));
-        let blocked = project_listing(
-            &product(paid, true, ScanOutcome::Clean { at: NOW }),
-            &ctx(&catalogue, &edges),
-        );
         assert!(
-            matches!(
-                blocked,
-                Err(ProjectionBlocked::CurrencyUnknown {
-                    inventory: InventoryId::TesNz
-                })
-            ),
-            "the NZ currency is unmeasured, so a priced listing blocks: {blocked:?}"
+            project_listing(
+                &product(paid, true, ScanOutcome::Clean { at: NOW }),
+                &ctx(&catalogue, &edges),
+            )
+            .is_ok(),
+            "the NZ currency is fixed to GBP, so a priced listing clears the currency gate"
         );
         assert!(
             project_listing(
@@ -322,6 +317,50 @@ mod tests {
             )
             .is_ok(),
             "a free listing needs no currency and passes the same gate"
+        );
+    }
+
+    #[test]
+    fn a_priced_listing_into_a_seller_scoped_inventory_still_blocks() {
+        // The gate's block path survives the NZ measurement: Etsy is
+        // SellerScoped and its currency is unverified until its connector,
+        // so a priced listing into it must still refuse rather than guess.
+        let catalogue = terms();
+        let etsy_edge = ProjectionEdge {
+            from: TERM,
+            to: VocabularyPath {
+                vocabulary: VocabularyId(InventoryId::Etsy, TermKind::Subject),
+                segments: vec!["Maths".to_owned()],
+                native_id: Some("e-1".to_owned()),
+            },
+            kind: EdgeKind::Exact,
+            decided_by: Decider::Imported {
+                source: "test".to_owned(),
+            },
+            decided_at: NOW,
+        };
+        let etsy_ctx = ListingContext {
+            org: ORG,
+            mapping: MAPPING,
+            inventory: InventoryId::Etsy,
+            now: NOW,
+            terms: &catalogue,
+            edges: std::slice::from_ref(&etsy_edge),
+            no_counterparts: &[],
+        };
+        let paid = PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("a price"));
+        let blocked = project_listing(
+            &product(paid, true, ScanOutcome::Clean { at: NOW }),
+            &etsy_ctx,
+        );
+        assert!(
+            matches!(
+                blocked,
+                Err(ProjectionBlocked::CurrencyUnknown {
+                    inventory: InventoryId::Etsy
+                })
+            ),
+            "a seller-scoped inventory's currency is unverified, so a priced listing blocks: {blocked:?}"
         );
     }
 

@@ -167,10 +167,17 @@ impl InventoryId {
         match self {
             Self::TesGb => CurrencyRule::Fixed(Currency::Gbp),
             Self::TesUs => CurrencyRule::Fixed(Currency::Usd),
-            // Measured for US only; the NZ inventory has not been probed, and
-            // the wedge's same-account Curriculum-tag mechanism makes the
-            // answer genuinely unobvious, so the gate stays closed.
-            Self::TesNz => CurrencyRule::Unmeasured,
+            // Observed by the founder on their own account: the NZ upload flow
+            // carries no currency control and prices denominate in GBP, so the
+            // inventory fixes the currency to the account's GBP rather than
+            // offering a per-listing choice. Recorded in decisions.md
+            // ("The NZ currency, fixed to GBP by observation, 2026-08-28").
+            // Re-open if a non-GBP seller's NZ inventory ever shows otherwise.
+            #[expect(
+                clippy::match_same_arms,
+                reason = "the GBP value coincides with TesGb today, but the NZ rule is a re-openable founder observation rather than the definitional GB fact, so the arms stay distinct to carry their own provenance"
+            )]
+            Self::TesNz => CurrencyRule::Fixed(Currency::Gbp),
             Self::Etsy | Self::Tpt => CurrencyRule::SellerScoped,
         }
     }
