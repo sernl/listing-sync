@@ -18,9 +18,17 @@ use tam_secrets::Secret;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-/// The write-path prefixes a lease may reach, and nothing else. Adding one is
-/// a deliberate edit here, guarded by the refusal test.
-pub(crate) const ALLOWED_PREFIXES: [&str; 2] = ["/api/v2/resources", "/api/resources/v3/draft"];
+/// The prefixes a lease may reach, and nothing else. Adding one is a
+/// deliberate edit here, guarded by the refusal test. The last three are the
+/// first-party reads — the seller's own catalogue and the two-step published
+/// bundle download — distinct from the write paths above them.
+pub(crate) const ALLOWED_PREFIXES: [&str; 5] = [
+    "/api/v2/resources",
+    "/api/resources/v3/draft",
+    "/api/v2/dashboard",
+    "/resource-detail/api/download",
+    "/teaching-resource/download",
+];
 
 fn path_is_allowed(path: &str) -> bool {
     ALLOWED_PREFIXES
@@ -160,7 +168,7 @@ mod tests {
     use super::path_is_allowed;
 
     #[test]
-    fn the_allow_list_admits_the_write_paths_and_refuses_the_rest() {
+    fn the_allow_list_admits_the_write_and_read_paths_and_refuses_the_rest() {
         assert!(path_is_allowed("/api/v2/resources"), "create is admitted");
         assert!(
             path_is_allowed("/api/v2/resources/9001/draft"),
@@ -169,6 +177,22 @@ mod tests {
         assert!(
             path_is_allowed("/api/resources/v3/draft/9001/attachment"),
             "the attachment path is admitted"
+        );
+        assert!(
+            path_is_allowed("/api/v2/dashboard/getAllResources"),
+            "the seller's own catalogue list is admitted"
+        );
+        assert!(
+            path_is_allowed("/api/v2/dashboard/getAllDrafts"),
+            "the seller's own draft list is admitted"
+        );
+        assert!(
+            path_is_allowed("/resource-detail/api/download/9001"),
+            "the download manifest is admitted"
+        );
+        assert!(
+            path_is_allowed("/teaching-resource/download/9001/bundle"),
+            "the bundle download is admitted"
         );
         assert!(
             !path_is_allowed("/api/v2/account/roster"),
@@ -181,6 +205,10 @@ mod tests {
         assert!(
             !path_is_allowed("/api/v2/resourcesX"),
             "a prefix that is not a path boundary is refused"
+        );
+        assert!(
+            !path_is_allowed("/api/v2/dashboardX"),
+            "the read prefixes are bounded at a path separator too"
         );
     }
 }
