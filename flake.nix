@@ -9,6 +9,12 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # cargo audit runs with -n against this directory, so the database is only
+    # ever as fresh as flake.lock; the bump is a scheduled job, not a fetch.
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
   };
 
   outputs =
@@ -44,6 +50,13 @@
               || (builtins.match ".*/tests/cassettes/.*\\.json" path != null)
               || (builtins.match ".*/docs/design/data/.*\\.json" path != null);
           };
+          # filterCargoSources keeps every .toml, so deny.toml and clippy.toml
+          # are already in src; narrowing to the latter keeps the file-count
+          # gate off the rebuild path of every Rust edit.
+          clippyTomlTree = pkgs.lib.cleanSourceWith {
+            inherit src;
+            filter = path: type: type == "directory" || baseNameOf path == "clippy.toml";
+          };
           commonArgs = {
             inherit src;
             strictDeps = true;
@@ -56,6 +69,25 @@
 
           checks = {
             inherit bin;
+
+            # The default --ignore yanked stands. Measured: -n leaves the
+            # sandbox without a crates.io index, so cargo-audit logs "couldn't
+            # check if the package is yanked" once per dependency whether the
+            # flag is set or not, and cannot detect a yanked crate here at all.
+            # deny.toml's yanked = "deny" is enforced by the networked just deny.
+            audit = craneLib.cargoAudit (commonArgs // { advisory-db = inputs.advisory-db; });
+
+            ban-strings = pkgs.runCommand "ban-strings" { nativeBuildInputs = [ pkgs.ripgrep ]; } ''
+              for entry in 'path = "str::split_at",' 'path = "str::split_at_mut",'; do
+                if ! rg -qF "$entry" ${./clippy.toml}; then
+                  echo "clippy.toml no longer carries the entry: $entry" >&2
+                  echo "crates/ban-probe catches a misspelt path; nothing but this catches a deleted one." >&2
+                  exit 1
+                fi
+              done
+              touch $out
+            '';
+
             clippy = craneLib.cargoClippy (
               commonArgs
               // {
@@ -63,6 +95,42 @@
                 cargoClippyExtraArgs = "--all-targets -- --deny warnings";
               }
             );
+
+            # Reported, never gated: -W without -D exits 0 on a hit, so this
+            # fails only when the tree stops compiling. crane splices the extra
+            # args straight into the build phase, which is why the tee rides
+            # along in the same string.
+            clippy-advisory = craneLib.cargoClippy (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                doInstallCargoArtifacts = false;
+                cargoClippyExtraArgs = ''
+                  --all-targets -- \
+                    -W clippy::nursery -W clippy::cargo \
+                    -W clippy::too_many_lines -W clippy::cognitive_complexity -W clippy::type_complexity \
+                    2>&1 | tee advisory-report.txt'';
+                installPhaseCommand = "install -Dm444 advisory-report.txt $out/advisory-report.txt";
+              }
+            );
+
+            clippy-toml-count = pkgs.runCommand "clippy-toml-count" { nativeBuildInputs = [ pkgs.fd ]; } ''
+              found=$(cd ${clippyTomlTree} && fd -HI -g clippy.toml --exclude target)
+              if [ "$found" != "clippy.toml" ]; then
+                echo "a crate-local clippy.toml replaces the root file rather than merging with it," >&2
+                echo "and it does so at exit 0 with no diagnostic, so the tree may hold exactly one." >&2
+                echo "found:" >&2
+                printf '%s\n' "$found" >&2
+                exit 1
+              fi
+              touch $out
+            '';
+
+            # Leave cargoDenyChecks at its default. Advisories are cargoAudit's
+            # lane; adding them here makes cargo-deny git-clone the RustSec
+            # database at build time, and the sandbox has neither network nor git.
+            deny = craneLib.cargoDeny commonArgs;
+
             fmt = craneLib.cargoFmt { inherit src; };
             nextest = craneLib.cargoNextest (commonArgs // { inherit cargoArtifacts; });
           };

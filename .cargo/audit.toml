@@ -1,0 +1,10 @@
+# cargo-audit reads this path and only this path: a root audit.toml is copied
+# into the build and then silently ignored, which is the failure mode this
+# file exists to avoid. Verified against cargo-audit 0.22.2.
+[advisories]
+# RUSTSEC-2023-0071 (Marvin Attack, rsa 0.9.10) has no fixed upstream release.
+# rsa is reached only through sqlx-mysql, a lockfile-only optional pin that
+# nothing in this Postgres-only workspace enables: cargo tree -i sqlx-mysql
+# --target all and cargo tree -i rsa --target all are both empty.
+# Re-evaluate when either sqlx or rsa moves.
+ignore = ["RUSTSEC-2023-0071"]
