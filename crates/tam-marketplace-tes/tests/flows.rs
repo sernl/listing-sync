@@ -237,11 +237,11 @@ fn delete_reports_success_only_after_the_read_returns_not_found() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::delete_resource_request(DRAFT),
+                request: endpoints::delete_draft_request(DRAFT),
                 response: status(204),
             },
             Interaction {
-                request: endpoints::read_resource_request(DRAFT),
+                request: endpoints::read_draft_request(DRAFT),
                 response: status(404),
             },
         ],
@@ -256,11 +256,11 @@ fn the_misleading_204_is_refused() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::delete_resource_request(DRAFT),
+                request: endpoints::delete_draft_request(DRAFT),
                 response: status(204),
             },
             Interaction {
-                request: endpoints::read_resource_request(DRAFT),
+                request: endpoints::read_draft_request(DRAFT),
                 response: ok(&draft_state(9001, false)),
             },
         ],
@@ -275,7 +275,8 @@ fn the_misleading_204_is_refused() {
                 ..
             })
         ),
-        "a 204 with the resource still readable is not a delete, whatever the status said"
+        "a 204 with the draft still readable is not a delete, whatever the status said; \
+         verifying against the resource route instead of the draft route reported a false gone live"
     );
 }
 
@@ -345,11 +346,11 @@ fn the_preflight_names_a_vanished_written_field() {
                 response: ok(&incomplete),
             },
             Interaction {
-                request: endpoints::delete_resource_request(probe),
+                request: endpoints::delete_draft_request(probe),
                 response: status(204),
             },
             Interaction {
-                request: endpoints::read_resource_request(probe),
+                request: endpoints::read_draft_request(probe),
                 response: status(404),
             },
         ],
@@ -390,11 +391,11 @@ fn the_probe_writes_before_asserting_because_an_empty_draft_omits_null_scalars()
                 response: ok(&populated),
             },
             Interaction {
-                request: endpoints::delete_resource_request(probe),
+                request: endpoints::delete_draft_request(probe),
                 response: status(204),
             },
             Interaction {
-                request: endpoints::read_resource_request(probe),
+                request: endpoints::read_draft_request(probe),
                 response: status(404),
             },
         ],

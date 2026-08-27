@@ -169,18 +169,20 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         }
     }
 
-    /// Deletes the resource and reports success only after the API read
-    /// returns 404. `DELETE .../{id}/draft` answers 204 while removing only
-    /// the draft overlay, and the public URL soft-404s, so neither is ever
-    /// consulted — the misleading-204 rule as code.
+    /// Deletes a never-published draft and reports success only after the
+    /// `/draft` read returns 404. The authoritative `DELETE /resources/{id}`
+    /// 404s for a draft-only resource without removing it, and a resource read
+    /// 404s for a draft whether or not it was deleted, so verifying deletion
+    /// against the resource route is a false "gone" — the deletion and its
+    /// proof both run on the `/draft` route the draft actually lives at.
     pub async fn delete(&self, id: DraftId) -> Result<(), AdapterError> {
-        self.send(endpoints::delete_resource_request(id)).await?;
-        let after = self.send(endpoints::read_resource_request(id)).await?;
+        self.send(endpoints::delete_draft_request(id)).await?;
+        let after = self.send(endpoints::read_draft_request(id)).await?;
         match after.status {
             404 => Ok(()),
             200 => Err(AdapterError::Rejected {
                 code: FailureCode::VerificationMismatch,
-                detail: FailureDetail("the resource is still readable after delete".to_owned()),
+                detail: FailureDetail("the draft is still readable after delete".to_owned()),
             }),
             _ => Err(AdapterError::Ambiguous(
                 AmbiguityCause::ReadBackIndeterminate,

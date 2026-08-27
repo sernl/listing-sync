@@ -291,6 +291,19 @@ pub fn delete_resource_request(id: DraftId) -> HttpRequest {
     }
 }
 
+/// Deletes a never-published draft. `DELETE /resources/{id}` (the authoritative
+/// published-resource delete) 404s for a draft-only resource without removing
+/// it, so a draft is deleted through its own `/draft` route and the deletion is
+/// verified by a `/draft` read, not a resource read that 404s either way.
+#[must_use]
+pub fn delete_draft_request(id: DraftId) -> HttpRequest {
+    HttpRequest {
+        method: Method::Delete,
+        url: format!("{ORIGIN}/api/v2/resources/{}/draft", id.0),
+        body: RequestBody::Empty,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_presign, DraftId, PresignParseError, TesLicence, TesListing};
