@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { api, type DrainStats, type QueueItem } from '$lib/api';
+	import { formatShare, gateWindow, readMeasurement, toRun, type DrainRun } from '$lib/drain';
+	import { createLedger } from '$lib/ledger';
 	import { toast } from '$lib/toast';
 
 	let items = $state<QueueItem[]>([]);
@@ -7,6 +9,10 @@
 	let loaded = $state(false);
 	let drafts = $state<Record<string, string>>({});
 	let busy = $state<string | null>(null);
+	let runs = $state<DrainRun[]>([]);
+	let truncated = $state(false);
+
+	const gate = $derived(gateWindow(runs));
 
 	async function refetch() {
 		const [queue, drain] = await Promise.all([api.queue(), api.drainStats()]);
@@ -17,6 +23,40 @@
 
 	$effect(() => {
 		void refetch();
+		// The stream replays the whole un-pruned ledger from cursor zero, so
+		// the series rebuilds on load without a route of its own. Events are
+		// kept by seq here rather than read out of the store's rolling buffer,
+		// which a busy tenant's item traffic would push them out of.
+		const seen = new Map<number, DrainRun>();
+		let resyncs = 0;
+		const ledger = createLedger(
+			(cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`)
+		);
+		const unsubscribe = ledger.subscribe((state) => {
+			if (state.resyncs !== resyncs) {
+				resyncs = state.resyncs;
+				truncated = true;
+			}
+			let fresh = false;
+			for (const event of state.events) {
+				if (event.kind !== 'ImportDrainMeasured' || seen.has(event.seq)) {
+					continue;
+				}
+				const measurement = readMeasurement(event.payload);
+				if (measurement) {
+					seen.set(event.seq, toRun(event.seq, measurement));
+					fresh = true;
+				}
+			}
+			if (fresh) {
+				runs = [...seen.values()].sort((left, right) => left.seq - right.seq);
+				void refetch();
+			}
+		});
+		return () => {
+			unsubscribe();
+			ledger.close();
+		};
 	});
 
 	async function resolve(item: QueueItem) {
@@ -68,6 +108,82 @@
 		</span>
 	{/if}
 </div>
+
+<section class="mb-6 rounded border border-slate-200 bg-white p-4">
+	<div class="mb-2 flex items-baseline gap-3">
+		<h2 class="text-sm font-medium">Import drain</h2>
+		<span class="text-xs text-slate-500">
+			the share of canonical terms each import raised a new item for
+		</span>
+	</div>
+
+	{#if runs.length === 0}
+		<p class="text-xs text-slate-500">
+			No import has recorded a drain report yet. Each run records one, and
+			the ledger keeps 30 days of them.
+		</p>
+	{:else}
+		<p class="mb-3 text-xs text-slate-600">
+			{#if gate.fall === null}
+				{runs.length} of 10 migrations recorded; the gate compares the first
+				against the tenth.
+			{:else}
+				First {formatShare(gate.first?.share ?? null)} → tenth
+				{formatShare(gate.tenth?.share ?? null)}: a fall of
+				{formatShare(gate.fall)}.
+			{/if}
+		</p>
+
+		<div class="overflow-x-auto">
+			<table class="w-full text-left text-xs">
+				<thead class="text-slate-500">
+					<tr>
+						<th class="py-1 pr-3 font-medium">#</th>
+						<th class="py-1 pr-3 font-medium">Direction</th>
+						<th class="py-1 pr-3 font-medium">Rows</th>
+						<th class="py-1 pr-3 font-medium">Terms seen</th>
+						<th class="py-1 pr-3 font-medium">Unmapped</th>
+						<th class="py-1 pr-3 font-medium">Covered</th>
+						<th class="py-1 pr-3 font-medium">New</th>
+						<th class="py-1 pr-3 font-medium">Already open</th>
+						<th class="py-1 font-medium">Share</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100">
+					{#each runs as run, index (run.seq)}
+						<tr class={index === 0 || index === 9 ? 'font-medium' : ''}>
+							<td class="py-1 pr-3 text-slate-400">{index + 1}</td>
+							<td class="py-1 pr-3">{run.source} → {run.target}</td>
+							<td class="py-1 pr-3">{run.rows}</td>
+							<td class="py-1 pr-3">{run.terms_seen}</td>
+							<td class="py-1 pr-3 {run.terms_unmapped > 0 ? 'text-orange-700' : ''}">
+								{run.terms_unmapped}
+							</td>
+							<td class="py-1 pr-3">{run.terms_covered}</td>
+							<td class="py-1 pr-3">{run.items_new}</td>
+							<td class="py-1 pr-3">{run.items_already_open}</td>
+							<td class="py-1">{formatShare(run.share)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+
+		<p class="mt-2 text-xs text-slate-500">
+			Unmapped terms never became canonical, so they are outside the share:
+			a share that falls while that column rises is an ingest gap rather
+			than a converging crosswalk.
+		</p>
+	{/if}
+
+	{#if truncated}
+		<p class="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
+			The ledger was pruned past the start of this stream, so runs older
+			than the 30-day window are not shown and the first row above may not
+			be the first migration.
+		</p>
+	{/if}
+</section>
 
 {#if !loaded}
 	<p class="text-slate-500">Loading the queue…</p>
