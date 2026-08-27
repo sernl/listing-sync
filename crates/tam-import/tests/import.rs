@@ -9,12 +9,14 @@ use sqlx::PgPool;
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
-use tam_import::{import_one, ImportEntry, ImportRun, NamedBytes, NoImportFiles};
+use tam_import::{
+    import_one, record_drain_report, DrainTotals, ImportEntry, ImportRun, NamedBytes, NoImportFiles,
+};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{HttpRequest, HttpResponse, Method, RequestBody};
 use tam_marketplace_tes::TesAdapter;
 use tam_secrets::Kek;
-use tam_storage::{ProductRepo, TaxonomyRepo};
+use tam_storage::{JobReadRepo, ProductRepo, TaxonomyRepo};
 use tam_types::{CanonicalTermId, InventoryId, OrgId, PriceIntent, Timestamp, Uuid};
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -261,4 +263,61 @@ async fn a_gap_blocks_the_projection_and_raises_exactly_once(pool: PgPool) {
         .await
         .expect("the queue reads");
     assert_eq!(open.len(), 2, "the founder sees exactly the two gaps");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_drain_report_lands_as_a_job_event_the_client_can_read(pool: PgPool) {
+    seed(&pool, false).await;
+    let adapter = adapter_for(13_549_794);
+    let run = run_for(pool.clone(), &adapter, store_root("drain"));
+    let entry = ImportEntry {
+        resource: 13_549_794,
+        files: vec![NamedBytes {
+            name: "worksheet.pdf".to_owned(),
+            bytes: pdf(),
+        }],
+    };
+    let report = import_one(&run, &entry).await.expect("the import runs");
+    let mut totals = DrainTotals::default();
+    totals.absorb(&report);
+    let job = record_drain_report(&run, totals)
+        .await
+        .expect("the drain report records");
+
+    let reads = JobReadRepo::new(pool);
+    let snapshot = reads
+        .snapshot(ORG, job)
+        .await
+        .expect("the job reads")
+        .expect("the job exists");
+    assert_eq!(
+        snapshot.inventory,
+        InventoryId::TesGb,
+        "the job carries the inventory the run reads"
+    );
+    assert_eq!(
+        snapshot.counts.total, 0,
+        "an import publishes nothing, so its job carries no item the lease scan could claim"
+    );
+
+    let events = reads.events_after(ORG, 0, 16).await.expect("events read");
+    let drain = events
+        .iter()
+        .find(|event| event.kind == "ImportDrainMeasured")
+        .expect("the drain report is on the stream");
+    assert_eq!(drain.job, job, "the report is scoped to the run's job");
+    assert_eq!(
+        drain.payload,
+        serde_json::json!({
+            "source": "TesGb",
+            "target": "TesNz",
+            "rows": 1,
+            "terms_seen": 2,
+            "terms_unmapped": 0,
+            "terms_covered": 0,
+            "items_new": 2,
+            "items_already_open": 0,
+        }),
+        "an empty NZ crosswalk raises every canonical term: the gate's first-run share is 2 of 2"
+    );
 }

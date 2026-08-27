@@ -162,6 +162,25 @@ impl JobRepo {
         Ok(())
     }
 
+    /// One event against a job that already exists, in a transaction of its
+    /// own. `enqueue` appends inside the transaction that creates the rows;
+    /// a process recording a measurement after its work is finished has no
+    /// such transaction to join, and `append_event` cannot pin the tenant
+    /// itself.
+    pub async fn record_event(
+        &self,
+        org: OrgId,
+        scope: &EventScope,
+        payload: &JobEventPayload,
+        at: Timestamp,
+    ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        crate::pin_org(&mut tx, org).await?;
+        append_event(&mut tx, scope, payload, at).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// The settled-outcome vector for the roll-up; deliberately no scalar
     /// verdict, per the design.
     pub async fn settled_outcomes(

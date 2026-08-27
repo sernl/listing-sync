@@ -440,6 +440,19 @@ pub(crate) async fn list_jobs(
     }))
 }
 
+/// A job carrying no items is settled, not active. `create_job` refuses an
+/// empty mapping list and both storage constructors insert a job's items in
+/// the transaction that creates it, so an itemless job is only ever an
+/// import run recording its drain measurement — work that is over, and would
+/// otherwise read as in flight forever.
+const fn phase_of(counts: &ItemCounts) -> JobPhase {
+    if counts.settled == counts.total {
+        JobPhase::Settled
+    } else {
+        JobPhase::Active
+    }
+}
+
 pub(crate) async fn job_view(
     State(state): State<AppState>,
     context: OrgContext,
@@ -451,11 +464,7 @@ pub(crate) async fn job_view(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such job"))?;
-    let phase = if snapshot.counts.total > 0 && snapshot.counts.settled == snapshot.counts.total {
-        JobPhase::Settled
-    } else {
-        JobPhase::Active
-    };
+    let phase = phase_of(&snapshot.counts);
     Ok(Json(JobView {
         job: snapshot.job,
         inventory: snapshot.inventory,
@@ -535,8 +544,8 @@ impl OrgContext {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_cursor, encode_cursor};
-    use tam_storage::LedgerCursor;
+    use super::{decode_cursor, encode_cursor, phase_of, JobPhase};
+    use tam_storage::{ItemCounts, LedgerCursor};
     use tam_types::{Timestamp, Uuid};
 
     #[test]
@@ -549,6 +558,33 @@ mod tests {
             decode_cursor(&encode_cursor(&cursor)),
             Some(cursor),
             "a minted token parses back to the same keyset position"
+        );
+    }
+
+    #[test]
+    fn a_job_carrying_no_items_is_settled_rather_than_active_forever() {
+        assert_eq!(
+            phase_of(&ItemCounts::default()),
+            JobPhase::Settled,
+            "an import run records its measurement against an itemless job"
+        );
+        assert_eq!(
+            phase_of(&ItemCounts {
+                total: 2,
+                settled: 1,
+                ..ItemCounts::default()
+            }),
+            JobPhase::Active,
+            "a partly settled job is still in flight"
+        );
+        assert_eq!(
+            phase_of(&ItemCounts {
+                total: 2,
+                settled: 2,
+                ..ItemCounts::default()
+            }),
+            JobPhase::Settled,
+            "every item settled settles the job"
         );
     }
 

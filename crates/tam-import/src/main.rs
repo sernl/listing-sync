@@ -16,7 +16,9 @@
 use std::io::Read as _;
 
 use serde::Deserialize;
-use tam_import::{import_one, ImportEntry, ImportRun, NamedBytes, NoImportFiles};
+use tam_import::{
+    import_one, record_drain_report, DrainTotals, ImportEntry, ImportRun, NamedBytes, NoImportFiles,
+};
 use tam_marketplace_tes::{GatewayTransport, TesAdapter};
 use tam_secrets::Kek;
 use tam_types::{InventoryId, OrgId, Timestamp, Uuid};
@@ -90,9 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         now: wall_now()?,
     };
 
-    let mut total_terms = 0usize;
-    let mut total_new = 0u64;
-    let mut total_rows = 0usize;
+    let mut totals = DrainTotals::default();
     for row in manifest {
         let mut files = Vec::new();
         for path in &row.files {
@@ -107,9 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         match import_one(&run, &entry).await {
             Ok(report) => {
-                total_terms += report.terms_seen;
-                total_new += report.raised.new;
-                total_rows += 1;
+                totals.absorb(&report);
                 eprintln!(
                     "{} → {} \"{}\": {}/{} terms mapped, {} new item(s), {} dedup, {}",
                     report.resource,
@@ -134,8 +132,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => eprintln!("{} FAILED: {error}", row.resource),
         }
     }
+    let job = record_drain_report(&run, totals).await?;
     eprintln!(
-        "imported {total_rows} row(s); drain: {total_new} new item(s) over {total_terms} term uses"
+        "imported {} row(s); drain: {} new item(s), {} already open, {} covered, \
+         over {} term use(s) of which {} unmapped",
+        totals.rows,
+        totals.items_new,
+        totals.items_already_open,
+        totals.terms_covered,
+        totals.terms_seen,
+        totals.terms_unmapped,
     );
+    eprintln!("drain report recorded as job {}", job.0.to_hyphenated());
     Ok(())
 }

@@ -21,16 +21,16 @@ use tam_pipeline::scan::EicarScanner;
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    BlobRepo, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
-    TenantBlobSink,
+    BlobRepo, EventScope, JobRepo, MappingRepo, NewJob, ProductRepo, RaiseReport, RaiseScope,
+    StorageError, TaxonomyRepo, TenantBlobSink,
 };
 use tam_taxonomy::listing::{project_listing, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
 use tam_taxonomy::TES_MAIN_AGE_RANGES;
 use tam_types::{
-    CanonicalTermId, ContentHash, Currency, FileId, FileKind, FileRole, InventoryId, ListingCopy,
-    MappingId, Money, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, Currency, FileId, FileKind, FileRole, InventoryId,
+    JobEventPayload, JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent,
+    ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
 };
 
 /// The import never uploads, so its adapter's file source is a refusal.
@@ -126,6 +126,87 @@ impl From<StorageError> for ImportError {
     fn from(error: StorageError) -> Self {
         Self::Storage(error)
     }
+}
+
+/// One import run's drain measurement, folded from the per-row reports,
+/// because the kill gate's unit is the catalogue rather than the row.
+/// `terms_covered` is the canonical terms that already had a counterpart in
+/// the target: the projection raises exactly one item per uncovered term, so
+/// what the raise did not account for was covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DrainTotals {
+    pub rows: u64,
+    pub terms_seen: u64,
+    pub terms_unmapped: u64,
+    pub terms_covered: u64,
+    pub items_new: u64,
+    pub items_already_open: u64,
+}
+
+impl DrainTotals {
+    pub fn absorb(&mut self, report: &ImportRowReport) {
+        let mapped = u64::try_from(report.terms_mapped).unwrap_or(u64::MAX);
+        let raised = report.raised.new + report.raised.already_open;
+        self.rows += 1;
+        self.terms_seen += u64::try_from(report.terms_seen).unwrap_or(u64::MAX);
+        self.terms_unmapped += u64::try_from(report.unmapped_native_ids.len()).unwrap_or(u64::MAX);
+        self.terms_covered += mapped.saturating_sub(raised);
+        self.items_new += report.raised.new;
+        self.items_already_open += report.raised.already_open;
+    }
+}
+
+fn wire(count: u64) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// Opens the run's job row and records its drain measurement against it, so
+/// the report the kill gate reads is a ledger row the client already knows
+/// how to receive rather than a line on a terminal that scrolled away.
+///
+/// The job carries no items. An import writes nothing to a marketplace, and
+/// a `queued` item is precisely what the worker's lease scan looks for, so
+/// giving this job items would turn a measurement into a publish. Its
+/// inventory is the source, the one the run's marketplace reads addressed;
+/// the target travels in the payload, because the event stream carries the
+/// body without its job row.
+pub async fn record_drain_report<T: Transport>(
+    run: &ImportRun<'_, T>,
+    totals: DrainTotals,
+) -> Result<JobId, ImportError> {
+    let job = JobId(fresh_uuid());
+    let jobs = JobRepo::new(run.pool.clone());
+    jobs.enqueue(
+        run.org,
+        &NewJob {
+            job,
+            inventory: run.source,
+            at: run.now,
+        },
+        &[],
+    )
+    .await?;
+    jobs.record_event(
+        run.org,
+        &EventScope {
+            org: run.org,
+            job,
+            item: None,
+        },
+        &JobEventPayload::ImportDrainMeasured {
+            source: run.source,
+            target: run.target,
+            rows: wire(totals.rows),
+            terms_seen: wire(totals.terms_seen),
+            terms_unmapped: wire(totals.terms_unmapped),
+            terms_covered: wire(totals.terms_covered),
+            items_new: wire(totals.items_new),
+            items_already_open: wire(totals.items_already_open),
+        },
+        run.now,
+    )
+    .await?;
+    Ok(job)
 }
 
 pub async fn import_one<T: Transport>(
