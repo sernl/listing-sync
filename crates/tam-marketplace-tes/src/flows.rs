@@ -21,8 +21,8 @@ use tam_marketplace::{
 use tam_types::{ContentHash, FailureCode, FailureDetail, FieldKey, InventoryId, OrgId, Timestamp};
 
 use crate::classify::{
-    classify_create, classify_read, classify_transport, classify_write, classify_write_json,
-    classify_write_status,
+    classify_create, classify_read, classify_read_bytes, classify_transport, classify_write,
+    classify_write_json, classify_write_status,
 };
 use crate::endpoints::{self, CatalogueEntry, DraftId, PresignedUpload, TesLicence, TesListing};
 use crate::schema;
@@ -494,6 +494,53 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         })
     }
 
+    /// The seller's own files for a published resource: the bytes of the
+    /// bundle Tes assembles. Two steps — the manifest names the bundle, then
+    /// the bundle is fetched, the upstream's 302 to the signed CDN url being
+    /// followed by the transport, so what arrives here is the ZIP itself.
+    ///
+    /// Published-only by construction. A draft has no bundle, and that is
+    /// reported as a rejection naming the cause rather than as an ambiguity,
+    /// because nothing about it is unknown.
+    pub async fn download_resource_bundle(
+        &self,
+        reason: &FetchReason,
+        id: DraftId,
+    ) -> Result<Vec<u8>, AdapterError> {
+        if !matches!(reason, FetchReason::FirstPartyExport { .. }) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(
+                    "a file download is justified only by the first-party-export capability"
+                        .to_owned(),
+                ),
+            });
+        }
+        let manifest = self.send(endpoints::download_manifest_request(id)).await?;
+        // A draft's manifest route redirects to an HTML `?error=notfound`
+        // page, so a body that will not parse as a manifest means the
+        // resource is unpublished, not that the read failed.
+        let body = match classify_read(&manifest) {
+            Ok(body) => body,
+            Err(error) => {
+                return Err(if matches!(error, AdapterError::Rejected { .. }) {
+                    no_published_bundle(id)
+                } else {
+                    error
+                })
+            }
+        };
+        let path = endpoints::parse_download_manifest(&body, id).map_err(|error| match error {
+            endpoints::DownloadManifestError::NoPublishedBundle => no_published_bundle(id),
+            endpoints::DownloadManifestError::OffOrigin(_) => AdapterError::Rejected {
+                code: FailureCode::UnexpectedOrigin,
+                detail: FailureDetail(error.to_string()),
+            },
+        })?;
+        let bundle = self.send(endpoints::download_bundle_request(&path)).await?;
+        classify_read_bytes(&bundle).map(<[u8]>::to_vec)
+    }
+
     /// The first-party import read: the seller's own listing, verbatim, for
     /// canonicalisation. Refuses any reason but `FirstPartyExport`, because
     /// this is the tier-one capability and nothing else justifies an
@@ -570,5 +617,18 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
         Some(Value::Array(entries)) => entries.iter().filter_map(native_id_string).collect(),
         Some(single) => native_id_string(single).into_iter().collect(),
         None => Vec::new(),
+    }
+}
+
+/// A resource with no bundle behind it. Distinct from a failed read: the
+/// answer is known, and it is that only a published resource has files to
+/// download.
+fn no_published_bundle(id: DraftId) -> AdapterError {
+    AdapterError::Rejected {
+        code: FailureCode::PreconditionElementAbsent,
+        detail: FailureDetail(format!(
+            "resource {} has no published bundle; only a published resource can be downloaded",
+            id.0
+        )),
     }
 }

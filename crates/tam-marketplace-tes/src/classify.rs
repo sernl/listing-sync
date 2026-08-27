@@ -134,6 +134,39 @@ pub fn classify_read(response: &HttpResponse) -> Result<Value, AdapterError> {
     }
 }
 
+/// How much of a body is examined for a sign-in interstitial. A bundle is
+/// arbitrarily large and decoding all of it to look for `<html` would copy
+/// the whole file; an interstitial declares itself in its first bytes.
+const INTERSTITIAL_HEAD_BYTES: usize = 2048;
+
+/// Classifies a NON-mutating read whose payload is bytes rather than JSON —
+/// a download bundle. Shares [`classify_read`]'s status vocabulary, and still
+/// looks for the interstitial, because an expired session answers a download
+/// with a sign-in page and a 200 just as readily.
+pub fn classify_read_bytes(response: &HttpResponse) -> Result<&[u8], AdapterError> {
+    match response.status {
+        200 => {
+            let head = response
+                .body
+                .get(..INTERSTITIAL_HEAD_BYTES)
+                .unwrap_or(&response.body);
+            if looks_like_signin(&String::from_utf8_lossy(head)) {
+                return Err(AdapterError::SessionExpired);
+            }
+            Ok(&response.body)
+        }
+        401 | 403 => Err(AdapterError::SessionExpired),
+        429 => Err(AdapterError::RateLimited { retry_after: None }),
+        404 => Err(AdapterError::Rejected {
+            code: FailureCode::PreconditionElementAbsent,
+            detail: detail(response.status, &response.text()),
+        }),
+        _ => Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate,
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{classify_read, classify_write};

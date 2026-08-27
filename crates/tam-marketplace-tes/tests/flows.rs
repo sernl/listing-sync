@@ -587,3 +587,137 @@ fn a_catalogue_read_without_the_export_capability_is_refused() {
         "the refusal happens before the first request, so nothing was sent"
     );
 }
+
+/// A bundle's first bytes are a ZIP local header, and the rest is chosen to
+/// be undecodable as UTF-8: this fixture exists to prove the transport hands
+/// the bytes back untouched rather than through a lossy decode.
+fn zip_bytes() -> Vec<u8> {
+    let mut bytes = b"PK\x03\x04\x14\x00\x08\x00\x08\x00".to_vec();
+    bytes.extend((0u8..=255).cycle().take(1024));
+    bytes.extend_from_slice(b"PK\x05\x06");
+    bytes
+}
+
+const BUNDLE_PATH: &str = "/teaching-resource/download/9001/bundle";
+
+#[test]
+fn a_published_resource_downloads_its_bundle_byte_for_byte() {
+    let bundle = zip_bytes();
+    let manifest = json!({
+        "zipUrls": {
+            "9001": { "url": BUNDLE_PATH, "title": "Fractions pack" }
+        }
+    });
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&manifest),
+            },
+            Interaction {
+                request: endpoints::download_bundle_request(BUNDLE_PATH),
+                response: HttpResponse {
+                    status: 200,
+                    body: bundle.clone(),
+                },
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let downloaded = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect("a published resource downloads its bundle");
+
+    assert_eq!(
+        downloaded, bundle,
+        "the bundle arrives byte for byte; a lossy transport would corrupt every archive"
+    );
+    assert_eq!(
+        downloaded.get(..4),
+        Some(b"PK\x03\x04".as_slice()),
+        "the zip magic survives, which is what the pipeline's extraction depends on"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the manifest and the bundle it named, and nothing else"
+    );
+}
+
+#[test]
+fn a_draft_has_no_bundle_and_says_so_distinctly() {
+    for (label, body) in [
+        (
+            "a manifest carrying no zipUrls",
+            json!({ "zipUrls": {} }).to_string().into_bytes(),
+        ),
+        (
+            "the html redirect the live route answers a draft with",
+            b"<html><head><title>Not found</title></head></html>".to_vec(),
+        ),
+    ] {
+        let cassette = Cassette {
+            interactions: vec![Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: HttpResponse { status: 200, body },
+            }],
+        };
+        let adapter = adapter(cassette, vec![]);
+        let refused = futures::executor::block_on(adapter.download_resource_bundle(
+            &FetchReason::FirstPartyExport {
+                inventory: InventoryId::TesGb,
+            },
+            DRAFT,
+        ));
+        assert!(
+            matches!(
+                refused,
+                Err(AdapterError::Rejected {
+                    code: FailureCode::PreconditionElementAbsent,
+                    ..
+                })
+            ),
+            "{label}: an absent bundle is a stated rejection, never an ambiguity"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{label}: the bundle itself was never requested"
+        );
+    }
+}
+
+#[test]
+fn a_bundle_download_without_the_export_capability_is_refused() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::VerifyAttempt {
+            attempt: WriteAttemptId(Uuid([3; 16])),
+        },
+        DRAFT,
+    ));
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                ..
+            })
+        ),
+        "downloading a seller's files needs the tier-one capability"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the refusal happens before the first request"
+    );
+}

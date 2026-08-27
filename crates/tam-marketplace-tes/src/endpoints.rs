@@ -385,11 +385,75 @@ pub fn parse_catalogue_page(
         .collect()
 }
 
+/// Step one of the two-step own-file download: the manifest naming the
+/// bundle. A draft has no bundle and this route answers it with an HTML
+/// redirect to `?error=notfound` rather than JSON.
+#[must_use]
+pub fn download_manifest_request(id: DraftId) -> HttpRequest {
+    HttpRequest {
+        method: Method::Get,
+        url: format!("{ORIGIN}/resource-detail/api/download/{}", id.0),
+        body: RequestBody::Empty,
+    }
+}
+
+/// Step two: the bundle itself, at the path the manifest named. The upstream
+/// answers a 302 to a signed CDN URL and the transport follows it, so what
+/// comes back is the ZIP.
+#[must_use]
+pub fn download_bundle_request(path: &str) -> HttpRequest {
+    HttpRequest {
+        method: Method::Get,
+        url: format!("{ORIGIN}{path}"),
+        body: RequestBody::Empty,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadManifestError {
+    /// No bundle for this resource — the shape a draft produces.
+    NoPublishedBundle,
+    /// The manifest named somewhere other than a path on this origin.
+    OffOrigin(String),
+}
+
+impl core::fmt::Display for DownloadManifestError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoPublishedBundle => write!(f, "no published bundle for this resource"),
+            Self::OffOrigin(url) => write!(f, "the manifest named an off-origin url: {url}"),
+        }
+    }
+}
+
+impl core::error::Error for DownloadManifestError {}
+
+/// Recovers the bundle path from a download manifest, which keys `zipUrls`
+/// by the resource id as a string.
+///
+/// The returned path must be origin-relative. An absolute url would skip the
+/// transport's rebasing onto the broker's leased endpoint and so escape the
+/// gateway's allow-list entirely, which is the one thing keeping a lease
+/// unable to reach anything but these routes.
+pub fn parse_download_manifest(body: &Value, id: DraftId) -> Result<String, DownloadManifestError> {
+    let url = body
+        .get("zipUrls")
+        .and_then(|urls| urls.get(id.0.to_string()))
+        .and_then(|entry| entry.get("url"))
+        .and_then(Value::as_str)
+        .ok_or(DownloadManifestError::NoPublishedBundle)?;
+    if url.starts_with('/') && !url.starts_with("//") {
+        Ok(url.to_owned())
+    } else {
+        Err(DownloadManifestError::OffOrigin(url.to_owned()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_catalogue_page, parse_presign, CataloguePageError, DraftId, PresignParseError,
-        TesLicence, TesListing,
+        parse_catalogue_page, parse_download_manifest, parse_presign, CataloguePageError,
+        DownloadManifestError, DraftId, PresignParseError, TesLicence, TesListing,
     };
     use base64::Engine;
     use serde_json::json;
@@ -525,5 +589,42 @@ mod tests {
             entries[1].published,
             "a row with no draft flag takes the endpoint's meaning"
         );
+    }
+
+    #[test]
+    fn the_manifest_yields_the_bundle_path_keyed_by_the_resource_id() {
+        let manifest = json!({
+            "zipUrls": {
+                "9001": {"url": "/teaching-resource/download/9001/bundle", "title": "Pack"}
+            }
+        });
+        assert_eq!(
+            parse_download_manifest(&manifest, DraftId(9001)),
+            Ok("/teaching-resource/download/9001/bundle".to_owned()),
+            "the bundle path comes from the manifest, not from a path we assumed"
+        );
+    }
+
+    #[test]
+    fn a_manifest_without_zip_urls_is_an_unpublished_resource() {
+        assert_eq!(
+            parse_download_manifest(&json!({}), DraftId(9001)),
+            Err(DownloadManifestError::NoPublishedBundle),
+            "a draft has no bundle, which is a distinct answer from a failed read"
+        );
+    }
+
+    #[test]
+    fn a_manifest_naming_another_origin_is_refused() {
+        for url in ["https://elsewhere.test/steal", "//elsewhere.test/steal"] {
+            let manifest = json!({"zipUrls": {"9001": {"url": url}}});
+            assert!(
+                matches!(
+                    parse_download_manifest(&manifest, DraftId(9001)),
+                    Err(DownloadManifestError::OffOrigin(_))
+                ),
+                "an absolute url would bypass the gateway allow-list entirely: {url}"
+            );
+        }
     }
 }
