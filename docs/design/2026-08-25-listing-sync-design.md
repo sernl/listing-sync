@@ -1,5 +1,8 @@
 # Listing-sync design specification
 
+The wedge reorientation recorded in [`decisions.md`](decisions.md) at lines 112 to 120 supersedes this document's GB-to-US wording, which is left in place rather than corrected because the arguments below are woven through it and hold unchanged: the duplication target inventory is `TesNz` throughout and the target markets are English (UK) and New Zealand.
+That decision rests on M-1's finding that market targeting is a Curriculum field value on one account rather than a separate inventory, which leaves the US inventory's role an open question rather than the settled premise the body argues from.
+
 ## Purpose and scope
 
 This document is the design specification for a commercial SaaS that bulk-uploads and cross-lists digital teaching resources for teacher-authors, schools and agencies.

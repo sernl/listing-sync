@@ -2,7 +2,7 @@
 
 This plan supersedes all three earlier versions: the build order in the round-one feasibility report, the revised order in the round-two addendum, and the server-side revision that followed the founder's architecture correction.
 It differs from all three because the wedge changed.
-The first chargeable product is Tes GB-to-US inventory duplication, which is a bulk-tool job inside one marketplace, so the cross-marketplace layer moves out of the first shippable milestone and the TPT connector moves behind three others.
+The first chargeable product is Tes GB-to-NZ inventory duplication, which is a bulk-tool job inside one marketplace, so the cross-marketplace layer moves out of the first shippable milestone and the TPT connector moves behind three others.
 
 Sizes are founder-weeks: one person, full time, excluding legal review and customer discovery, which run in parallel.
 Each milestone states what it proves and carries a kill gate written as an observable finding rather than as a feeling about progress.
@@ -93,10 +93,10 @@ The correctness discipline the entire product rests on is then unimplementable a
 
 ## M1, the first chargeable milestone
 
-Tes GB-to-US inventory duplication, 8 to 11 founder-weeks.
+Tes GB-to-NZ inventory duplication, 8 to 11 founder-weeks.
 
 The size is a judgement rather than a carried figure and the arithmetic is worth showing.
-The server-side plan priced catalogue plus bulk create on Tes at six to eight weeks once the server owns custody, isolation and correctness, and priced the GB-to-US duplication feature at three to four weeks on top.
+The server-side plan priced catalogue plus bulk create on Tes at six to eight weeks once the server owns custody, isolation and correctness, and priced the GB-to-NZ duplication feature at three to four weeks on top.
 Combining them saves one to two weeks of overlap, because the catalogue is only ever built once and the mapping engine is built once, which gives eight to eleven.
 It is larger than the addendum's five to seven for the same feature because that estimate assumed a browser extension running on the seller's machine and no credential custody at all, and the founder's architecture reinstates both.
 

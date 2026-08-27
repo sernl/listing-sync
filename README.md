@@ -3,9 +3,11 @@
 Server-side bulk upload and cross-listing for teacher-authors who sell digital
 teaching resources on marketplaces that offer no bulk create and no write API.
 
-Status: design complete, pre-implementation. The first chargeable product is
-Tes GB-to-US inventory duplication. See [`docs/design/`](docs/design/) for the
-full specification, the engineering charter, and the milestone plan.
+Status: M1 implementation is landed through the end-to-end gauntlet, and the
+M1j close is in progress.
+The first chargeable product is Tes GB-to-NZ inventory duplication.
+See [`docs/design/`](docs/design/) for the full specification, the engineering
+charter, and the milestone plan.
 
 ## Layout
 
