@@ -46,7 +46,7 @@ pub fn classify_transport(error: TransportError) -> AdapterError {
 pub fn classify_write(response: &HttpResponse, expected_id: i64) -> Result<Value, AdapterError> {
     match response.status {
         200 | 201 => {
-            if let Ok(value) = serde_json::from_str::<Value>(&response.body) {
+            if let Ok(value) = serde_json::from_slice::<Value>(&response.body) {
                 if value.get("id").and_then(Value::as_i64) == Some(expected_id) {
                     return Ok(value);
                 }
@@ -58,7 +58,7 @@ pub fn classify_write(response: &HttpResponse, expected_id: i64) -> Result<Value
         408 => Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut)),
         400 | 404 | 422 => Err(AdapterError::Rejected {
             code: FailureCode::UploadRejected,
-            detail: detail(response.status, &response.body),
+            detail: detail(response.status, &response.text()),
         }),
         // 401, 403 and 429 land here deliberately: the write may have
         // landed before the refusal, so they are ambiguous like any other
@@ -73,7 +73,7 @@ pub fn classify_write(response: &HttpResponse, expected_id: i64) -> Result<Value
 /// shape; the id assertion lives with the caller where one exists.
 pub fn classify_write_json(response: &HttpResponse) -> Result<Value, AdapterError> {
     classify_write_status(response)?;
-    serde_json::from_str::<Value>(&response.body)
+    serde_json::from_slice::<Value>(&response.body)
         .map_err(|_| AdapterError::Ambiguous(AmbiguityCause::ReadBackIndeterminate))
 }
 
@@ -86,7 +86,7 @@ pub fn classify_write_status(response: &HttpResponse) -> Result<(), AdapterError
         408 => Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut)),
         400 | 404 | 422 => Err(AdapterError::Rejected {
             code: FailureCode::UploadRejected,
-            detail: detail(response.status, &response.body),
+            detail: detail(response.status, &response.text()),
         }),
         // 401, 403 and 429 land here deliberately: the write may have landed
         // before the refusal.
@@ -113,19 +113,20 @@ pub fn classify_create(response: &HttpResponse) -> Result<DraftId, AdapterError>
 pub fn classify_read(response: &HttpResponse) -> Result<Value, AdapterError> {
     match response.status {
         200 => {
-            if looks_like_signin(&response.body) {
+            let text = response.text();
+            if looks_like_signin(&text) {
                 return Err(AdapterError::SessionExpired);
             }
-            serde_json::from_str::<Value>(&response.body).map_err(|_| AdapterError::Rejected {
+            serde_json::from_slice::<Value>(&response.body).map_err(|_| AdapterError::Rejected {
                 code: FailureCode::VerificationMismatch,
-                detail: detail(response.status, &response.body),
+                detail: detail(response.status, &text),
             })
         }
         401 | 403 => Err(AdapterError::SessionExpired),
         429 => Err(AdapterError::RateLimited { retry_after: None }),
         404 => Err(AdapterError::Rejected {
             code: FailureCode::PreconditionElementAbsent,
-            detail: detail(response.status, &response.body),
+            detail: detail(response.status, &response.text()),
         }),
         _ => Err(AdapterError::Ambiguous(
             AmbiguityCause::ReadBackIndeterminate,
@@ -145,7 +146,7 @@ mod tests {
     fn response(status: u16, body: &str) -> HttpResponse {
         HttpResponse {
             status,
-            body: body.to_owned(),
+            body: body.as_bytes().to_vec(),
         }
     }
 

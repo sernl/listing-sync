@@ -57,7 +57,7 @@ fn adapter_for(resource: i64) -> TesAdapter<CassetteTransport, NoImportFiles> {
             },
             response: HttpResponse {
                 status: 200,
-                body: draft_body(resource),
+                body: draft_body(resource).into_bytes(),
             },
         }],
     };

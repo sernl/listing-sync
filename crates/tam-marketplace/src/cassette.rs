@@ -95,7 +95,7 @@ mod tests {
     fn ok(body: &str) -> HttpResponse {
         HttpResponse {
             status: 200,
-            body: body.to_owned(),
+            body: body.as_bytes().to_vec(),
         }
     }
 
@@ -120,11 +120,11 @@ mod tests {
         assert_eq!(transport.remaining(), 2, "nothing replayed yet");
         let first = futures::executor::block_on(transport.send(get("https://example.test/a")))
             .expect("the first recorded interaction replays");
-        assert_eq!(first.body, "a", "the recorded response comes back");
+        assert_eq!(first.text(), "a", "the recorded response comes back");
         assert_eq!(transport.remaining(), 1, "one interaction consumed");
         let second = futures::executor::block_on(transport.send(get("https://example.test/b")))
             .expect("the second recorded interaction replays");
-        assert_eq!(second.body, "b", "order is preserved");
+        assert_eq!(second.text(), "b", "order is preserved");
         assert_eq!(transport.remaining(), 0, "the cassette is exhausted");
     }
 
@@ -166,5 +166,40 @@ mod tests {
         let encoded = serde_json::to_string(&cassette).expect("a cassette serialises");
         let back: Cassette = serde_json::from_str(&encoded).expect("a cassette deserialises");
         assert_eq!(back, cassette, "the fixture format survives a round trip");
+    }
+
+    #[test]
+    fn a_utf8_body_still_records_as_a_json_string() {
+        let response = ok(r#"{"id":42}"#);
+        let encoded = serde_json::to_string(&response).expect("a response serialises");
+        assert_eq!(
+            encoded, r#"{"status":200,"body":"{\"id\":42}"}"#,
+            "a text body keeps the representation every committed fixture was written in"
+        );
+    }
+
+    #[test]
+    fn a_binary_body_survives_the_fixture_round_trip_byte_for_byte() {
+        let zip: Vec<u8> = b"PK\x03\x04\x14\x00\x08\x00\x08\x00"
+            .iter()
+            .copied()
+            .chain((0u8..=255).cycle().take(512))
+            .collect();
+        let response = HttpResponse {
+            status: 200,
+            body: zip.clone(),
+        };
+        let encoded = serde_json::to_string(&response).expect("a binary response serialises");
+        let back: HttpResponse =
+            serde_json::from_str(&encoded).expect("a binary response deserialises");
+        assert_eq!(
+            back.body, zip,
+            "a download bundle must round trip byte for byte; a lossy body would corrupt it"
+        );
+        assert_eq!(
+            &back.body[..4],
+            b"PK\x03\x04",
+            "the zip magic survives, which is what the import depends on"
+        );
     }
 }

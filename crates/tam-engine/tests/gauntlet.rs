@@ -137,7 +137,10 @@ impl FakeTes {
     async fn answer(&self, request: &HttpRequest) -> HttpResponse {
         let mut state = self.state.lock().await;
         let url = request.url.as_str();
-        let ok = |body: String| HttpResponse { status: 200, body };
+        let ok = |body: String| HttpResponse {
+            status: 200,
+            body: body.into_bytes(),
+        };
 
         if url.ends_with("/api/v2/resources") && request.method == Method::Post {
             state.creates_seen += 1;
@@ -145,7 +148,9 @@ impl FakeTes {
                 if state.creates_seen > after {
                     return HttpResponse {
                         status: 400,
-                        body: json!({"error": "upload refused by the fake"}).to_string(),
+                        body: json!({"error": "upload refused by the fake"})
+                            .to_string()
+                            .into_bytes(),
                     };
                 }
             }
@@ -161,7 +166,7 @@ impl FakeTes {
                     return state.drafts.get(&id).map_or(
                         HttpResponse {
                             status: 404,
-                            body: String::new(),
+                            body: Vec::new(),
                         },
                         |draft| ok(draft.to_string()),
                     );
@@ -215,7 +220,7 @@ impl FakeTes {
             return state.drafts.get(&id).map_or(
                 HttpResponse {
                     status: 404,
-                    body: String::new(),
+                    body: Vec::new(),
                 },
                 |draft| ok(draft.to_string()),
             );
@@ -223,7 +228,7 @@ impl FakeTes {
         if url.starts_with("https://fake-bucket.s3.amazonaws.com/") {
             return HttpResponse {
                 status: 204,
-                body: String::new(),
+                body: Vec::new(),
             };
         }
         if url.ends_with("/publish") {
@@ -235,7 +240,7 @@ impl FakeTes {
             state.drafts.remove(&id);
             return HttpResponse {
                 status: 204,
-                body: String::new(),
+                body: Vec::new(),
             };
         }
         HttpResponse {
@@ -243,7 +248,8 @@ impl FakeTes {
             body: format!(
                 "the fake has no route for {} {url}",
                 method_name(request.method)
-            ),
+            )
+            .into_bytes(),
         }
     }
 }

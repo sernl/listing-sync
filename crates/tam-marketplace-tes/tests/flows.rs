@@ -48,14 +48,14 @@ fn adapter(
 fn ok(body: &Value) -> HttpResponse {
     HttpResponse {
         status: 200,
-        body: body.to_string(),
+        body: body.to_string().into_bytes(),
     }
 }
 
 fn status(code: u16) -> HttpResponse {
     HttpResponse {
         status: code,
-        body: String::new(),
+        body: Vec::new(),
     }
 }
 

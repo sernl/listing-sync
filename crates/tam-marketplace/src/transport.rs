@@ -46,10 +46,75 @@ pub struct HttpRequest {
     pub body: RequestBody,
 }
 
+/// A response body is bytes, never a string. `reqwest::Response::text()`
+/// decodes lossily rather than failing, so carrying a body as `String` turns
+/// every non-UTF-8 byte into U+FFFD in silence — measured on a real download
+/// bundle, a 4364-byte ZIP came back 7810 bytes and unreadable. Text is a
+/// view onto the bytes, taken by [`HttpResponse::text`] where a classifier
+/// wants one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpResponse {
     pub status: u16,
-    pub body: String,
+    #[serde(with = "body_bytes")]
+    pub body: Vec<u8>,
+}
+
+impl HttpResponse {
+    /// The body decoded as UTF-8 for classification and diagnostics, lossily
+    /// and deliberately: a body that does not decode is binary, and binary is
+    /// read through `body` itself.
+    #[must_use]
+    pub fn text(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.body)
+    }
+}
+
+/// Keeps a recorded body legible: a UTF-8 body serialises as a JSON string,
+/// exactly as it did when bodies were `String`, so every committed cassette
+/// fixture stays byte-identical. Anything else falls back to an array of
+/// bytes, which is faithful where a string would not be.
+mod body_bytes {
+    use serde::de::{SeqAccess, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        match core::str::from_utf8(bytes) {
+            Ok(text) => serializer.serialize_str(text),
+            Err(_) => serializer.collect_seq(bytes),
+        }
+    }
+
+    struct BodyVisitor;
+
+    impl<'de> Visitor<'de> for BodyVisitor {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter.write_str("a response body as a UTF-8 string or an array of bytes")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(value.as_bytes().to_vec())
+        }
+
+        fn visit_bytes<E: serde::de::Error>(self, value: &[u8]) -> Result<Self::Value, E> {
+            Ok(value.to_vec())
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut bytes = Vec::new();
+            while let Some(byte) = seq.next_element::<u8>()? {
+                bytes.push(byte);
+            }
+            Ok(bytes)
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<u8>, D::Error> {
+        deserializer.deserialize_any(BodyVisitor)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

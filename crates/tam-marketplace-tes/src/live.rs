@@ -124,13 +124,18 @@ async fn send_over(
             .await
             .map_err(|error| classify_reqwest(&error))?;
         let status = response.status().as_u16();
+        // `.bytes()` not `.text()`: text decodes lossily and would silently
+        // corrupt every download bundle.
         let body = response
-            .text()
+            .bytes()
             .await
             .map_err(|error| TransportError::AfterSend {
                 detail: error.to_string(),
             })?;
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body: body.to_vec(),
+        })
     }
 }
 
