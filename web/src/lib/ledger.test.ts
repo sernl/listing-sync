@@ -54,6 +54,19 @@ describe('the ledger store', () => {
 		expect(state().events).toEqual([]);
 	});
 
+	it('subscribes to every generated kind, the drain report included', () => {
+		const { stream, state } = harness();
+		stream.fire(
+			'ImportDrainMeasured',
+			'1',
+			'{"source":"TesGb","target":"TesNz","rows":1,"terms_seen":3,' +
+				'"terms_unmapped":1,"terms_covered":1,"items_new":1,"items_already_open":0}'
+		);
+		expect(state().events).toHaveLength(1);
+		expect(state().events[0].kind).toBe('ImportDrainMeasured');
+		expect((state().events[0].payload as { items_new: number }).items_new).toBe(1);
+	});
+
 	it('closes its stream when closed', () => {
 		const { stream, ledger } = harness();
 		ledger.close();

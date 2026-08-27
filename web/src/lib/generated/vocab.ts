@@ -81,7 +81,8 @@ export type JobEventKind =
   | "ItemResumed"
   | "ItemSettled"
   | "JobSettled"
-  | "JobHalted";
+  | "JobHalted"
+  | "ImportDrainMeasured";
 
 export const JOB_EVENT_KINDS: readonly JobEventKind[] = [
   "JobQueued",
@@ -96,4 +97,5 @@ export const JOB_EVENT_KINDS: readonly JobEventKind[] = [
   "ItemSettled",
   "JobSettled",
   "JobHalted",
+  "ImportDrainMeasured",
 ];

@@ -503,12 +503,32 @@ pub enum JobEventPayload {
     JobHalted {
         scope: String,
     },
+    /// One import run's reconciliation-drain measurement, whole rather than
+    /// per row. The kill gate's share is `items_new` over the canonical terms
+    /// the run projected, which is `terms_covered + items_new +
+    /// items_already_open`; a term already carrying an open item is in that
+    /// denominator because it was still a term this run had to translate.
+    /// `terms_unmapped` is the falsifier: a native id with no inbound edge
+    /// never becomes a canonical term, so it leaves the share untouched, and
+    /// a share that falls while this rises is an ingest gap rather than a
+    /// converging crosswalk. Both inventories travel in the body because the
+    /// stream carries the payload without its job row.
+    ImportDrainMeasured {
+        source: InventoryId,
+        target: InventoryId,
+        rows: u32,
+        terms_seen: u32,
+        terms_unmapped: u32,
+        terms_covered: u32,
+        items_new: u32,
+        items_already_open: u32,
+    },
 }
 
 impl JobEventPayload {
     /// Every kind name, in a stable order, for the vocabulary generator and
     /// the client's stream subscriptions.
-    pub const ALL_KINDS: [&'static str; 12] = [
+    pub const ALL_KINDS: [&'static str; 13] = [
         "JobQueued",
         "JobStarted",
         "ItemQueued",
@@ -521,6 +541,7 @@ impl JobEventPayload {
         "ItemSettled",
         "JobSettled",
         "JobHalted",
+        "ImportDrainMeasured",
     ];
 
     /// The serde tag, which is the `job_event.kind` column value. Total, so
@@ -540,6 +561,7 @@ impl JobEventPayload {
             Self::ItemSettled { .. } => "ItemSettled",
             Self::JobSettled { .. } => "JobSettled",
             Self::JobHalted { .. } => "JobHalted",
+            Self::ImportDrainMeasured { .. } => "ImportDrainMeasured",
         }
     }
 }
@@ -591,7 +613,7 @@ mod tests {
         );
     }
 
-    /// The twelve serde tags and the twelve kind strings are one set; the
+    /// The thirteen serde tags and the thirteen kind strings are one set; the
     /// wildcard-free construction plus this agreement loop is the tripwire.
     #[test]
     fn every_job_event_tag_is_its_kind_string() {
@@ -629,8 +651,18 @@ mod tests {
             super::JobEventPayload::JobHalted {
                 scope: "org_inventory".to_owned(),
             },
+            super::JobEventPayload::ImportDrainMeasured {
+                source: super::InventoryId::TesGb,
+                target: super::InventoryId::TesNz,
+                rows: 1,
+                terms_seen: 3,
+                terms_unmapped: 1,
+                terms_covered: 1,
+                items_new: 1,
+                items_already_open: 0,
+            },
         ];
-        assert_eq!(samples.len(), 12, "one sample per JobEventKind");
+        assert_eq!(samples.len(), 13, "one sample per JobEventKind");
         for payload in samples {
             let encoded = serde_json::to_value(&payload).expect("a payload serialises");
             let tag = encoded
