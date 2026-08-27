@@ -10,10 +10,12 @@
 //! Every constant admitted to the resource-bound set carries a provenance
 //! marker in its doc comment, a factual claim about where the number came
 //! from; the three per-tier rates are covered by the marker on `Tier::quota`.
-//! `MEASURED` cites an observation recorded during the spike, named in the
-//! comment. No constant carries this marker yet, because the spike has not run.
+//! `MEASURED` cites a recorded observation, named in the comment.
 //! `SIZED` means derived by arithmetic from a quantity that is known
-//! independently of the spike, such as the box's RAM or a protocol limit.
+//! independently of measurement, such as the box's RAM or a protocol limit.
+//! `DECIDED` is a deliberate operating point citing a dated `decisions.md`
+//! entry and naming the trigger that re-opens it; neither a guess nor a
+//! measurement.
 //! `UNCALIBRATED` is a guess, and is a release blocker for the first paying
 //! deployment rather than a wish. The test below pins how many of them exist,
 //! so lowering the budget is a deliberate edit and raising it cannot pass
@@ -60,9 +62,10 @@ impl Tier {
     /// is denied workspace-wide, so that match cannot be silenced with `_`.
     pub const ALL: [Self; 3] = [Self::Free, Self::Pro, Self::Studio];
 
-    /// UNCALIBRATED. Rates are placeholders chosen so the free tier cannot
-    /// saturate one box at the concurrency below; listing and storage ceilings
-    /// are placeholders until pricing is set. Nothing here is measured.
+    /// DECIDED (decisions.md, "Limits calibration, 2026-08-28"): placeholder
+    /// admission bounds for tiers not sold in M1, the free rate unable to
+    /// saturate one box at the concurrency below; re-priced with M5's billing
+    /// work, which owns tiers and pricing.
     #[must_use]
     pub const fn quota(self) -> TierQuota {
         match self {
@@ -96,8 +99,9 @@ pub mod http {
     /// Revisit once the spike records real listing-metadata payload sizes.
     pub const REQUEST_BODY_BYTES_MAX: u64 = 2 * 1024 * 1024;
 
-    /// UNCALIBRATED. No file-size census of any connected marketplace's
-    /// resources has been taken. The spike's recording obligation covers it.
+    /// MEASURED against the Tes per-file ceiling recorded in the M-1 outcomes
+    /// (decisions.md): supported files up to 200 MB. 256 MB admits the largest
+    /// Tes-legal file with multipart headroom.
     pub const UPLOAD_BODY_BYTES_MAX: u64 = 256 * 1024 * 1024;
 }
 
@@ -107,18 +111,20 @@ pub mod ingest {
     /// a zip-bomb defence; bounding decompressed output is.
     pub const ARCHIVE_UNCOMPRESSED_BYTES_MAX: u64 = 1024 * 1024 * 1024;
 
-    /// UNCALIBRATED. Uncompressed divided by compressed, checked incrementally
-    /// rather than after the fact. The number must be set from the ratio
-    /// distribution of real seller bundles, which has not been sampled; set
-    /// deliberately loose so a false rejection is unlikely before it is.
+    /// DECIDED (decisions.md, "Limits calibration, 2026-08-28"): uncompressed
+    /// divided by compressed, checked incrementally rather than after the fact.
+    /// Deliberately loose so a false rejection is unlikely before the ratio
+    /// distribution of real seller bundles is sampled; the customer-zero import
+    /// is the first sample and re-opens this number.
     pub const ARCHIVE_COMPRESSION_RATIO_MAX: u64 = 200;
 }
 
 pub mod job {
     use std::time::Duration;
 
-    /// UNCALIBRATED: retry count is only meaningful once the fault taxonomy
-    /// from the spike says which faults are worth retrying at all.
+    /// SIZED against `WALL_CLOCK_MAX` at the backoff base: the deadline
+    /// outlives the full retry budget, pinned by the wall-clock test below.
+    /// Which faults are worth retrying at all is M0's tested fault taxonomy.
     pub const ATTEMPTS_MAX: u32 = 5;
 
     /// SIZED against support response time, not against publish duration: a
@@ -128,10 +134,10 @@ pub mod job {
     /// rather than derived from it.
     pub const WALL_CLOCK_MAX: Duration = Duration::from_mins(30);
 
-    /// UNCALIBRATED: bounded by how many ingestion subprocesses and browser
-    /// sessions fit in the box's RAM alongside the connection pool, which has
-    /// not been measured. Automation runs here, on our own infrastructure, so
-    /// it is inside this bound rather than outside it. Deliberately low.
+    /// DECIDED (decisions.md, "Limits calibration, 2026-08-28"): held at the
+    /// serialised end until the per-job RAM footprint alongside the connection
+    /// pool is measured, which re-opens it. Automation runs here, on our own
+    /// infrastructure, so it is inside this bound rather than outside it.
     pub const CONCURRENT_JOBS_GLOBAL_MAX: u32 = 8;
 }
 
@@ -160,19 +166,6 @@ pub mod ledger {
     pub const PRUNE_BATCH: i64 = 10_000;
 }
 
-pub mod browser {
-    use std::num::NonZeroU32;
-
-    /// UNCALIBRATED. The count of browser sessions spawned at startup and never
-    /// spawned on demand. One process drives every seller's authenticated
-    /// session, so an unbounded pool is a cross-tenant memory incident rather
-    /// than one tenant's slow job. The hardware ceiling is roughly thirty
-    /// concurrent sessions on the current box; the operating point is set by
-    /// marketplace pacing, which is an order of magnitude lower and unmeasured,
-    /// so this starts at the serialised end and moves only on evidence.
-    pub const SESSIONS_MAX: NonZeroU32 = NonZeroU32::new(2).unwrap();
-}
-
 pub mod llm {
     /// SIZED as a loss ceiling rather than from a token price: this is the
     /// per-tenant daily spend the business is willing to lose to a runaway
@@ -185,10 +178,11 @@ pub mod llm {
 pub mod marketplace {
     use std::num::NonZeroU32;
 
-    /// UNCALIBRATED, and the only constant here with a legal rather than an
-    /// operational justification. Tes publishes no throttle and none has been
-    /// observed; where one is published, as on Etsy, the lower figure binds.
-    /// Raising it requires the written-terms answer in the charter's section 1.
+    /// DECIDED (decisions.md, "Limits calibration, 2026-08-28"), the only
+    /// constant here with a legal rather than an operational justification.
+    /// Tes publishes no throttle and none has been observed; where one is
+    /// published, as on Etsy, the lower figure binds. Raising it requires the
+    /// written-terms answer in the charter's section 1.
     pub const OUTBOUND_REQUESTS_PER_MINUTE_MAX: NonZeroU32 = NonZeroU32::new(30).unwrap();
 }
 
@@ -212,10 +206,6 @@ const _: () = {
     assert!(
         usize::BITS >= 64,
         "byte bounds are u64 and are converted to usize at the axum boundary"
-    );
-    assert!(
-        browser::SESSIONS_MAX.get() <= job::CONCURRENT_JOBS_GLOBAL_MAX,
-        "a pre-spawned session with no job that can reach it is memory held for nothing"
     );
 };
 
@@ -243,7 +233,7 @@ mod tests {
 
     /// Counts doc-comment markers only, so prose and assertion messages that
     /// mention the marker do not inflate it.
-    const UNCALIBRATED_BUDGET: usize = 7;
+    const UNCALIBRATED_BUDGET: usize = 0;
 
     #[test]
     fn all_is_total_over_the_enum() {
