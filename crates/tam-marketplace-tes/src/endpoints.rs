@@ -304,9 +304,93 @@ pub fn delete_draft_request(id: DraftId) -> HttpRequest {
     }
 }
 
+/// How many rows one dashboard page asks for. The API paginates on `page`
+/// and `limit` and answers an out-of-range page with an empty array.
+pub const CATALOGUE_PAGE_LIMIT: u32 = 50;
+
+/// One row of the seller's own catalogue as the dashboard list returns it.
+/// `price_pence` is the API's own unit, carried without conversion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogueEntry {
+    pub id: i64,
+    pub title: String,
+    pub published: bool,
+    pub licence: Option<String>,
+    pub price_pence: Option<i64>,
+}
+
+#[must_use]
+pub fn list_resources_request(page: u32, limit: u32) -> HttpRequest {
+    HttpRequest {
+        method: Method::Get,
+        url: format!("{ORIGIN}/api/v2/dashboard/getAllResources?page={page}&limit={limit}"),
+        body: RequestBody::Empty,
+    }
+}
+
+#[must_use]
+pub fn list_drafts_request(page: u32, limit: u32) -> HttpRequest {
+    HttpRequest {
+        method: Method::Get,
+        url: format!("{ORIGIN}/api/v2/dashboard/getAllDrafts?page={page}&limit={limit}"),
+        body: RequestBody::Empty,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CataloguePageError(pub String);
+
+impl core::fmt::Display for CataloguePageError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "catalogue page shape: {}", self.0)
+    }
+}
+
+impl core::error::Error for CataloguePageError {}
+
+/// Parses one dashboard page. `default_published` is what the endpoint the
+/// page came from implies; a row's own `draft` flag overrides it where the
+/// row carries one. A row without a numeric id fails the page rather than
+/// being dropped, so a shape change cannot shorten a catalogue silently.
+pub fn parse_catalogue_page(
+    body: &Value,
+    default_published: bool,
+) -> Result<Vec<CatalogueEntry>, CataloguePageError> {
+    let rows = body
+        .as_array()
+        .ok_or_else(|| CataloguePageError("the page is not a JSON array".to_owned()))?;
+    rows.iter()
+        .map(|row| {
+            let id = row.get("id").and_then(Value::as_i64).ok_or_else(|| {
+                CataloguePageError("a catalogue row carries no numeric id".to_owned())
+            })?;
+            Ok(CatalogueEntry {
+                id,
+                title: row
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                published: row
+                    .get("draft")
+                    .and_then(Value::as_bool)
+                    .map_or(default_published, |draft| !draft),
+                licence: row
+                    .get("licence")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                price_pence: row.get("price").and_then(Value::as_i64),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_presign, DraftId, PresignParseError, TesLicence, TesListing};
+    use super::{
+        parse_catalogue_page, parse_presign, CataloguePageError, DraftId, PresignParseError,
+        TesLicence, TesListing,
+    };
     use base64::Engine;
     use serde_json::json;
 
@@ -414,6 +498,32 @@ mod tests {
                 Err(PresignParseError::Policy(_))
             ),
             "an upload with no destination bucket must fail closed"
+        );
+    }
+
+    #[test]
+    fn a_catalogue_row_without_an_id_fails_the_page() {
+        let page = json!([{"title": "no id here"}]);
+        assert!(
+            matches!(
+                parse_catalogue_page(&page, true),
+                Err(CataloguePageError(_))
+            ),
+            "a row the walk cannot address must fail the page, not vanish from it"
+        );
+    }
+
+    #[test]
+    fn a_rows_own_draft_flag_overrides_the_endpoint_default() {
+        let page = json!([{"id": 1, "draft": true}, {"id": 2}]);
+        let entries = parse_catalogue_page(&page, true).expect("the page parses");
+        assert!(
+            !entries[0].published,
+            "a row declaring itself a draft is not published, whatever list it came from"
+        );
+        assert!(
+            entries[1].published,
+            "a row with no draft flag takes the endpoint's meaning"
         );
     }
 }

@@ -24,7 +24,7 @@ use crate::classify::{
     classify_create, classify_read, classify_transport, classify_write, classify_write_json,
     classify_write_status,
 };
-use crate::endpoints::{self, DraftId, PresignedUpload, TesLicence, TesListing};
+use crate::endpoints::{self, CatalogueEntry, DraftId, PresignedUpload, TesLicence, TesListing};
 use crate::schema;
 
 /// The two Tes inventories share this one adapter type; everything that
@@ -429,7 +429,71 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     }
 }
 
+/// How many pages a catalogue walk will request before it refuses to
+/// continue. The walk ends at the first empty page; this cap only bounds a
+/// walk whose end never arrives.
+pub const CATALOGUE_PAGE_MAX: u32 = 40;
+
 impl<T: Transport, F: FileSource> TesAdapter<T, F> {
+    /// The seller's own catalogue: every published resource, then every
+    /// draft. Gated on the first-party-export capability like
+    /// [`Self::fetch_for_import`], because an enumeration-shaped read is
+    /// exactly the tier-one capability and nothing else justifies one.
+    pub async fn list_own_resources(
+        &self,
+        reason: &FetchReason,
+    ) -> Result<Vec<CatalogueEntry>, AdapterError> {
+        if !matches!(reason, FetchReason::FirstPartyExport { .. }) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(
+                    "a catalogue read is justified only by the first-party-export capability"
+                        .to_owned(),
+                ),
+            });
+        }
+        let mut entries = Vec::new();
+        self.walk_catalogue(endpoints::list_resources_request, true, &mut entries)
+            .await?;
+        self.walk_catalogue(endpoints::list_drafts_request, false, &mut entries)
+            .await?;
+        Ok(entries)
+    }
+
+    async fn walk_catalogue(
+        &self,
+        build: fn(u32, u32) -> tam_marketplace::transport::HttpRequest,
+        published: bool,
+        entries: &mut Vec<CatalogueEntry>,
+    ) -> Result<(), AdapterError> {
+        for page in 0..CATALOGUE_PAGE_MAX {
+            let response = self
+                .send(build(page, endpoints::CATALOGUE_PAGE_LIMIT))
+                .await?;
+            let body = classify_read(&response)?;
+            let rows = endpoints::parse_catalogue_page(&body, published).map_err(|error| {
+                AdapterError::Rejected {
+                    code: FailureCode::VerificationMismatch,
+                    detail: FailureDetail(error.to_string()),
+                }
+            })?;
+            if rows.is_empty() {
+                return Ok(());
+            }
+            entries.extend(rows);
+        }
+        // Reaching the cap means the catalogue never ended, so what was
+        // collected is a truncation; the import must not mistake it for the
+        // whole catalogue.
+        Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(format!(
+                "the catalogue walk hit its {CATALOGUE_PAGE_MAX}-page cap without reaching an \
+                 empty page; the result would be truncated"
+            )),
+        })
+    }
+
     /// The first-party import read: the seller's own listing, verbatim, for
     /// canonicalisation. Refuses any reason but `FirstPartyExport`, because
     /// this is the tier-one capability and nothing else justifies an

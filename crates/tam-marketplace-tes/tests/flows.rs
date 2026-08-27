@@ -8,9 +8,9 @@ use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{FilePart, HttpResponse};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FileSourceError,
-    FormId, ListingLocator, MarketplaceAdapter, RemoteLifecycle, RemoteListingId,
+    FormId, ListingLocator, MarketplaceAdapter, RemoteLifecycle, RemoteListingId, WriteAttemptId,
 };
-use tam_marketplace_tes::endpoints::{self, DraftId, TesLicence, TesListing};
+use tam_marketplace_tes::endpoints::{self, CatalogueEntry, DraftId, TesLicence, TesListing};
 use tam_marketplace_tes::{schema, TesAdapter};
 use tam_types::{FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
 
@@ -475,5 +475,115 @@ fn a_missing_ambiguity_cause_is_not_invented() {
             Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier))
         ),
         "a 2xx create without an id is precisely the no-durable-identifier ambiguity"
+    );
+}
+
+#[test]
+fn the_catalogue_walk_pages_published_then_drafts_and_stops_on_an_empty_page() {
+    let limit = endpoints::CATALOGUE_PAGE_LIMIT;
+    let published_page = json!([
+        {
+            "id": 9001, "title": "Fractions pack", "licence": "TES-PAID",
+            "price": 350, "draft": false, "url": "/teaching-resource/fractions-pack-9001"
+        },
+        {
+            "id": 9002, "title": "Free starter", "licence": "CC-BY",
+            "price": 0, "draft": false, "url": "/teaching-resource/free-starter-9002"
+        },
+    ]);
+    let drafts_page = json!([
+        {
+            "id": 9003, "title": "Half written", "licence": "CC-BY-SA",
+            "price": 0, "draft": true, "url": "/teaching-resource/half-written-9003"
+        },
+    ]);
+    let empty = json!([]);
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::list_resources_request(0, limit),
+                response: ok(&published_page),
+            },
+            Interaction {
+                request: endpoints::list_resources_request(1, limit),
+                response: ok(&empty),
+            },
+            Interaction {
+                request: endpoints::list_drafts_request(0, limit),
+                response: ok(&drafts_page),
+            },
+            Interaction {
+                request: endpoints::list_drafts_request(1, limit),
+                response: ok(&empty),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let entries =
+        futures::executor::block_on(adapter.list_own_resources(&FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        }))
+        .expect("the first-party catalogue read succeeds");
+
+    assert_eq!(
+        entries,
+        vec![
+            CatalogueEntry {
+                id: 9001,
+                title: "Fractions pack".to_owned(),
+                published: true,
+                licence: Some("TES-PAID".to_owned()),
+                price_pence: Some(350),
+            },
+            CatalogueEntry {
+                id: 9002,
+                title: "Free starter".to_owned(),
+                published: true,
+                licence: Some("CC-BY".to_owned()),
+                price_pence: Some(0),
+            },
+            CatalogueEntry {
+                id: 9003,
+                title: "Half written".to_owned(),
+                published: false,
+                licence: Some("CC-BY-SA".to_owned()),
+                price_pence: Some(0),
+            },
+        ],
+        "both lists arrive in order, each row carrying the price in pence and its own draft state"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the walk stopped at the empty page of each list, and nowhere earlier"
+    );
+}
+
+#[test]
+fn a_catalogue_read_without_the_export_capability_is_refused() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let refused =
+        futures::executor::block_on(adapter.list_own_resources(&FetchReason::VerifyAttempt {
+            attempt: WriteAttemptId(Uuid([3; 16])),
+        }));
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                ..
+            })
+        ),
+        "an enumeration read needs the tier-one capability, not any reason at all"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the refusal happens before the first request, so nothing was sent"
     );
 }

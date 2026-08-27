@@ -17,7 +17,7 @@ pub mod live;
 pub mod schema;
 pub mod session;
 
-pub use endpoints::DraftId;
+pub use endpoints::{CatalogueEntry, DraftId};
 pub use flows::{NotATesInventory, TesAdapter};
 pub use live::{GatewayTransport, ReqwestTransport};
 pub use session::{SessionError, TesSession};
