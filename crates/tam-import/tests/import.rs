@@ -15,10 +15,11 @@ use tam_import::{
 };
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{HttpRequest, HttpResponse, Method, RequestBody};
-use tam_marketplace_tes::TesAdapter;
+use tam_marketplace::FetchReason;
+use tam_marketplace_tes::{endpoints as tes, DraftId, TesAdapter};
 use tam_secrets::Kek;
 use tam_storage::{JobReadRepo, ProductRepo, TaxonomyRepo};
-use tam_types::{CanonicalTermId, InventoryId, OrgId, PriceIntent, Timestamp, Uuid};
+use tam_types::{CanonicalTermId, FileKind, InventoryId, OrgId, PriceIntent, Timestamp, Uuid};
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
@@ -383,5 +384,294 @@ async fn the_drain_report_lands_as_a_job_event_the_client_can_read(pool: PgPool)
             "items_already_open": 0,
         }),
         "an empty NZ crosswalk raises every canonical term: the gate's first-run share is 2 of 2"
+    );
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A stored (uncompressed) ZIP assembled by hand, so this test needs no
+/// archive dependency of its own. The pipeline reads it with the real
+/// reader, so these bytes have to be a genuine archive.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn zip_of(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let small = "the fixture archive is small";
+    let mut out: Vec<u8> = Vec::new();
+    let mut directory: Vec<u8> = Vec::new();
+    for (name, bytes) in entries {
+        let offset = u32::try_from(out.len()).expect(small);
+        let len = u32::try_from(bytes.len()).expect(small);
+        let name_len = u16::try_from(name.len()).expect(small);
+        let crc = crc32(bytes);
+
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&10u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&name_len.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(bytes);
+
+        directory.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        directory.extend_from_slice(&20u16.to_le_bytes());
+        directory.extend_from_slice(&10u16.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&crc.to_le_bytes());
+        directory.extend_from_slice(&len.to_le_bytes());
+        directory.extend_from_slice(&len.to_le_bytes());
+        directory.extend_from_slice(&name_len.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes());
+        directory.extend_from_slice(&0u32.to_le_bytes());
+        directory.extend_from_slice(&offset.to_le_bytes());
+        directory.extend_from_slice(name.as_bytes());
+    }
+    let directory_offset = u32::try_from(out.len()).expect(small);
+    let directory_len = u32::try_from(directory.len()).expect(small);
+    let count = u16::try_from(entries.len()).expect(small);
+    out.extend_from_slice(&directory);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&directory_len.to_le_bytes());
+    out.extend_from_slice(&directory_offset.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+fn json_ok(value: &serde_json::Value) -> HttpResponse {
+    HttpResponse {
+        status: 200,
+        body: value.to_string().into_bytes(),
+    }
+}
+
+/// The hops discover makes, in order: the catalogue walk, then the two-step
+/// download, then the metadata read `import_one` does for itself.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn discover_adapter(
+    resource: i64,
+    bundle: Vec<u8>,
+) -> TesAdapter<CassetteTransport, NoImportFiles> {
+    let limit = tes::CATALOGUE_PAGE_LIMIT;
+    let path = format!("/teaching-resource/download/{resource}/bundle");
+    let mut zip_urls = serde_json::Map::new();
+    zip_urls.insert(
+        resource.to_string(),
+        serde_json::json!({ "url": path, "title": "Fractions practice" }),
+    );
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: tes::list_resources_request(0, limit),
+                response: json_ok(&serde_json::json!([{
+                    "id": resource,
+                    "title": "Fractions practice",
+                    "licence": "CC-BY",
+                    "price": 0,
+                    "draft": false
+                }])),
+            },
+            Interaction {
+                request: tes::list_resources_request(1, limit),
+                response: json_ok(&serde_json::json!([])),
+            },
+            Interaction {
+                request: tes::list_drafts_request(0, limit),
+                response: json_ok(&serde_json::json!([])),
+            },
+            Interaction {
+                request: tes::download_manifest_request(DraftId(resource)),
+                response: json_ok(&serde_json::json!({ "zipUrls": zip_urls })),
+            },
+            Interaction {
+                request: tes::download_bundle_request(&path),
+                response: HttpResponse {
+                    status: 200,
+                    body: bundle,
+                },
+            },
+            Interaction {
+                request: HttpRequest {
+                    method: Method::Get,
+                    url: format!("https://www.tes.com/api/v2/resources/{resource}/draft"),
+                    body: RequestBody::Empty,
+                },
+                response: HttpResponse {
+                    status: 200,
+                    body: draft_body(resource).into_bytes(),
+                },
+            },
+        ],
+    };
+    TesAdapter::new(
+        InventoryId::TesGb,
+        CassetteTransport::new(cassette),
+        NoImportFiles,
+    )
+    .expect("TesGb is a Tes inventory")
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn discover_lists_downloads_and_imports_with_no_file_on_disk(pool: PgPool) {
+    seed(&pool, true).await;
+    let adapter = discover_adapter(13_549_794, zip_of(&[("worksheet.pdf", pdf())]));
+    let run = run_for(pool.clone(), &adapter, store_root("discover"));
+    let reason = FetchReason::FirstPartyExport {
+        inventory: InventoryId::TesGb,
+    };
+
+    let catalogue = adapter
+        .list_own_resources(&reason)
+        .await
+        .expect("the catalogue lists");
+    let published: Vec<_> = catalogue
+        .into_iter()
+        .filter(|entry| entry.published)
+        .collect();
+    assert_eq!(
+        published.len(),
+        1,
+        "one published resource walked out of the catalogue"
+    );
+
+    let bundle = adapter
+        .download_resource_bundle(&reason, DraftId(published[0].id))
+        .await
+        .expect("the published bundle downloads");
+    let entry = ImportEntry {
+        resource: published[0].id,
+        files: vec![NamedBytes {
+            name: format!("{}-bundle.zip", published[0].id),
+            bytes: bundle,
+        }],
+    };
+    let report = import_one(&run, &entry)
+        .await
+        .expect("the downloaded bundle imports");
+    let mut totals = DrainTotals::default();
+    totals.absorb(&report);
+    let job = record_drain_report(&run, totals)
+        .await
+        .expect("the drain report records");
+
+    let record = ProductRepo::new(pool.clone())
+        .get(ORG, report.product)
+        .await
+        .expect("the product reads back")
+        .expect("the product exists");
+    let kinds: Vec<FileKind> = record
+        .product
+        .payload
+        .iter()
+        .map(|file| file.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![FileKind::Pdf],
+        "the pipeline extracted the bundle: the payload is the pdf from inside it, not the zip"
+    );
+    assert_eq!(
+        record.product.title.0, "Fractions practice",
+        "the metadata read still supplies the listing copy"
+    );
+    assert!(
+        record.product.cover.is_some(),
+        "the cover generated from the extracted file"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "list, download and metadata read: exactly the recorded hops and no more"
+    );
+
+    let snapshot = JobReadRepo::new(pool)
+        .snapshot(ORG, job)
+        .await
+        .expect("the job reads")
+        .expect("the drain job exists");
+    assert_eq!(
+        snapshot.inventory,
+        InventoryId::TesGb,
+        "the drain job carries the inventory the run read"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_bundle_wrapping_an_inner_zip_keeps_it_as_one_archive_payload(pool: PgPool) {
+    seed(&pool, true).await;
+    let inner = zip_of(&[("slides.pdf", pdf())]);
+    let bundle = zip_of(&[("worksheet.pdf", pdf()), ("extras.zip", inner)]);
+    let adapter = discover_adapter(13_549_794, bundle);
+    let run = run_for(pool.clone(), &adapter, store_root("discover-nested"));
+    let reason = FetchReason::FirstPartyExport {
+        inventory: InventoryId::TesGb,
+    };
+
+    let catalogue = adapter
+        .list_own_resources(&reason)
+        .await
+        .expect("the catalogue lists");
+    let downloaded = adapter
+        .download_resource_bundle(&reason, DraftId(catalogue[0].id))
+        .await
+        .expect("the bundle downloads");
+    let entry = ImportEntry {
+        resource: catalogue[0].id,
+        files: vec![NamedBytes {
+            name: "13549794-bundle.zip".to_owned(),
+            bytes: downloaded,
+        }],
+    };
+    let report = import_one(&run, &entry)
+        .await
+        .expect("the nested bundle imports");
+
+    let record = ProductRepo::new(pool)
+        .get(ORG, report.product)
+        .await
+        .expect("the product reads back")
+        .expect("the product exists");
+    let kinds: Vec<FileKind> = record
+        .product
+        .payload
+        .iter()
+        .map(|file| file.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![FileKind::Pdf, FileKind::Zip],
+        "extraction is one level deep: an inner archive is stored as a Zip payload, not recursed into"
     );
 }
