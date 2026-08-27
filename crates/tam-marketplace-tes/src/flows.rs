@@ -304,9 +304,11 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         self.inventory
     }
 
-    /// The pre-flight is the M0 loop as a probe: create an empty draft, read
-    /// its field-name set, fingerprint it, and delete the probe — asserting
-    /// on the way that every field this adapter writes still exists.
+    /// The pre-flight is the M0 loop as a probe: create a draft, write every
+    /// field this adapter writes, read the result back, fingerprint it, and
+    /// delete the probe. The write comes before the assertion because the
+    /// live API omits null scalar keys from a draft's JSON, so an empty
+    /// draft cannot witness the written-field set.
     async fn assert_form_schema(
         &self,
         _org: OrgId,
@@ -314,7 +316,17 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     ) -> Result<FormSchemaFingerprint, AdapterError> {
         let created = self.send(endpoints::create_draft_request()).await?;
         let id = classify_create(&created)?;
-        let state = self.resource_state(id).await;
+        let written = self
+            .send(endpoints::set_metadata_request(
+                id,
+                &endpoints::probe_listing(),
+            ))
+            .await
+            .and_then(|response| classify_write_json(&response).map(drop));
+        let state = match written {
+            Ok(()) => self.resource_state(id).await,
+            Err(error) => Err(error),
+        };
         let deleted = self.delete(id).await;
         let observed = schema::field_names(&state?);
         deleted?;

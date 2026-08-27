@@ -337,6 +337,10 @@ fn the_preflight_names_a_vanished_written_field() {
                 response: ok(&json!({"id": 77})),
             },
             Interaction {
+                request: endpoints::set_metadata_request(probe, &endpoints::probe_listing()),
+                response: ok(&json!({"id": 77})),
+            },
+            Interaction {
                 request: endpoints::read_draft_request(probe),
                 response: ok(&incomplete),
             },
@@ -360,6 +364,47 @@ fn the_preflight_names_a_vanished_written_field() {
         report.removed,
         vec!["descriptionRaw".to_owned()],
         "the vanished field is named, and the probe draft was still deleted first"
+    );
+    assert_eq!(adapter.transport().remaining(), 0, "the probe cleaned up");
+}
+
+#[test]
+fn the_probe_writes_before_asserting_because_an_empty_draft_omits_null_scalars() {
+    let probe = DraftId(78);
+    let mut populated = json!({"id": 78, "draft": true});
+    for field in schema::WRITTEN_DRAFT_FIELDS {
+        populated[field] = json!(null);
+    }
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::create_draft_request(),
+                response: ok(&json!({"id": 78})),
+            },
+            Interaction {
+                request: endpoints::set_metadata_request(probe, &endpoints::probe_listing()),
+                response: ok(&json!({"id": 78})),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(probe),
+                response: ok(&populated),
+            },
+            Interaction {
+                request: endpoints::delete_resource_request(probe),
+                response: status(204),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(probe),
+                response: status(404),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let fingerprint =
+        futures::executor::block_on(adapter.assert_form_schema(ORG, FormId(Uuid([7; 16]))));
+    assert!(
+        fingerprint.is_ok(),
+        "a probe that wrote every field must observe every field: {fingerprint:?}"
     );
     assert_eq!(adapter.transport().remaining(), 0, "the probe cleaned up");
 }

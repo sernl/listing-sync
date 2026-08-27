@@ -2,14 +2,14 @@
 //!
 //! Usage, from the repo root with the operator's cookie jar:
 //!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar-path>
-//!       preflight                       (default: create, read, delete a probe draft)
+//!       preflight                       (default: create, probe-write, read, delete one ZZ draft)
 //!       draft <pdf-path>                (full draft flow, then verified delete)
 //!       publish <pdf-path> --yes-publish-live   (goes LIVE; founder deletes after verifying)
 
 use std::io::Read as _;
 
 use tam_marketplace::{FileContent, FileSource, FileSourceError, FormId, MarketplaceAdapter};
-use tam_marketplace_tes::endpoints::{TesLicence, TesListing};
+use tam_marketplace_tes::endpoints;
 use tam_marketplace_tes::{ReqwestTransport, TesAdapter, TesSession};
 use tam_types::{FileId, InventoryId, OrgId, Uuid};
 
@@ -25,19 +25,6 @@ fn read_file(path: &str) -> Result<Vec<u8>, std::io::Error> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)?.read_to_end(&mut bytes)?;
     Ok(bytes)
-}
-
-fn smoke_listing() -> TesListing {
-    TesListing {
-        title: "ZZ-SMOKE-DELETE-ME".to_owned(),
-        description_markdown: "Automated adapter check. **Delete me.**".to_owned(),
-        category_ids: vec![1_000_448],
-        age_range_ids: vec![4],
-        ages: vec![11, 12, 13, 14],
-        main_type: 99_009,
-        main_age: 4,
-        licence: TesLicence::CcBy,
-    }
 }
 
 #[tokio::main]
@@ -85,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let adapter = TesAdapter::new(InventoryId::TesGb, transport, OneFile(file.clone()))?;
             let id = adapter
-                .create_listing(&smoke_listing(), &[file])
+                .create_listing(&endpoints::probe_listing(), &[file])
                 .await
                 .map_err(|error| format!("draft flow failed: {error:?}"))?;
             eprintln!("draft created: id={}", id.0);

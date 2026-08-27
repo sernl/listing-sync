@@ -59,6 +59,29 @@ pub fn create_draft_request() -> HttpRequest {
     }
 }
 
+/// The title prefix marking every automation-created artefact disposable, so
+/// a human can sweep the dashboard for strays; the rehearsal invariants in
+/// the runbook bound how many may exist at once.
+pub const ZZ_TITLE_PREFIX: &str = "ZZ-SMOKE-DELETE-ME";
+
+/// The schema probe's payload. The live API omits null scalar keys from a
+/// draft's JSON, so an empty draft cannot witness the written-field set; the
+/// probe writes every field first and asserts the read-back. The ids are the
+/// cassette-proven ones from the recorded captures.
+#[must_use]
+pub fn probe_listing() -> TesListing {
+    TesListing {
+        title: ZZ_TITLE_PREFIX.to_owned(),
+        description_markdown: "Automated schema probe. **Delete me.**".to_owned(),
+        category_ids: vec![1_000_448],
+        age_range_ids: vec![4],
+        ages: vec![11, 12, 13, 14],
+        main_type: 99_009,
+        main_age: 4,
+        licence: TesLicence::CcBy,
+    }
+}
+
 #[must_use]
 pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
     let categories: Vec<Value> = listing

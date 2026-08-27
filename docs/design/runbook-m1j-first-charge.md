@@ -25,7 +25,8 @@ The exported cookie jar is a secret, lives at the gitignored `probes/local/tes-c
 
 1. Log into Tes in a browser as the account that will be automated and export the cookie jar in Netscape format to `probes/local/tes-cookies.jar`.
    That is the ingestion shape the code already proves: `TesSession::from_netscape_jar` at `crates/tam-marketplace-tes/src/session.rs:44`, used by the live smoke example at `crates/tam-marketplace-tes/examples/live_smoke.rs:51` and by the canary at `crates/tam-canary/src/main.rs:43`.
-2. Verify the jar before anything durable holds it, with a mode that creates nothing: `cargo run -p tam-marketplace-tes --example live_smoke -- probes/local/tes-cookies.jar preflight`.
+2. Verify the jar before anything durable holds it: `cargo run -p tam-marketplace-tes --example live_smoke -- probes/local/tes-cookies.jar preflight`.
+   The probe creates one ZZ-titled draft, writes every field the adapter writes, asserts the read-back, and deletes it in the same run — the write comes first because the live API omits null scalar keys from an empty draft's JSON.
    It prints the draft form schema fingerprint on success.
 3. Choose a connection UUID and send the link request as one line of JSON on the broker socket.
    The wire shape is defined in `crates/tam-session-broker/src/protocol.rs`: an object with `op` set to `link`, plus `org` and `connection` as canonical hyphenated UUIDs, `marketplace` as `"Tes"`, and `cookie_header`.
@@ -128,9 +129,9 @@ A degraded item is terminal and is not a retry class: the listing is live and pr
 ## The ZZ-prefix rehearsal
 
 The vehicle is `crates/tam-marketplace-tes/examples/live_smoke.rs`, the operator's supervised live check that replaced the deleted spike.
-It runs as `cargo run -p tam-marketplace-tes --example live_smoke -- <jar-path> <mode> [args]` with three modes: `preflight`, the default, which creates nothing and asserts the draft form schema; `draft <pdf-path>`, the full draft flow followed by a verified delete; and `publish <pdf-path> --yes-publish-live`, which goes live.
-Without the flag the publish mode refuses and keeps the draft, at line 107.
-Every artefact carries the title literal `ZZ-SMOKE-DELETE-ME`, at line 32.
+It runs as `cargo run -p tam-marketplace-tes --example live_smoke -- <jar-path> <mode> [args]` with three modes: `preflight`, the default, which probe-writes one ZZ-titled draft, asserts the draft form schema, and deletes it in the same run; `draft <pdf-path>`, the full draft flow followed by a verified delete; and `publish <pdf-path> --yes-publish-live`, which goes live.
+Without the flag the publish mode refuses and keeps the draft.
+Every artefact carries the title prefix `ZZ-SMOKE-DELETE-ME`, defined once as `ZZ_TITLE_PREFIX` in the adapter's `endpoints.rs`.
 
 The M0 spike's account-safety invariants live only in that plan's prose, at [`plans/2026-08-25-m0-tes-spike.md`](plans/2026-08-25-m0-tes-spike.md) lines 21 and 22, and they bind this act unchanged in substance: at most three ZZ artefacts exist at once, each is deleted in the same run that created it, nothing is published except through the explicit gated mode, and the founder verifies the deletion in the dashboard rather than trusting an exit status.
 
@@ -142,7 +143,7 @@ Nothing else writes to the account concurrently: the per-tenant mutex stops two 
 ### Steps
 
 1. Run `preflight` first, every time.
-   It creates nothing and fails closed if the form schema has drifted.
+   It creates and deletes one ZZ probe draft and fails closed if the form schema has drifted.
 2. Run `draft <pdf>` for the rehearsal proper.
    It creates the draft, uploads the file, deletes the draft and verifies it is gone, printing `draft <id> deleted and verified gone`.
 3. Open the Tes dashboard and confirm no `ZZ-` titled resource remains.
