@@ -76,6 +76,19 @@ impl Vault {
         let sealed = seal(&self.kek, &context, secret).map_err(|_| VaultError::Seal)?;
 
         let mut tx = self.pool.begin().await?;
+        // The connection row must exist before the secret row: the secret's
+        // foreign key points at it, so a fresh connection linked in the
+        // other order dies on the constraint before the upsert can run.
+        sqlx::query(
+            "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+             VALUES ($1, $2, $3, 'linked', now(), now()) \
+             ON CONFLICT (org_id, id) DO UPDATE SET state = 'linked', updated_at = now()",
+        )
+        .bind(uuid(org.0))
+        .bind(uuid(connection.0))
+        .bind(marketplace_to_db(marketplace))
+        .execute(&mut *tx)
+        .await?;
         sqlx::query(
             "INSERT INTO connection_secret \
              (org_id, connection_id, key_version, wrapped_dek, nonce, ciphertext, aad, created_at) \
@@ -93,26 +106,6 @@ impl Vault {
         .bind(context_bytes(&context))
         .execute(&mut *tx)
         .await?;
-        let updated = sqlx::query(
-            "UPDATE connection SET state = 'linked', updated_at = now() \
-             WHERE org_id = $1 AND id = $2",
-        )
-        .bind(uuid(org.0))
-        .bind(uuid(connection.0))
-        .execute(&mut *tx)
-        .await?;
-        if updated.rows_affected() == 0 {
-            sqlx::query(
-                "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
-                 VALUES ($1, $2, $3, 'linked', now(), now()) \
-                 ON CONFLICT (org_id, id) DO UPDATE SET state = 'linked', updated_at = now()",
-            )
-            .bind(uuid(org.0))
-            .bind(uuid(connection.0))
-            .bind(marketplace_to_db(marketplace))
-            .execute(&mut *tx)
-            .await?;
-        }
         tx.commit().await?;
         Ok(())
     }
@@ -206,4 +199,71 @@ fn context_bytes(context: &AadContext) -> Vec<u8> {
     bytes.extend_from_slice(&context.connection.0 .0);
     bytes.extend_from_slice(&context.key_version.to_be_bytes());
     bytes
+}
+
+#[cfg(all(test, feature = "pg-tests"))]
+mod tests {
+    use super::{Vault, KEY_VERSION};
+    use sqlx::PgPool;
+    use tam_secrets::{Kek, Secret};
+    use tam_types::{ConnectionId, Marketplace, OrgId, Uuid};
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn a_fresh_connection_links_without_a_preexisting_row(app: PgPool) {
+        let org = [0xA1; 16];
+        sqlx::query(
+            "INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-fresh', now())",
+        )
+        .bind(uuid::Uuid::from_bytes(org))
+        .execute(&app)
+        .await
+        .expect("the org inserts");
+
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&app)
+            .await
+            .expect("the database name reads");
+        let broker = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&format!(
+                "postgres://tam_broker:tam_broker_dev@127.0.0.1:5433/{database}"
+            ))
+            .await
+            .expect("the broker role connects");
+        let vault = Vault::new(broker.clone(), Kek::from_bytes(&[0x22; 32]).expect("kek"));
+        let connection = [0xB2; 16];
+        vault
+            .link(
+                OrgId(Uuid(org)),
+                ConnectionId(Uuid(connection)),
+                Marketplace::Tes,
+                Secret::new("TESSession=fresh".to_owned()),
+            )
+            .await
+            .expect("a fresh connection links with no pre-created row");
+
+        let (state,): (String,) =
+            sqlx::query_as("SELECT state FROM connection WHERE org_id = $1 AND id = $2")
+                .bind(uuid::Uuid::from_bytes(org))
+                .bind(uuid::Uuid::from_bytes(connection))
+                .fetch_one(&broker)
+                .await
+                .expect("the connection row exists");
+        assert_eq!(state, "linked", "the upsert ran before the secret insert");
+
+        let (versions,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM connection_secret WHERE org_id = $1 AND connection_id = $2 \
+             AND key_version = $3",
+        )
+        .bind(uuid::Uuid::from_bytes(org))
+        .bind(uuid::Uuid::from_bytes(connection))
+        .bind(KEY_VERSION)
+        .fetch_one(&broker)
+        .await
+        .expect("the secret row is countable");
+        assert_eq!(
+            versions, 1,
+            "the sealed credential landed in the same transaction"
+        );
+    }
 }

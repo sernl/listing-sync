@@ -112,7 +112,7 @@ db-verify:
 # The database-backed test lane: tenancy isolation, codecs, structural fences,
 # and the API driven in-process over per-test databases
 db-test: db-wait db-verify
-    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests
+    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:
