@@ -37,3 +37,7 @@ Task 6 — the close: runbook (link, currency probe, supervised first run, ZZ-pr
 - Localised copy (spelling, curriculum framing): M4.
 - Automated billing, tiers, signup: M5.
 - Scheduled sync (cron-driven re-runs): after the first manual-run cohort proves the shape.
+- Browser end-to-end (Playwright), deferred to M1j by the M1i plan: re-deferred, owner founder, before the first external customer's onboarding; the in-process Rust gauntlet covers the flow end to end for M1j.
+- The xtask-dependent checks in the enforcement toolchain's thirteen-check table — lint-configuration scan, crate-root attributes, dependency closure, migration lint: owner founder, when the xtask crate first lands; the no-new-code subset of that table is wired in this close.
+- The pg_notify lease-kill fan-out, named for M1j by the M1e plan and not built: owner founder, before the first external customer; revocation kills gateways and the linked-connection gate holds every new lease, but an in-flight lease runs to completion, so revocation latency is bounded by one item's write.
+- Resource-type vocabulary seeding, named for M1j by the M1g plan as "when the duplicator consumes it" and shipped unconsumed: owner founder, at the first external customer or when NZ listing quality demands it; duplicated listings carry no resource-type mapping in M1 and the projection maps Subject and Topic only.
