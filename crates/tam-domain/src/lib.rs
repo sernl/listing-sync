@@ -908,18 +908,6 @@ impl SyncMachine {
         Ok(self.emit_unbilled(SyncState::Terminal(outcome), effects))
     }
 
-    /// A successful submit leaves no durable identifier behind — `SubmitEvidence`
-    /// carries none, and turning a landed route into one is per-marketplace
-    /// adapter knowledge — so the read-back is addressed by the marker
-    /// convention and justified as a first-party read. The receipt-gated
-    /// `verify_after` is reachable only after `settle`, which is the
-    /// post-settle read on the reconciled row.
-    /// The pre-settle verification read. When the submit stated the durable
-    /// identifier it landed on, the read addresses it directly under
-    /// `VerifyAttempt`, justified by the open `write_attempt` row. When it did
-    /// not, only a marker strategy can search for the landing; any other
-    /// strategy has nothing to verify against, so the write that cannot be
-    /// verified halts as ambiguous rather than guessing — the stall bias.
     /// A submit that landed with no statable identifier and no marker to
     /// search: nothing can verify it, so it halts as the no-durable-identifier
     /// ambiguity — the governing axiom, a stalled queue over a duplicate storm.
@@ -931,6 +919,12 @@ impl SyncMachine {
         )
     }
 
+    /// The pre-settle verification read. When the submit stated the durable
+    /// identifier it landed on, the read addresses it directly under
+    /// `VerifyAttempt`, justified by the open `write_attempt` row. When it did
+    /// not, only a marker strategy can search for the landing; any other
+    /// strategy has nothing to verify against, so the write that cannot be
+    /// verified halts as ambiguous rather than guessing — the stall bias.
     fn await_read_back(
         self,
         attempt: WriteAttemptId,
