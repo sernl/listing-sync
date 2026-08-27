@@ -209,6 +209,181 @@ pub async fn record_drain_report<T: Transport>(
     Ok(job)
 }
 
+/// The catalogue coverage of one resource, measured without its files: how
+/// many of the terms it carries reach a counterpart in the target inventory
+/// and how many raise a reconciliation item. This is the kill-gate drain
+/// contribution, computed through the same `project_terms` gate the full
+/// import uses, so a measurement and a migration cannot disagree on coverage.
+#[derive(Debug)]
+pub struct MeasureReport {
+    pub resource: i64,
+    pub title: String,
+    pub terms_seen: usize,
+    pub terms_mapped: usize,
+    pub unmapped_native_ids: Vec<String>,
+    pub terms_uncovered: usize,
+}
+
+/// The catalogue's coverage, folded across resources. `share` is the drain
+/// the kill gate compares across the first ten migrations: of the terms that
+/// mapped inbound, the fraction with no counterpart into the target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MeasureTotals {
+    pub rows: u64,
+    pub terms_seen: u64,
+    pub terms_mapped: u64,
+    pub terms_unmapped: u64,
+    pub terms_uncovered: u64,
+}
+
+impl MeasureTotals {
+    pub fn absorb(&mut self, report: &MeasureReport) {
+        self.rows += 1;
+        self.terms_seen += u64::try_from(report.terms_seen).unwrap_or(u64::MAX);
+        self.terms_mapped += u64::try_from(report.terms_mapped).unwrap_or(u64::MAX);
+        self.terms_unmapped += u64::try_from(report.unmapped_native_ids.len()).unwrap_or(u64::MAX);
+        self.terms_uncovered += u64::try_from(report.terms_uncovered).unwrap_or(u64::MAX);
+    }
+
+    /// `None` when no term mapped, because a share over zero terms reads as
+    /// perfect coverage when it is the absence of any signal at all.
+    #[must_use]
+    pub fn share(&self) -> Option<f64> {
+        (self.terms_mapped != 0).then(|| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "term counts are small; the ratio is a display figure, not an accumulator"
+            )]
+            let share = self.terms_uncovered as f64 / self.terms_mapped as f64;
+            share
+        })
+    }
+}
+
+/// Reads one resource and runs the taxonomy gate, without its files, its
+/// product, or any persistence. The full import raises the reconciliation
+/// items and settles a product; this only counts them.
+pub async fn measure_one<T: Transport>(
+    run: &ImportRun<'_, T>,
+    resource: i64,
+) -> Result<MeasureReport, ImportError> {
+    let listing = run
+        .adapter
+        .fetch_for_import(
+            &FetchReason::FirstPartyExport {
+                inventory: run.source,
+            },
+            DraftId(resource),
+        )
+        .await?;
+    let taxonomy = TaxonomyRepo::new(run.pool.clone());
+    let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, &listing).await?;
+    let terms_seen = listing.category_native_ids.len();
+    let terms_mapped = subjects.len();
+
+    let terms = taxonomy.terms().await?;
+    let kinds: std::collections::HashMap<CanonicalTermId, tam_domain::TermKind> =
+        terms.iter().map(|term| (term.id, term.kind)).collect();
+    let mut target_edges = taxonomy
+        .edges_into(tam_domain::VocabularyId(
+            run.target,
+            tam_domain::TermKind::Subject,
+        ))
+        .await?;
+    target_edges.extend(
+        taxonomy
+            .edges_into(tam_domain::VocabularyId(
+                run.target,
+                tam_domain::TermKind::Topic,
+            ))
+            .await?,
+    );
+    let no_counterparts = taxonomy.no_counterparts_into(run.target).await?;
+
+    let mut uncovered: Vec<CanonicalTermId> = Vec::new();
+    for kind in [tam_domain::TermKind::Subject, tam_domain::TermKind::Topic] {
+        let of_kind: Vec<CanonicalTermId> = subjects
+            .iter()
+            .copied()
+            .filter(|term| kinds.get(term) == Some(&kind))
+            .collect();
+        if of_kind.is_empty() {
+            continue;
+        }
+        let outcome = tam_taxonomy::project::project_terms(
+            &of_kind,
+            tam_domain::VocabularyId(run.target, kind),
+            &target_edges,
+            &no_counterparts,
+        );
+        for blocked in outcome.blocked {
+            if !uncovered.contains(&blocked.term) {
+                uncovered.push(blocked.term);
+            }
+        }
+    }
+    // A term the catalogue does not classify raises its own item, matching
+    // project_listing's fail-closed reading of an impossible input.
+    for term in &subjects {
+        if !kinds.contains_key(term) && !uncovered.contains(term) {
+            uncovered.push(*term);
+        }
+    }
+
+    Ok(MeasureReport {
+        resource,
+        title: listing.title,
+        terms_seen,
+        terms_mapped,
+        unmapped_native_ids: unmapped,
+        terms_uncovered: uncovered.len(),
+    })
+}
+
+/// The inbound projection shared by the full import and the measure path: the
+/// seller's native category ids mapped to canonical subjects over the source
+/// vocabulary's edges, an unmapped id retained verbatim.
+async fn inbound_subjects(
+    taxonomy: &TaxonomyRepo,
+    source: InventoryId,
+    listing: &tam_marketplace::ImportedListing,
+) -> Result<(Vec<CanonicalTermId>, Vec<String>), ImportError> {
+    let subject_edges = taxonomy
+        .edges_into(tam_domain::VocabularyId(
+            source,
+            tam_domain::TermKind::Subject,
+        ))
+        .await?;
+    let topic_edges = taxonomy
+        .edges_into(tam_domain::VocabularyId(
+            source,
+            tam_domain::TermKind::Topic,
+        ))
+        .await?;
+    let mut subjects: Vec<CanonicalTermId> = Vec::new();
+    let mut unmapped: Vec<String> = Vec::new();
+    for native in &listing.category_native_ids {
+        let found = ingest_by_native_id(
+            native,
+            tam_domain::VocabularyId(source, tam_domain::TermKind::Subject),
+            &subject_edges,
+        )
+        .or_else(|| {
+            ingest_by_native_id(
+                native,
+                tam_domain::VocabularyId(source, tam_domain::TermKind::Topic),
+                &topic_edges,
+            )
+        });
+        match found {
+            Some(term) if !subjects.contains(&term) => subjects.push(term),
+            Some(_) => {}
+            None => unmapped.push(native.clone()),
+        }
+    }
+    Ok((subjects, unmapped))
+}
+
 pub async fn import_one<T: Transport>(
     run: &ImportRun<'_, T>,
     entry: &ImportEntry,
@@ -278,39 +453,7 @@ pub async fn import_one<T: Transport>(
     // name a canonical term that does not exist — and the outbound raise
     // below covers every term that does.
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
-    let subject_edges = taxonomy
-        .edges_into(tam_domain::VocabularyId(
-            run.source,
-            tam_domain::TermKind::Subject,
-        ))
-        .await?;
-    let topic_edges = taxonomy
-        .edges_into(tam_domain::VocabularyId(
-            run.source,
-            tam_domain::TermKind::Topic,
-        ))
-        .await?;
-    let mut subjects: Vec<CanonicalTermId> = Vec::new();
-    let mut unmapped: Vec<String> = Vec::new();
-    for native in &listing.category_native_ids {
-        let found = ingest_by_native_id(
-            native,
-            tam_domain::VocabularyId(run.source, tam_domain::TermKind::Subject),
-            &subject_edges,
-        )
-        .or_else(|| {
-            ingest_by_native_id(
-                native,
-                tam_domain::VocabularyId(run.source, tam_domain::TermKind::Topic),
-                &topic_edges,
-            )
-        });
-        match found {
-            Some(term) if !subjects.contains(&term) => subjects.push(term),
-            Some(_) => {}
-            None => unmapped.push(native.clone()),
-        }
-    }
+    let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, &listing).await?;
     let terms_seen = listing.category_native_ids.len();
     let terms_mapped = subjects.len();
 

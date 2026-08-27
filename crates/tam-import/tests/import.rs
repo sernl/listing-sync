@@ -10,7 +10,8 @@ use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
 use tam_import::{
-    import_one, record_drain_report, DrainTotals, ImportEntry, ImportRun, NamedBytes, NoImportFiles,
+    import_one, measure_one, record_drain_report, DrainTotals, ImportEntry, ImportRun,
+    MeasureTotals, NamedBytes, NoImportFiles,
 };
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{HttpRequest, HttpResponse, Method, RequestBody};
@@ -236,6 +237,69 @@ async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
     );
     assert!(product.cover.is_some(), "the pipeline generated the cover");
     assert_eq!(report.curriculum, vec!["English".to_owned()]);
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn measure_reports_a_covered_catalogue_as_zero_uncovered_without_files(pool: PgPool) {
+    seed(&pool, true).await;
+    let adapter = adapter_for(13_549_794);
+    let run = run_for(pool.clone(), &adapter, store_root("measure-covered"));
+    let report = measure_one(&run, 13_549_794)
+        .await
+        .expect("the measure runs with no files");
+    assert_eq!(
+        (
+            report.terms_seen,
+            report.terms_mapped,
+            report.terms_uncovered
+        ),
+        (2, 2, 0),
+        "both categories map and both have an NZ counterpart, so the drain is zero"
+    );
+    let mut totals = MeasureTotals::default();
+    totals.absorb(&report);
+    assert_eq!(
+        totals.share(),
+        Some(0.0),
+        "a fully covered sample is 0% drain"
+    );
+
+    let product_rows: (i64,) = sqlx::query_as("SELECT count(*) FROM product")
+        .fetch_one(&pool)
+        .await
+        .expect("the product count reads");
+    assert_eq!(product_rows.0, 0, "a measurement persists no product");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn measure_counts_the_uncovered_terms_a_full_import_would_raise(pool: PgPool) {
+    seed(&pool, false).await;
+    let adapter = adapter_for(13_549_794);
+    let run = run_for(pool.clone(), &adapter, store_root("measure-gap"));
+    let report = measure_one(&run, 13_549_794)
+        .await
+        .expect("the measure runs");
+    assert_eq!(
+        (report.terms_mapped, report.terms_uncovered),
+        (2, 2),
+        "no NZ edges: both mapped terms are uncovered, matching the full import's raise count"
+    );
+    let mut totals = MeasureTotals::default();
+    totals.absorb(&report);
+    assert_eq!(
+        totals.share(),
+        Some(1.0),
+        "an empty crosswalk is 100% drain"
+    );
+
+    let open = TaxonomyRepo::new(pool)
+        .open_items(ORG)
+        .await
+        .expect("the queue reads");
+    assert!(
+        open.is_empty(),
+        "a measurement raises no reconciliation item"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

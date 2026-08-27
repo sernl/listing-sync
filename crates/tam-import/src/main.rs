@@ -5,11 +5,15 @@
 //! this process never holds a marketplace credential.
 //!
 //! Usage: tam-import <db-url> <org-hex> <gateway-base> <kek-path> \
-//!            <store-root> <manifest.json>
+//!            <store-root> <manifest.json> [measure]
 //!
 //! The manifest is a JSON array of { "resource": <numeric id>,
 //! "files": ["/path/to/original", ...] } — customer zero's file bytes come
 //! from disk, per the plan's uncaptured-endpoint boundary.
+//!
+//! A trailing `measure` argument reads each resource and reports the drain
+//! coverage without its files, its product, or any persistence — the
+//! kill-gate number when the originals are not on the box.
 
 #![forbid(unsafe_code)]
 
@@ -17,7 +21,8 @@ use std::io::Read as _;
 
 use serde::Deserialize;
 use tam_import::{
-    import_one, record_drain_report, DrainTotals, ImportEntry, ImportRun, NamedBytes, NoImportFiles,
+    import_one, measure_one, record_drain_report, DrainTotals, ImportEntry, ImportRun,
+    MeasureTotals, NamedBytes, NoImportFiles,
 };
 use tam_marketplace_tes::{GatewayTransport, TesAdapter};
 use tam_secrets::Kek;
@@ -91,6 +96,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         target: InventoryId::TesNz,
         now: wall_now()?,
     };
+
+    if arguments.get(6).map(String::as_str) == Some("measure") {
+        let mut totals = MeasureTotals::default();
+        for row in &manifest {
+            match measure_one(&run, row.resource).await {
+                Ok(report) => {
+                    totals.absorb(&report);
+                    eprintln!(
+                        "{} \"{}\": {}/{} terms mapped, {} uncovered, {} unmapped native id(s)",
+                        report.resource,
+                        report.title,
+                        report.terms_mapped,
+                        report.terms_seen,
+                        report.terms_uncovered,
+                        report.unmapped_native_ids.len(),
+                    );
+                }
+                Err(error) => eprintln!("{} FAILED: {error}", row.resource),
+            }
+        }
+        eprintln!(
+            "measured {} row(s); {} of {} mapped term(s) uncovered — drain share {}",
+            totals.rows,
+            totals.terms_uncovered,
+            totals.terms_mapped,
+            totals.share().map_or_else(
+                || "n/a (no terms mapped)".to_owned(),
+                |share| format!("{:.1}%", share * 100.0)
+            ),
+        );
+        return Ok(());
+    }
 
     let mut totals = DrainTotals::default();
     for row in manifest {
