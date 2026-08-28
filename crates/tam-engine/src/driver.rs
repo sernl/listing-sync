@@ -499,6 +499,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                                 attempt: attempt.0,
                                 mapping: lease.mapping,
                             },
+                            &operation,
                             now,
                         )
                         .await;
@@ -522,6 +523,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                                 attempt: attempt.0,
                                 mapping: lease.mapping,
                             },
+                            &operation,
                             now,
                         )
                         .await;
@@ -555,6 +557,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                                 attempt: attempt.0,
                                 mapping: lease.mapping,
                             },
+                            &operation,
                             now,
                         )
                         .await;
@@ -605,6 +608,11 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                         // next lease abandons on `AttemptInFlight` and the
                         // item burns its whole retry allowance with nothing
                         // leaving the process.
+                        //
+                        // Except for a create, which is the one operation a
+                        // requeue can repeat into a second listing:
+                        // `may_settle_unverified` holds that fence shut and
+                        // accepts the deadlock as the cheaper failure.
                         VerifyOutcome::RateWindowClosed | VerifyOutcome::Cut => {
                             let stopped_by = match verified {
                                 VerifyOutcome::RateWindowClosed => {
@@ -614,7 +622,14 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                                     "the run was cut"
                                 }
                             };
-                            if let Some(attempt) = current_attempt {
+                            let settling =
+                                current_attempt.filter(|_| may_settle_unverified(&operation));
+                            if let Some(attempt) = settling {
+                                let verdict = AttemptVerdict {
+                                    state: "ambiguous".to_owned(),
+                                    failure_code: None,
+                                    landing: addressed_by(&operation),
+                                };
                                 settle_open_attempt(
                                     ctx,
                                     &lease_ref,
@@ -622,13 +637,20 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                                         attempt: attempt.0,
                                         mapping: lease.mapping,
                                     },
-                                    "ambiguous",
+                                    &verdict,
                                     now,
                                 )
                                 .await?;
                             }
+                            let fenced = if settling.is_none() && current_attempt.is_some() {
+                                "; the attempt stays in flight so the create cannot repeat"
+                            } else {
+                                ""
+                            };
                             return Ok(RunVerdict::Abandoned {
-                                reason: format!("{stopped_by} before the write could be verified"),
+                                reason: format!(
+                                    "{stopped_by} before the write could be verified{fenced}"
+                                ),
                             });
                         }
                     }
@@ -837,12 +859,50 @@ async fn rate_refused_before_the_write(
     ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     lease_ref: &LeaseRef,
     settling: AttemptRef,
+    operation: &ItemOperation,
     at: Timestamp,
 ) -> Result<RunVerdict, EngineError> {
-    settle_open_attempt(ctx, lease_ref, settling, "abandoned", at).await?;
+    let verdict = AttemptVerdict {
+        state: "abandoned".to_owned(),
+        failure_code: None,
+        landing: addressed_by(operation),
+    };
+    settle_open_attempt(ctx, lease_ref, settling, &verdict, at).await?;
     Ok(RunVerdict::Abandoned {
         reason: "the per-connection rate window is exhausted".to_owned(),
     })
+}
+
+/// What an unfinished attempt names. A revise or a removal addressed a
+/// listing that already exists, so the settled row says which one and the
+/// ledger's "every settled row names what the write was about" holds on the
+/// walk-away paths too; a create knows no identifier until its read-back
+/// answers, and inventing one would be worse than recording nothing.
+fn addressed_by(operation: &ItemOperation) -> LandingEffect {
+    operation
+        .subject()
+        .map_or(LandingEffect::None, |id| LandingEffect::Addressed {
+            id: id.clone(),
+        })
+}
+
+/// Whether a run walking away from a write it could not verify may settle
+/// that write's attempt.
+///
+/// `write_attempt_one_in_flight` is the only fence this system has against a
+/// second create: neither adapter has an idempotent create to fall back on,
+/// and both say so where they take the idempotency key. Settling releases
+/// the fence, so a create's attempt is left standing instead — the requeued
+/// item abandons on `AttemptInFlight` until `ATTEMPTS_MAX` settles it
+/// `failed`, with nothing further leaving the process. That stall is the
+/// worse-looking outcome and the better one: a duplicate listing on a
+/// seller's store is the one failure this ledger cannot undo.
+///
+/// A revise or a removal addresses a listing that already exists, so
+/// re-running it mints nothing and the settle is purely the deadlock repair
+/// it was written as.
+const fn may_settle_unverified(operation: &ItemOperation) -> bool {
+    !matches!(operation, ItemOperation::Create)
 }
 
 /// Settles an attempt the run is about to walk away from, so abandoning does
@@ -853,26 +913,23 @@ async fn rate_refused_before_the_write(
 /// open attempt per mapping — so a re-leased item whose predecessor left one
 /// standing abandons on `AttemptInFlight` at `RecordIntent` on every pass,
 /// burning its whole retry allowance without another request leaving the
-/// process.
+/// process. Where that fence is the only thing standing between a requeue
+/// and a duplicate listing, [`may_settle_unverified`] keeps the row standing
+/// deliberately and this helper is not called at all.
 ///
-/// `state` is the whole difference between the two callers: `'abandoned'`
-/// where the refusal came before the write was called and nothing was sent,
-/// `'ambiguous'` where the write went out and the verification could not
-/// finish. The mapping is left alone either way, which `LandingEffect::None`
-/// records honestly.
+/// The verdict's state is the whole difference between the two callers:
+/// `'abandoned'` where the refusal came before the write was called and
+/// nothing was sent, `'ambiguous'` where the write went out and the
+/// verification could not finish. Neither writes the mapping — `Addressed`
+/// names the listing in the attempt row and leaves the binding alone.
 async fn settle_open_attempt(
     ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     lease: &LeaseRef,
     settling: AttemptRef,
-    state: &str,
+    verdict: &AttemptVerdict,
     at: Timestamp,
 ) -> Result<(), EngineError> {
-    let verdict = AttemptVerdict {
-        state: state.to_owned(),
-        failure_code: None,
-        landing: LandingEffect::None,
-    };
-    match ctx.attempts.settle(lease, settling, &verdict, at).await {
+    match ctx.attempts.settle(lease, settling, verdict, at).await {
         // A fenced settle means the lease was stolen, and the steal owns the
         // story from here — the same reading the terminal path already takes.
         Ok(_) | Err(StorageError::StaleLease) => Ok(()),

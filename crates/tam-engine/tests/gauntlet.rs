@@ -875,15 +875,17 @@ async fn the_poll_consumes_one_grant_per_read_back_call(pool: PgPool) {
 /// `Absent` during lag, which under the create polarity halts the tenant's
 /// inventory on pure throughput; abandoning without settling would deadlock
 /// the mapping on `write_attempt_one_in_flight` until `ATTEMPTS_MAX`.
-#[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_rate_window_closing_mid_poll_settles_the_attempt_ambiguous(pool: PgPool) {
-    provision(&pool).await;
-    let engine = engine_pool(&pool).await;
+/// Leaves exactly one grant in the connection's minute window, so the write
+/// takes it and the poll's first read finds none.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn exhaust_all_but_one_grant(engine: &PgPool) {
     let budgets = RateBudgetRepo::new(engine.clone());
     let connection = tam_types::ConnectionId(Uuid([0x33; 16]));
     let window = Timestamp(NOW.0 - NOW.0.rem_euclid(60_000));
     let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
-    // One grant left: the submit takes it and the first read finds none.
     for _ in 1..ceiling {
         assert_ne!(
             budgets
@@ -891,9 +893,36 @@ async fn a_rate_window_closing_mid_poll_settles_the_attempt_ambiguous(pool: PgPo
                 .await
                 .expect("the budget consumes"),
             BudgetGrant::Exhausted,
-            "the fixture must leave exactly one grant for the submit"
+            "the fixture must leave exactly one grant for the write"
         );
     }
+}
+
+/// Requeues the item the way `expire_and_steal` does behind a worker whose
+/// run abandoned, so a second pass can be driven over the same fixture.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn requeue(engine: &PgPool) {
+    let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
+    LeaseRepo::new(engine.clone())
+        .expire_and_steal(Timestamp(NOW.0 + 400_000), attempts_max)
+        .await
+        .expect("the steal runs");
+}
+
+/// The create's fence, which is the one this system cannot replace: neither
+/// marketplace offers an idempotent create, so `write_attempt_one_in_flight`
+/// is all that stands between a requeued item and a second listing on the
+/// seller's store. A run that walked away from an unverified create leaves
+/// its attempt standing, and the next pass abandons on `AttemptInFlight`
+/// rather than creating again.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_rate_window_closing_mid_create_holds_the_duplicate_fence(pool: PgPool) {
+    provision(&pool).await;
+    let engine = engine_pool(&pool).await;
+    exhaust_all_but_one_grant(&engine).await;
 
     let fake = FakeTes::lagging(3);
     let verdict = drive(&pool, &fake).await;
@@ -901,6 +930,8 @@ async fn a_rate_window_closing_mid_poll_settles_the_attempt_ambiguous(pool: PgPo
         matches!(verdict, RunVerdict::Abandoned { .. }),
         "we stopped looking; the run abandons into the stealer rather than inventing an outcome"
     );
+    let landed = { fake.state.lock().await.drafts.keys().copied().max() };
+    let landed = landed.expect("the create reached the fake before the window closed");
 
     let settled: Vec<(String, bool)> =
         sqlx::query_as("SELECT state, settled_at IS NOT NULL FROM write_attempt WHERE org_id = $1")
@@ -910,11 +941,29 @@ async fn a_rate_window_closing_mid_poll_settles_the_attempt_ambiguous(pool: PgPo
             .expect("the attempt rows read");
     assert_eq!(
         settled,
-        vec![("ambiguous".to_owned(), true)],
-        "the write went out and could not be verified, which is ambiguous rather than \
-         abandoned; and settling it at all is what stops the next lease deadlocking on \
-         AttemptInFlight"
+        vec![("in_flight".to_owned(), false)],
+        "the create went out unverified, so its attempt is held: settling it would release \
+         the only fence there is against making the listing twice"
     );
+
+    requeue(&engine).await;
+    let (second, _) = pump(&pool, &fake, Lease::Held).await;
+    assert!(
+        matches!(second, Ok(RunVerdict::Abandoned { .. })),
+        "the requeued item abandons on the held fence rather than crashing: {second:?}"
+    );
+    let mut after: Vec<i64> = {
+        let ids = fake.state.lock().await.drafts.keys().copied().collect();
+        ids
+    };
+    after.sort_unstable();
+    assert_eq!(
+        after,
+        vec![landed],
+        "the second pass minted no second listing; the schema probe it does make is \
+         created and deleted within the preflight"
+    );
+
     let record = MappingRepo::new(pool.clone())
         .get(ORG, MAPPING)
         .await
@@ -923,7 +972,52 @@ async fn a_rate_window_closing_mid_poll_settles_the_attempt_ambiguous(pool: PgPo
     assert_eq!(
         record.mapping.binding,
         Binding::Unbound,
-        "an unverified write binds nothing; LandingEffect::None records that honestly"
+        "an unverified write binds nothing"
+    );
+}
+
+/// A removal addresses a listing that already exists, so re-running it mints
+/// nothing: its attempt settles, and the settled row names what the write
+/// was about rather than nulling the columns that say so.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_rate_window_closing_mid_removal_settles_the_attempt_ambiguous(pool: PgPool) {
+    provision_with(&pool, Fixture::removal(true)).await;
+    let engine = engine_pool(&pool).await;
+    exhaust_all_but_one_grant(&engine).await;
+
+    let fake = FakeTes::holding(REMOVAL_ID);
+    let verdict = drive(&pool, &fake).await;
+    assert!(
+        matches!(verdict, RunVerdict::Abandoned { .. }),
+        "we stopped looking; the run abandons into the stealer rather than inventing an outcome"
+    );
+
+    let settled: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT state, settled_at IS NOT NULL, remote_url FROM write_attempt WHERE org_id = $1",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .fetch_all(&engine)
+    .await
+    .expect("the attempt rows read");
+    assert_eq!(
+        settled,
+        vec![(
+            "ambiguous".to_owned(),
+            true,
+            Some(format!("https://www.tes.com/api/v2/resources/{REMOVAL_ID}"))
+        )],
+        "the delete went out and could not be verified, which is ambiguous rather than \
+         abandoned; and the row names the listing it addressed, so an operator reading the \
+         ledger is not left guessing"
+    );
+    let record = MappingRepo::new(pool.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert!(
+        matches!(record.mapping.binding, Binding::Bound { .. }),
+        "an unverified removal severs nothing; the mapping still holds the listing"
     );
 }
 
