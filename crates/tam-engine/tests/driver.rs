@@ -16,7 +16,7 @@ use tam_marketplace::FetchReason;
 use tam_marketplace::{
     AdapterError, AmbiguityCause, CreateStrategy, FieldSet, FormId, FormSchemaFingerprint,
     IdempotencyKey, ListingLocator, MarketplaceAdapter, ObservedListing, ProjectedListing,
-    RemoteLifecycle, RemoteListingId, SubmitEvidence,
+    RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
 };
 use tam_storage::{
     HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
@@ -77,6 +77,32 @@ impl MarketplaceAdapter for ScriptedAdapter {
             .unwrap_or(Err(AdapterError::Ambiguous(
                 AmbiguityCause::ResponseEventLost,
             )))
+    }
+
+    /// The lifecycle writes are unreachable from this fixture: every item it
+    /// drives is a create. They refuse rather than answer, so a test that
+    /// grew a revise or a removal would say so instead of replaying a
+    /// scripted submit answer that describes a different write.
+    async fn revise(
+        &self,
+        _org: OrgId,
+        _plan: RevisePlan,
+        _now: Timestamp,
+    ) -> Result<SubmitEvidence, AdapterError> {
+        Err(AdapterError::Uncaptured {
+            capability: "scripted.revise",
+        })
+    }
+
+    async fn remove(
+        &self,
+        _org: OrgId,
+        _plan: RemovalPlan,
+        _now: Timestamp,
+    ) -> Result<SubmitEvidence, AdapterError> {
+        Err(AdapterError::Uncaptured {
+            capability: "scripted.remove",
+        })
     }
 
     async fn read_back(

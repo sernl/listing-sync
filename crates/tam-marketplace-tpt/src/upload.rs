@@ -11,7 +11,7 @@
 //! [`Pause`] capability, so the worker binds a real timer, a test binds an
 //! instant return, and this crate stays free of an async runtime.
 
-use tam_marketplace::{AdapterError, IdempotencyKey, Pause};
+use tam_marketplace::{AdapterError, IdempotencyKey};
 use tam_types::{FailureCode, FailureDetail};
 
 /// The staged-object handle `/uploads/upload_file` returns. Consumed by
@@ -205,17 +205,10 @@ impl Hop {
     }
 }
 
-/// A [`Pause`] that returns immediately. The cassette-driven tests replay a
-/// recorded poll sequence, where a real 1.2-second wait would add nothing but
-/// wall-clock time to the gated lane.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct InstantPause;
-
-impl Pause for InstantPause {
-    fn pause(&self, _ms: u32) -> impl core::future::Future<Output = ()> + Send {
-        core::future::ready(())
-    }
-}
+/// Re-exported here rather than at the crate root because this module's own
+/// test module reaches it through `super::`, which resolves to `upload` and
+/// not to the crate root.
+pub use tam_marketplace::InstantPause;
 
 /// A job that never reached a terminal state. Not an ambiguity: no product
 /// form has been posted at this point, so nothing landed and nothing needs
@@ -233,8 +226,8 @@ pub fn queue_exhausted(polls: u32) -> AdapterError {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_buster, queue_exhausted, Hop, InstantPause, ProcessedHandle, UploadHandle};
-    use tam_marketplace::{IdempotencyKey, Pause as _};
+    use super::{cache_buster, queue_exhausted, Hop, ProcessedHandle, UploadHandle};
+    use tam_marketplace::IdempotencyKey;
     use tam_types::Uuid;
 
     fn key(seed: u8) -> IdempotencyKey {
@@ -301,11 +294,6 @@ mod tests {
             !printed.contains("secret"),
             "both handles are encrypted envelopes over an object path, and Debug printed {printed}"
         );
-    }
-
-    #[test]
-    fn the_instant_pause_returns_without_waiting() {
-        futures::executor::block_on(InstantPause.pause(60_000));
     }
 
     #[test]

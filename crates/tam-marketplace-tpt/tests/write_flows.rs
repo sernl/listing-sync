@@ -29,8 +29,9 @@ use tam_marketplace::transport::{
 };
 use tam_marketplace::{
     AdapterError, AmbiguityCause, ChallengeKind, FetchReason, FieldSet, FileContent, FileSource,
-    FileSourceError, FormId, IdempotencyKey, ListingLocator, MarketplaceAdapter, NativeTerm,
-    ProjectedListing, RemoteLifecycle, RemoteListingId, WriteAttemptId,
+    FileSourceError, FormId, IdempotencyKey, LifecycleTransition, ListingLocator, ListingState,
+    MarketplaceAdapter, NativeTerm, ProjectedListing, RemoteLifecycle, RemoteListingId,
+    RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_marketplace_tpt::endpoints::{self, FormTarget, SignedS3Call, UploadReservation};
 use tam_marketplace_tpt::s3::{self, S3Operation, S3Signature, UploadSlot, UploadTicket};
@@ -1221,6 +1222,176 @@ fn a_signing_string_naming_another_object_never_becomes_a_request() {
     assert!(
         endpoints::sign_auth_request(&mine, &signable, AMZ_DATE).is_err(),
         "the oracle signs whatever it is given, so the scope check is ours to make"
+    );
+}
+
+fn revise_plan(to: ListingState) -> RevisePlan {
+    RevisePlan {
+        subject: RemoteListingId::Tpt {
+            product_id: PRODUCT_ID,
+        },
+        fields: fields(),
+        transition: LifecycleTransition {
+            // Unused on TPT: the edit form is a full replace whichever side of
+            // the draft line the product is on.
+            from: ListingState::Draft,
+            to,
+        },
+    }
+}
+
+/// The trait method delegates to the edit render rather than re-deriving one:
+/// the cassette's submit interaction is built from the committed render's own
+/// tokens and thumbnail handles, so a `revise` wired to a fresh create render
+/// would not match it. The body's own content — the status selector and the
+/// echoed handles — is pinned by
+/// `the_publish_edit_moves_the_status_selector_and_echoes_the_existing_thumbnails`,
+/// which this inherits its severity from.
+#[test]
+fn revise_moves_the_status_selector_and_echoes_the_existing_thumbnails() {
+    for (label, to, status) in [
+        (
+            "a publish",
+            ListingState::Live,
+            write_model::StatusUser::Live,
+        ),
+        (
+            "an edit that stays a draft",
+            ListingState::Draft,
+            write_model::StatusUser::Draft,
+        ),
+    ] {
+        let target = FormTarget::EditDigital(ProductId(PRODUCT_ID));
+        let cassette = Cassette {
+            interactions: vec![
+                edit_render(),
+                Interaction {
+                    request: endpoints::submit_form_request(target, edit_body(&fields(), status)),
+                    response: with_header(
+                        302,
+                        "",
+                        ResponseHeader::Location,
+                        "/Product/Fractions-pack-17511712",
+                    ),
+                },
+            ],
+        };
+        let adapter = adapter(cassette);
+        let evidence = futures::executor::block_on(adapter.revise(org(), revise_plan(to), NOW))
+            .unwrap_or_else(|error| panic!("{label}: the recorded edit replays: {error:?}"));
+        assert_eq!(
+            evidence.landed,
+            Some(RemoteListingId::Tpt {
+                product_id: PRODUCT_ID
+            }),
+            "{label}: the landing names the product the redirect agreed on"
+        );
+        assert_eq!(
+            evidence.landed_on_route.as_deref(),
+            Some("/Product/Fractions-pack-17511712"),
+            "{label}: the evidence names where the edit landed"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{label}: the render and the submit, and no read-back inside the call"
+        );
+    }
+}
+
+/// The six fields a TPT edit blanks. A created product carries none of them,
+/// so the blanking is a no-op on every listing Phase 3 can revise; this fails
+/// the day either side starts carrying a value, which is the day adopting a
+/// listing this system did not create makes the blanking live.
+#[test]
+fn an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry() {
+    let page = tam_marketplace_tpt::form::scrape_form_page(&create_render().response.text())
+        .expect("the committed create render parses");
+    let listing =
+        write_model::listing_from_field_set(&fields()).expect("the projection parses back");
+    let authorship = attested();
+    let created = write_model::create_fields(&write_model::CreateSubmission {
+        tokens: page.tokens(),
+        listing: &listing,
+        product: &ProcessedHandle::new(PROCESSED_HANDLE.to_owned()),
+        thumbs_collection_key: COLLECTION_KEY,
+        authorship: &authorship,
+    });
+    let edited = edit_body(&fields(), write_model::StatusUser::Draft);
+    let value = |body: &[(String, String)], name: &str| {
+        body.iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value.clone())
+    };
+    for name in [
+        "data[ItemsProperty][pages]",
+        "data[ItemsLocalization][common_core_id]",
+        "data[ItemsLocalization][country_id_flag]",
+        "data[ItemsProperty][duration]",
+        "data[ItemsProperty][answer_key]",
+    ] {
+        assert_eq!(
+            value(&edited, name),
+            value(&created, name),
+            "an edit reposts {name} exactly as the create posted it, so a revise of a \
+             product this system created loses nothing"
+        );
+    }
+    assert_eq!(
+        value(&created, "data[ItemTaxCode][tax_code_id]"),
+        None,
+        "the create posts no tax code at all"
+    );
+    assert_eq!(
+        value(&edited, "data[ItemTaxCode][tax_code_id]").as_deref(),
+        Some(""),
+        "and the edit posts an empty one, so a created product has none to lose"
+    );
+}
+
+#[test]
+fn a_removal_posts_remove_resource_and_accepts_only_its_own_id_back() {
+    let product = ProductId(PRODUCT_ID);
+    let plan = |subject| RemovalPlan {
+        attempt: WriteAttemptId(Uuid([0x61; 16])),
+        subject,
+        // Unused on TPT: `RemoveResource` takes a product id and nothing else.
+        state: ListingState::Live,
+    };
+    let removing = adapter(delete_cassette(product, delete_answer(PRODUCT_ID)));
+    let evidence = futures::executor::block_on(removing.remove(
+        org(),
+        plan(RemoteListingId::Tpt {
+            product_id: PRODUCT_ID,
+        }),
+        NOW,
+    ))
+    .expect("the recorded delete replays through the trait");
+    assert_eq!(
+        evidence.landed,
+        Some(RemoteListingId::Tpt {
+            product_id: PRODUCT_ID
+        }),
+        "the removal states the listing whose disappearance the driver will poll for"
+    );
+    assert_eq!(
+        removing.transport().remaining(),
+        0,
+        "one mutation and nothing else: no render, no read-back inside the call"
+    );
+
+    let elsewhere =
+        futures::executor::block_on(adapter(delete_cassette(product, delete_answer(9))).remove(
+            org(),
+            plan(RemoteListingId::Tpt {
+                product_id: PRODUCT_ID,
+            }),
+            NOW,
+        ));
+    assert_eq!(
+        elsewhere,
+        Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier)),
+        "an echo naming a product we did not delete settles nothing about this one"
     );
 }
 

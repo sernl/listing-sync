@@ -17,9 +17,9 @@ use serde_json::Value;
 use tam_marketplace::transport::{HttpRequest, HttpResponse, RequestBody, Transport};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
-    FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator,
+    FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, ListingState,
     MarketplaceAdapter, ObservedListing, Pause, ProjectedListing, RemoteLifecycle, RemoteListingId,
-    SchemaDrift, SubmitEvidence,
+    RemovalPlan, RevisePlan, SchemaDrift, SubmitEvidence,
 };
 use tam_types::{
     ContentHash, FailureCode, FailureDetail, FieldKey, FileId, InventoryId, OrgId, Timestamp,
@@ -641,6 +641,25 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         fields: &FieldSet,
         status: StatusUser,
     ) -> Result<SubmitLanding, AdapterError> {
+        self.post_edit(product, fields, status)
+            .await
+            .map(|(landing, _)| landing)
+    }
+
+    /// [`Self::update`] keeping the response beside the landing, so the
+    /// trait's `revise` can state the status and the body digest its own
+    /// write produced rather than re-deriving them from a second read.
+    ///
+    /// The inline `landing.product == product` check stays: it reads the
+    /// write's own response, which is classification and the adapter's job,
+    /// where a read of a lagging route would be verification and the
+    /// driver's.
+    async fn post_edit(
+        &self,
+        product: ProductId,
+        fields: &FieldSet,
+        status: StatusUser,
+    ) -> Result<(SubmitLanding, HttpResponse), AdapterError> {
         let authorship = self.attestation()?;
         let listing = write_model::listing_from_field_set(fields)?;
         let target = FormTarget::EditDigital(product);
@@ -657,7 +676,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             .await?;
         let landing = classify_edit_submit(&response, &target.path())?;
         if landing.product == product {
-            Ok(landing)
+            Ok((landing, response))
         } else {
             // The edit route names the product it edits, so a redirect to a
             // different one is not something this flow can reconcile.
@@ -684,13 +703,22 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     /// rather than refused — the mutation was posted, and a refusal here
     /// would be a claim the record survives that nothing observed.
     pub async fn delete(&self, product: ProductId) -> Result<(), AdapterError> {
-        let body = self
-            .read(endpoints::remove_resource_request(product))
+        self.post_remove(product).await.map(drop)
+    }
+
+    /// [`Self::delete`] keeping the raw answer, so the trait's `remove` can
+    /// digest the bytes the mutation actually returned. The id echo is the
+    /// whole confirmation either way and stays here, because it reads the
+    /// write's own response rather than a route that lags it.
+    async fn post_remove(&self, product: ProductId) -> Result<(ProductId, Vec<u8>), AdapterError> {
+        let response = self
+            .send_ambiguous_on_loss(endpoints::remove_resource_request(product))
             .await?;
+        let body = classify_graphql_read(&response)?;
         let deleted = read_model::parse_resource_delete(&body)
             .map_err(|_| AdapterError::Ambiguous(AmbiguityCause::ReadBackIndeterminate))?;
         if deleted == product {
-            Ok(())
+            Ok((deleted, response.body))
         } else {
             Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier))
         }
@@ -861,6 +889,74 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
             landed_on_route: Some(landing.location.clone()),
             landed: Some(RemoteListingId::Tpt {
                 product_id: landing.product.0,
+            }),
+            observed_lag: false,
+        })
+    }
+
+    /// `_from` is genuinely unused: the edit form is a full replace whichever
+    /// side of the draft line the product is on, so only `to` selects
+    /// anything. `now` is unused because the edit body carries no instant.
+    ///
+    /// The edit is a full replace and does not preserve `PAGES`,
+    /// `COMMON_CORE_ID`, `COUNTRY_ID_FLAG`, `DURATION`, `ANSWER_KEY` or
+    /// `TAX_CODE_ID`: `edit_fields` posts each of them empty or absent and
+    /// `listing_from_field_set` hardcodes `tax_code: None`. That is safe only
+    /// while every bound mapping was bound by this system's own create, which
+    /// posts none of the six either — so the blanking is a no-op on every
+    /// listing that can reach here today, pinned by
+    /// `an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry`.
+    /// Adopting a listing this system did not create makes the blanking live
+    /// and is Phase 4's to answer.
+    async fn revise(
+        &self,
+        _org: OrgId,
+        plan: RevisePlan,
+        _now: Timestamp,
+    ) -> Result<SubmitEvidence, AdapterError> {
+        let product = product_from_locator(&ListingLocator::Durable(plan.subject))?;
+        let status = match plan.transition.to {
+            ListingState::Draft => StatusUser::Draft,
+            ListingState::Live => StatusUser::Live,
+        };
+        let (landing, response) = self.post_edit(product, &plan.fields, status).await?;
+        Ok(SubmitEvidence {
+            http_status: Some(response.status),
+            // As on `submit`: this crate holds no SHA-256, so it states no
+            // body digest rather than inventing one from the hash it does
+            // hold. Adding the edge is a founder decision.
+            response_body_digest: None,
+            landed_on_route: Some(landing.location.clone()),
+            landed: Some(RemoteListingId::Tpt {
+                product_id: landing.product.0,
+            }),
+            observed_lag: false,
+        })
+    }
+
+    /// `plan.state` is unused: `RemoveResource` takes a product id and
+    /// nothing else, so TPT has no per-state removal route to choose between.
+    ///
+    /// `http_status` is `None` rather than invented: the mutation's transport
+    /// status is consumed by the GraphQL classifier, so this cell has none of
+    /// its own to state.
+    async fn remove(
+        &self,
+        _org: OrgId,
+        plan: RemovalPlan,
+        _now: Timestamp,
+    ) -> Result<SubmitEvidence, AdapterError> {
+        let product = product_from_locator(&ListingLocator::Durable(plan.subject))?;
+        let route = endpoints::remove_resource_request(product).url;
+        // The raw answer is what a body digest would be taken over; this
+        // crate holds no SHA-256, so none is stated. See `revise`.
+        let (deleted, _body) = self.post_remove(product).await?;
+        Ok(SubmitEvidence {
+            http_status: None,
+            response_body_digest: None,
+            landed_on_route: Some(route),
+            landed: Some(RemoteListingId::Tpt {
+                product_id: deleted.0,
             }),
             observed_lag: false,
         })

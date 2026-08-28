@@ -12,12 +12,12 @@
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tam_marketplace::transport::Transport;
+use tam_marketplace::transport::{HttpResponse, Transport};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
     FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, ListingState,
     MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle, RemoteListingId,
-    SubmitEvidence,
+    RemovalPlan, RevisePlan, SubmitEvidence,
 };
 use tam_types::{
     ContentHash, CurrencyRule, FailureCode, FailureDetail, FieldKey, InventoryId, Money, OrgId,
@@ -60,6 +60,32 @@ fn delete_request(state: ListingState, id: DraftId) -> tam_marketplace::transpor
     match state {
         ListingState::Draft => endpoints::delete_draft_request(id),
         ListingState::Live => endpoints::delete_resource_request(id),
+    }
+}
+
+/// The canonical resource identity, and the one thing every evidence-producing
+/// cell must agree on: `landed` becomes the bind's remote-id columns, so a
+/// revise that minted the route it posted would make `settle` report
+/// `DivergentLanding` against the mapping it had just successfully revised.
+fn canonical_url(id: DraftId) -> String {
+    format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0)
+}
+
+/// What one lifecycle write observed about itself. Every cell posts and
+/// classifies and none of them verifies, so `observed_lag` is false
+/// throughout: the lag is the driver's to observe, and no cell polls inside
+/// itself. An empty body digests to a stable value, which is a fact, where
+/// `None` would say the adapter could not state one.
+fn write_evidence(response: &HttpResponse, route: String, id: DraftId) -> SubmitEvidence {
+    let digest: [u8; 32] = Sha256::digest(&response.body).into();
+    SubmitEvidence {
+        http_status: Some(response.status),
+        response_body_digest: Some(ContentHash(digest)),
+        landed_on_route: Some(route),
+        landed: Some(RemoteListingId::Tes {
+            url: canonical_url(id),
+        }),
+        observed_lag: false,
     }
 }
 
@@ -197,10 +223,48 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// must be JSON naming this draft, which is the same positive assertion
     /// the create's own metadata step makes.
     pub async fn update(&self, id: DraftId, listing: &TesListing) -> Result<(), AdapterError> {
+        self.post_metadata(id, listing).await.map(drop)
+    }
+
+    /// The metadata POST and its own classification, without any read after
+    /// it. The trait's `revise` takes this half and leaves the verification
+    /// to the driver, which is the only layer holding a budget to poll with.
+    async fn post_metadata(
+        &self,
+        id: DraftId,
+        listing: &TesListing,
+    ) -> Result<HttpResponse, AdapterError> {
         let written = self
             .send(endpoints::set_metadata_request(id, listing))
             .await?;
-        classify_write(&written, id.0).map(drop)
+        classify_write(&written, id.0)?;
+        Ok(written)
+    }
+
+    /// The publish POST and its status classification, without the state read
+    /// that [`Self::publish`] proves itself with.
+    async fn post_publish(
+        &self,
+        id: DraftId,
+        listing: &TesListing,
+    ) -> Result<HttpResponse, AdapterError> {
+        let published = self.send(endpoints::publish_request(id, listing)).await?;
+        classify_write_status(&published)?;
+        Ok(published)
+    }
+
+    /// The delete POST and nothing else — not even a status classification,
+    /// because `DELETE .../{id}/draft` answers 204 whether or not it removed
+    /// anything (the misleading-204 measured in M0), so only a read can
+    /// settle a deletion. [`Self::delete`] follows this with that read; the
+    /// trait's `remove` leaves it to the driver's poll, because the route
+    /// that would answer lags by seconds.
+    async fn post_delete(
+        &self,
+        id: DraftId,
+        state: ListingState,
+    ) -> Result<HttpResponse, AdapterError> {
+        self.send(delete_request(state, id)).await
     }
 
     /// Publishes the draft, then proves it by reading the state back. The
@@ -210,8 +274,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// it: the licence and, for a paid listing, the price both reach the API
     /// here rather than on the draft alone.
     pub async fn publish(&self, id: DraftId, listing: &TesListing) -> Result<Value, AdapterError> {
-        let published = self.send(endpoints::publish_request(id, listing)).await?;
-        classify_write_status(&published)?;
+        self.post_publish(id, listing).await?;
         let state = self.resource_state(id).await?;
         let is_published = state.get("draft").and_then(Value::as_bool) == Some(false)
             || state.get("isPublic").and_then(Value::as_bool) == Some(true);
@@ -239,7 +302,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// success, which is why the verdict is the follow-up read on the stated
     /// state's own route and never the delete's own status.
     pub async fn delete(&self, id: DraftId, state: ListingState) -> Result<(), AdapterError> {
-        self.send(delete_request(state, id)).await?;
+        self.post_delete(id, state).await?;
         let after = self.send(read_request(state, id)).await?;
         gone(after.status, route_name(state))
     }
@@ -540,15 +603,81 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         Ok(SubmitEvidence {
             http_status: Some(200),
             response_body_digest: Some(ContentHash(digest)),
-            landed_on_route: Some(format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0)),
+            landed_on_route: Some(canonical_url(id)),
             // The durable identifier the create returned, so the pre-settle
             // verification read addresses the resource directly rather than
             // search for a marker the JSON API never carried.
             landed: Some(RemoteListingId::Tes {
-                url: format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0),
+                url: canonical_url(id),
             }),
             observed_lag: false,
         })
+    }
+
+    /// `now` is unused for the same reason it is unused on
+    /// [`MarketplaceAdapter::submit`]: no Tes request carries an instant.
+    ///
+    /// Only the two transitions out of `Draft` are captured. No capture shows
+    /// `POST /{id}/draft` against a published resource, and M0 recorded that
+    /// the `/draft` route is a draft *overlay* whose delete answers a
+    /// misleading 204 — so guessing that it edits or unpublishes a live
+    /// listing would edit an overlay and leave the live listing standing.
+    async fn revise(
+        &self,
+        _org: OrgId,
+        plan: RevisePlan,
+        _now: Timestamp,
+    ) -> Result<SubmitEvidence, AdapterError> {
+        let id = Self::draft_id_from_locator(&ListingLocator::Durable(plan.subject))?;
+        let listing = Self::listing_from_field_set(&plan.fields)?;
+        match (plan.transition.from, plan.transition.to) {
+            // The metadata POST answers with JSON naming the draft, and
+            // `post_metadata` asserts it: free evidence the write's own
+            // response carries, where the publish route answers status only.
+            (ListingState::Draft, ListingState::Draft) => {
+                let response = self.post_metadata(id, &listing).await?;
+                let route = format!("{}/api/v2/resources/{}/draft", endpoints::ORIGIN, id.0);
+                Ok(write_evidence(&response, route, id))
+            }
+            (ListingState::Draft, ListingState::Live) => {
+                let response = self.post_publish(id, &listing).await?;
+                let route = format!(
+                    "{}/api/v2/resources/{}/draft/publish",
+                    endpoints::ORIGIN,
+                    id.0
+                );
+                Ok(write_evidence(&response, route, id))
+            }
+            (ListingState::Live, ListingState::Live) => Err(AdapterError::Uncaptured {
+                capability: "tes.edit_published",
+            }),
+            (ListingState::Live, ListingState::Draft) => Err(AdapterError::Uncaptured {
+                capability: "tes.unpublish",
+            }),
+        }
+    }
+
+    /// The state selects which delete is posted and that is load-bearing:
+    /// each route 404s for the other's resource, and choosing it from a probe
+    /// is the 2026-08-29 incident, where a publish-lagged read said "draft"
+    /// for a live listing and only its overlay was removed.
+    ///
+    /// `plan.attempt` is unused here: the authorisation is structural, in the
+    /// closed `Effect` set that is the only thing able to reach this call.
+    async fn remove(
+        &self,
+        _org: OrgId,
+        plan: RemovalPlan,
+        _now: Timestamp,
+    ) -> Result<SubmitEvidence, AdapterError> {
+        let id = Self::draft_id_from_locator(&ListingLocator::Durable(plan.subject))?;
+        let response = self.post_delete(id, plan.state).await?;
+        classify_write_status(&response)?;
+        let route = match plan.state {
+            ListingState::Draft => format!("{}/api/v2/resources/{}/draft", endpoints::ORIGIN, id.0),
+            ListingState::Live => canonical_url(id),
+        };
+        Ok(write_evidence(&response, route, id))
     }
 
     async fn read_back(

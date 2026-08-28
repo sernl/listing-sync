@@ -8,8 +8,9 @@ use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{FilePart, HttpResponse};
 use tam_marketplace::{
     AdapterError, AgeSpan, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource,
-    FileSourceError, FormId, ListingLocator, ListingState, MarketplaceAdapter, NativeTerm,
-    ProjectedListing, RemoteLifecycle, RemoteListingId, WriteAttemptId,
+    FileSourceError, FormId, LifecycleTransition, ListingLocator, ListingState, MarketplaceAdapter,
+    NativeTerm, ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan,
+    WriteAttemptId,
 };
 use tam_marketplace_tes::endpoints::{
     self, CatalogueEntry, DraftId, FreeLicence, TesListing, TesPrice, TesPricing,
@@ -604,6 +605,226 @@ fn a_published_resource_still_readable_after_its_delete_is_a_mismatch() {
             })
         ),
         "a 204 with the resource still readable is not a delete on this route either"
+    );
+}
+
+fn revise_plan(transition: LifecycleTransition) -> RevisePlan {
+    RevisePlan {
+        subject: RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        },
+        fields: sample_field_set_without_files(),
+        transition,
+    }
+}
+
+fn sample_field_set_without_files() -> FieldSet {
+    FieldSet {
+        files: vec![],
+        ..sample_field_set(FileId(Uuid([0x21; 16])))
+    }
+}
+
+fn removal_plan(state: ListingState) -> RemovalPlan {
+    RemovalPlan {
+        attempt: WriteAttemptId(Uuid([0x61; 16])),
+        subject: RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        },
+        state,
+    }
+}
+
+/// The four-case dispatch, on the two cells a capture settles. Collapsing it
+/// to one route would silently publish an edit, or silently fail to publish
+/// a publish.
+#[test]
+fn revise_to_live_publishes_and_revise_to_draft_reposts_the_metadata() {
+    for (label, transition, request, route) in [
+        (
+            "an edit that keeps the draft",
+            LifecycleTransition {
+                from: ListingState::Draft,
+                to: ListingState::Draft,
+            },
+            endpoints::set_metadata_request(DRAFT, &sample_listing()),
+            "https://www.tes.com/api/v2/resources/9001/draft",
+        ),
+        (
+            "a publish",
+            LifecycleTransition {
+                from: ListingState::Draft,
+                to: ListingState::Live,
+            },
+            endpoints::publish_request(DRAFT, &sample_listing()),
+            "https://www.tes.com/api/v2/resources/9001/draft/publish",
+        ),
+    ] {
+        let cassette = Cassette {
+            interactions: vec![Interaction {
+                request,
+                response: ok(&draft_state(9001, false)),
+            }],
+        };
+        let adapter = adapter(cassette, vec![]);
+        let evidence =
+            futures::executor::block_on(adapter.revise(ORG, revise_plan(transition), NOW))
+                .unwrap_or_else(|error| panic!("{label}: the cell posts its route: {error:?}"));
+        assert_eq!(
+            evidence.landed_on_route.as_deref(),
+            Some(route),
+            "{label}: the evidence names the route the write went to"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{label}: the cell posts and classifies and reads nothing back — verification is \
+             the driver's, because only the driver holds a budget to poll with"
+        );
+    }
+}
+
+/// The exact invention the charter forbids: no capture shows `POST
+/// /{id}/draft` against a published resource, and the `/draft` route is a
+/// draft overlay, so guessing would edit the overlay and leave the live
+/// listing standing.
+#[test]
+fn an_edit_of_a_published_resource_is_uncaptured_rather_than_guessed() {
+    for (label, to, capability) in [
+        (
+            "editing a live listing",
+            ListingState::Live,
+            "tes.edit_published",
+        ),
+        ("unpublishing", ListingState::Draft, "tes.unpublish"),
+    ] {
+        let adapter = adapter(
+            Cassette {
+                interactions: vec![],
+            },
+            vec![],
+        );
+        let refused = futures::executor::block_on(adapter.revise(
+            ORG,
+            revise_plan(LifecycleTransition {
+                from: ListingState::Live,
+                to,
+            }),
+            NOW,
+        ));
+        assert_eq!(
+            refused,
+            Err(AdapterError::Uncaptured { capability }),
+            "{label}: a capability no capture settles is refused, not approximated"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{label}: and the refusal sends nothing at all"
+        );
+    }
+}
+
+/// The state selects the route and nothing probes for it — the 2026-08-29
+/// incident, where a publish-lagged read said "draft" for a live listing and
+/// only its overlay was removed.
+#[test]
+fn a_removal_deletes_the_route_the_stated_state_lives_at() {
+    for (label, state, deletion, route) in [
+        (
+            "a draft",
+            ListingState::Draft,
+            endpoints::delete_draft_request(DRAFT),
+            "https://www.tes.com/api/v2/resources/9001/draft",
+        ),
+        (
+            "a published resource",
+            ListingState::Live,
+            endpoints::delete_resource_request(DRAFT),
+            "https://www.tes.com/api/v2/resources/9001",
+        ),
+    ] {
+        let cassette = Cassette {
+            interactions: vec![Interaction {
+                request: deletion,
+                response: status(204),
+            }],
+        };
+        let adapter = adapter(cassette, vec![]);
+        let evidence = futures::executor::block_on(adapter.remove(ORG, removal_plan(state), NOW))
+            .unwrap_or_else(|error| {
+                panic!("{label}: the stated state decides the route: {error:?}")
+            });
+        assert_eq!(
+            evidence.landed_on_route.as_deref(),
+            Some(route),
+            "{label}: the evidence names the delete that was posted"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{label}: the removal posts and does not confirm; the disappearance is the \
+             driver's to poll for, on a route that lags this write by seconds"
+        );
+    }
+}
+
+/// `landed` becomes the bind's remote-id columns. A revise that minted the
+/// route it posted rather than the canonical resource identity would make
+/// `settle` report `DivergentLanding` against the mapping it had just
+/// successfully revised.
+#[test]
+fn a_revise_and_a_create_mint_the_same_landed_identifier() {
+    let created = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::create_draft_request(),
+                response: ok(&json!({"id": 9001})),
+            },
+            Interaction {
+                request: endpoints::set_metadata_request(DRAFT, &sample_listing()),
+                response: ok(&draft_state(9001, true)),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+        ],
+    };
+    let submitted = futures::executor::block_on(adapter(created, vec![]).submit(
+        ORG,
+        tam_marketplace::IdempotencyKey(Uuid([2; 16])),
+        sample_field_set_without_files(),
+        NOW,
+    ))
+    .expect("the create lands");
+
+    let revised = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::set_metadata_request(DRAFT, &sample_listing()),
+            response: ok(&draft_state(9001, true)),
+        }],
+    };
+    let evidence = futures::executor::block_on(adapter(revised, vec![]).revise(
+        ORG,
+        revise_plan(LifecycleTransition {
+            from: ListingState::Draft,
+            to: ListingState::Draft,
+        }),
+        NOW,
+    ))
+    .expect("the revise lands");
+
+    assert_eq!(
+        evidence.landed, submitted.landed,
+        "a create and a revise of one resource must mint one identity, byte for byte"
+    );
+    assert_eq!(
+        evidence.landed,
+        Some(RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        }),
+        "and it is the canonical resource url, never the route the write went to"
     );
 }
 

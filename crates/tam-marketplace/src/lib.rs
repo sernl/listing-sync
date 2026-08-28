@@ -321,6 +321,13 @@ pub enum ListingState {
     Live,
 }
 
+/// Where the caller states the listing is now and where this write leaves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleTransition {
+    pub from: ListingState,
+    pub to: ListingState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaDrift {
     pub form: FormId,
@@ -432,6 +439,10 @@ pub struct SubmitEvidence {
     /// state it — Tes can, because its create returns the resource id. This
     /// is what lets the pre-settle verification read address the listing by a
     /// durable id rather than by a marker search no adapter can serve yet.
+    ///
+    /// It is what the verification read *addresses*, not a claim that this
+    /// write created it: a removal states the listing whose disappearance is
+    /// its proof, and the driver turns that into a sever rather than a bind.
     pub landed: Option<RemoteListingId>,
     pub observed_lag: bool,
 }
@@ -505,6 +516,60 @@ pub trait MarketplaceAdapter: Send + Sync {
         reason: FetchReason,
         observed_at: Timestamp,
     ) -> impl std::future::Future<Output = Result<ObservedListing, AdapterError>> + Send;
+
+    /// Rewrites an existing listing and states which side of the draft line
+    /// it should land on. Publishing is this call with `to: Live`; an edit
+    /// that means to keep the current state names it on both halves.
+    ///
+    /// The transition travels whole because both routes are asymmetric and
+    /// discovering the current state is unsound: the route that would answer
+    /// lags the write that produced it (Tes measured 2026-08-29, TPT
+    /// 2026-08-28), so a probe run soon after a write reads a live listing as
+    /// a draft. A caller that just wrote always knows what it wrote.
+    ///
+    /// Every implementation posts and classifies; none of them verifies.
+    /// Verification is the driver's, because only the driver holds a budget
+    /// to poll with.
+    fn revise(
+        &self,
+        org: OrgId,
+        plan: RevisePlan,
+        now: Timestamp,
+    ) -> impl std::future::Future<Output = Result<SubmitEvidence, AdapterError>> + Send;
+
+    /// Removes an existing listing from the state the caller states it is in.
+    ///
+    /// `plan.attempt` is the authorisation: a removal is permitted only while
+    /// the caller holds the open, epoch-fenced `write_attempt` row for the
+    /// mapping that names this listing. The row is written before the click,
+    /// so a removal that reached the marketplace is one the ledger asked for.
+    /// The structural enforcement is the closed `Effect` set, not this
+    /// argument: `Effect::Remove` is constructible only inside `tam-domain`
+    /// and reachable only from a state a successful `RecordIntent` produced.
+    fn remove(
+        &self,
+        org: OrgId,
+        plan: RemovalPlan,
+        now: Timestamp,
+    ) -> impl std::future::Future<Output = Result<SubmitEvidence, AdapterError>> + Send;
+}
+
+/// What a revise addresses and what it means to do to it. A struct rather
+/// than four more parameters, which is also what keeps the subject and the
+/// transition travelling together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisePlan {
+    pub subject: RemoteListingId,
+    pub fields: FieldSet,
+    pub transition: LifecycleTransition,
+}
+
+/// What a removal addresses, and the open fenced attempt that authorises it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovalPlan {
+    pub attempt: WriteAttemptId,
+    pub subject: RemoteListingId,
+    pub state: ListingState,
 }
 
 /// A seller's own listing as the first-party import read yields it:
@@ -663,6 +728,19 @@ pub trait Pause: Send + Sync {
     fn pause(&self, ms: u32) -> impl std::future::Future<Output = ()> + Send;
 }
 
+/// A [`Pause`] that returns immediately. Cassette-driven tests replay a
+/// recorded poll sequence, and the driver's verification poll is stepped the
+/// same way, where a real wait would add nothing but wall-clock time to the
+/// gated lane.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InstantPause;
+
+impl Pause for InstantPause {
+    fn pause(&self, _ms: u32) -> impl std::future::Future<Output = ()> + Send {
+        core::future::ready(())
+    }
+}
+
 /// The six transport faults the research names, plus the two ambiguity faults
 /// this design adds because no external service will produce them on demand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -685,7 +763,7 @@ pub trait FaultPlan: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{settle, FieldDiffReport, Outcome, RemoteListingId};
+    use super::{settle, FieldDiffReport, InstantPause, Outcome, Pause as _, RemoteListingId};
     use tam_types::{AttemptId, FieldKey, FieldMismatch, MismatchClass, Timestamp, Uuid};
 
     fn receipt_parts() -> (AttemptId, RemoteListingId, Timestamp) {
@@ -727,5 +805,10 @@ mod tests {
             matches!(outcome, Outcome::Degraded { .. }),
             "a truncated landing must not be recorded as clean"
         );
+    }
+
+    #[test]
+    fn the_instant_pause_returns_without_waiting() {
+        futures::executor::block_on(InstantPause.pause(60_000));
     }
 }
