@@ -14,8 +14,9 @@ pub mod registry;
 use tam_marketplace::{
     settle, verify_after, AdapterError, AmbiguityCause, ChallengeKind, CorrelationMarker,
     CreateStrategy, EvidenceRef, FetchReason, FieldDiffReport, FieldSet, FormId,
-    FormSchemaFingerprint, IdempotencyKey, ListingLocator, ObservedListing, Outcome,
-    RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence, WriteAttemptId,
+    FormSchemaFingerprint, IdempotencyKey, LifecycleTransition, ListingLocator, ListingState,
+    ObservedListing, Outcome, RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence,
+    WriteAttemptId,
 };
 use tam_types::{
     AttemptId, CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail,
@@ -397,18 +398,50 @@ pub enum SellerEvent {
     InventoryHalted,
 }
 
+/// What one item does to the listing its mapping names. Closed, because the
+/// driver's effect interpretation and the read-back's polarity are both total
+/// functions of it. A create holds no subject because nothing exists yet; a
+/// revise and a remove must hold one, because only a bound mapping can be
+/// revised or removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ItemOperation {
+    Create,
+    Revise {
+        subject: RemoteListingId,
+        transition: LifecycleTransition,
+    },
+    Remove {
+        subject: RemoteListingId,
+        state: ListingState,
+    },
+}
+
+impl ItemOperation {
+    /// The listing this operation addresses, which a create does not have.
+    #[must_use]
+    pub const fn subject(&self) -> Option<&RemoteListingId> {
+        match self {
+            Self::Create => None,
+            Self::Revise { subject, .. } | Self::Remove { subject, .. } => Some(subject),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncState {
     AwaitingPreflight,
+    /// `None` where the operation asserts no form: a revise and a removal
+    /// both skip the preflight, so there is no fingerprint for a later drift
+    /// to be measured against and saying so is more honest than inventing one.
     PreflightAsserted {
-        schema: FormSchemaFingerprint,
+        schema: Option<FormSchemaFingerprint>,
     },
     /// Carries the asserted fingerprint alongside the attempt, because a
     /// provably-never-sent submit returns to `PreflightAsserted`, and that
     /// state is defined by the fingerprint a later drift is measured against.
     IntentRecorded {
         attempt: WriteAttemptId,
-        schema: FormSchemaFingerprint,
+        schema: Option<FormSchemaFingerprint>,
     },
     Submitted {
         attempt: WriteAttemptId,
@@ -459,6 +492,21 @@ pub enum Effect {
         attempt: WriteAttemptId,
         key: IdempotencyKey,
         fields: FieldSet,
+    },
+    /// Neither lifecycle write carries an `IdempotencyKey`, because neither
+    /// platform offers an idempotent edit or delete: the fenced attempt row
+    /// is what stands in, which is the same argument `Submit` already records
+    /// for Tes.
+    Revise {
+        attempt: WriteAttemptId,
+        subject: RemoteListingId,
+        fields: FieldSet,
+        transition: LifecycleTransition,
+    },
+    Remove {
+        attempt: WriteAttemptId,
+        subject: RemoteListingId,
+        state: ListingState,
     },
     ReadBack {
         locator: ListingLocator,
@@ -549,6 +597,10 @@ pub struct SyncMachine {
     /// names them and a resubmit after a never-sent request writes the same set.
     pub fields: FieldSet,
     pub strategy: CreateStrategy,
+    /// What this item does to the listing its mapping names. The entry row,
+    /// the write effect, the read-back's polarity and the reconcile are all
+    /// total functions of it.
+    pub operation: ItemOperation,
     pub state: SyncState,
     pub budget: StepBudget,
 }
@@ -573,6 +625,7 @@ impl SyncMachine {
         intent_hash: ContentHash,
         fields: FieldSet,
         strategy: CreateStrategy,
+        operation: ItemOperation,
         budget: StepBudget,
     ) -> Result<Transition, MachineError> {
         let machine = Self {
@@ -585,11 +638,32 @@ impl SyncMachine {
             intent_hash,
             fields,
             strategy,
+            operation,
             state: SyncState::AwaitingPreflight,
             budget,
         };
-        let effects = vec![Effect::AssertFormSchema { form }];
-        machine.advance(SyncState::AwaitingPreflight, effects)
+        let (state, effects) = machine.entry_row(form);
+        machine.advance(state, effects)
+    }
+
+    /// Only a create asserts a form schema. Tes's assertion is write-bearing —
+    /// it creates a draft, writes it, reads it and deletes it on the seller's
+    /// real store — so asserting on every revise would multiply probe drafts
+    /// by the size of a bulk revise, and a removal describes no form at all.
+    /// The edit path's drift detection is the canary's, on its own cadence.
+    fn entry_row(&self, form: FormId) -> (SyncState, Vec<Effect>) {
+        match self.operation {
+            ItemOperation::Create => (
+                SyncState::AwaitingPreflight,
+                vec![Effect::AssertFormSchema { form }],
+            ),
+            ItemOperation::Revise { .. } | ItemOperation::Remove { .. } => (
+                SyncState::PreflightAsserted { schema: None },
+                vec![Effect::RecordIntent {
+                    intent_hash: self.intent_hash,
+                }],
+            ),
+        }
     }
 
     /// Consumes the machine so a stale state cannot be stepped twice, and takes
@@ -651,7 +725,12 @@ impl SyncMachine {
                 let effects = vec![Effect::RecordIntent {
                     intent_hash: self.intent_hash,
                 }];
-                self.advance(SyncState::PreflightAsserted { schema }, effects)
+                self.advance(
+                    SyncState::PreflightAsserted {
+                        schema: Some(schema),
+                    },
+                    effects,
+                )
             }
             Input::PreflightResult(Err(drift)) => {
                 let effects = vec![
@@ -686,15 +765,11 @@ impl SyncMachine {
     fn preflight_asserted_rows(
         self,
         input: &Input,
-        schema: FormSchemaFingerprint,
+        schema: Option<FormSchemaFingerprint>,
     ) -> Result<Transition, MachineError> {
         match *input {
             Input::IntentRecorded(attempt) => {
-                let effects = vec![Effect::Submit {
-                    attempt,
-                    key: self.key,
-                    fields: self.fields.clone(),
-                }];
+                let effects = vec![self.write_effect(attempt)];
                 self.advance(SyncState::IntentRecorded { attempt, schema }, effects)
             }
             Input::PreflightResult(_)
@@ -707,11 +782,38 @@ impl SyncMachine {
         }
     }
 
+    /// The one write this operation means, named by the attempt that
+    /// authorises it. Every arm carries the same fencing token, which is what
+    /// makes the write-safety properties quantify over all three.
+    fn write_effect(&self, attempt: WriteAttemptId) -> Effect {
+        match &self.operation {
+            ItemOperation::Create => Effect::Submit {
+                attempt,
+                key: self.key,
+                fields: self.fields.clone(),
+            },
+            ItemOperation::Revise {
+                subject,
+                transition,
+            } => Effect::Revise {
+                attempt,
+                subject: subject.clone(),
+                fields: self.fields.clone(),
+                transition: *transition,
+            },
+            ItemOperation::Remove { subject, state } => Effect::Remove {
+                attempt,
+                subject: subject.clone(),
+                state: *state,
+            },
+        }
+    }
+
     fn intent_recorded_rows(
         self,
         input: Input,
         attempt: WriteAttemptId,
-        schema: FormSchemaFingerprint,
+        schema: Option<FormSchemaFingerprint>,
         now: LogicalInstant,
     ) -> Result<Transition, MachineError> {
         match input {
@@ -781,28 +883,7 @@ impl SyncMachine {
         now: LogicalInstant,
     ) -> Result<Transition, MachineError> {
         match input {
-            // A listing that is not there is not a landing. The observation is
-            // evidence that the verification read found nothing, which under
-            // the stall bias is the halting ambiguity rather than a silent
-            // commit of a listing no read has ever seen.
-            Input::ReadBackResult(Ok(observed))
-                if matches!(observed.lifecycle, RemoteLifecycle::Absent) =>
-            {
-                self.halt_ambiguous(
-                    attempt,
-                    AmbiguityCause::ReadBackIndeterminate,
-                    Capture::Diagnostics,
-                )
-            }
-            Input::ReadBackResult(Ok(observed)) => {
-                let outcome = settle(
-                    as_attempt_id(attempt),
-                    observed.id,
-                    Timestamp(now.0),
-                    unnormalised_report(),
-                );
-                self.advance(SyncState::Terminal(outcome), vec![])
-            }
+            Input::ReadBackResult(Ok(observed)) => self.observed_rows(observed, attempt, now),
             Input::ReadBackResult(Err(AdapterError::Ambiguous(cause))) => {
                 let effects = vec![
                     Effect::CaptureDiagnostics {
@@ -870,15 +951,61 @@ impl SyncMachine {
         }
     }
 
+    /// What the verification read proves, which is the one thing that inverts
+    /// with the operation: a create and a revise are proved by finding the
+    /// listing, a removal by not finding it.
+    ///
+    /// A create or revise that observes absence after the whole poll budget is
+    /// the stall bias doing its job — the write may have landed and we cannot
+    /// see it, which is `Ambiguous`, never a silent commit. A removal that
+    /// still finds the listing did not take, which is a refusal the ledger can
+    /// act on rather than an ambiguity that halts the tenant.
+    fn observed_rows(
+        self,
+        observed: ObservedListing,
+        attempt: WriteAttemptId,
+        now: LogicalInstant,
+    ) -> Result<Transition, MachineError> {
+        let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
+        let removing = matches!(self.operation, ItemOperation::Remove { .. });
+        if absent == removing {
+            let outcome = settle(
+                as_attempt_id(attempt),
+                observed.id,
+                Timestamp(now.0),
+                unnormalised_report(),
+            );
+            return self.advance(SyncState::Terminal(outcome), vec![]);
+        }
+        if removing {
+            let outcome = Outcome::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(
+                    "the removal's verification read still found the listing".to_owned(),
+                ),
+            };
+            return self.advance(SyncState::Terminal(outcome), vec![]);
+        }
+        self.halt_ambiguous(
+            attempt,
+            AmbiguityCause::ReadBackIndeterminate,
+            Capture::Diagnostics,
+        )
+    }
+
     fn parked_rows(
         self,
         input: &Input,
         challenge: ChallengeKind,
     ) -> Result<Transition, MachineError> {
         match *input {
+            // Branched exactly as the entry row is: a revise or a removal
+            // parked on a captcha and then cleared must not acquire a form
+            // assertion on its way back in, which on Tes is the write-bearing
+            // probe draft the whole branch exists to avoid.
             Input::ChallengeCleared => {
-                let effects = vec![Effect::AssertFormSchema { form: self.form }];
-                self.advance(SyncState::AwaitingPreflight, effects)
+                let (state, effects) = self.entry_row(self.form);
+                self.advance(state, effects)
             }
             Input::ParkExpired => {
                 let effects = vec![Effect::Notify {
@@ -976,6 +1103,26 @@ impl SyncMachine {
     /// Where there is nothing to search for, the strategy's meaning is to stop,
     /// which is what `HaltOnAmbiguity` says in its name.
     fn reconcile(self, attempt: WriteAttemptId) -> Result<Transition, MachineError> {
+        // A revise and a removal were *given* a durable identifier, which is
+        // strictly better than a marker: there is nothing to search for, so
+        // the read-back's polarity decides and the strategy has no bearing.
+        // Halting the tenant's inventory here would be the halt-on-lag
+        // failure the verification poll exists to remove, arriving through
+        // another door.
+        if let Some(subject) = self.operation.subject() {
+            let locator = ListingLocator::Durable(subject.clone());
+            let effects = vec![
+                Effect::ReadBack {
+                    locator: locator.clone(),
+                    reason: FetchReason::VerifyAttempt { attempt },
+                },
+                Effect::CaptureDiagnostics {
+                    attempt: Some(attempt),
+                    cause: CaptureCause::Ambiguity,
+                },
+            ];
+            return self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects);
+        }
         let marker = match self.strategy {
             CreateStrategy::CorrelationMarker { .. } => marker_for(attempt),
             CreateStrategy::DraftThenPublish { .. } | CreateStrategy::HaltOnAmbiguity => {
@@ -1355,6 +1502,15 @@ mod machine_tests {
     }
 
     fn machine(state: SyncState, strategy: CreateStrategy, actions_remaining: u32) -> SyncMachine {
+        machine_for(ItemOperation::Create, state, strategy, actions_remaining)
+    }
+
+    fn machine_for(
+        operation: ItemOperation,
+        state: SyncState,
+        strategy: CreateStrategy,
+        actions_remaining: u32,
+    ) -> SyncMachine {
         SyncMachine {
             org: org(),
             inventory: InventoryId::TesGb,
@@ -1365,8 +1521,26 @@ mod machine_tests {
             intent_hash: intent_hash(),
             fields: fields(),
             strategy,
+            operation,
             state,
             budget: StepBudget { actions_remaining },
+        }
+    }
+
+    fn removal() -> ItemOperation {
+        ItemOperation::Remove {
+            subject: listing(),
+            state: ListingState::Live,
+        }
+    }
+
+    fn publication() -> ItemOperation {
+        ItemOperation::Revise {
+            subject: listing(),
+            transition: LifecycleTransition {
+                from: ListingState::Draft,
+                to: ListingState::Live,
+            },
         }
     }
 
@@ -1426,6 +1600,7 @@ mod machine_tests {
             intent_hash(),
             fields(),
             marker_strategy(),
+            ItemOperation::Create,
             StepBudget {
                 actions_remaining: 10,
             },
@@ -1467,6 +1642,7 @@ mod machine_tests {
             intent_hash(),
             fields(),
             marker_strategy(),
+            ItemOperation::Create,
             StepBudget {
                 actions_remaining: 0,
             },
@@ -1485,7 +1661,9 @@ mod machine_tests {
             .expect("a preflight result applies in AwaitingPreflight");
         assert_eq!(
             transition.next.state,
-            SyncState::PreflightAsserted { schema: schema() },
+            SyncState::PreflightAsserted {
+                schema: Some(schema()),
+            },
             "the asserted fingerprint is what a later drift is measured against"
         );
         assert_eq!(
@@ -1527,7 +1705,9 @@ mod machine_tests {
     #[test]
     fn row_preflight_asserted_intent_recorded_submits() {
         let transition = machine(
-            SyncState::PreflightAsserted { schema: schema() },
+            SyncState::PreflightAsserted {
+                schema: Some(schema()),
+            },
             marker_strategy(),
             10,
         )
@@ -1537,7 +1717,7 @@ mod machine_tests {
             transition.next.state,
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             "the recorded intent carries the fingerprint a never-sent submit returns to"
         );
@@ -1557,7 +1737,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1587,7 +1767,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1617,7 +1797,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             CreateStrategy::HaltOnAmbiguity,
             10,
@@ -1641,7 +1821,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1681,7 +1861,7 @@ mod machine_tests {
             let transition = machine(
                 SyncState::IntentRecorded {
                     attempt: attempt(),
-                    schema: schema(),
+                    schema: Some(schema()),
                 },
                 strategy,
                 10,
@@ -1717,7 +1897,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1750,7 +1930,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1791,7 +1971,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1832,7 +2012,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1868,7 +2048,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1897,7 +2077,7 @@ mod machine_tests {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -1909,7 +2089,9 @@ mod machine_tests {
         .expect("a submit result applies in IntentRecorded");
         assert_eq!(
             transition.next.state,
-            SyncState::PreflightAsserted { schema: schema() },
+            SyncState::PreflightAsserted {
+                schema: Some(schema()),
+            },
             "the only class that provably never left is the only one that returns pre-submit"
         );
         assert_eq!(
@@ -1974,6 +2156,205 @@ mod machine_tests {
             ]),
             "an unverifiable write halts the tenant's inventory rather than proceeding"
         );
+    }
+
+    /// The single likeliest error in this change is a polarity copied from
+    /// the create path, under which a removal would settle Committed on
+    /// finding the listing it failed to remove.
+    #[test]
+    fn a_removal_settles_on_absence_and_refuses_on_presence() {
+        let gone = machine_for(
+            removal(),
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: ListingLocator::Durable(listing()),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ReadBackResult(Ok(observed_absent())), now())
+        .expect("a read-back result applies in AwaitingReadBack");
+        assert_eq!(
+            gone.next.state,
+            SyncState::Terminal(settled()),
+            "a removal is proved by the listing not being there"
+        );
+        assert_eq!(
+            gone.effects,
+            EffectList(vec![]),
+            "a settled removal asks for nothing"
+        );
+
+        let refused = machine_for(
+            removal(),
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: ListingLocator::Durable(listing()),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ReadBackResult(Ok(observed())), now())
+        .expect("a read-back result applies in AwaitingReadBack");
+        assert_eq!(
+            refused.next.state,
+            SyncState::Terminal(Outcome::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(
+                    "the removal's verification read still found the listing".to_owned()
+                ),
+            }),
+            "a removal that still finds its listing did not take, and says so per item"
+        );
+        assert_eq!(
+            refused.effects,
+            EffectList(vec![]),
+            "and it does not halt the tenant's inventory over one item's refusal"
+        );
+    }
+
+    /// On Tes the form assertion creates, writes, reads and deletes a probe
+    /// draft on the seller's real store. A removal that ran it would do that
+    /// before every deletion, and a bulk removal would multiply it.
+    #[test]
+    fn a_removal_asserts_no_form_schema() {
+        let entry = SyncMachine::initial(
+            org(),
+            InventoryId::TesGb,
+            connection(),
+            form(),
+            item(),
+            key(),
+            intent_hash(),
+            fields(),
+            marker_strategy(),
+            removal(),
+            StepBudget {
+                actions_remaining: 10,
+            },
+        )
+        .expect("a ten-action budget affords the single entry effect");
+        assert_eq!(
+            entry.next.state,
+            SyncState::PreflightAsserted { schema: None },
+            "a removal describes no form, so there is no fingerprint to assert"
+        );
+        assert_eq!(
+            entry.effects,
+            EffectList(vec![Effect::RecordIntent {
+                intent_hash: intent_hash(),
+            }]),
+            "the entry row records the intent and asserts nothing"
+        );
+
+        // The parked path is the one a test that only steps `initial` would
+        // pass green over: a removal parked on a captcha for a long-running
+        // tenant re-enters through here.
+        let cleared = machine_for(
+            removal(),
+            SyncState::Parked {
+                attempt: Some(attempt()),
+                challenge: ChallengeKind::Captcha,
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ChallengeCleared, now())
+        .expect("a cleared challenge applies in Parked");
+        assert_eq!(
+            cleared.next.state,
+            SyncState::PreflightAsserted { schema: None },
+            "a cleared removal re-enters where it entered, not at the preflight"
+        );
+        assert!(
+            !cleared
+                .effects
+                .0
+                .iter()
+                .any(|effect| matches!(effect, Effect::AssertFormSchema { .. })),
+            "and it acquires no form assertion on the way back in"
+        );
+    }
+
+    /// The transition is carried, never reconstructed: no column records which
+    /// side of the draft line a listing sits on, so a machine that rebuilt it
+    /// from the mapping would be reading a lie.
+    #[test]
+    fn a_revise_to_live_emits_the_transition_it_was_seeded_with() {
+        let transition = machine_for(
+            publication(),
+            SyncState::PreflightAsserted { schema: None },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::IntentRecorded(attempt()), now())
+        .expect("an intent applies in PreflightAsserted");
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::Revise {
+                attempt: attempt(),
+                subject: listing(),
+                fields: fields(),
+                transition: LifecycleTransition {
+                    from: ListingState::Draft,
+                    to: ListingState::Live,
+                },
+            }]),
+            "the effect carries the transition the item was seeded with, whole"
+        );
+        assert_eq!(
+            transition.next.state,
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: None,
+            },
+            "a revise records its intent with no fingerprint, because it asserted none"
+        );
+    }
+
+    /// An ambiguous revise or removal holds its own durable identifier, which
+    /// is strictly better than a marker. Halting the tenant's inventory here
+    /// would be the halt-on-lag failure arriving through another door.
+    #[test]
+    fn an_ambiguous_lifecycle_write_re_reads_its_subject_rather_than_halting() {
+        for (label, operation) in [("a publish", publication()), ("a removal", removal())] {
+            let transition = machine_for(
+                operation,
+                SyncState::IntentRecorded {
+                    attempt: attempt(),
+                    schema: None,
+                },
+                draft_strategy(),
+                10,
+            )
+            .step(
+                Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+                now(),
+            )
+            .expect("a submit result applies in IntentRecorded");
+            assert_eq!(
+                transition.next.state,
+                SyncState::AwaitingReadBack {
+                    attempt: attempt(),
+                    locator: ListingLocator::Durable(listing()),
+                },
+                "{label}: the subject it was given is what the read addresses"
+            );
+            assert_eq!(
+                transition.effects,
+                EffectList(vec![
+                    Effect::ReadBack {
+                        locator: ListingLocator::Durable(listing()),
+                        reason: FetchReason::VerifyAttempt { attempt: attempt() },
+                    },
+                    Effect::CaptureDiagnostics {
+                        attempt: Some(attempt()),
+                        cause: CaptureCause::Ambiguity,
+                    },
+                ]),
+                "{label}: it re-reads under a strategy that would halt a create"
+            );
+        }
     }
 
     #[test]
@@ -2152,7 +2533,9 @@ mod machine_tests {
                 },
             ),
             (
-                SyncState::PreflightAsserted { schema: schema() },
+                SyncState::PreflightAsserted {
+                    schema: Some(schema()),
+                },
                 None,
                 Outcome::Skipped {
                     code: FailureCode::Other,
@@ -2171,7 +2554,7 @@ mod machine_tests {
             (
                 SyncState::IntentRecorded {
                     attempt: attempt(),
-                    schema: schema(),
+                    schema: Some(schema()),
                 },
                 Some(attempt()),
                 ambiguous(attempt(), AmbiguityCause::ProcessKilledByBackstop),
@@ -2237,7 +2620,7 @@ mod machine_tests {
         let refused = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -2255,7 +2638,7 @@ mod machine_tests {
         let refused = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             marker_strategy(),
             10,
@@ -2314,10 +2697,12 @@ mod machine_tests {
     fn every_state_and_input_pair_is_total() {
         let states = vec![
             SyncState::AwaitingPreflight,
-            SyncState::PreflightAsserted { schema: schema() },
+            SyncState::PreflightAsserted {
+                schema: Some(schema()),
+            },
             SyncState::IntentRecorded {
                 attempt: attempt(),
-                schema: schema(),
+                schema: Some(schema()),
             },
             SyncState::Submitted {
                 attempt: attempt(),
@@ -2384,7 +2769,9 @@ mod machine_tests {
     #[test]
     fn a_reused_fencing_token_is_the_drivers_obligation() {
         let first = machine(
-            SyncState::PreflightAsserted { schema: schema() },
+            SyncState::PreflightAsserted {
+                schema: Some(schema()),
+            },
             marker_strategy(),
             10,
         )
@@ -2588,9 +2975,14 @@ mod machine_tests {
         WriteAttemptId(Uuid(bytes))
     }
 
-    fn submit_attempt(effect: &Effect) -> Option<WriteAttemptId> {
+    /// Every write the closed set carries, so the two write-safety properties
+    /// quantify over the destructive ones by construction. Naming only
+    /// `Submit` here would compile and silently stop them at the create.
+    fn write_attempt_of(effect: &Effect) -> Option<WriteAttemptId> {
         match effect {
-            Effect::Submit { attempt, .. } => Some(*attempt),
+            Effect::Submit { attempt, .. }
+            | Effect::Revise { attempt, .. }
+            | Effect::Remove { attempt, .. } => Some(*attempt),
             Effect::AssertFormSchema { .. }
             | Effect::RecordIntent { .. }
             | Effect::ReadBack { .. }
@@ -2687,9 +3079,15 @@ mod machine_tests {
                 draft_strategy(),
                 CreateStrategy::HaltOnAmbiguity,
             ]),
+            proptest::sample::select(vec![ItemOperation::Create, publication(), removal()]),
         )
-            .prop_map(|(inputs, actions_remaining, strategy)| {
-                let start = machine(SyncState::AwaitingPreflight, strategy, actions_remaining);
+            .prop_map(|(inputs, actions_remaining, strategy, operation)| {
+                let start = machine_for(
+                    operation,
+                    SyncState::AwaitingPreflight,
+                    strategy,
+                    actions_remaining,
+                );
                 drive(start, &inputs)
             })
     }
@@ -2700,7 +3098,7 @@ mod machine_tests {
         fn no_attempt_is_ever_submitted_twice(run in arb_run()) {
             let mut seen = std::collections::HashSet::new();
             for effect in &run.effects {
-                if let Some(attempt) = submit_attempt(effect) {
+                if let Some(attempt) = write_attempt_of(effect) {
                     prop_assert!(
                         seen.insert(attempt),
                         "one write attempt must never be submitted twice"
@@ -2730,7 +3128,7 @@ mod machine_tests {
             if matches!(run.terminal, Some(Outcome::Ambiguous { .. })) {
                 let resubmitted = run.effects[run.terminal_at..]
                     .iter()
-                    .any(|effect| submit_attempt(effect).is_some());
+                    .any(|effect| write_attempt_of(effect).is_some());
                 prop_assert!(
                     !resubmitted,
                     "an ambiguous write is reconciled or escalated, never retried"

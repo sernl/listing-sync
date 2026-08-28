@@ -7,8 +7,8 @@
 
 use serde_json::json;
 use tam_domain::{
-    BlockCause, Effect, HaltScope, Input, ItemOutcome, MachineError, SellerEvent, StepBudget,
-    SyncMachine, SyncState, Transition,
+    BlockCause, Effect, HaltScope, Input, ItemOperation, ItemOutcome, MachineError, SellerEvent,
+    StepBudget, SyncMachine, SyncState, Transition,
 };
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
@@ -197,6 +197,11 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
         seed.intent_hash,
         seed.fields,
         seed.strategy,
+        // Every item in the ledger is a create: `Effect::Submit` is the only
+        // write effect the driver interprets, and the column that will carry
+        // an operation does not exist yet. The two lifecycle arms below are
+        // therefore unreachable until the ledger and the seed can state one.
+        ItemOperation::Create,
         seed.budget,
     )?;
     let mut current_attempt: Option<WriteAttemptId> = None;
@@ -286,6 +291,14 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                     record_action(ctx, lease, sequence, "submit", now).await?;
                     let submitted = ctx.adapter.submit(org, key, fields, now).await;
                     pending = Some(Input::SubmitResult(submitted));
+                }
+                // Unreachable while every item is a create; the stall bias is
+                // the honest placeholder until the driver can hold a budget to
+                // verify a lifecycle write with.
+                Effect::Revise { .. } | Effect::Remove { .. } => {
+                    return Ok(RunVerdict::Abandoned {
+                        reason: "the driver does not interpret the lifecycle writes yet".to_owned(),
+                    })
                 }
                 Effect::ReadBack { locator, reason } => {
                     record_action(ctx, lease, sequence, "read-back", now).await?;
