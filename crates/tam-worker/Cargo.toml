@@ -6,9 +6,12 @@ publish = false
 
 [dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-domain = { path = "../tam-domain" }
 tam-engine = { path = "../tam-engine" }
 tam-limits = { path = "../tam-limits" }
+tam-marketplace = { path = "../tam-marketplace" }
 tam-marketplace-tes = { path = "../tam-marketplace-tes" }
+tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
 tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }

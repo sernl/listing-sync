@@ -2483,9 +2483,12 @@ name = "tam-worker"
 version = "0.0.0"
 dependencies = [
  "sqlx",
+ "tam-domain",
  "tam-engine",
  "tam-limits",
+ "tam-marketplace",
  "tam-marketplace-tes",
+ "tam-marketplace-tpt",
  "tam-pipeline",
  "tam-secrets",
  "tam-storage",

@@ -4,25 +4,42 @@
 //! design's single-home line; this process no longer duplicates it.
 //!
 //! Per item: the projection gates the item (a blocked projection parks it
-//! behind the queue items it just raised), the broker leases a gateway
-//! endpoint so this process never holds a credential, the adapter renders
-//! the field set it will submit, and the M1d driver runs the machine against
-//! that adapter with the fenced attempt and the read-back verification it
-//! was built with.
+//! behind the queue items it just raised), the marketplace selects the
+//! adapter and the transport it rides, the adapter renders the field set it
+//! will submit, and the M1d driver runs the machine against that adapter
+//! with the fenced attempt and the read-back verification it was built with.
+//!
+//! The two live marketplaces reach their credential by different routes and
+//! that asymmetry is deliberate. Tes rides the broker's gateway, so this
+//! process never holds a Tes credential. Tpt rides a direct transport,
+//! because the broker's allow-list is five Tes path prefixes over one
+//! hardcoded upstream and the S3 signing-oracle upload cannot be proxied
+//! through it — so Phase 3 configures a founder-exported cookie jar and an
+//! authorship attestation at this process boundary, and the vault's `tpt`
+//! connection row functions as the queue gate rather than as the credential.
+//! That split is interim and its production answer is founder-gated; see
+//! `docs/design/decisions.md`.
 //!
 //! Usage: tam-worker <engine-database-url> <worker-name> <broker-socket> \
 //!            <kek-path> <store-root> [poll-ms]
+//!
+//! Environment: `TAM_TPT_COOKIE_JAR` is a Netscape cookie jar path and
+//! `TAM_TPT_AUTHORSHIP` is `name|epoch_millis`. Both are optional; without
+//! either, Tpt items are refused and their leases left to expire.
 
 #![forbid(unsafe_code)]
 
 use std::io::Read as _;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use tam_domain::ItemOperation;
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::request_lease;
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
-use tam_engine::Pause;
+use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
 use tam_marketplace_tes::{GatewayTransport, TesAdapter};
+use tam_marketplace_tpt::{AuthorshipDeclaration, ReqwestTransport, TptAdapter, TptSession};
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
@@ -73,6 +90,93 @@ fn load_kek(path: &str) -> Result<Kek, Box<dyn std::error::Error>> {
     Ok(Kek::from_bytes(&bytes)?)
 }
 
+/// A refusal that is a property of the configuration rather than of the item
+/// refused: every queued item for that marketplace takes the same path this
+/// pass, so stating it once is the whole report and stating it per item would
+/// bury the pass's real work under identical lines.
+struct OncePerPass(AtomicBool);
+
+impl OncePerPass {
+    const fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
+    /// True on the first call since the last [`Self::reset`].
+    fn first(&self) -> bool {
+        !self.0.swap(true, Ordering::Relaxed)
+    }
+
+    fn reset(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
+/// What the worker sends to Tpt, read once at this process boundary.
+///
+/// Both halves are required and both are checked here rather than at the
+/// write: `TptAdapter::update` opens with `self.attestation()?` exactly as
+/// `submit` does, so a revise needs the declaration no less than a create,
+/// and a missing one refuses with `UploadRejected`, which the machine settles
+/// `Failed`. Refusing the item up front leaves the lease to expire instead,
+/// which is the stall bias.
+struct TptCredential {
+    session: TptSession,
+    authorship: AuthorshipDeclaration,
+}
+
+/// The jar and the attestation, or nothing.
+///
+/// `AuthorshipDeclaration::attested` is the only constructor and it names the
+/// seller and the instant they attested; minting the instant from this
+/// process's own clock would be this worker attesting on a seller's behalf,
+/// so the instant is configured beside the name and never derived.
+fn load_tpt_credential() -> Option<TptCredential> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the worker is the configuration boundary: the Tpt cookie jar path enters the process here and nowhere else"
+    )]
+    let jar_path = std::env::var("TAM_TPT_COOKIE_JAR").ok()?;
+    let mut jar = String::new();
+    if let Err(error) =
+        std::fs::File::open(&jar_path).and_then(|mut file| file.read_to_string(&mut jar).map(drop))
+    {
+        eprintln!("tam-worker: TAM_TPT_COOKIE_JAR is unreadable, Tpt items refused: {error}");
+        return None;
+    }
+    let session = match TptSession::from_netscape_jar(&jar) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("tam-worker: TAM_TPT_COOKIE_JAR is unparseable, Tpt items refused: {error}");
+            return None;
+        }
+    };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the worker is the configuration boundary: the Tpt authorship attestation enters the process here and nowhere else"
+    )]
+    let raw = std::env::var("TAM_TPT_AUTHORSHIP").ok()?;
+    let Some(authorship) = parse_authorship(&raw) else {
+        eprintln!("tam-worker: TAM_TPT_AUTHORSHIP is not \"name|epoch_millis\", Tpt items refused");
+        return None;
+    };
+    Some(TptCredential {
+        session,
+        authorship,
+    })
+}
+
+fn parse_authorship(raw: &str) -> Option<AuthorshipDeclaration> {
+    let (name, at) = raw.split_once('|')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(AuthorshipDeclaration::attested(
+        name.to_owned(),
+        Timestamp(at.trim().parse().ok()?),
+    ))
+}
+
 struct Pump {
     pool: sqlx::PgPool,
     leases: LeaseRepo,
@@ -82,7 +186,20 @@ struct Pump {
     broker_socket: std::path::PathBuf,
     kek: Kek,
     store_root: std::path::PathBuf,
+    tpt: Option<TptCredential>,
     cancel: CancellationToken,
+    unadapted_said: OncePerPass,
+    tpt_unconfigured_said: OncePerPass,
+}
+
+/// What one run needs beyond its adapter. A struct because `drive` would
+/// otherwise take six inputs against `too-many-arguments-threshold = 5`, and
+/// because these four always travel together anyway.
+struct Drive<'a> {
+    worker: &'a str,
+    item: &'a LeasedItem,
+    operation: &'a ItemOperation,
+    projected: Option<&'a ProjectedListing>,
 }
 
 impl Pump {
@@ -115,25 +232,61 @@ impl Pump {
             }
         };
 
-        if item.inventory.marketplace() != Marketplace::Tes {
-            eprintln!(
-                "tam-worker {worker}: no adapter for {:?} yet, lease left to expire",
-                item.inventory
-            );
-            return;
+        let work = Drive {
+            worker,
+            item,
+            operation: &operation,
+            projected: projected.as_ref(),
+        };
+        // `wildcard_enum_match_arm` is denied, so a fourth marketplace cannot
+        // be added without visiting this match, which is the point. The arms
+        // differ only in the adapter and the transport they construct; two
+        // monomorphisations of `drive` are the whole cost of routing without
+        // a registry, which RPITIT rules out.
+        match item.inventory.marketplace() {
+            Marketplace::Tes => {
+                let Some(adapter) = self.tes_adapter(work.worker, item).await else {
+                    return;
+                };
+                self.drive(work, &adapter).await;
+            }
+            Marketplace::Tpt => {
+                let Some(adapter) = self.tpt_adapter(work.worker, item) else {
+                    return;
+                };
+                self.drive(work, &adapter).await;
+            }
+            Marketplace::Etsy => {
+                if self.unadapted_said.first() {
+                    eprintln!(
+                        "tam-worker {worker}: no adapter for {:?} yet, leases left to expire",
+                        item.inventory
+                    );
+                }
+            }
         }
-        let Some(connection) = (match self.leases.connection_for(item.org, item.inventory).await {
-            Ok(connection) => connection,
+    }
+
+    /// Tes rides the broker's gateway: the endpoint is leased per item, so
+    /// this process holds no Tes credential at any point.
+    async fn tes_adapter(
+        &self,
+        worker: &str,
+        item: &LeasedItem,
+    ) -> Option<TesAdapter<GatewayTransport, PipelineFileSource<LocalObjectStore>>> {
+        let connection = match self.leases.connection_for(item.org, item.inventory).await {
+            Ok(Some(connection)) => connection,
+            Ok(None) => {
+                eprintln!(
+                    "tam-worker {worker}: no linked connection for {:?}, lease left to expire",
+                    item.inventory
+                );
+                return None;
+            }
             Err(error) => {
                 eprintln!("tam-worker {worker}: connection lookup failed: {error}");
-                return;
+                return None;
             }
-        }) else {
-            eprintln!(
-                "tam-worker {worker}: no linked connection for {:?}, lease left to expire",
-                item.inventory
-            );
-            return;
         };
         let gateway = match request_lease(
             &self.broker_socket,
@@ -146,17 +299,62 @@ impl Pump {
             Ok(lease) => lease,
             Err(error) => {
                 eprintln!("tam-worker {worker}: broker lease refused: {error}");
-                return;
+                return None;
             }
         };
         let transport = match GatewayTransport::new(gateway.endpoint.clone()) {
             Ok(transport) => transport,
             Err(error) => {
                 eprintln!("tam-worker {worker}: transport build failed: {error}");
-                return;
+                return None;
             }
         };
-        let files = PipelineFileSource::new(
+        match TesAdapter::new(item.inventory, transport, self.files(item)) {
+            Ok(adapter) => Some(adapter),
+            Err(error) => {
+                eprintln!("tam-worker {worker}: {error}");
+                None
+            }
+        }
+    }
+
+    /// Tpt rides the direct transport and skips the broker entirely, which
+    /// also removes the hardcoded `Marketplace::Tes` the broker lease takes.
+    /// The item still cannot lease without a `linked` Tpt connection row —
+    /// `LeaseRepo::acquire`'s candidate CTE requires one — so the vault row
+    /// remains the queue gate, and `gate_connection` flipping it to
+    /// `needs_reauth` still stops Tpt items even though its stored secret was
+    /// never the one sent.
+    fn tpt_adapter(
+        &self,
+        worker: &str,
+        item: &LeasedItem,
+    ) -> Option<TptAdapter<ReqwestTransport, PipelineFileSource<LocalObjectStore>, SleepingPause>>
+    {
+        let Some(credential) = self.tpt.as_ref() else {
+            if self.tpt_unconfigured_said.first() {
+                eprintln!(
+                    "tam-worker {worker}: no Tpt cookie jar or authorship attestation \
+                     configured, Tpt leases left to expire"
+                );
+            }
+            return None;
+        };
+        let transport = match ReqwestTransport::new(&credential.session) {
+            Ok(transport) => transport,
+            Err(error) => {
+                eprintln!("tam-worker {worker}: Tpt transport build failed: {error}");
+                return None;
+            }
+        };
+        Some(
+            TptAdapter::new(transport, self.files(item), SleepingPause)
+                .attesting(credential.authorship.clone()),
+        )
+    }
+
+    fn files(&self, item: &LeasedItem) -> PipelineFileSource<LocalObjectStore> {
+        PipelineFileSource::new(
             BlobRepo::new(
                 self.pool.clone(),
                 LocalObjectStore::new(self.store_root.clone()),
@@ -164,19 +362,22 @@ impl Pump {
             ),
             item.org,
             self.pool.clone(),
-        );
-        let adapter = match TesAdapter::new(item.inventory, transport, files) {
-            Ok(adapter) => adapter,
-            Err(error) => {
-                eprintln!("tam-worker {worker}: {error}");
-                return;
-            }
-        };
+        )
+    }
+
+    /// The whole tail of the pump, monomorphised once per marketplace.
+    async fn drive<A: MarketplaceAdapter>(&self, work: Drive<'_>, adapter: &A) {
+        let Drive {
+            worker,
+            item,
+            operation,
+            projected,
+        } = work;
         // A removal renders nothing, so it never reaches the adapter's
         // projection: the listing is being taken down rather than described.
-        let seed = match projected.as_ref().map_or_else(
-            || Ok(seed_for_removal(item, &operation)),
-            |projected| seed_from_projection(&adapter, item, projected),
+        let seed = match projected.map_or_else(
+            || Ok(seed_for_removal(item, operation)),
+            |projected| seed_from_projection(adapter, item, projected),
         ) {
             Ok(seed) => seed,
             Err(error) => {
@@ -185,7 +386,7 @@ impl Pump {
             }
         };
         let ctx = DriverContext {
-            adapter: &adapter,
+            adapter,
             leases: &self.leases,
             halts: &self.halts,
             attempts: &self.attempts,
@@ -250,6 +451,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     eprintln!("tam-worker {worker_name}: item pump live, maintenance every {poll_ms}ms");
 
+    let tpt = load_tpt_credential();
+    if tpt.is_none() {
+        eprintln!("tam-worker {worker_name}: no Tpt credential configured; Tes items only");
+    }
     let pump = Pump {
         pool: pool.clone(),
         leases: LeaseRepo::new(pool.clone()),
@@ -259,7 +464,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         broker_socket,
         kek,
         store_root,
+        tpt,
         cancel: cancel.clone(),
+        unadapted_said: OncePerPass::new(),
+        tpt_unconfigured_said: OncePerPass::new(),
     };
 
     tokio::pin!(ctrl_c);
@@ -271,6 +479,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if cancel.is_cancelled() {
             break;
         }
+        pump.unadapted_said.reset();
+        pump.tpt_unconfigured_said.reset();
         let now = WallClock.now();
         let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
         match leases.expire_and_steal(now, attempts_max).await {
@@ -310,4 +520,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("tam-worker {worker_name}: stopped cleanly");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_authorship, OncePerPass};
+    use tam_types::Timestamp;
+
+    #[test]
+    fn an_attestation_names_the_seller_and_the_instant_they_attested() {
+        let parsed =
+            parse_authorship("A. Seller|1724889600000").expect("the configured form parses");
+        assert_eq!(
+            (parsed.attested_by(), parsed.attested_at()),
+            ("A. Seller", Timestamp(1_724_889_600_000)),
+            "both halves travel; the instant is configured rather than derived, because \
+             minting it from this process's clock would be the worker attesting for a seller"
+        );
+    }
+
+    #[test]
+    fn a_half_written_attestation_is_no_attestation() {
+        for raw in [
+            "A. Seller",
+            "A. Seller|",
+            "A. Seller|not-an-instant",
+            "|1724889600000",
+            "   |1724889600000",
+        ] {
+            assert_eq!(
+                parse_authorship(raw),
+                None,
+                "refusing Tpt items is the honest answer to {raw:?}; defaulting either half \
+                 would put a declaration on the wire nobody made"
+            );
+        }
+    }
+
+    #[test]
+    fn a_once_per_pass_refusal_speaks_once_and_again_after_the_reset() {
+        let said = OncePerPass::new();
+        assert!(said.first(), "the first refusal of the pass is reported");
+        assert!(!said.first(), "the rest of the pass is silent");
+        said.reset();
+        assert!(said.first(), "the next pass reports again");
+    }
 }
