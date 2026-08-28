@@ -14,8 +14,9 @@ use tam_domain::{
 };
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
-    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, ItemVerdict, JobRepo, LeaseRef,
-    LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, StorageError, WriteAttemptRepo,
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, ItemVerdict, JobRepo,
+    LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, StorageError,
+    WriteAttemptRepo,
 };
 use tam_types::{
     CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
@@ -99,6 +100,18 @@ fn mapping_of(id: MappingId, product_seed: u8, binding: Binding) -> Mapping {
         price_rule: PriceRule::Explicit(PriceIntent::Free),
         publish: PublishMode::DryRun,
         lifecycle: RemoteLifecycle::Absent,
+    }
+}
+
+/// The whole mapping a landed create leaves behind: bound and stale, and
+/// carrying the lifecycle the verification read observed. The bind writes the
+/// lifecycle columns now, so a fixture still expecting `Absent` here would be
+/// asserting the gap this closes -- a mapping whose listing was published
+/// reading 'absent' is what makes a later removal state the wrong route.
+fn landed_mapping(id: MappingId, product_seed: u8, url: &str, at: Timestamp) -> Mapping {
+    Mapping {
+        lifecycle: RemoteLifecycle::Draft,
+        ..mapping_of(id, product_seed, freshly_bound(url, at))
     }
 }
 
@@ -220,12 +233,12 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
 }
 
 /// One whole write attempt: opened against the mapping, then settled
-/// committed with whatever the write landed on.
-async fn land(
+/// committed with whatever the write did to the listing it addressed.
+async fn settle_attempt(
     engine: &PgPool,
     lease: &LeaseRef,
     mapping: MappingId,
-    landed: Option<RemoteListingId>,
+    landing: LandingEffect,
     at: Timestamp,
 ) -> Result<BindDisposition, StorageError> {
     let attempts = WriteAttemptRepo::new(engine.clone());
@@ -247,11 +260,28 @@ async fn land(
             &AttemptVerdict {
                 state: "committed".to_owned(),
                 failure_code: None,
-                landed,
+                landing,
             },
             at,
         )
         .await
+}
+
+/// A create landing on `url`, in the lifecycle every captured create lands
+/// in. Draft carries no `lifecycle_since`, which is what
+/// `mapping_lifecycle_total` demands of it.
+async fn land(
+    engine: &PgPool,
+    lease: &LeaseRef,
+    mapping: MappingId,
+    landed: Option<RemoteListingId>,
+    at: Timestamp,
+) -> Result<BindDisposition, StorageError> {
+    let landing = landed.map_or(LandingEffect::None, |id| LandingEffect::Landed {
+        id,
+        lifecycle: RemoteLifecycle::Draft,
+    });
+    settle_attempt(engine, lease, mapping, landing, at).await
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -278,7 +308,7 @@ async fn a_landed_write_binds_the_mapping_stale(app: PgPool) {
         .expect("the mapping exists");
     assert_eq!(
         record.mapping,
-        mapping_of(MAPPING, PRODUCT, freshly_bound(LANDED, LANDED_AT)),
+        landed_mapping(MAPPING, PRODUCT, LANDED, LANDED_AT),
         "the bound row must decode to exactly the mapping a fresh insert of that \
          binding would hold, or the bind left a state the codec cannot round-trip"
     );
@@ -517,5 +547,280 @@ async fn one_remote_listing_cannot_be_claimed_twice(app: PgPool) {
         refused.is_err(),
         "two mappings in one organisation's inventory must not both claim the same \
          remote listing; mapping_one_per_inventory guards the product side only"
+    );
+}
+
+/// The mapping's whole state after a sever, in the columns the CHECK
+/// constraints govern together. Read over the engine role, which is
+/// BYPASSRLS: `tam_app` forces row-level security and this helper takes no
+/// tenant pin.
+type SeverRow = (
+    String,
+    Option<String>,
+    Option<String>,
+    bool,
+    String,
+    bool,
+    String,
+    bool,
+);
+
+async fn sever_row(pool: &PgPool, mapping: MappingId) -> Result<SeverRow, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT binding_state, remote_url, sever_cause, severed_at IS NOT NULL, \
+                verify_state, verify_stale_since IS NULL, \
+                lifecycle_state, lifecycle_since IS NULL \
+         FROM mapping WHERE org_id = $1 AND id = $2",
+    )
+    .bind(db_uuid(ORG.0))
+    .bind(db_uuid(mapping.0))
+    .fetch_one(pool)
+    .await
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_committed_removal_severs_and_releases_the_bound_claim(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the create settles"),
+        BindDisposition::Bound,
+        "the removal needs a binding to sever"
+    );
+
+    let severed = settle_attempt(
+        &engine,
+        &lease,
+        MAPPING,
+        LandingEffect::Severed { id: tes(LANDED) },
+        RELANDED_AT,
+    )
+    .await
+    .expect("the removal settles");
+
+    assert_eq!(
+        severed,
+        BindDisposition::Severed,
+        "a committed removal severs rather than binding the listing it took down"
+    );
+    assert_eq!(
+        sever_row(&engine, MAPPING)
+            .await
+            .expect("the mapping row reads"),
+        (
+            "severed".to_owned(),
+            Some(LANDED.to_owned()),
+            Some("removed_by_seller".to_owned()),
+            true,
+            "stale".to_owned(),
+            true,
+            "absent".to_owned(),
+            true,
+        ),
+        "three plausible wrong severs are refused here: one that nulls the remote id \
+         (mapping_binding_total demands it on a severed row), one that leaves \
+         verify_stale_since set (mapping_verify_bound demands it NULL off a bound row), \
+         and one that writes a lifecycle_state without its matching since"
+    );
+
+    seed_rival_mapping(&app)
+        .await
+        .expect("the rival product and mapping insert");
+    let reclaimed = sqlx::query(
+        "UPDATE mapping \
+         SET binding_state = 'bound', remote_id_kind = 'tes', remote_url = $3, \
+             first_seen_at = now(), verify_state = 'stale', verify_stale_since = now() \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(db_uuid(ORG.0))
+    .bind(db_uuid(RIVAL.0))
+    .bind(LANDED)
+    .execute(&engine)
+    .await;
+    assert!(
+        reclaimed.is_ok(),
+        "both of 0018's unique indexes are predicated on binding_state = 'bound', so a \
+         sever releases the claim; a sever that left the row bound would refuse this, \
+         and the migrate the sever exists for would be unrunnable"
+    );
+}
+
+/// A constraint proof, not a proof of a production race: while a removal is
+/// in flight `write_attempt_one_in_flight` admits no second attempt on the
+/// mapping, so nothing can rebind it underneath. The predicate this pins is
+/// defence in depth against a fixture-level write and a future concurrent
+/// binder.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sever_of_a_mapping_rebound_elsewhere_is_refused_not_written(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(ELSEWHERE)), LANDED_AT)
+            .await
+            .expect("the create settles"),
+        BindDisposition::Bound,
+        "the mapping holds a listing other than the one the removal took down"
+    );
+
+    let refused = settle_attempt(
+        &engine,
+        &lease,
+        MAPPING,
+        LandingEffect::Severed { id: tes(LANDED) },
+        RELANDED_AT,
+    )
+    .await
+    .expect("the removal settles");
+
+    assert_eq!(
+        refused,
+        BindDisposition::SeverDiverged {
+            existing: tes(ELSEWHERE)
+        },
+        "a rebound sever fails on the remote identity while the row is still bound, so \
+         reporting it as a refusal against the binding state would be a self-contradiction"
+    );
+    let row = sever_row(&engine, MAPPING)
+        .await
+        .expect("the mapping row reads");
+    assert_eq!(
+        (row.0.as_str(), row.1.as_deref()),
+        ("bound", Some(ELSEWHERE)),
+        "an unconditional sever would erase a live binding on the strength of a stale removal"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_severed_mapping_re_creates_through_the_same_row(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the create settles"),
+        BindDisposition::Bound,
+        "the removal needs a binding to sever"
+    );
+    assert_eq!(
+        settle_attempt(
+            &engine,
+            &lease,
+            MAPPING,
+            LandingEffect::Severed { id: tes(LANDED) },
+            RELANDED_AT,
+        )
+        .await
+        .expect("the removal settles"),
+        BindDisposition::Severed,
+        "the re-create needs a severed row to reuse"
+    );
+
+    let rebound = land(&engine, &lease, MAPPING, Some(tes(ELSEWHERE)), RELANDED_AT)
+        .await
+        .expect("the re-create settles");
+
+    assert_eq!(
+        rebound,
+        BindDisposition::Bound,
+        "mapping_one_per_inventory is unpredicated, so a severed row cannot be replaced \
+         by a fresh mapping and the re-create must reuse it; a fence excluding 'severed' \
+         would leave a live listing the ledger has no record of"
+    );
+    assert_eq!(
+        sever_row(&engine, MAPPING)
+            .await
+            .expect("the mapping row reads"),
+        (
+            "bound".to_owned(),
+            Some(ELSEWHERE.to_owned()),
+            None,
+            false,
+            "stale".to_owned(),
+            false,
+            "draft".to_owned(),
+            true,
+        ),
+        "the re-bound row is constraint-legal whole: the sever columns clear, the verify \
+         columns take a bound row's shape, and the lifecycle is the one observed"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_committed_create_records_the_lifecycle_it_landed_in(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let leases = LeaseRepo::new(engine.clone());
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the create settles"),
+        BindDisposition::Bound,
+        "the create binds before its lifecycle can be read back"
+    );
+    let drafted = sever_row(&engine, MAPPING)
+        .await
+        .expect("the mapping row reads");
+    assert_eq!(
+        (drafted.6.as_str(), drafted.7),
+        ("draft", true),
+        "a create observed as a draft records 'draft', and mapping_lifecycle_total \
+         demands no lifecycle_since beside it"
+    );
+
+    leases
+        .settle(
+            &lease,
+            &ItemVerdict {
+                outcome: ItemOutcome::Succeeded,
+                failure_code: None,
+                failure_detail: None,
+            },
+            LANDED_AT,
+        )
+        .await
+        .expect("the first item settles, releasing the tenant mutex");
+    let rival = rival_lease(&app, &engine)
+        .await
+        .expect("the rival fixture seeds")
+        .expect("the rival item leases");
+    assert_eq!(
+        settle_attempt(
+            &engine,
+            &rival,
+            RIVAL,
+            LandingEffect::Landed {
+                id: tes(ELSEWHERE),
+                lifecycle: RemoteLifecycle::Live { since: RELANDED_AT },
+            },
+            RELANDED_AT,
+        )
+        .await
+        .expect("the publish settles"),
+        BindDisposition::Bound,
+        "the publish binds the rival mapping"
+    );
+
+    let published = sever_row(&engine, RIVAL)
+        .await
+        .expect("the mapping row reads");
+    assert_eq!(
+        (published.6.as_str(), published.7),
+        ("live", false),
+        "a bind that keeps ignoring the lifecycle columns leaves every published listing \
+         reading 'absent', which is what makes a later removal state the wrong route"
     );
 }

@@ -12,12 +12,12 @@ use tam_domain::{
 };
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
-    AdapterError, CreateStrategy, FieldSet, FormId, MarketplaceAdapter, Outcome, RemoteListingId,
+    AdapterError, CreateStrategy, FieldSet, FormId, MarketplaceAdapter, Outcome, RemoteLifecycle,
     WriteAttemptId,
 };
 use tam_storage::{
     append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
-    EventScope, HaltCause, HaltRepo, ItemVerdict, LeaseRef, LeaseRepo, LeasedItem,
+    EventScope, HaltCause, HaltRepo, ItemVerdict, LandingEffect, LeaseRef, LeaseRepo, LeasedItem,
     NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
@@ -132,18 +132,33 @@ fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
     }
 }
 
-/// The listing a committed-class outcome landed on. Only the two outcomes
-/// that carry a receipt can state one; every other outcome settled without a
+/// What a settled outcome did to the mapping. Only the two outcomes that
+/// carry a receipt can name a listing; every other outcome settled without a
 /// write that landed, so there is nothing to record.
-const fn outcome_to_landed(outcome: &Outcome) -> Option<&RemoteListingId> {
-    match outcome {
-        Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => {
-            Some(receipt.listing())
-        }
-        Outcome::Rejected { .. }
-        | Outcome::Ambiguous { .. }
-        | Outcome::Blocked { .. }
-        | Outcome::Skipped { .. } => None,
+///
+/// The bound lifecycle is the one the verification read observed, not one
+/// derived from the adapter's create convention: `Outcome::Committed` is
+/// reachable only through a read-back, so an observation is always in hand,
+/// and where it somehow is not the honest answer is to record nothing rather
+/// than to invent a state the mapping was never seen in.
+fn outcome_to_landing(outcome: &Outcome, observed: Option<&RemoteLifecycle>) -> LandingEffect {
+    match (outcome, observed) {
+        (
+            Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. },
+            Some(lifecycle),
+        ) => LandingEffect::Landed {
+            id: receipt.listing().clone(),
+            lifecycle: lifecycle.clone(),
+        },
+        (
+            Outcome::Committed { .. }
+            | Outcome::Degraded { .. }
+            | Outcome::Rejected { .. }
+            | Outcome::Ambiguous { .. }
+            | Outcome::Blocked { .. }
+            | Outcome::Skipped { .. },
+            _,
+        ) => LandingEffect::None,
     }
 }
 
@@ -205,6 +220,10 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
         seed.budget,
     )?;
     let mut current_attempt: Option<WriteAttemptId> = None;
+    // What the verification read last saw, so a bind records the lifecycle
+    // the listing was observed in rather than the one its create convention
+    // would imply.
+    let mut observed_lifecycle: Option<RemoteLifecycle> = None;
     let mut sequence: u32 = 0;
 
     loop {
@@ -303,6 +322,9 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                 Effect::ReadBack { locator, reason } => {
                     record_action(ctx, lease, sequence, "read-back", now).await?;
                     let observed = ctx.adapter.read_back(org, locator, reason, now).await;
+                    if let Ok(listing) = &observed {
+                        observed_lifecycle = Some(listing.lifecycle.clone());
+                    }
                     pending = Some(Input::ReadBackResult(observed));
                 }
                 Effect::Reconcile { .. } => {
@@ -394,7 +416,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                     let attempt_verdict = AttemptVerdict {
                         state: outcome_to_attempt_state(outcome).to_owned(),
                         failure_code: verdict.failure_code,
-                        landed: outcome_to_landed(outcome).cloned(),
+                        landing: outcome_to_landing(outcome, observed_lifecycle.as_ref()),
                     };
                     let settled = ctx
                         .attempts
@@ -472,7 +494,7 @@ async fn settle_unsent_attempt(
     let verdict = AttemptVerdict {
         state: "abandoned".to_owned(),
         failure_code: None,
-        landed: None,
+        landing: LandingEffect::None,
     };
     match ctx.attempts.settle(lease, settling, &verdict, at).await {
         // A fenced settle means the lease was stolen, and the steal owns the
@@ -487,7 +509,11 @@ async fn settle_unsent_attempt(
 /// record, do not, so a row in the ledger is always something to act on.
 fn bind_anomaly(disposition: BindDisposition) -> Option<BindAnomaly> {
     match disposition {
-        BindDisposition::Bound | BindDisposition::AlreadyBound | BindDisposition::NotLanded => None,
+        BindDisposition::Bound
+        | BindDisposition::AlreadyBound
+        | BindDisposition::NotLanded
+        | BindDisposition::Addressed
+        | BindDisposition::Severed => None,
         BindDisposition::DivergentLanding { existing } => Some(BindAnomaly::DivergentLanding {
             existing_remote: format!("{existing:?}"),
         }),
@@ -496,8 +522,16 @@ fn bind_anomaly(disposition: BindDisposition) -> Option<BindAnomaly> {
                 claiming_mapping: existing_mapping,
             })
         }
-        BindDisposition::Refused { state } => Some(BindAnomaly::Refused {
-            binding_state: state,
+        // A refused sever genuinely means the row was not bound, because a
+        // sever that fails on the remote identity while the row is still
+        // bound reports `SeverDiverged` instead.
+        BindDisposition::Refused { state } | BindDisposition::SeverRefused { state } => {
+            Some(BindAnomaly::Refused {
+                binding_state: state,
+            })
+        }
+        BindDisposition::SeverDiverged { existing } => Some(BindAnomaly::SeverDiverged {
+            existing_remote: format!("{existing:?}"),
         }),
     }
 }
@@ -638,6 +672,8 @@ mod tests {
             BindDisposition::Bound,
             BindDisposition::AlreadyBound,
             BindDisposition::NotLanded,
+            BindDisposition::Addressed,
+            BindDisposition::Severed,
         ] {
             assert_eq!(
                 bind_anomaly(disposition.clone()),
@@ -684,6 +720,33 @@ mod tests {
                 binding_state: "severed".to_owned(),
             }),
             "a refused bind carries the state the fence was refused against"
+        );
+        assert_eq!(
+            bind_anomaly(BindDisposition::SeverRefused {
+                state: "unbound".to_owned(),
+            }),
+            Some(BindAnomaly::Refused {
+                binding_state: "unbound".to_owned(),
+            }),
+            "a refused sever genuinely means the row was not bound, so Refused is correct here"
+        );
+        assert_eq!(
+            bind_anomaly(BindDisposition::SeverDiverged {
+                existing: RemoteListingId::Tes {
+                    url: url.to_owned(),
+                },
+            }),
+            Some(BindAnomaly::SeverDiverged {
+                existing_remote: format!(
+                    "{:?}",
+                    RemoteListingId::Tes {
+                        url: url.to_owned()
+                    }
+                ),
+            }),
+            "a removal that took down a listing the mapping no longer holds names the one it \
+             does, which a refusal against the binding state could not say without \
+             contradicting itself"
         );
     }
 }

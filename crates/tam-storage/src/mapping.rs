@@ -446,14 +446,21 @@ impl PriceRuleColumns {
     }
 }
 
-struct LifecycleColumns {
-    state: &'static str,
-    since: Option<DateTime<Utc>>,
-    reason: Option<String>,
+/// The three columns `mapping_lifecycle_total` constrains together, and the
+/// only encoder of them. Every writer of a mapping's lifecycle goes through
+/// it, because the constraint's third clause -- `lifecycle_reason IS NULL OR
+/// lifecycle_state = 'rejected'` -- is a clause a hand-written statement will
+/// forget, and forgetting it aborts the settling transaction and strands the
+/// attempt `in_flight`, which `write_attempt_one_in_flight` then turns into a
+/// permanent refusal of every future attempt on that mapping.
+pub(crate) struct LifecycleColumns {
+    pub(crate) state: &'static str,
+    pub(crate) since: Option<DateTime<Utc>>,
+    pub(crate) reason: Option<String>,
 }
 
 impl LifecycleColumns {
-    fn encode(lifecycle: &RemoteLifecycle) -> Result<Self, StorageError> {
+    pub(crate) fn encode(lifecycle: &RemoteLifecycle) -> Result<Self, StorageError> {
         let (state, since, reason) = match lifecycle {
             RemoteLifecycle::Absent => ("absent", None, None),
             RemoteLifecycle::Draft => ("draft", None, None),

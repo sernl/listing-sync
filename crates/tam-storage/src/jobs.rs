@@ -13,7 +13,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
-use tam_marketplace::{IdempotencyKey, RemoteListingId};
+use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
     FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp,
     Uuid,
@@ -23,7 +23,7 @@ use crate::codec::{
     failure_code_to_db, inventory_from_db, inventory_to_db, marketplace_to_db, timestamp_to_db,
     uuid_from_db, uuid_to_db, OperationColumns, RemoteIdColumns, StoredOperation,
 };
-use crate::mapping::remote_id_from_db;
+use crate::mapping::{remote_id_from_db, LifecycleColumns};
 use crate::StorageError;
 
 pub(crate) const fn item_outcome_to_db(outcome: ItemOutcome) -> &'static str {
@@ -684,15 +684,54 @@ pub struct AttemptIntent {
     pub hash: Vec<u8>,
 }
 
+/// What a settling attempt did to the mapping it names.
+///
+/// A create and a revise land; a removal severs; an attempt that addressed a
+/// listing and changed nothing still says which listing that was. Splitting
+/// these is what stops a committed removal binding the mapping to a listing
+/// that no longer exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LandingEffect {
+    /// The verdict named no listing; there is nothing to record.
+    None,
+    /// The attempt addressed this listing and changed no binding -- a revise
+    /// or a removal that did not take, or one whose fate is unsettled. The
+    /// attempt row records what it addressed; the mapping is untouched.
+    /// Without it a failed removal would not say what it failed to remove.
+    Addressed { id: RemoteListingId },
+    /// The write landed here: bind the mapping to it, and record the
+    /// lifecycle the verification read actually observed rather than the one
+    /// the adapter's create convention would imply.
+    Landed {
+        id: RemoteListingId,
+        lifecycle: RemoteLifecycle,
+    },
+    /// The write removed it: sever the binding, releasing the bound claim
+    /// both of migration 0018's partial unique indexes hold.
+    Severed { id: RemoteListingId },
+}
+
+impl LandingEffect {
+    /// The listing the attempt addressed, whatever it did to it. Every
+    /// variant but `None` writes the `write_attempt` remote-id columns, so
+    /// the settled row always names what the write was about.
+    const fn addressed(&self) -> Option<&RemoteListingId> {
+        match self {
+            Self::None => Option::None,
+            Self::Addressed { id } | Self::Landed { id, .. } | Self::Severed { id } => Some(id),
+        }
+    }
+}
+
 /// How an attempt settled in the ledger's own vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptVerdict {
     pub state: String,
     pub failure_code: Option<FailureCode>,
-    /// The listing the write landed on, carried by the receipt a committed
-    /// outcome holds. Without it the ledger cannot say what it created, so
-    /// reconciliation, verification and dedup have nothing to address.
-    pub landed: Option<RemoteListingId>,
+    /// What the write did to the listing it addressed. Without it the ledger
+    /// cannot say what it created, so reconciliation, verification and dedup
+    /// have nothing to address.
+    pub landing: LandingEffect,
 }
 
 /// The two rows a settlement writes: the fenced attempt, and the mapping a
@@ -747,9 +786,20 @@ impl WriteAttemptRepo {
     }
 
     /// Epoch-fenced settlement of the attempt row, and — when the verdict
-    /// carries a landed listing — the mapping bind, in one transaction. A
-    /// separate bind call would leave a crash window where the attempt says
-    /// committed while the mapping stays unbound.
+    /// carries a landing or a sever — the mapping write, in one transaction.
+    /// A separate call would leave a crash window where the attempt says
+    /// committed while the mapping stays unbound, or stays bound to a listing
+    /// the removal took down.
+    ///
+    /// What authorises the sever is `write_attempt_one_in_flight`, not
+    /// `write_attempt.lease_epoch`: the epoch is written at open from the
+    /// run's own `LeaseRef` and compared here against the same one, so it can
+    /// never mismatch within a run, and `expire_and_steal` bumps
+    /// `job_item.lease_epoch` rather than the attempt's. The clause that
+    /// bites is `state = 'in_flight'`. The sever's remote-id predicate is
+    /// defence in depth against fixture-level writes and a future concurrent
+    /// binder, not a live guard: while a removal is in flight no second
+    /// attempt on the mapping can open, so nothing can rebind it underneath.
     pub async fn settle(
         &self,
         lease: &LeaseRef,
@@ -761,9 +811,12 @@ impl WriteAttemptRepo {
         let AttemptVerdict {
             state,
             failure_code,
-            landed,
+            landing,
         } = verdict;
-        let remote = landed.as_ref().map(RemoteIdColumns::encode).transpose()?;
+        let remote = landing
+            .addressed()
+            .map(RemoteIdColumns::encode)
+            .transpose()?;
         let org_db = uuid_to_db(lease.org.0);
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
@@ -784,42 +837,87 @@ impl WriteAttemptRepo {
         if updated.rows_affected() == 0 {
             return Err(StorageError::StaleLease);
         }
-        let (Some(landed), Some(remote)) = (landed.as_ref(), remote) else {
-            tx.commit().await?;
-            return Ok(BindDisposition::NotLanded);
-        };
         let mapping_db = uuid_to_db(mapping.0);
-        sqlx::query("SAVEPOINT bind").execute(&mut *tx).await?;
-        let bound = sqlx::query!(
-            "UPDATE mapping \
-             SET binding_state = 'bound', \
-                 remote_id_kind = $3, remote_url = $4, remote_numeric_id = $5, \
-                 first_seen_at = $6, \
-                 verify_state = 'stale', verified_at = NULL, verify_stale_since = $6, \
-                 binding_attempt = NULL, binding_marker = NULL, \
-                 ambiguous_since = NULL, severed_at = NULL, sever_cause = NULL, \
-                 updated_at = $6 \
-             WHERE org_id = $1 AND id = $2 \
-               AND binding_state IN ('unbound', 'creating')",
-            org_db,
-            mapping_db,
-            remote.kind,
-            remote.url,
-            remote.numeric_id,
-            at_db,
-        )
-        .execute(&mut *tx)
-        .await;
-        let disposition = match bound {
-            Ok(bound) if bound.rows_affected() > 0 => BindDisposition::Bound,
-            Ok(_) => classify_bind(&mut tx, org_db, mapping_db, landed).await?,
-            Err(clash) if is_bound_identity_clash(&clash) => {
-                sqlx::query("ROLLBACK TO SAVEPOINT bind")
-                    .execute(&mut *tx)
-                    .await?;
-                claimed_elsewhere(&mut tx, org_db, mapping_db, &remote).await?
+        // The savepoint guards the identity clash and nothing else: every
+        // other database error still aborts the whole settle. A sever cannot
+        // raise one, because releasing a claim contends with no index.
+        let disposition = match landing {
+            LandingEffect::None => BindDisposition::NotLanded,
+            LandingEffect::Addressed { .. } => BindDisposition::Addressed,
+            LandingEffect::Landed { id, lifecycle } => {
+                let remote = RemoteIdColumns::encode(id)?;
+                let lifecycle = LifecycleColumns::encode(lifecycle)?;
+                sqlx::query("SAVEPOINT bind").execute(&mut *tx).await?;
+                let bound = sqlx::query!(
+                    "UPDATE mapping \
+                     SET binding_state = 'bound', \
+                         remote_id_kind = $3, remote_url = $4, remote_numeric_id = $5, \
+                         first_seen_at = $6, \
+                         verify_state = 'stale', verified_at = NULL, verify_stale_since = $6, \
+                         binding_attempt = NULL, binding_marker = NULL, \
+                         ambiguous_since = NULL, severed_at = NULL, sever_cause = NULL, \
+                         lifecycle_state = $7, lifecycle_since = $8, lifecycle_reason = $9, \
+                         updated_at = $6 \
+                     WHERE org_id = $1 AND id = $2 \
+                       AND binding_state IN ('unbound', 'creating', 'severed')",
+                    org_db,
+                    mapping_db,
+                    remote.kind,
+                    remote.url,
+                    remote.numeric_id,
+                    at_db,
+                    lifecycle.state,
+                    lifecycle.since,
+                    lifecycle.reason,
+                )
+                .execute(&mut *tx)
+                .await;
+                match bound {
+                    Ok(bound) if bound.rows_affected() > 0 => BindDisposition::Bound,
+                    Ok(_) => classify_bind(&mut tx, org_db, mapping_db, id).await?,
+                    Err(clash) if is_bound_identity_clash(&clash) => {
+                        sqlx::query("ROLLBACK TO SAVEPOINT bind")
+                            .execute(&mut *tx)
+                            .await?;
+                        claimed_elsewhere(&mut tx, org_db, mapping_db, &remote).await?
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
-            Err(error) => return Err(error.into()),
+            LandingEffect::Severed { id } => {
+                let remote = RemoteIdColumns::encode(id)?;
+                let lifecycle = LifecycleColumns::encode(&RemoteLifecycle::Absent)?;
+                let severed = sqlx::query!(
+                    "UPDATE mapping \
+                     SET binding_state = 'severed', \
+                         severed_at = $6, sever_cause = 'removed_by_seller', \
+                         verify_state = 'stale', verified_at = NULL, \
+                         verify_stale_since = NULL, \
+                         lifecycle_state = $7, lifecycle_since = $8, lifecycle_reason = $9, \
+                         updated_at = $6 \
+                     WHERE org_id = $1 AND id = $2 \
+                       AND binding_state = 'bound' \
+                       AND remote_id_kind = $3 \
+                       AND remote_url IS NOT DISTINCT FROM $4 \
+                       AND remote_numeric_id IS NOT DISTINCT FROM $5",
+                    org_db,
+                    mapping_db,
+                    remote.kind,
+                    remote.url,
+                    remote.numeric_id,
+                    at_db,
+                    lifecycle.state,
+                    lifecycle.since,
+                    lifecycle.reason,
+                )
+                .execute(&mut *tx)
+                .await?;
+                if severed.rows_affected() > 0 {
+                    BindDisposition::Severed
+                } else {
+                    classify_sever(&mut tx, org_db, mapping_db, id).await?
+                }
+            }
         };
         tx.commit().await?;
         Ok(disposition)
@@ -844,6 +942,11 @@ impl WriteAttemptRepo {
 pub enum BindDisposition {
     /// The verdict carried no landed listing, so there was nothing to bind.
     NotLanded,
+    /// The attempt named the listing it addressed and asked for no change to
+    /// the binding, so the `write_attempt` row records it and the mapping is
+    /// untouched. A failed removal settles here, saying what it failed to
+    /// remove.
+    Addressed,
     Bound,
     AlreadyBound,
     DivergentLanding {
@@ -854,6 +957,23 @@ pub enum BindDisposition {
     },
     Refused {
         state: String,
+    },
+    /// The removal took: the binding is released and both partial unique
+    /// indexes stop holding the claim, so the mapping can be re-created
+    /// through the same row.
+    Severed,
+    /// The sever's fence matched no row because the mapping was not bound.
+    SeverRefused {
+        state: String,
+    },
+    /// The mapping is bound, to a different listing than the one this
+    /// removal took down. A separate variant rather than `Refused`, whose
+    /// documented meaning is that the fence matched no row *in this binding
+    /// state*: a rebound sever fails on the remote-id predicate while
+    /// `binding_state` is still `'bound'`, so `Refused { binding_state:
+    /// "bound" }` would be a self-contradiction an operator cannot act on.
+    SeverDiverged {
+        existing: RemoteListingId,
     },
 }
 
@@ -905,6 +1025,48 @@ async fn claimed_elsewhere(
     Ok(BindDisposition::ClaimedElsewhere {
         existing_mapping: MappingId(uuid_from_db(claimant.id)),
     })
+}
+
+/// Why the fenced sever matched no row, read inside the settling
+/// transaction. Two answers only: the mapping is not bound, or it is bound to
+/// a listing other than the one this removal took down.
+async fn classify_sever(
+    tx: &mut Transaction<'_, Postgres>,
+    org: uuid::Uuid,
+    mapping: uuid::Uuid,
+    severed: &RemoteListingId,
+) -> Result<BindDisposition, StorageError> {
+    let row = sqlx::query!(
+        "SELECT binding_state, remote_id_kind, remote_url, remote_numeric_id \
+         FROM mapping WHERE org_id = $1 AND id = $2",
+        org,
+        mapping,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| StorageError::CorruptRow {
+        reason: "the settled attempt names a mapping that does not exist".to_owned(),
+    })?;
+    if row.binding_state != "bound" {
+        return Ok(BindDisposition::SeverRefused {
+            state: row.binding_state,
+        });
+    }
+    let existing = remote_id_from_db(
+        row.remote_id_kind
+            .as_deref()
+            .ok_or_else(|| StorageError::CorruptRow {
+                reason: "bound binding without a remote id kind".to_owned(),
+            })?,
+        row.remote_url,
+        row.remote_numeric_id,
+    )?;
+    if existing == *severed {
+        return Err(StorageError::Inconsistent {
+            reason: "the sever matched no row against the identity the mapping holds".to_owned(),
+        });
+    }
+    Ok(BindDisposition::SeverDiverged { existing })
 }
 
 /// Why the fenced bind matched no row, read inside the settling transaction

@@ -4,6 +4,12 @@
 -- binding_candidate or field_mismatch — because resolving an ambiguous create
 -- deletes candidate rows and a mismatched verification inserts mismatch rows,
 -- so both of those paths stay on the app path with reconciliation.
+--
+-- Amended by 0019's commit: the engine's one UPDATE now also writes the
+-- lifecycle triple beside the binding, and a committed removal severs through
+-- the same grant. Both are UPDATE ON mapping, so nothing widens; what changes
+-- is what the engine writes to a mapping, which is why this comment says so
+-- rather than leaving a reviewer to infer it.
 GRANT UPDATE ON mapping TO tam_engine;
 
 -- mapping_one_per_inventory protects the product side of a binding; nothing

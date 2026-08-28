@@ -476,6 +476,11 @@ pub enum BindAnomaly {
     ClaimedElsewhere { claiming_mapping: MappingId },
     /// The prior-state fence matched no row, in this binding state.
     Refused { binding_state: String },
+    /// A removal took a listing down, and the mapping that asked for it is
+    /// bound to a different one. Distinct from `Refused`, whose meaning is
+    /// that the fence matched no row in this binding state: a sever that
+    /// diverges fails on the remote identity while the row is still bound.
+    SeverDiverged { existing_remote: String },
 }
 
 /// The body carried beside each `job_event.kind`. The serde tag of each
