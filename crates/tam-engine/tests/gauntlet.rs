@@ -191,7 +191,14 @@ impl FakeTes {
                         .unwrap_or_else(|| json!({ "id": id }));
                     return ok(echoed.to_string());
                 }
-                Method::Put | Method::Delete => {}
+                Method::Delete => {
+                    state.drafts.remove(&id);
+                    return HttpResponse {
+                        status: 204,
+                        body: Vec::new(),
+                    };
+                }
+                Method::Put => {}
             }
         }
         if url.contains("/api/resources/v3/draft/") && url.ends_with("/attachment") {

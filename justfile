@@ -110,9 +110,10 @@ db-verify:
     cd crates/tam-storage && SQLX_OFFLINE=false DATABASE_URL={{db_url}} cargo sqlx prepare --check
 
 # The database-backed test lane: tenancy isolation, codecs, structural fences,
-# and the API driven in-process over per-test databases
+# the API driven in-process over per-test databases, and the engine driven
+# end to end against a fake marketplace
 db-test: db-wait db-verify
-    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests
+    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests -p tam-engine --features tam-engine/pg-tests
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:
