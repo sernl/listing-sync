@@ -3,10 +3,10 @@
 //! read. Every step classifies its own response; no step trusts a status
 //! another step produced.
 //!
-//! The `FieldSet` contract this adapter accepts is interim until the
-//! taxonomy hub (M1g) and the projection own it: `Title` is plain text,
-//! `Description` is markdown, `Price` is a free-tier licence token
-//! (`CC-BY`, `CC-BY-SA`, `CC-BY-ND`), `Taxonomy` is JSON
+//! The `FieldSet` contract is this crate's on both sides: `project_fields`
+//! renders it from a projected listing and the submit parses it back.
+//! `Title` is plain text, `Description` is markdown, `Price` is a free-tier
+//! licence token (`CC-BY`, `CC-BY-SA`, `CC-BY-ND`), `Taxonomy` is JSON
 //! `{"categories": [..], "mainType": n}`, and `Grades` is JSON
 //! `{"ageRanges": [..], "ages": [..], "mainAge": n}`.
 
@@ -14,11 +14,14 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tam_marketplace::transport::Transport;
 use tam_marketplace::{
-    AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FormId,
-    FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, MarketplaceAdapter,
-    ObservedListing, RemoteLifecycle, RemoteListingId, SubmitEvidence,
+    AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
+    FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator,
+    MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle, RemoteListingId,
+    SubmitEvidence,
 };
-use tam_types::{ContentHash, FailureCode, FailureDetail, FieldKey, InventoryId, OrgId, Timestamp};
+use tam_types::{
+    ContentHash, FailureCode, FailureDetail, FieldKey, InventoryId, OrgId, PriceIntent, Timestamp,
+};
 
 use crate::classify::{
     classify_create, classify_read, classify_read_bytes, classify_transport, classify_write,
@@ -304,6 +307,69 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
 impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     fn inventory(&self) -> InventoryId {
         self.inventory
+    }
+
+    /// Tes's own wire shape, rendered here rather than in the engine that
+    /// seeds the item: a licence token in `Price`, the numeric category ids
+    /// in `Taxonomy`, and the age ranges with the derived age list in
+    /// `Grades`. The submit's own `listing_from_field_set` parses exactly
+    /// this back, so both halves of the contract sit in one file.
+    ///
+    /// A category the crosswalk left without a numeric id is refused: Tes
+    /// addresses categories by number and there is nothing to send.
+    fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
+        let licence = match listing.price {
+            PriceIntent::Free => "CC-BY".to_owned(),
+            // The Tes write path's licence vocabulary is Creative Commons
+            // only so far; a paid seed reaches this adapter's own closed
+            // refusal and settles honestly rather than being silently freed.
+            PriceIntent::Paid(_) => "TES-PAID".to_owned(),
+        };
+        let mut categories: Vec<i64> = Vec::new();
+        for term in &listing.taxonomy {
+            let native = term.native_id.as_deref().ok_or_else(|| {
+                unprojectable_category("a Tes taxonomy path must carry its numeric id".to_owned())
+            })?;
+            categories.push(native.parse().map_err(|_| {
+                unprojectable_category(format!("non-numeric Tes category id {native:?}"))
+            })?);
+        }
+        let mut age_ranges: Vec<i64> = Vec::new();
+        for term in &listing.grades {
+            if let Some(native) = term.native_id.as_deref() {
+                if let Ok(id) = native.parse() {
+                    age_ranges.push(id);
+                }
+            }
+        }
+        let (ages, main_age): (Vec<i64>, i64) = match listing.ages {
+            Some(span) => (
+                (i64::from(span.low_years)..=i64::from(span.high_years)).collect(),
+                i64::from(span.low_years),
+            ),
+            None => (Vec::new(), 0),
+        };
+        Ok(FieldSet {
+            entries: vec![
+                (FieldKey::Title, listing.title.clone()),
+                (FieldKey::Description, listing.body.clone()),
+                (FieldKey::Price, licence),
+                (
+                    FieldKey::Taxonomy,
+                    serde_json::json!({ "categories": categories, "mainType": 0 }).to_string(),
+                ),
+                (
+                    FieldKey::Grades,
+                    serde_json::json!({
+                        "ageRanges": age_ranges,
+                        "ages": ages,
+                        "mainAge": main_age
+                    })
+                    .to_string(),
+                ),
+            ],
+            files: listing.files.clone(),
+        })
     }
 
     /// The pre-flight is the M0 loop as a probe: create a draft, write every
@@ -602,6 +668,37 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     }
 }
 
+/// The three reads above as the cross-platform capability. The bodies stay
+/// inherent so the Tes crate's own tests and the import binary keep calling
+/// them directly; the trait is what a platform-agnostic importer binds.
+impl<T: Transport, F: FileSource> FirstPartyExport for TesAdapter<T, F> {
+    type CatalogueEntry = CatalogueEntry;
+    type Resource = DraftId;
+
+    fn list_own_resources(
+        &self,
+        reason: &FetchReason,
+    ) -> impl core::future::Future<Output = Result<Vec<CatalogueEntry>, AdapterError>> + Send {
+        Self::list_own_resources(self, reason)
+    }
+
+    fn download_resource_bundle(
+        &self,
+        reason: &FetchReason,
+        id: DraftId,
+    ) -> impl core::future::Future<Output = Result<Vec<u8>, AdapterError>> + Send {
+        Self::download_resource_bundle(self, reason, id)
+    }
+
+    fn fetch_for_import(
+        &self,
+        reason: &FetchReason,
+        id: DraftId,
+    ) -> impl core::future::Future<Output = Result<ImportedListing, AdapterError>> + Send {
+        Self::fetch_for_import(self, reason, id)
+    }
+}
+
 /// The marketplace serialises ids sometimes as numbers and sometimes as
 /// strings; the import keeps them as strings, the edge relation's own form.
 fn native_id_string(value: &Value) -> Option<String> {
@@ -617,6 +714,16 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
         Some(Value::Array(entries)) => entries.iter().filter_map(native_id_string).collect(),
         Some(single) => native_id_string(single).into_iter().collect(),
         None => Vec::new(),
+    }
+}
+
+/// A projection Tes cannot express. The category ids it addresses are
+/// numbers, so a term the crosswalk left without one is refused before an
+/// attempt is opened rather than sent as something else.
+fn unprojectable_category(detail: String) -> AdapterError {
+    AdapterError::Rejected {
+        code: FailureCode::UploadRejected,
+        detail: FailureDetail(detail),
     }
 }
 

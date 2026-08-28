@@ -15,8 +15,8 @@ use tam_engine::driver::{run_item, DriverContext, MachineSeed, NowSource, RunVer
 use tam_marketplace::FetchReason;
 use tam_marketplace::{
     AdapterError, AmbiguityCause, CreateStrategy, FieldSet, FormId, FormSchemaFingerprint,
-    IdempotencyKey, ListingLocator, MarketplaceAdapter, ObservedListing, RemoteLifecycle,
-    RemoteListingId, SubmitEvidence,
+    IdempotencyKey, ListingLocator, MarketplaceAdapter, ObservedListing, ProjectedListing,
+    RemoteLifecycle, RemoteListingId, SubmitEvidence,
 };
 use tam_storage::{
     HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
@@ -46,6 +46,13 @@ struct ScriptedAdapter {
 impl MarketplaceAdapter for ScriptedAdapter {
     fn inventory(&self) -> InventoryId {
         InventoryId::TesGb
+    }
+
+    fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
+        Ok(FieldSet {
+            entries: vec![(FieldKey::Title, listing.title.clone())],
+            files: listing.files.clone(),
+        })
     }
 
     async fn assert_form_schema(

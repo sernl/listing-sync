@@ -28,8 +28,7 @@ use tam_import::{
     import_one, measure_one, record_drain_report, DrainTotals, ImportEntry, ImportRun,
     MeasureTotals, NamedBytes, NoImportFiles,
 };
-use tam_marketplace::transport::Transport;
-use tam_marketplace::FetchReason;
+use tam_marketplace::{FetchReason, FirstPartyExport};
 use tam_marketplace_tes::{DraftId, GatewayTransport, TesAdapter};
 use tam_secrets::Kek;
 use tam_types::{InventoryId, OrgId, Timestamp, Uuid};
@@ -74,11 +73,13 @@ fn wall_now() -> Result<Timestamp, Box<dyn std::error::Error>> {
 /// One entry through the import, absorbed into the run's totals and reported
 /// on the way past. Shared by the manifest path and by discover, so the two
 /// print the same shape.
-async fn import_and_report<T: Transport>(
-    run: &ImportRun<'_, T>,
+async fn import_and_report<A: FirstPartyExport>(
+    run: &ImportRun<'_, A>,
     entry: &ImportEntry,
     totals: &mut DrainTotals,
-) {
+) where
+    A::Resource: From<i64>,
+{
     match import_one(run, entry).await {
         Ok(report) => {
             totals.absorb(&report);
@@ -107,8 +108,8 @@ async fn import_and_report<T: Transport>(
     }
 }
 
-async fn record_and_report<T: Transport>(
-    run: &ImportRun<'_, T>,
+async fn record_and_report<A: FirstPartyExport>(
+    run: &ImportRun<'_, A>,
     totals: DrainTotals,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let job = record_drain_report(run, totals).await?;

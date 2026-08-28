@@ -13,6 +13,15 @@ pub const ORIGIN: &str = "https://www.tes.com";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DraftId(pub i64);
 
+/// The catalogue and the import manifest both carry a resource as its bare
+/// numeric id, which is how a platform-agnostic importer names one without
+/// naming this crate.
+impl From<i64> for DraftId {
+    fn from(resource: i64) -> Self {
+        Self(resource)
+    }
+}
+
 /// The licence values the API validates. Free resources use the Creative
 /// Commons family; `TES-PAID` requires a price and is refused without one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

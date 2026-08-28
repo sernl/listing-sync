@@ -18,7 +18,7 @@ use tam_domain::{
     VocabularyId, VocabularyPath,
 };
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
-use tam_engine::seed::{seed_for_item, SeedOutcome};
+use tam_engine::seed::{project_for_item, seed_from_projection, ProjectionOutcome};
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
 };
@@ -468,16 +468,17 @@ async fn drive(app: &PgPool, fake: &FakeTes) -> RunVerdict {
         .await
         .expect("the acquire runs")
         .expect("the enqueued item leases");
-    let seed = match seed_for_item(pool, &item, NOW)
+    let projected = match project_for_item(pool, &item, NOW)
         .await
-        .expect("the seed runs")
+        .expect("the projection runs")
     {
-        SeedOutcome::Ready(seed) => seed,
-        SeedOutcome::Blocked { gate, .. } => {
+        ProjectionOutcome::Ready(projected) => projected,
+        ProjectionOutcome::Blocked { gate, .. } => {
             panic!("the fixture projects; blocked on {gate}")
         }
     };
     let adapter = TesAdapter::new(InventoryId::TesNz, fake, OneFile).expect("a Tes inventory");
+    let seed = seed_from_projection(&adapter, &item, &projected).expect("the adapter renders");
     let halts = HaltRepo::new(pool.clone());
     let attempts = WriteAttemptRepo::new(pool.clone());
     let budgets = RateBudgetRepo::new(pool.clone());

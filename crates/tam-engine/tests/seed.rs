@@ -1,7 +1,11 @@
 //! The seed producer against a live catalogue: a projectable mapping yields
-//! the machine seed field-for-field, and a blocked one raises its queue
-//! items and reports the park gate — the worker cannot lease what it cannot
-//! project.
+//! the machine seed field-for-field through the real Tes adapter's own
+//! rendering, and a blocked one raises its queue items and reports the park
+//! gate — the worker cannot lease what it cannot project.
+//!
+//! The adapter here is the real one over a transport that would refuse every
+//! request, because rendering a field set is pure: a projection that reached
+//! the network would fail this test rather than pass it.
 
 #![cfg(feature = "pg-tests")]
 
@@ -9,14 +13,29 @@ use sqlx::PgPool;
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
-use tam_engine::seed::{seed_for_item, SeedOutcome};
+use tam_engine::seed::{project_for_item, seed_from_projection, ProjectionOutcome};
+use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
+use tam_marketplace::{FileContent, FileSource, FileSourceError};
+use tam_marketplace_tes::TesAdapter;
 use tam_storage::{LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
 use tam_types::{
     CanonicalTermId, ContentHash, FieldKey, FileId, FileKind, FileRole, InventoryId, JobId,
     ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
     ScanOutcome, Timestamp, Title, Uuid,
 };
+
+/// The rendering reads no files, so the source is a refusal.
+struct NoFiles;
+
+impl FileSource for NoFiles {
+    fn fetch(
+        &self,
+        file: FileId,
+    ) -> impl core::future::Future<Output = Result<FileContent, FileSourceError>> + Send {
+        core::future::ready(Err(FileSourceError::Missing(file)))
+    }
+}
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
 const PRODUCT: ProductId = ProductId(Uuid([0x01; 16]));
@@ -174,12 +193,21 @@ fn entry(seed: &tam_engine::driver::MachineSeed, key: FieldKey) -> String {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
     provision(&pool, true).await;
-    let outcome = seed_for_item(&pool, &lease(), NOW)
+    let outcome = project_for_item(&pool, &lease(), NOW)
         .await
-        .expect("the seed runs");
-    let SeedOutcome::Ready(seed) = outcome else {
+        .expect("the projection runs");
+    let ProjectionOutcome::Ready(projected) = outcome else {
         panic!("a covered mapping seeds");
     };
+    let adapter = TesAdapter::new(
+        InventoryId::TesNz,
+        CassetteTransport::new(Cassette {
+            interactions: vec![],
+        }),
+        NoFiles,
+    )
+    .expect("a Tes inventory");
+    let seed = seed_from_projection(&adapter, &lease(), &projected).expect("the adapter renders");
     assert_eq!(entry(&seed, FieldKey::Title), "Fractions practice");
     assert_eq!(entry(&seed, FieldKey::Price), "CC-BY", "free is CC-BY");
     let taxonomy: serde_json::Value =
@@ -203,10 +231,10 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
     provision(&pool, false).await;
-    let outcome = seed_for_item(&pool, &lease(), NOW)
+    let outcome = project_for_item(&pool, &lease(), NOW)
         .await
-        .expect("the seed runs");
-    let SeedOutcome::Blocked { gate, raised } = outcome else {
+        .expect("the projection runs");
+    let ProjectionOutcome::Blocked { gate, raised } = outcome else {
         panic!("no NZ edge means the seed blocks");
     };
     assert_eq!(gate, "reconciliation");

@@ -169,7 +169,7 @@ fn run_for(
     pool: PgPool,
     adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
     store_root: std::path::PathBuf,
-) -> ImportRun<'_, CassetteTransport> {
+) -> ImportRun<'_, TesAdapter<CassetteTransport, NoImportFiles>> {
     ImportRun {
         pool,
         kek: Kek::from_bytes(&[0x11; 32]).expect("a well-formed kek"),

@@ -3,11 +3,12 @@
 //! jittered poll until ctrl-c. The outbox drain lives in tam-server per the
 //! design's single-home line; this process no longer duplicates it.
 //!
-//! Per item: the projection seeds the machine (a blocked projection parks
-//! the item behind the queue items it just raised), the broker leases a
-//! gateway endpoint so this process never holds a credential, and the M1d
-//! driver runs the machine against the adapter with the fenced attempt and
-//! the read-back verification it was built with.
+//! Per item: the projection gates the item (a blocked projection parks it
+//! behind the queue items it just raised), the broker leases a gateway
+//! endpoint so this process never holds a credential, the adapter renders
+//! the field set it will submit, and the M1d driver runs the machine against
+//! that adapter with the fenced attempt and the read-back verification it
+//! was built with.
 //!
 //! Usage: tam-worker <engine-database-url> <worker-name> <broker-socket> \
 //!            <kek-path> <store-root> [poll-ms]
@@ -19,7 +20,7 @@ use std::io::Read as _;
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::request_lease;
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
-use tam_engine::seed::{seed_for_item, SeedOutcome};
+use tam_engine::seed::{project_for_item, seed_from_projection, ProjectionOutcome};
 use tam_marketplace_tes::{GatewayTransport, TesAdapter};
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
@@ -77,9 +78,9 @@ impl Pump {
     /// the lease to expire into the stealer, which is the stall bias.
     async fn pump_item(&self, worker: &str, item: &LeasedItem) {
         let now = WallClock.now();
-        let seed = match seed_for_item(&self.pool, item, now).await {
-            Ok(SeedOutcome::Ready(seed)) => seed,
-            Ok(SeedOutcome::Blocked { gate, raised }) => {
+        let projected = match project_for_item(&self.pool, item, now).await {
+            Ok(ProjectionOutcome::Ready(projected)) => projected,
+            Ok(ProjectionOutcome::Blocked { gate, raised }) => {
                 let until = Timestamp(now.0.saturating_add(BLOCKED_PARK_MS));
                 match self.leases.park(&item.lease_ref(), gate, until).await {
                     Ok(()) => eprintln!(
@@ -94,7 +95,7 @@ impl Pump {
                 return;
             }
             Err(error) => {
-                eprintln!("tam-worker {worker}: seed failed, lease left to expire: {error}");
+                eprintln!("tam-worker {worker}: projection failed, lease left to expire: {error}");
                 return;
             }
         };
@@ -153,6 +154,13 @@ impl Pump {
             Ok(adapter) => adapter,
             Err(error) => {
                 eprintln!("tam-worker {worker}: {error}");
+                return;
+            }
+        };
+        let seed = match seed_from_projection(&adapter, item, &projected) {
+            Ok(seed) => seed,
+            Err(error) => {
+                eprintln!("tam-worker {worker}: seed failed, lease left to expire: {error}");
                 return;
             }
         };

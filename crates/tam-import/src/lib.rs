@@ -12,9 +12,9 @@
 #![forbid(unsafe_code)]
 
 use sqlx::PgPool;
-use tam_marketplace::transport::Transport;
-use tam_marketplace::{AdapterError, FetchReason, FileContent, FileSource, FileSourceError};
-use tam_marketplace_tes::{DraftId, TesAdapter};
+use tam_marketplace::{
+    AdapterError, FetchReason, FileContent, FileSource, FileSourceError, FirstPartyExport,
+};
 use tam_pipeline::archive::ExtractBudget;
 use tam_pipeline::pipeline::{ingest, IngestContext, IngestError, Ingested};
 use tam_pipeline::scan::EicarScanner;
@@ -59,12 +59,14 @@ pub struct NamedBytes {
     pub bytes: Vec<u8>,
 }
 
-/// Everything an import run holds constant across entries.
-pub struct ImportRun<'a, T: Transport> {
+/// Everything an import run holds constant across entries. The adapter is
+/// the first-party-export capability rather than one marketplace's client,
+/// so a second platform's import is this same run over its own adapter.
+pub struct ImportRun<'a, A: FirstPartyExport> {
     pub pool: PgPool,
     pub kek: Kek,
     pub store_root: std::path::PathBuf,
-    pub adapter: &'a TesAdapter<T, NoImportFiles>,
+    pub adapter: &'a A,
     pub org: OrgId,
     pub source: InventoryId,
     pub target: InventoryId,
@@ -170,8 +172,8 @@ fn wire(count: u64) -> u32 {
 /// inventory is the source, the one the run's marketplace reads addressed;
 /// the target travels in the payload, because the event stream carries the
 /// body without its job row.
-pub async fn record_drain_report<T: Transport>(
-    run: &ImportRun<'_, T>,
+pub async fn record_drain_report<A: FirstPartyExport>(
+    run: &ImportRun<'_, A>,
     totals: DrainTotals,
 ) -> Result<JobId, ImportError> {
     let job = JobId(fresh_uuid());
@@ -263,17 +265,20 @@ impl MeasureTotals {
 /// Reads one resource and runs the taxonomy gate, without its files, its
 /// product, or any persistence. The full import raises the reconciliation
 /// items and settles a product; this only counts them.
-pub async fn measure_one<T: Transport>(
-    run: &ImportRun<'_, T>,
+pub async fn measure_one<A: FirstPartyExport>(
+    run: &ImportRun<'_, A>,
     resource: i64,
-) -> Result<MeasureReport, ImportError> {
+) -> Result<MeasureReport, ImportError>
+where
+    A::Resource: From<i64>,
+{
     let listing = run
         .adapter
         .fetch_for_import(
             &FetchReason::FirstPartyExport {
                 inventory: run.source,
             },
-            DraftId(resource),
+            resource.into(),
         )
         .await?;
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
@@ -384,17 +389,20 @@ async fn inbound_subjects(
     Ok((subjects, unmapped))
 }
 
-pub async fn import_one<T: Transport>(
-    run: &ImportRun<'_, T>,
+pub async fn import_one<A: FirstPartyExport>(
+    run: &ImportRun<'_, A>,
     entry: &ImportEntry,
-) -> Result<ImportRowReport, ImportError> {
+) -> Result<ImportRowReport, ImportError>
+where
+    A::Resource: From<i64>,
+{
     let listing = run
         .adapter
         .fetch_for_import(
             &FetchReason::FirstPartyExport {
                 inventory: run.source,
             },
-            DraftId(entry.resource),
+            entry.resource.into(),
         )
         .await?;
 

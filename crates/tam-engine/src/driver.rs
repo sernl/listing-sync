@@ -71,6 +71,10 @@ pub enum RunVerdict {
 pub enum EngineError {
     Storage(StorageError),
     Machine(MachineError),
+    /// The adapter refused to render the projection into its own wire
+    /// shape: the item is unrepresentable on this marketplace, so its lease
+    /// is left to expire rather than settled.
+    Projection(AdapterError),
 }
 
 impl From<StorageError> for EngineError {
@@ -85,11 +89,18 @@ impl From<MachineError> for EngineError {
     }
 }
 
+impl From<AdapterError> for EngineError {
+    fn from(error: AdapterError) -> Self {
+        Self::Projection(error)
+    }
+}
+
 impl core::fmt::Display for EngineError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Storage(error) => write!(f, "storage: {error}"),
             Self::Machine(error) => write!(f, "machine: {error:?}"),
+            Self::Projection(error) => write!(f, "projection: {error:?}"),
         }
     }
 }

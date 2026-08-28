@@ -15,7 +15,8 @@ pub mod transport;
 
 use tam_types::{
     AttemptId, ConnectionId, ContentHash, FailureCode, FailureDetail, FieldKey, FieldMismatch,
-    FileId, InventoryId, LogicalInstant, Marketplace, MismatchClass, OrgId, Timestamp, Uuid,
+    FileId, InventoryId, LogicalInstant, Marketplace, MismatchClass, OrgId, PriceIntent, Timestamp,
+    Uuid,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -365,6 +366,44 @@ pub struct FieldSet {
     pub files: Vec<FileId>,
 }
 
+/// One projected vocabulary term as the seam carries it: the marketplace's
+/// own identifier where the crosswalk holds one, and the path it named. The
+/// canonical term stays on the domain side; an adapter sees only what the
+/// marketplace itself would recognise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeTerm {
+    pub native_id: Option<String>,
+    pub segments: Vec<String>,
+}
+
+/// A product's derived age span in years, where its grade declaration
+/// resolved to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgeSpan {
+    pub low_years: u8,
+    pub high_years: u8,
+}
+
+/// The platform-neutral rendering of one product, and the input to
+/// [`MarketplaceAdapter::project_fields`]. It carries what every marketplace
+/// needs and nothing any one of them encodes: no licence token, no category
+/// numbering, no age-range JSON, because those are wire shapes and a wire
+/// shape belongs to the adapter that speaks it.
+///
+/// This is the seam-side image of the domain's listing projection. The domain
+/// crate depends on this one, so the projection type itself cannot appear
+/// here; the engine lowers it at the call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectedListing {
+    pub title: String,
+    pub body: String,
+    pub price: PriceIntent,
+    pub taxonomy: Vec<NativeTerm>,
+    pub grades: Vec<NativeTerm>,
+    pub ages: Option<AgeSpan>,
+    pub files: Vec<FileId>,
+}
+
 /// What the driver observed about the submit itself, which is evidence and
 /// never a verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -409,6 +448,17 @@ pub struct ObservedListing {
 pub trait MarketplaceAdapter: Send + Sync {
     fn inventory(&self) -> InventoryId;
 
+    /// Renders a projected listing into the field set this marketplace's
+    /// submit accepts. Every wire shape lives behind this method — licence
+    /// tokens, category numbering, age-range JSON — so the engine that seeds
+    /// an item carries no marketplace's encoding. Pure, and therefore not a
+    /// future: it reads no session and performs no I/O.
+    ///
+    /// Refuses rather than approximates. A projection this marketplace cannot
+    /// express — a term whose native identifier is missing or of the wrong
+    /// shape — is a rejection here, before an attempt is opened.
+    fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError>;
+
     fn assert_form_schema(
         &self,
         org: OrgId,
@@ -450,6 +500,51 @@ pub struct ImportedListing {
     pub age_range_native_ids: Vec<String>,
     pub year_groups: Vec<String>,
     pub curriculum: Vec<String>,
+}
+
+/// The tier-one capability as a seam: the marketplace's own reads of the
+/// seller's own data, which is the only tier that justifies an enumeration-
+/// shaped read. Separate from [`MarketplaceAdapter`] because exporting and
+/// writing are different privileges, and an importer that binds this trait
+/// addresses the capability rather than one marketplace's client type.
+///
+/// Every implementation refuses a reason other than
+/// [`FetchReason::FirstPartyExport`]; the trait states the shape and the
+/// adapter states the refusal, because the reason is checked against the
+/// marketplace the adapter serves.
+///
+/// The two associated types are the marketplace's own handles — how it names
+/// a catalogue row and how it addresses one of the seller's resources — which
+/// no shared type can stand in for. Written with explicit `impl Future`
+/// returns rather than `async fn`, because `async_fn_in_trait` is a hard
+/// error under a deny-warnings build.
+pub trait FirstPartyExport: Send + Sync {
+    /// One row of the seller's own catalogue, in the marketplace's vocabulary.
+    type CatalogueEntry;
+    /// How the marketplace addresses one of the seller's own resources.
+    type Resource;
+
+    /// The seller's own catalogue, whole. A walk that cannot reach its end
+    /// refuses rather than returning a truncation an importer would mistake
+    /// for the entire catalogue.
+    fn list_own_resources(
+        &self,
+        reason: &FetchReason,
+    ) -> impl std::future::Future<Output = Result<Vec<Self::CatalogueEntry>, AdapterError>> + Send;
+
+    /// The bytes of the seller's own files for one resource.
+    fn download_resource_bundle(
+        &self,
+        reason: &FetchReason,
+        id: Self::Resource,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, AdapterError>> + Send;
+
+    /// One of the seller's own listings, verbatim, for canonicalisation.
+    fn fetch_for_import(
+        &self,
+        reason: &FetchReason,
+        id: Self::Resource,
+    ) -> impl std::future::Future<Output = Result<ImportedListing, AdapterError>> + Send;
 }
 
 /// How a seller's marketplace access is held. `StoredCredential` is today's

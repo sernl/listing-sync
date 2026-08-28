@@ -3,15 +3,24 @@
 //! marketplace. A blocked projection raises its queue items and parks the
 //! item rather than settling it, because a drained queue un-parks it into a
 //! clean retry — the treadmill inverted into the drain's own retry loop.
+//!
+//! Two halves, deliberately separate. [`project_for_item`] is the ledger's:
+//! it reads, projects, and parks, and it needs no adapter, so an item that
+//! cannot project never costs a gateway session. [`seed_from_projection`] is
+//! the marketplace's: the adapter renders its own wire shape, so no
+//! platform's encoding lives here.
 
 use sqlx::PgPool;
-use tam_domain::{ProjectionBlocked, StepBudget, TermKind, VocabularyId};
-use tam_marketplace::{CreateStrategy, FieldSet, FormId, RemoteLifecycleKind};
+use tam_domain::{ProjectionBlocked, StepBudget, TermKind, VocabularyId, VocabularyPath};
+use tam_marketplace::{
+    AgeSpan, CreateStrategy, FormId, MarketplaceAdapter, NativeTerm, ProjectedListing,
+    RemoteLifecycleKind,
+};
 use tam_storage::{
     LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing, ListingContext};
-use tam_types::{FieldKey, PriceIntent, Timestamp};
+use tam_types::Timestamp;
 
 use crate::driver::{EngineError, MachineSeed};
 
@@ -19,8 +28,8 @@ use crate::driver::{EngineError, MachineSeed};
 /// (create, metadata, three-step file upload per file, read-back).
 const ACTIONS_PER_ITEM: u32 = 32;
 
-pub enum SeedOutcome {
-    Ready(MachineSeed),
+pub enum ProjectionOutcome {
+    Ready(ProjectedListing),
     /// The projection refused; the gaps (when taxonomy) are raised already.
     Blocked {
         gate: &'static str,
@@ -28,11 +37,11 @@ pub enum SeedOutcome {
     },
 }
 
-pub async fn seed_for_item(
+pub async fn project_for_item(
     pool: &PgPool,
     lease: &LeasedItem,
     now: Timestamp,
-) -> Result<SeedOutcome, EngineError> {
+) -> Result<ProjectionOutcome, EngineError> {
     let mapping = MappingRepo::new(pool.clone())
         .get(lease.org, lease.mapping)
         .await?
@@ -91,13 +100,13 @@ pub async fn seed_for_item(
                     &causes,
                 )
                 .await?;
-            return Ok(SeedOutcome::Blocked {
+            return Ok(ProjectionOutcome::Blocked {
                 gate: "reconciliation",
                 raised,
             });
         }
         Err(ProjectionBlocked::CurrencyUnknown { .. }) => {
-            return Ok(SeedOutcome::Blocked {
+            return Ok(ProjectionOutcome::Blocked {
                 gate: "currency_unknown",
                 raised: RaiseReport {
                     new: 0,
@@ -106,7 +115,7 @@ pub async fn seed_for_item(
             });
         }
         Err(ProjectionBlocked::CoverMissing) => {
-            return Ok(SeedOutcome::Blocked {
+            return Ok(ProjectionOutcome::Blocked {
                 gate: "cover_missing",
                 raised: RaiseReport {
                     new: 0,
@@ -115,7 +124,7 @@ pub async fn seed_for_item(
             });
         }
         Err(ProjectionBlocked::ScanIncomplete { .. }) => {
-            return Ok(SeedOutcome::Blocked {
+            return Ok(ProjectionOutcome::Blocked {
                 gate: "scan_incomplete",
                 raised: RaiseReport {
                     new: 0,
@@ -125,63 +134,36 @@ pub async fn seed_for_item(
         }
     };
 
-    let licence = match projection.price {
-        PriceIntent::Free => "CC-BY".to_owned(),
-        // The Tes write path's licence vocabulary is Creative Commons only
-        // so far; a paid seed reaches the adapter's own closed refusal and
-        // settles honestly rather than being silently freed here.
-        PriceIntent::Paid(_) => "TES-PAID".to_owned(),
-    };
-    let mut categories: Vec<i64> = Vec::new();
-    for path in &projection.taxonomy {
-        let native = path
-            .native_id
-            .as_deref()
-            .ok_or(StorageError::Inconsistent {
-                reason: "a Tes taxonomy path must carry its numeric id".to_owned(),
-            })?;
-        categories.push(native.parse().map_err(|_| StorageError::Inconsistent {
-            reason: format!("non-numeric Tes category id {native:?}"),
-        })?);
-    }
-    let mut age_ranges: Vec<i64> = Vec::new();
-    for path in &projection.grades {
-        if let Some(native) = path.native_id.as_deref() {
-            if let Ok(id) = native.parse() {
-                age_ranges.push(id);
-            }
-        }
-    }
-    let (ages, main_age): (Vec<i64>, i64) = match product.grades.derived {
-        Some(interval) => (
-            (i64::from(interval.low_years())..=i64::from(interval.high_years())).collect(),
-            i64::from(interval.low_years()),
-        ),
-        None => (Vec::new(), 0),
-    };
+    Ok(ProjectionOutcome::Ready(ProjectedListing {
+        title: projection.title,
+        body: projection.body,
+        price: projection.price,
+        taxonomy: projection.taxonomy.iter().map(native_term).collect(),
+        grades: projection.grades.iter().map(native_term).collect(),
+        ages: product.grades.derived.map(|interval| AgeSpan {
+            low_years: interval.low_years(),
+            high_years: interval.high_years(),
+        }),
+        files: projection.files,
+    }))
+}
 
-    let entries = vec![
-        (FieldKey::Title, projection.title.clone()),
-        (FieldKey::Description, projection.body.clone()),
-        (FieldKey::Price, licence),
-        (
-            FieldKey::Taxonomy,
-            serde_json::json!({ "categories": categories, "mainType": 0 }).to_string(),
-        ),
-        (
-            FieldKey::Grades,
-            serde_json::json!({
-                "ageRanges": age_ranges,
-                "ages": ages,
-                "mainAge": main_age
-            })
-            .to_string(),
-        ),
-    ];
-    let fields = FieldSet {
-        entries,
-        files: projection.files.clone(),
-    };
+fn native_term(path: &VocabularyPath) -> NativeTerm {
+    NativeTerm {
+        native_id: path.native_id.clone(),
+        segments: path.segments.clone(),
+    }
+}
+
+/// The adapter half: it renders the field set, and the intent hash is taken
+/// over what it rendered, so the recorded intent is the bytes the submit will
+/// carry rather than a shape the engine guessed at.
+pub fn seed_from_projection<A: MarketplaceAdapter>(
+    adapter: &A,
+    lease: &LeasedItem,
+    listing: &ProjectedListing,
+) -> Result<MachineSeed, EngineError> {
+    let fields = adapter.project_fields(listing)?;
     let intent_hash = tam_pipeline::hash::content_hash(
         serde_json::json!({
             "entries": fields
@@ -208,7 +190,7 @@ pub async fn seed_for_item(
         tam_types::InventoryId::Etsy => 0x04,
         tam_types::InventoryId::Tpt => 0x05,
     };
-    Ok(SeedOutcome::Ready(MachineSeed {
+    Ok(MachineSeed {
         form: FormId(tam_types::Uuid([form_tag; 16])),
         fields,
         intent_hash,
@@ -218,5 +200,5 @@ pub async fn seed_for_item(
         budget: StepBudget {
             actions_remaining: ACTIONS_PER_ITEM,
         },
-    }))
+    })
 }
