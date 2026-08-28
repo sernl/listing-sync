@@ -43,11 +43,28 @@ const MAPPING: MappingId = MappingId(Uuid([0x31; 16]));
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
 const NOW: Timestamp = Timestamp(1_000);
 
+async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Binding) {
+    provision_lifecycle(
+        pool,
+        with_nz_edge,
+        binding,
+        tam_marketplace::RemoteLifecycle::Absent,
+    )
+    .await;
+}
+
+/// The same fixture with the mapping's recorded lifecycle stated, which is
+/// the half of `admission` every other fixture leaves incomparable.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Binding) {
+async fn provision_lifecycle(
+    pool: &PgPool,
+    with_nz_edge: bool,
+    binding: tam_domain::Binding,
+    lifecycle: tam_marketplace::RemoteLifecycle,
+) {
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
         .bind(uuid::Uuid::from_bytes(ORG.0 .0))
         .execute(pool)
@@ -133,7 +150,7 @@ async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Bindi
                 },
                 price_rule: PriceRule::Explicit(PriceIntent::Free),
                 publish: tam_domain::PublishMode::DryRun,
-                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+                lifecycle,
             },
             0,
             NOW,
@@ -370,4 +387,92 @@ async fn a_removal_is_ready_without_a_projection(pool: PgPool) {
         projected.is_none(),
         "a removal describes nothing, so nothing was projected and no gap could park it"
     );
+}
+
+fn removing_live(url: &str) -> tam_domain::ItemOperation {
+    tam_domain::ItemOperation::Remove {
+        subject: tes(url),
+        state: tam_marketplace::ListingState::Live,
+    }
+}
+
+fn published_at(at: Timestamp) -> tam_marketplace::RemoteLifecycle {
+    tam_marketplace::RemoteLifecycle::Live { since: at }
+}
+
+/// The 2026-08-29 incident shape, refused before it reaches a marketplace.
+/// The stated state selects the delete route — `Draft` posts the overlay
+/// delete, `Live` the resource delete — so a stale item stating `draft`
+/// against a mapping that has since gone live takes down only the overlay
+/// and leaves the listing standing. Nothing downstream can undo that: the
+/// gate is the only place it is stoppable.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_item_whose_stated_state_contradicts_the_mapping_is_refused(pool: PgPool) {
+    provision_lifecycle(&pool, true, bound_to(HELD), published_at(NOW)).await;
+    let outcome = prepare_item(&pool, &leasing(removing(HELD)), NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Blocked { gate, raised } = outcome else {
+        panic!("an item that thinks the listing is a draft must not delete a live one");
+    };
+    assert_eq!(
+        gate, "lifecycle_diverged",
+        "the gate names the contradiction between the item's stated state and the one \
+         the mapping records"
+    );
+    assert_eq!(
+        (raised.new, raised.already_open),
+        (0, 0),
+        "a stale state raises no reconciliation item; nothing is missing"
+    );
+}
+
+/// The other side of the same gate, and what makes the publish path usable
+/// at all: a mapping the publish bound `'live'` admits the next item that
+/// states it. Were the bind not writing the lifecycle, this would be the
+/// permanent park instead.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_published_mapping_admits_the_item_that_states_it(pool: PgPool) {
+    provision_lifecycle(&pool, true, bound_to(HELD), published_at(NOW)).await;
+    let outcome = prepare_item(&pool, &leasing(removing_live(HELD)), NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Ready { operation, .. } = outcome else {
+        panic!("an item that states the state the mapping records is admitted");
+    };
+    assert_eq!(
+        operation,
+        removing_live(HELD),
+        "the operation travels whole through the gate that agreed with it"
+    );
+}
+
+/// Section K item 16's engine half. The sever exists so a mapping can be
+/// re-created through the same row — `mapping_one_per_inventory` leaves no
+/// other row to use — and the storage fence admitting `'severed'` is only
+/// half of that. If `admission` refused a create here, the sever's whole
+/// stated purpose would be unreachable, and no test would say so: the
+/// Create arm is a predicate rather than an exhaustive match, so tightening
+/// it compiles clean.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_severed_mapping_admits_a_fresh_create(pool: PgPool) {
+    provision(
+        &pool,
+        true,
+        tam_domain::Binding::Severed {
+            was: tes(HELD),
+            noticed: NOW,
+            cause: tam_domain::SeverCause::RemovedBySeller,
+        },
+    )
+    .await;
+    let outcome = prepare_item(&pool, &lease(), NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Ready {
+        projected: Some(_), ..
+    } = outcome
+    else {
+        panic!("a severed mapping holds no listing, so a create has one to make");
+    };
 }

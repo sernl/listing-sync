@@ -90,6 +90,9 @@ struct FakeState {
     /// been published.
     publish_pending: Option<usize>,
     publish_lag: usize,
+    /// Whether the delete answers its measured 204 without removing
+    /// anything — the misleading-204 the read-back exists to catch.
+    swallow_deletes: bool,
 }
 
 impl FakeState {
@@ -183,6 +186,18 @@ impl FakeTes {
     /// the case it must refuse to call a success.
     fn never_publishing(id: i64) -> Self {
         Self::holding_with(id, usize::MAX)
+    }
+
+    /// A fake holding `id` whose delete answers 204 and removes nothing,
+    /// which is the misleading-204 measured in M0.
+    fn swallowing(id: i64) -> Self {
+        let fake = Self::holding_with(id, 0);
+        Self {
+            state: Mutex::new(FakeState {
+                swallow_deletes: true,
+                ..fake.state.into_inner()
+            }),
+        }
     }
 
     fn holding_with(id: i64, publish_lag: usize) -> Self {
@@ -298,7 +313,9 @@ impl FakeTes {
                     return ok(echoed.to_string());
                 }
                 Method::Delete => {
-                    state.drafts.remove(&id);
+                    if !state.swallow_deletes {
+                        state.drafts.remove(&id);
+                    }
                     return HttpResponse::plain(204, Vec::new());
                 }
                 Method::Put => {}
@@ -1311,5 +1328,67 @@ async fn a_publish_the_read_never_confirms_settles_ambiguous(pool: PgPool) {
         (mapping.0.as_str(), mapping.1.as_str()),
         ("bound", "draft"),
         "nothing was proved, so nothing about the listing is rewritten"
+    );
+}
+
+/// A removal the marketplace did not take. The delete answers its measured
+/// 204, the absence poll still finds the listing, and the item settles
+/// Failed — the one unproved read that is a refusal rather than an
+/// ambiguity, because the ledger can act on it.
+///
+/// What the settled row must not lose is which listing the delete failed to
+/// remove, which is the whole reason `LandingEffect::Addressed` exists; and
+/// the mapping must still hold that listing, because severing a mapping
+/// whose listing is still live is how the next create mints a duplicate.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_that_does_not_take_records_what_it_addressed(pool: PgPool) {
+    provision_with(&pool, Fixture::removal(true)).await;
+    let fake = FakeTes::swallowing(REMOVAL_ID);
+    let verdict = drive(&pool, &fake).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Failed),
+        "the delete answered 204 and removed nothing; the read-back is what catches that"
+    );
+    let still_there = { fake.state.lock().await.drafts.contains_key(&REMOVAL_ID) };
+    assert!(still_there, "the fixture's delete really did swallow");
+
+    let engine = engine_pool(&pool).await;
+    let attempt: (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT state, failure_code, remote_url FROM write_attempt WHERE org_id = $1",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .fetch_one(&engine)
+    .await
+    .expect("the attempt row reads");
+    assert_eq!(
+        (
+            attempt.0.as_str(),
+            attempt.1.as_deref(),
+            attempt.2.as_deref()
+        ),
+        (
+            "failed",
+            Some("VerificationMismatch"),
+            Some(format!("https://www.tes.com/api/v2/resources/{REMOVAL_ID}").as_str())
+        ),
+        "a failed removal says what it failed to remove; a row that named nothing would \
+         leave an operator with a failure and no subject"
+    );
+    let mapping: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT binding_state, sever_cause, lifecycle_state FROM mapping \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(MAPPING.0 .0))
+    .fetch_one(&engine)
+    .await
+    .expect("the mapping row reads");
+    assert_eq!(
+        (mapping.0.as_str(), mapping.1.as_deref(), mapping.2.as_str()),
+        ("bound", None, "draft"),
+        "the listing is still on the seller's store, so the mapping still holds it: \
+         severing here releases the bound claim and the next create mints a duplicate \
+         the ledger cannot reconcile"
     );
 }

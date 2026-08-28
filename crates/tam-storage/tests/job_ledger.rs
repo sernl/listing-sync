@@ -177,3 +177,60 @@ async fn seed_ledger_job_only(pool: &PgPool) -> Result<(), sqlx::Error> {
     tx.commit().await?;
     Ok(())
 }
+
+/// Migration 0019's two structural guarantees about `job_item.operation`.
+///
+/// The `'create'` default existed to backfill every row the ledger already
+/// held and is then dropped, so an insert site that forgets the column
+/// raises a NOT NULL violation rather than silently storing a create. And
+/// `job_item_operation_total` is what stops an operation and its columns
+/// disagreeing: a revise that names no subject would reach the engine as an
+/// item whose stated target is nothing at all.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_operation_carries_no_default_and_must_agree_with_its_columns(pool: PgPool) {
+    let defaulted: Option<String> = sqlx::query_scalar(
+        "SELECT column_default FROM information_schema.columns \
+         WHERE table_name = 'job_item' AND column_name = 'operation'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the column exists");
+    assert_eq!(
+        defaulted, None,
+        "the backfill default is dropped after 0019 runs; leaving it would let an insert \
+         that forgot the column store 'create' for a removal"
+    );
+
+    seed_org_a(&pool).await.expect("fixture org inserts");
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), Timestamp(1))
+        .await
+        .expect("the fixture product inserts");
+    MappingRepo::new(pool.clone())
+        .insert(ORG_A, &unbound_mapping(), 0, Timestamp(1))
+        .await
+        .expect("the fixture mapping inserts");
+    seed_ledger_job_only(&pool)
+        .await
+        .expect("the fixture job inserts");
+
+    let mut tx = pool.begin().await.expect("transaction begins");
+    pin_a(&mut tx).await.expect("tenant pin applies");
+    let incomplete = sqlx::query(
+        "INSERT INTO job_item \
+         (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, operation) \
+         VALUES ($1, $2, $3, $4, $5, 'queued', now(), 'revise')",
+    )
+    .bind(db_uuid(ORG_A.0))
+    .bind(db_uuid(ITEM_1))
+    .bind(db_uuid(JOB_1))
+    .bind(db_uuid(MAPPING_1.0))
+    .bind(db_uuid(Uuid([0x61; 16])))
+    .execute(&mut *tx)
+    .await;
+    assert!(
+        incomplete.is_err(),
+        "a revise that names neither a subject nor a transition must be refused by \
+         job_item_operation_total, not read back as an item pointing at nothing"
+    );
+}

@@ -698,9 +698,18 @@ fn an_edit_of_a_published_resource_is_uncaptured_rather_than_guessed() {
         ),
         ("unpublishing", ListingState::Draft, "tes.unpublish"),
     ] {
+        // One interaction the wrong implementation would consume — a
+        // published edit approximated as a draft metadata post. `remaining()`
+        // over an empty cassette is `len().saturating_sub(cursor)`, which
+        // reads zero whether nothing was sent or five things were, so the
+        // untouched claim needs something for the counter to still be
+        // holding.
         let adapter = adapter(
             Cassette {
-                interactions: vec![],
+                interactions: vec![Interaction {
+                    request: endpoints::set_metadata_request(DRAFT, &sample_listing()),
+                    response: ok(&draft_state(9001, false)),
+                }],
             },
             vec![],
         );
@@ -719,8 +728,9 @@ fn an_edit_of_a_published_resource_is_uncaptured_rather_than_guessed() {
         );
         assert_eq!(
             adapter.transport().remaining(),
-            0,
-            "{label}: and the refusal sends nothing at all"
+            1,
+            "{label}: and the refusal sends nothing at all — the interaction it would \
+             have consumed is still there"
         );
     }
 }
@@ -1372,7 +1382,10 @@ fn the_catalogue_walk_pages_published_then_drafts_and_stops_on_an_empty_page() {
 fn a_catalogue_read_without_the_export_capability_is_refused() {
     let adapter = adapter(
         Cassette {
-            interactions: vec![],
+            interactions: vec![Interaction {
+                request: endpoints::list_resources_request(0, endpoints::CATALOGUE_PAGE_LIMIT),
+                response: ok(&json!([])),
+            }],
         },
         vec![],
     );
@@ -1392,8 +1405,9 @@ fn a_catalogue_read_without_the_export_capability_is_refused() {
     );
     assert_eq!(
         adapter.transport().remaining(),
-        0,
-        "the refusal happens before the first request, so nothing was sent"
+        1,
+        "the refusal happens before the first request: the walk's own first page is \
+         still unconsumed, which an empty cassette could not have shown"
     );
 }
 
@@ -1501,7 +1515,10 @@ fn a_draft_has_no_bundle_and_says_so_distinctly() {
 fn a_bundle_download_without_the_export_capability_is_refused() {
     let adapter = adapter(
         Cassette {
-            interactions: vec![],
+            interactions: vec![Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&json!([])),
+            }],
         },
         vec![],
     );
@@ -1523,8 +1540,9 @@ fn a_bundle_download_without_the_export_capability_is_refused() {
     );
     assert_eq!(
         adapter.transport().remaining(),
-        0,
-        "the refusal happens before the first request"
+        1,
+        "the refusal happens before the first request: the manifest read is still \
+         unconsumed, which an empty cassette could not have shown"
     );
 }
 

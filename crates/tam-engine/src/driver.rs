@@ -1204,10 +1204,41 @@ mod tests {
     }
 
     /// The lease TTL the worker leases with. Mirrored rather than imported:
-    /// it is a binary's constant and `tam-engine` is a library, so the
-    /// inequality is asserted where `VerifyPolicy` lives and this value is
-    /// kept in step with `crates/tam-worker/src/main.rs` by hand.
+    /// `tam-worker` is a binary crate with no library target, so there is
+    /// nothing for `tam-engine` to depend on, and the inequality is asserted
+    /// where `VerifyPolicy` lives. The mirror is checked against the
+    /// worker's own source below rather than trusted, because a guard that
+    /// cannot see one of the two values it names is not a guard.
     const LEASE_TTL_SECS: i64 = 300;
+
+    /// The worker's source, which is the only thing this crate can reach of
+    /// it.
+    const WORKER_SOURCE: &str = include_str!("../../tam-worker/src/main.rs");
+
+    /// The lease TTL the worker actually declares, read out of that source.
+    /// `None` where the declaration moved or changed shape, which fails the
+    /// assertion below as loudly as a changed value does — the mirror has to
+    /// break when it stops mirroring, whatever the reason.
+    fn declared_lease_ttl_secs() -> Option<i64> {
+        WORKER_SOURCE.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("const LEASE_TTL_SECS: i64 = ")?
+                .strip_suffix(';')?
+                .parse()
+                .ok()
+        })
+    }
+
+    #[test]
+    fn the_mirrored_lease_ttl_is_the_one_the_worker_leases_with() {
+        assert_eq!(
+            declared_lease_ttl_secs(),
+            Some(LEASE_TTL_SECS),
+            "the inequality below is only worth asserting against the lease the worker \
+             really takes: lowering LEASE_TTL_SECS there and leaving this copy behind \
+             leaves the test green while the poll has stopped fitting"
+        );
+    }
 
     /// The slowest Tpt create actually measured, recorded as "nearly three
     /// minutes" at `crates/tam-marketplace-tpt/src/flows.rs`. The theoretical
