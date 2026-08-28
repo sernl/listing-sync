@@ -282,18 +282,47 @@ struct Verification<'a> {
     deadline: i64,
 }
 
-/// Three answers, because evidence about the listing and evidence about us
+/// Two answers, because evidence about the listing and evidence about us
 /// settle differently.
 enum VerifyOutcome {
-    /// The predicate accepted, the read returned a condition the machine has
-    /// an arm for, or the try budget ran out. Either way this is evidence
-    /// about the listing, and the machine settles on it.
+    /// The predicate accepted, the try budget ran out, or the read returned
+    /// the one condition `AwaitingReadBack` has an arm for. Either way this
+    /// is evidence about the listing, and the machine settles on it.
     Observed(Result<ObservedListing, AdapterError>),
+    /// The poll stopped without answering the predicate. The write may have
+    /// landed; we simply stopped looking.
+    Stopped(VerifyStop),
+}
+
+/// Why a poll stopped with nothing to say about the listing.
+///
+/// `ReadCondition` is the reason this is an enum rather than a flag.
+/// `awaiting_read_back_rows` answers `Ok(..)` and `Err(Ambiguous(..))` and
+/// calls every other `AdapterError` `InputNotApplicable`, so stepping one
+/// would return `Err` out of `run_item` with the write attempt still
+/// `in_flight` — the same stranded row the rate-window path exists to avoid,
+/// reached from the other side. An expired session, a 429 or a dropped
+/// connection mid-poll is enough to produce it.
+enum VerifyStop {
     /// The per-connection rate window closed before the predicate could be
-    /// answered. The write may have landed; we simply stopped looking.
+    /// answered.
     RateWindowClosed,
     /// The wall clock or the cancellation token ended the run.
     Cut,
+    /// The read answered a condition rather than an observation. Absence is
+    /// an observation precisely so that lag is not one, which leaves these
+    /// as facts about us rather than about the listing.
+    ReadCondition(AdapterError),
+}
+
+impl VerifyStop {
+    fn reason(&self) -> String {
+        match self {
+            Self::RateWindowClosed => "the per-connection rate window closed".to_owned(),
+            Self::Cut => "the run was cut".to_owned(),
+            Self::ReadCondition(error) => format!("the verification read answered {error:?}"),
+        }
+    }
 }
 
 /// Polls the marketplace's own read until the operation's predicate accepts,
@@ -310,19 +339,23 @@ enum VerifyOutcome {
 /// The deadline and the cancellation token are checked between tries, which
 /// leaves up to one `interval_ms` of uninterruptible pause after a ctrl-c —
 /// two seconds, stated rather than implied. Neither is answered by stepping
-/// `Input::BudgetExhausted`: in `AwaitingReadBack` that input is
-/// `InputNotApplicable`, so it would crash the run instead of settling it.
+/// `Input::BudgetExhausted`, which `SyncMachine::step` intercepts ahead of
+/// the state dispatch: from `AwaitingReadBack` that would settle the item
+/// `Ambiguous`, but this same effect is raised again from
+/// `SyncState::Terminal` after a reconciled settle, and `exhaust_budget`
+/// answers a terminal machine `InputNotApplicable`. Walking away covers both
+/// callers with one rule.
 async fn verify_with_backoff<A: MarketplaceAdapter, N: NowSource, P: Pause>(
     ctx: &DriverContext<'_, A, N, P>,
     lease: &LeasedItem,
     request: Verification<'_>,
 ) -> Result<VerifyOutcome, EngineError> {
     let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
-    let mut last: Option<Result<ObservedListing, AdapterError>> = None;
+    let mut last: Option<ObservedListing> = None;
     for attempted in 0..request.policy.tries {
         let now = ctx.clock.now();
         if ctx.cancel.is_cancelled() || now.0 >= request.deadline {
-            return Ok(VerifyOutcome::Cut);
+            return Ok(VerifyOutcome::Stopped(VerifyStop::Cut));
         }
         // Recomputed on every read: `consume` is keyed on the window start,
         // so one window carried across a poll that straddles a minute
@@ -333,7 +366,7 @@ async fn verify_with_backoff<A: MarketplaceAdapter, N: NowSource, P: Pause>(
             .consume(lease.org, request.connection, window, ceiling)
             .await?;
         if grant == BudgetGrant::Exhausted {
-            return Ok(VerifyOutcome::RateWindowClosed);
+            return Ok(VerifyOutcome::Stopped(VerifyStop::RateWindowClosed));
         }
         let observed = ctx
             .adapter
@@ -344,25 +377,34 @@ async fn verify_with_backoff<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                 now,
             )
             .await;
-        match &observed {
-            // Every `AdapterError` is a condition rather than lag —
-            // absence became an observation precisely so that lag is not one
-            // — and the machine has an arm for each, so polling through one
-            // would only spend the budget.
-            Err(_) => return Ok(VerifyOutcome::Observed(observed)),
-            Ok(listing) if verification_settles(request.operation, listing) => {
-                return Ok(VerifyOutcome::Observed(observed))
+        match observed {
+            // Every `AdapterError` is a condition rather than lag — absence
+            // became an observation precisely so that lag is not one — so
+            // polling through one would only spend the budget. Which way out
+            // it takes is decided by the machine's arm set rather than by
+            // the condition's severity: `Ambiguous` is the one
+            // `AwaitingReadBack` accepts, and every other one stops the poll
+            // instead of being stepped into `InputNotApplicable`.
+            Err(AdapterError::Ambiguous(cause)) => {
+                return Ok(VerifyOutcome::Observed(Err(AdapterError::Ambiguous(cause))))
             }
-            Ok(_) => {}
+            Err(error) => return Ok(VerifyOutcome::Stopped(VerifyStop::ReadCondition(error))),
+            Ok(listing) if verification_settles(request.operation, &listing) => {
+                return Ok(VerifyOutcome::Observed(Ok(listing)))
+            }
+            Ok(listing) => last = Some(listing),
         }
-        last = Some(observed);
         if attempted + 1 < request.policy.tries {
             ctx.pause.pause(request.policy.interval_ms).await;
         }
     }
     // A policy of zero tries never looked, which is the one case with no
     // answer to hand over; the stall bias reports it as a cut run.
-    Ok(last.map_or(VerifyOutcome::Cut, VerifyOutcome::Observed))
+    Ok(
+        last.map_or(VerifyOutcome::Stopped(VerifyStop::Cut), |listing| {
+            VerifyOutcome::Observed(Ok(listing))
+        }),
+    )
 }
 
 const fn outcome_to_attempt_state(outcome: &Outcome) -> &'static str {
@@ -613,15 +655,8 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                         // requeue can repeat into a second listing:
                         // `may_settle_unverified` holds that fence shut and
                         // accepts the deadlock as the cheaper failure.
-                        VerifyOutcome::RateWindowClosed | VerifyOutcome::Cut => {
-                            let stopped_by = match verified {
-                                VerifyOutcome::RateWindowClosed => {
-                                    "the per-connection rate window closed"
-                                }
-                                VerifyOutcome::Observed(_) | VerifyOutcome::Cut => {
-                                    "the run was cut"
-                                }
-                            };
+                        VerifyOutcome::Stopped(stop) => {
+                            let stopped_by = stop.reason();
                             let settling =
                                 current_attempt.filter(|_| may_settle_unverified(&operation));
                             if let Some(attempt) = settling {

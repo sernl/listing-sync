@@ -37,11 +37,28 @@ impl NowSource for SteppingClock {
     }
 }
 
-/// Scripted per call: submit answers are consumed in order; preflight and
-/// read-back are fixed.
+/// Scripted per call: submit answers are consumed in order, the preflight is
+/// fixed, and the read-back either observes the draft or answers the one
+/// condition the fixture was built with.
 struct ScriptedAdapter {
     submit_answers: Vec<Result<SubmitEvidence, AdapterError>>,
     submit_cursor: AtomicUsize,
+    read_back_condition: Option<AdapterError>,
+}
+
+impl ScriptedAdapter {
+    fn answering(submit: Result<SubmitEvidence, AdapterError>) -> Self {
+        Self {
+            submit_answers: vec![submit],
+            submit_cursor: AtomicUsize::new(0),
+            read_back_condition: None,
+        }
+    }
+
+    fn with_read_back_condition(mut self, condition: AdapterError) -> Self {
+        self.read_back_condition = Some(condition);
+        self
+    }
 }
 
 impl MarketplaceAdapter for ScriptedAdapter {
@@ -113,6 +130,9 @@ impl MarketplaceAdapter for ScriptedAdapter {
         _reason: FetchReason,
         _observed_at: Timestamp,
     ) -> Result<ObservedListing, AdapterError> {
+        if let Some(condition) = self.read_back_condition.clone() {
+            return Err(condition);
+        }
         let id = match locator {
             ListingLocator::Durable(id) => id,
             ListingLocator::Marker { .. } => RemoteListingId::Tes {
@@ -350,18 +370,7 @@ async fn assert_bound_to(engine: &PgPool, url: &str) -> Result<(), sqlx::Error> 
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_happy_path_settles_succeeded(app: PgPool) {
-    let adapter = ScriptedAdapter {
-        submit_answers: vec![Ok(SubmitEvidence {
-            http_status: Some(200),
-            response_body_digest: None,
-            landed_on_route: Some("https://www.tes.com/api/v2/resources/9001".to_owned()),
-            landed: Some(RemoteListingId::Tes {
-                url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
-            }),
-            observed_lag: false,
-        })],
-        submit_cursor: AtomicUsize::new(0),
-    };
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
     let (verdict, engine) = run(&app, &adapter, CreateStrategy::HaltOnAmbiguity).await;
     assert_eq!(
         verdict,
@@ -404,10 +413,8 @@ async fn the_happy_path_settles_succeeded(app: PgPool) {
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn an_ambiguous_submit_halts_the_inventory(app: PgPool) {
-    let adapter = ScriptedAdapter {
-        submit_answers: vec![Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))],
-        submit_cursor: AtomicUsize::new(0),
-    };
+    let adapter =
+        ScriptedAdapter::answering(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut)));
     let (verdict, engine) = run(&app, &adapter, CreateStrategy::HaltOnAmbiguity).await;
     assert_eq!(
         verdict,
@@ -434,5 +441,62 @@ async fn an_ambiguous_submit_halts_the_inventory(app: PgPool) {
     assert_eq!(
         binding, "unbound",
         "an ambiguous submit landed nothing, so there is nothing to bind"
+    );
+}
+
+/// The submit landed and named its listing; the verification read then
+/// answered a condition rather than an observation.
+fn landed_evidence() -> SubmitEvidence {
+    SubmitEvidence {
+        http_status: Some(200),
+        response_body_digest: None,
+        landed_on_route: Some("https://www.tes.com/api/v2/resources/9001".to_owned()),
+        landed: Some(RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        }),
+        observed_lag: false,
+    }
+}
+
+/// `AwaitingReadBack` has arms for an observation and for `Ambiguous`, and
+/// calls the other seven `AdapterError`s inapplicable. Handing one to the
+/// machine returns `Err` out of `run_item` with the attempt still in flight,
+/// which no caller settles and the next lease cannot get past — so the poll
+/// treats them the way it treats the rate window closing, as evidence about
+/// us rather than about the listing.
+///
+/// An expired session mid-poll is the ordinary trigger: `classify_read` maps
+/// a 401, a 403 or a sign-in interstitial behind a 200 straight to it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_read_back_condition_abandons_rather_than_crashing_the_run(app: PgPool) {
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()))
+        .with_read_back_condition(AdapterError::SessionExpired);
+    let (verdict, engine) = run(&app, &adapter, CreateStrategy::HaltOnAmbiguity).await;
+    let RunVerdict::Abandoned { reason } = verdict else {
+        panic!("a read-back condition abandons into the stealer: {verdict:?}");
+    };
+    assert!(
+        reason.contains("SessionExpired"),
+        "the abandon names the condition that stopped the poll: {reason}"
+    );
+    let attempt: (String, bool) =
+        sqlx::query_as("SELECT state, settled_at IS NULL FROM write_attempt LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the attempt row reads");
+    assert_eq!(
+        (attempt.0.as_str(), attempt.1),
+        ("in_flight", true),
+        "the item is a create, so the fence is held rather than settled; what this test \
+         pins is that the run reports a verdict at all instead of returning Err with the \
+         same row left behind and no reason recorded"
+    );
+    let binding: String = sqlx::query_scalar("SELECT binding_state FROM mapping LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the mapping row reads");
+    assert_eq!(
+        binding, "unbound",
+        "the read never observed the listing, so there is nothing to bind"
     );
 }
