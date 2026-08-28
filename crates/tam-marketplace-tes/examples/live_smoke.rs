@@ -8,6 +8,7 @@
 //!
 //! Usage, from the repo root with the operator's cookie jar:
 //!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar> preflight
+//!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar> list
 //!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar> draft <pdf>
 //!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar> edit <pdf>
 //!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar> paid <pdf> \
@@ -16,6 +17,7 @@
 //!       delete-published <pdf> --yes-publish-live
 //!
 //! `preflight` probes the draft schema and creates nothing that outlives it.
+//! `list` reads the seller's own catalogue and writes nothing at all.
 //! `draft` creates a draft, reads it back and deletes it. `edit` creates a
 //! draft, rewrites its title and description, reads the change back and
 //! deletes it. `paid` creates a priced draft and, only with
@@ -413,6 +415,54 @@ async fn run_preflight(adapter: &Adapter) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Which of the two lists a catalogue row came from, as the row itself
+/// reports it.
+fn state(published: bool) -> &'static str {
+    if published {
+        "published"
+    } else {
+        "draft"
+    }
+}
+
+/// A catalogue row's price in pounds, from the pence the API carries. A row
+/// with no price at all reads as `-` rather than as free, because the two are
+/// different answers.
+fn pounds(price_pence: Option<i64>) -> String {
+    match price_pence {
+        None => "-".to_owned(),
+        Some(0) => "free".to_owned(),
+        Some(pence) => format!(
+            "\u{a3}{}.{:02}",
+            pence.checked_div(100).unwrap_or_default(),
+            pence.checked_rem(100).unwrap_or_default().unsigned_abs(),
+        ),
+    }
+}
+
+/// The seller's own catalogue, published rows then drafts. Read-only: it
+/// creates nothing and so has nothing to clean up.
+async fn run_list(adapter: &Adapter) -> Result<(), Failure> {
+    let entries = adapter
+        .list_own_resources(&FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        })
+        .await
+        .map_err(|error| failed("the catalogue read failed", &error))?;
+    for entry in &entries {
+        println!(
+            "  {} | {} | {} | {} | {}",
+            entry.id,
+            state(entry.published),
+            entry.licence.as_deref().unwrap_or("-"),
+            pounds(entry.price_pence),
+            entry.title,
+        );
+    }
+    println!("catalogue: {} rows", entries.len());
+    Ok(())
+}
+
 async fn run_draft(adapter: &Adapter, file: FileContent, now: Timestamp) -> Result<(), Failure> {
     let listing = listing("draft", now, FREE);
     println!("draft: creating {:?}", listing.title);
@@ -585,7 +635,7 @@ fn empty_file() -> FileContent {
 async fn main() -> Result<(), Failure> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let jar_path = arguments.first().ok_or(
-        "usage: live_smoke <jar> [preflight|draft <pdf>|edit <pdf>|paid <pdf> \
+        "usage: live_smoke <jar> [preflight|list|draft <pdf>|edit <pdf>|paid <pdf> \
          [--price <minor units>] [--yes-publish-live]|delete-published <pdf> --yes-publish-live]",
     )?;
     let mut jar = String::new();
@@ -593,7 +643,7 @@ async fn main() -> Result<(), Failure> {
     let session = TesSession::from_netscape_jar(&jar)?;
     let transport = ReqwestTransport::new(&session)?;
     let mode = arguments.get(1).map_or("preflight", String::as_str);
-    let file = if mode == "preflight" {
+    let file = if matches!(mode, "preflight" | "list") {
         empty_file()
     } else {
         file_argument(&arguments)?
@@ -604,12 +654,14 @@ async fn main() -> Result<(), Failure> {
 
     match mode {
         "preflight" => run_preflight(&adapter).await,
+        "list" => run_list(&adapter).await,
         "draft" => run_draft(&adapter, file, now).await,
         "edit" => run_edit(&adapter, file, now).await,
         "paid" => run_paid(&adapter, file, now, price_argument(&arguments)?, publish).await,
         "delete-published" => run_delete_published(&adapter, file, now, publish).await,
         other => Err(format!(
-            "unknown mode {other:?}; expected preflight, draft, edit, paid or delete-published"
+            "unknown mode {other:?}; expected preflight, list, draft, edit, paid or \
+             delete-published"
         )
         .into()),
     }
