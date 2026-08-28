@@ -65,7 +65,10 @@ impl Pause for SleepingPause {
 }
 
 type Adapter = TptAdapter<ReqwestTransport, OneFile, SleepingPause>;
-type Failure = Box<dyn std::error::Error>;
+/// `Send + Sync` so the futures below stay `Send`: a cleanup guard holds the
+/// operation's outcome across the await that deletes the product, and a
+/// boxed error that is not `Send` would make every mode's future unspawnable.
+type Failure = Box<dyn std::error::Error + Send + Sync>;
 
 /// What an operator should do about each condition, which is the whole reason
 /// the classifier tells a lapsed session apart from an edge refusal.
@@ -233,25 +236,125 @@ fn status_of(observed: &ObservedListing) -> Result<StatusUser, Failure> {
     }
 }
 
-async fn read_back(
+/// How many times a verification re-reads before it gives up, and how long it
+/// waits between tries.
+///
+/// TPT's read API lags its write API by seconds, measured live on 2026-08-28:
+/// a delete answered `resourceDelete` 200 while the product still read back
+/// two seconds later and was gone by twenty, and an edit that submitted
+/// cleanly read back its old title. One instant read is therefore not a
+/// verdict about this API — it is a false negative waiting to happen — and
+/// every verification below polls until the state it expects appears.
+///
+/// The budget is sized to the slowest convergence actually observed rather
+/// than to the fastest: eleven reads two seconds apart is twenty seconds of
+/// waiting. The production read-back path — the driver that settles a write
+/// receipt, and the reconciliation behind it — faces the same lag and will
+/// need the same treatment; this constant is the example's own and settles
+/// nothing for that path.
+const VERIFY_TRIES: u32 = 11;
+/// See [`VERIFY_TRIES`].
+const VERIFY_INTERVAL_MS: u32 = 2_000;
+
+/// Re-reads the product until `settled` accepts what came back, or until the
+/// budget is spent, and hands the caller the last answer either way. The
+/// caller re-checks its own condition on that answer, so a budget that runs
+/// out is reported as the condition failing rather than as a read failing.
+async fn poll_until(
+    adapter: &Adapter,
+    product: ProductId,
+    now: Timestamp,
+    settled: impl Fn(&Result<ObservedListing, AdapterError>) -> bool,
+) -> Result<ObservedListing, AdapterError> {
+    let mut seen = observe(adapter, product, now).await;
+    for read in 1..VERIFY_TRIES {
+        if settled(&seen) {
+            return seen;
+        }
+        println!(
+            "  not settled after read {read}/{VERIFY_TRIES}; waiting {VERIFY_INTERVAL_MS}ms — \
+             TPT's read lags its write"
+        );
+        SleepingPause.pause(VERIFY_INTERVAL_MS).await;
+        seen = observe(adapter, product, now).await;
+    }
+    seen
+}
+
+fn describe_observation(observed: &ObservedListing) {
+    println!(
+        "  reads back: title={:?} price={} lifecycle={:?}",
+        reported(observed, FieldKey::Title),
+        reported(observed, FieldKey::Price),
+        observed.lifecycle,
+    );
+}
+
+/// The product exists and reads back, polled because a create does not appear
+/// on the read API the instant its form post returns.
+async fn confirm_present(
     adapter: &Adapter,
     product: ProductId,
     now: Timestamp,
 ) -> Result<ObservedListing, Failure> {
-    let observed = observe(adapter, product, now)
+    let observed = poll_until(adapter, product, now, Result::is_ok)
         .await
-        .map_err(|error| failed("the read-back failed", &error))?;
-    println!(
-        "  reads back: title={:?} price={} lifecycle={:?}",
-        reported(&observed, FieldKey::Title),
-        reported(&observed, FieldKey::Price),
-        observed.lifecycle,
-    );
+        .map_err(|error| failed("the read-back never found the product", &error))?;
+    describe_observation(&observed);
     Ok(observed)
 }
 
-/// The cleanup every mode ends with: delete, then prove the product is gone
-/// by a read that no longer finds it.
+async fn confirm_title(
+    adapter: &Adapter,
+    product: ProductId,
+    expected: &str,
+    now: Timestamp,
+) -> Result<(), Failure> {
+    let observed = poll_until(adapter, product, now, |seen| {
+        seen.as_ref()
+            .is_ok_and(|observed| reported(observed, FieldKey::Title) == expected)
+    })
+    .await
+    .map_err(|error| failed("the read-back after the edit failed", &error))?;
+    describe_observation(&observed);
+    if reported(&observed, FieldKey::Title) == expected {
+        println!("  confirmed edited: the read-back carries the new title");
+        return Ok(());
+    }
+    Err(format!(
+        "the edit did not appear within the verification budget: {product} still reads back as {:?}",
+        reported(&observed, FieldKey::Title)
+    )
+    .into())
+}
+
+async fn confirm_live(
+    adapter: &Adapter,
+    product: ProductId,
+    now: Timestamp,
+) -> Result<(), Failure> {
+    let observed = poll_until(adapter, product, now, |seen| {
+        seen.as_ref()
+            .is_ok_and(|observed| matches!(observed.lifecycle, RemoteLifecycle::Live { .. }))
+    })
+    .await
+    .map_err(|error| failed("the read-back after the publish failed", &error))?;
+    describe_observation(&observed);
+    if matches!(observed.lifecycle, RemoteLifecycle::Live { .. }) {
+        println!("  confirmed live: the read-back reports the published state");
+        return Ok(());
+    }
+    Err(format!(
+        "the publish did not appear within the verification budget: {product} still reads back \
+         as {:?}",
+        observed.lifecycle
+    )
+    .into())
+}
+
+/// Delete, then prove the product is gone by a read that no longer finds it —
+/// polled, because a delete this API answered 200 to was still readable two
+/// seconds later in the live run.
 async fn delete_and_confirm(
     adapter: &Adapter,
     product: ProductId,
@@ -262,10 +365,16 @@ async fn delete_and_confirm(
         .await
         .map_err(|error| failed("the delete failed", &error))?;
     println!("  deleted {product}");
-    match observe(adapter, product, now).await {
-        Ok(observed) => {
-            Err(format!("{product} still reads back after its delete: {observed:?}").into())
-        }
+    match poll_until(adapter, product, now, |seen| {
+        matches!(*seen, Err(AdapterError::Ambiguous(_)))
+    })
+    .await
+    {
+        Ok(observed) => Err(format!(
+            "{product} still reads back after its delete and the whole verification budget: \
+             {observed:?}"
+        )
+        .into()),
         Err(AdapterError::Ambiguous(_)) => {
             println!("  confirmed gone: the catalogue no longer returns {product}");
             Ok(())
@@ -273,6 +382,42 @@ async fn delete_and_confirm(
         Err(error) => Err(format!(
             "the delete of {product} could not be confirmed: {}",
             describe(&error)
+        )
+        .into()),
+    }
+}
+
+/// The cleanup guard every mode that creates something ends with.
+///
+/// Whatever the operation concluded, the product this run created is deleted
+/// and its removal confirmed, and the two outcomes are reported separately: a
+/// failed assertion must never be a reason to leave a listing on the
+/// founder's store, which is exactly what an early return once did.
+async fn finish(
+    adapter: &Adapter,
+    product: ProductId,
+    now: Timestamp,
+    outcome: Result<(), Failure>,
+) -> Result<(), Failure> {
+    println!("cleanup: deleting {product} whatever the operation concluded");
+    let cleaned = delete_and_confirm(adapter, product, now).await;
+    match (outcome, cleaned) {
+        (Ok(()), Ok(())) => {
+            println!("ok: the operation succeeded and {product} is gone");
+            Ok(())
+        }
+        (Err(operation), Ok(())) => {
+            println!("cleanup ok: {product} is gone, so nothing was left behind");
+            Err(format!("the operation failed: {operation}").into())
+        }
+        (Ok(()), Err(cleanup)) => Err(format!(
+            "the operation succeeded but CLEANUP FAILED: {product} may still be on the store — \
+             {cleanup}"
+        )
+        .into()),
+        (Err(operation), Err(cleanup)) => Err(format!(
+            "the operation failed ({operation}) AND CLEANUP FAILED: {product} may still be on \
+             the store — {cleanup}"
         )
         .into()),
     }
@@ -298,20 +443,22 @@ async fn run_draft(adapter: &Adapter, now: Timestamp) -> Result<(), Failure> {
         PriceIntent::Free,
     );
     println!("draft: creating {:?}", listing.title);
+    // The id is captured the moment it exists, and every step after it runs
+    // under the cleanup guard.
     let product = create(adapter, &listing, now).await?;
-    read_back(adapter, product, now).await?;
-    delete_and_confirm(adapter, product, now).await
+    let outcome = confirm_present(adapter, product, now).await.map(|_| ());
+    finish(adapter, product, now, outcome).await
 }
 
-async fn run_edit(adapter: &Adapter, now: Timestamp) -> Result<(), Failure> {
-    let listing = projection(
-        title_for("edit", now),
-        "<p>The first body.</p>".to_owned(),
-        PriceIntent::Free,
-    );
-    println!("edit: creating {:?}", listing.title);
-    let product = create(adapter, &listing, now).await?;
-    let observed = read_back(adapter, product, now).await?;
+/// The edit itself, run under [`finish`]: nothing in here may return in a way
+/// that skips the delete.
+async fn edit_and_verify(
+    adapter: &Adapter,
+    product: ProductId,
+    title: &str,
+    now: Timestamp,
+) -> Result<(), Failure> {
+    let observed = confirm_present(adapter, product, now).await?;
     // An edit restates every field including the status, so the status comes
     // from the read-back rather than from what the create is assumed to have
     // left behind.
@@ -319,7 +466,7 @@ async fn run_edit(adapter: &Adapter, now: Timestamp) -> Result<(), Failure> {
     // The product read carries no description, so the title moves with it:
     // the edit changes both and the title is what a read-back can prove.
     let rewritten = projection(
-        format!("{}-edited", listing.title),
+        format!("{title}-edited"),
         "<p>The second body, written by the edit.</p>".to_owned(),
         PriceIntent::Free,
     );
@@ -331,16 +478,41 @@ async fn run_edit(adapter: &Adapter, now: Timestamp) -> Result<(), Failure> {
     println!(
         "  edited {product}: description rewritten, title moved with it, status kept at {status:?}"
     );
-    let observed = read_back(adapter, product, now).await?;
-    if reported(&observed, FieldKey::Title) != rewritten.title {
-        return Err(format!(
-            "the edit did not take: {product} still reads back as {:?}",
-            reported(&observed, FieldKey::Title)
-        )
-        .into());
+    confirm_title(adapter, product, &rewritten.title, now).await
+}
+
+async fn run_edit(adapter: &Adapter, now: Timestamp) -> Result<(), Failure> {
+    let listing = projection(
+        title_for("edit", now),
+        "<p>The first body.</p>".to_owned(),
+        PriceIntent::Free,
+    );
+    println!("edit: creating {:?}", listing.title);
+    let product = create(adapter, &listing, now).await?;
+    let outcome = edit_and_verify(adapter, product, &listing.title, now).await;
+    finish(adapter, product, now, outcome).await
+}
+
+/// The priced half, run under [`finish`] for the same reason the edit is.
+async fn paid_and_verify(
+    adapter: &Adapter,
+    product: ProductId,
+    listing: &ProjectedListing,
+    publish: bool,
+    now: Timestamp,
+) -> Result<(), Failure> {
+    confirm_present(adapter, product, now).await?;
+    if !publish {
+        println!("  left as a draft; pass --yes-publish-live to publish it");
+        return Ok(());
     }
-    println!("  confirmed edited: the read-back carries the new title");
-    delete_and_confirm(adapter, product, now).await
+    let fields = fields_of(adapter, listing)?;
+    adapter
+        .publish(product, &fields)
+        .await
+        .map_err(|error| failed("the publish failed", &error))?;
+    println!("  PUBLISHED {product} live; the cleanup below deletes it again");
+    confirm_live(adapter, product, now).await
 }
 
 async fn run_paid(adapter: &Adapter, now: Timestamp, publish: bool) -> Result<(), Failure> {
@@ -359,19 +531,8 @@ async fn run_paid(adapter: &Adapter, now: Timestamp, publish: bool) -> Result<()
         money.minor_units()
     );
     let product = create(adapter, &listing, now).await?;
-    read_back(adapter, product, now).await?;
-    if publish {
-        let fields = fields_of(adapter, &listing)?;
-        adapter
-            .publish(product, &fields)
-            .await
-            .map_err(|error| failed("the publish failed", &error))?;
-        println!("  PUBLISHED {product} live; it is deleted again below");
-        read_back(adapter, product, now).await?;
-    } else {
-        println!("  left as a draft; pass --yes-publish-live to publish it");
-    }
-    delete_and_confirm(adapter, product, now).await
+    let outcome = paid_and_verify(adapter, product, &listing, publish, now).await;
+    finish(adapter, product, now, outcome).await
 }
 
 fn adapter_for(mode: &str, arguments: &[String], now: Timestamp) -> Result<Adapter, Failure> {
