@@ -11,9 +11,17 @@
 //! the flow the product page instead.
 //!
 //! The header envelope is per request rather than per client, because the
-//! capture distinguishes two shapes on one host: the XHR hops carry the
-//! mirrored CSRF header and the XHR marker, and the two product form posts
-//! are document navigations that carry neither.
+//! capture distinguishes three shapes on one host: the product form renders
+//! and the submits answering them are document navigations, the GraphQL and
+//! upload hops are XHRs carrying the mirrored CSRF header and the XHR marker,
+//! and the clock read and the signing oracle are plain same-origin fetches.
+//! Each shape is sent what the capture recorded for it, because a request
+//! claiming to be a browser while carrying none of a browser's other signals
+//! is what Cloudflare challenges: the same document navigation was answered
+//! with an interstitial under a truncated `Mozilla/5.0` and with the form
+//! under a real browser's headers. A challenge that arrives anyway is named
+//! rather than guessed at, by `crate::classify::classify_form_page`, which
+//! reads the interstitial markers before the scrape runs.
 
 use core::error::Error as _;
 
@@ -35,6 +43,28 @@ const GATEWAY_VERSION_HEADER: &str = "x-gateway-auth-version";
 const GATEWAY_VERSION: &str = "2";
 /// The job token, which no response body carries.
 const QUEUE_TRACKING_HEADER: &str = "x-queue-tracking-id";
+
+/// The seller's own browser, verbatim from the founder's HAR captures. Sent
+/// rather than a shortened stand-in because a truncated `Mozilla/5.0` claims
+/// to be a browser and matches no browser's remaining signals, which is the
+/// state Cloudflare challenges the document navigations in.
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0";
+/// Constant across every recorded hop, on both hosts.
+const ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
+
+/// Every session hop is same-origin, so the site is a client default and only
+/// the mode, the destination and the accepted media types vary by shape.
+const SEC_FETCH_SITE_HEADER: &str = "sec-fetch-site";
+const SEC_FETCH_MODE_HEADER: &str = "sec-fetch-mode";
+const SEC_FETCH_DEST_HEADER: &str = "sec-fetch-dest";
+const SEC_FETCH_USER_HEADER: &str = "sec-fetch-user";
+const SAME_ORIGIN: &str = "same-origin";
+
+const NAVIGATION_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+const GRAPHQL_ACCEPT: &str = "application/json";
+/// The upload hops are jQuery's, and jQuery sends its own list.
+const JQUERY_ACCEPT: &str = "application/json, text/javascript, */*; q=0.01";
+const ANY_ACCEPT: &str = "*/*";
 
 /// The only host a TPT session may reach.
 const SESSION_HOST: &str = "www.teacherspayteachers.com";
@@ -69,14 +99,20 @@ fn static_name(name: &'static str) -> reqwest::header::HeaderName {
     reqwest::header::HeaderName::from_static(name)
 }
 
-/// The headers every client sends. The session client is this plus the jar
-/// and the origin, so the two differ in exactly two headers and the
-/// difference is visible in one place.
+/// The headers every client sends: the browser identity, which the captures
+/// carry unchanged on both hosts. The session client is this plus the jar and
+/// the one same-origin constant, so the two differ in exactly two headers and
+/// the difference is visible in one place; everything varying by hop shape is
+/// applied per request instead.
 fn bare_headers() -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::USER_AGENT,
-        reqwest::header::HeaderValue::from_static("Mozilla/5.0"),
+        reqwest::header::HeaderValue::from_static(USER_AGENT),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT_LANGUAGE,
+        reqwest::header::HeaderValue::from_static(ACCEPT_LANGUAGE),
     );
     headers
 }
@@ -85,6 +121,10 @@ fn session_headers(
     session: &TptSession,
 ) -> Result<reqwest::header::HeaderMap, TransportBuildError> {
     let mut headers = bare_headers();
+    headers.insert(
+        static_name(SEC_FETCH_SITE_HEADER),
+        reqwest::header::HeaderValue::from_static(SAME_ORIGIN),
+    );
     let mut set = |name: reqwest::header::HeaderName, value: &str| {
         reqwest::header::HeaderValue::from_str(value)
             .map(|encoded| headers.insert(name, encoded))
@@ -92,7 +132,6 @@ fn session_headers(
             .map_err(|error| TransportBuildError(error.to_string()))
     };
     set(reqwest::header::COOKIE, session.header_value())?;
-    set(reqwest::header::ORIGIN, ORIGIN)?;
     Ok(headers)
 }
 
@@ -163,16 +202,114 @@ fn route(request: &HttpRequest) -> Result<Route, TransportError> {
     })
 }
 
-/// Whether a session-authenticated request is one of the XHR hops, which is
-/// what decides the CSRF header and the XHR marker.
+/// The shape of one session hop, which is what decides its header envelope
+/// and, for the two XHR shapes, its CSRF header and XHR marker.
 ///
 /// The distinction is the capture's own: `/uploads/upload_file`,
 /// `/uploads/process_file`, `/converter/generate_thumbs`, `/queue/results`
-/// and both GraphQL services carry the pair; the two multipart product form
-/// posts are document navigations and carry neither, and `/uploads/time` and
-/// `/uploads/sign_auth` are plain cookie-authenticated GETs.
-const fn is_xhr(body: &RequestBody) -> bool {
-    matches!(*body, RequestBody::Json(_) | RequestBody::Bytes(_))
+/// and both GraphQL services carry the pair; the two form renders and the two
+/// multipart posts answering them are document navigations and carry neither;
+/// `/uploads/time` and `/uploads/sign_auth` are plain cookie-authenticated
+/// GETs the page makes without the XHR marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hop {
+    Navigation,
+    GraphqlXhr,
+    FormXhr,
+    Fetch,
+}
+
+impl Hop {
+    const fn accept(self) -> &'static str {
+        match self {
+            Self::Navigation => NAVIGATION_ACCEPT,
+            Self::GraphqlXhr => GRAPHQL_ACCEPT,
+            Self::FormXhr => JQUERY_ACCEPT,
+            Self::Fetch => ANY_ACCEPT,
+        }
+    }
+
+    const fn fetch_mode(self) -> &'static str {
+        match self {
+            Self::Navigation => "navigate",
+            Self::GraphqlXhr | Self::FormXhr | Self::Fetch => "cors",
+        }
+    }
+
+    const fn fetch_dest(self) -> &'static str {
+        match self {
+            Self::Navigation => "document",
+            Self::GraphqlXhr | Self::FormXhr | Self::Fetch => "empty",
+        }
+    }
+
+    const fn is_xhr(self) -> bool {
+        matches!(self, Self::GraphqlXhr | Self::FormXhr)
+    }
+}
+
+/// Which shape a session request wears. The destination decides a navigation,
+/// because both form urls are navigated to and posted to alike; the body
+/// decides the rest, because the XHR hops are exactly the ones carrying a
+/// JSON or a urlencoded payload.
+fn hop(request: &HttpRequest) -> Hop {
+    if endpoints::is_product_form(&request.url) {
+        Hop::Navigation
+    } else {
+        match request.body {
+            RequestBody::Json(_) => Hop::GraphqlXhr,
+            RequestBody::Bytes(_) => Hop::FormXhr,
+            RequestBody::Empty | RequestBody::Multipart { .. } => Hop::Fetch,
+        }
+    }
+}
+
+/// What one shape carries beyond the client defaults, as the captures
+/// recorded it.
+fn envelope(hop: Hop, method: Method) -> Vec<(reqwest::header::HeaderName, &'static str)> {
+    let mut headers = vec![
+        (reqwest::header::ACCEPT, hop.accept()),
+        (static_name(SEC_FETCH_MODE_HEADER), hop.fetch_mode()),
+        (static_name(SEC_FETCH_DEST_HEADER), hop.fetch_dest()),
+    ];
+    match hop {
+        Hop::Navigation => {
+            headers.push((reqwest::header::UPGRADE_INSECURE_REQUESTS, "1"));
+            // A browser sends neither on the render it navigates to and both
+            // on the submit that answers it: an Origin on a same-origin
+            // document GET is a signal no browser emits.
+            if !matches!(method, Method::Get) {
+                headers.push((static_name(SEC_FETCH_USER_HEADER), "?1"));
+                headers.push((reqwest::header::ORIGIN, ORIGIN));
+            }
+        }
+        Hop::GraphqlXhr | Hop::FormXhr => headers.push((reqwest::header::ORIGIN, ORIGIN)),
+        Hop::Fetch => {}
+    }
+    headers
+}
+
+/// The browser envelope for one session request. Session-authenticated hops
+/// alone: the bucket sees the identity headers of the bare client and nothing
+/// naming the marketplace.
+fn apply_session_envelope(
+    builder: reqwest::RequestBuilder,
+    request: &HttpRequest,
+    csrf_token: &str,
+) -> reqwest::RequestBuilder {
+    let shape = hop(request);
+    let builder = envelope(shape, request.method)
+        .into_iter()
+        .fold(builder, |carried, (name, value)| {
+            carried.header(name, value)
+        });
+    if shape.is_xhr() {
+        builder
+            .header(static_name(CSRF_HEADER), csrf_token)
+            .header(static_name(REQUESTED_WITH_HEADER), "XMLHttpRequest")
+    } else {
+        builder
+    }
 }
 
 /// `is_connect` covers DNS, refusal and handshake alike and reqwest exposes
@@ -305,10 +442,8 @@ impl Transport for ReqwestTransport {
             Method::Delete => client.delete(&request.url),
         };
         let session_authenticated = route == Route::Session;
-        let builder = if session_authenticated && is_xhr(&request.body) {
-            builder
-                .header(static_name(CSRF_HEADER), &self.csrf_token)
-                .header(static_name(REQUESTED_WITH_HEADER), "XMLHttpRequest")
+        let builder = if session_authenticated {
+            apply_session_envelope(builder, &request, &self.csrf_token)
         } else {
             builder
         };
@@ -350,9 +485,10 @@ mod tests {
     };
 
     use super::{
-        bare_headers, build_client, is_xhr, project_headers, route, session_headers, Route,
-        SESSION_HOST,
+        bare_headers, build_client, envelope, hop, project_headers, route, session_headers,
+        static_name, Hop, Route, ACCEPT_LANGUAGE, SEC_FETCH_MODE_HEADER, SESSION_HOST, USER_AGENT,
     };
+    use crate::endpoints::{FormTarget, ORIGIN};
     use crate::session::TptSession;
 
     fn sigv2() -> RequestAuth {
@@ -422,25 +558,93 @@ mod tests {
     }
 
     #[test]
-    fn the_form_navigation_carries_no_csrf_header_and_the_xhr_hops_do() {
-        assert!(
-            is_xhr(&RequestBody::Json(serde_json::json!({}))),
+    fn every_hop_is_classified_as_the_capture_recorded_it() {
+        let form = FormTarget::CreateDigital.url();
+        assert_eq!(
+            hop(&HttpRequest::get(form.clone())),
+            Hop::Navigation,
+            "the form render is a document navigation"
+        );
+        assert_eq!(
+            hop(&HttpRequest {
+                method: Method::Post,
+                url: form,
+                body: RequestBody::Multipart {
+                    fields: vec![],
+                    file: None
+                },
+                auth: RequestAuth::Session,
+            }),
+            Hop::Navigation,
+            "and so is the submit answering it, which the capture shows carries no CSRF header"
+        );
+        assert_eq!(
+            hop(&HttpRequest::post_json(
+                format!("{ORIGIN}/graph/graphql?opname=MyProductListings"),
+                serde_json::json!({})
+            )),
+            Hop::GraphqlXhr,
             "a GraphQL call is an XHR and mirrors the token"
         );
-        assert!(
-            is_xhr(&RequestBody::Bytes(b"job=abc".to_vec())),
+        assert_eq!(
+            hop(&HttpRequest {
+                method: Method::Post,
+                url: format!("{ORIGIN}/uploads/upload_file"),
+                body: RequestBody::Bytes(b"job=abc".to_vec()),
+                auth: RequestAuth::Session,
+            }),
+            Hop::FormXhr,
             "the four urlencoded upload hops are XHRs and mirror the token"
         );
-        assert!(
-            !is_xhr(&RequestBody::Multipart {
-                fields: vec![],
-                file: None
-            }),
-            "the product form post is a document navigation, and the capture shows no header"
+        assert_eq!(
+            hop(&HttpRequest::get(format!(
+                "{ORIGIN}/uploads/time?requestTime=1787896640872"
+            ))),
+            Hop::Fetch,
+            "the clock read and the signing oracle are plain fetches, and carry neither"
         );
         assert!(
-            !is_xhr(&RequestBody::Empty),
-            "the form render, the clock read and the signing oracle carry neither"
+            Hop::GraphqlXhr.is_xhr() && Hop::FormXhr.is_xhr(),
+            "the two XHR shapes are the two that mirror the token"
+        );
+        assert!(
+            !Hop::Navigation.is_xhr() && !Hop::Fetch.is_xhr(),
+            "and neither document navigations nor plain fetches do"
+        );
+    }
+
+    #[test]
+    fn only_the_submit_navigation_and_the_xhr_hops_name_the_origin() {
+        let has = |headers: &[(reqwest::header::HeaderName, &'static str)],
+                   name: &reqwest::header::HeaderName| {
+            headers.iter().any(|(carried, _)| carried == name)
+        };
+        let render = envelope(Hop::Navigation, Method::Get);
+        assert!(
+            !has(&render, &reqwest::header::ORIGIN),
+            "a browser sends no Origin on a same-origin document GET, and sent: {render:?}"
+        );
+        assert!(
+            has(&render, &reqwest::header::UPGRADE_INSECURE_REQUESTS)
+                && render.contains(&(reqwest::header::ACCEPT, super::NAVIGATION_ACCEPT)),
+            "the render is a navigation asking for HTML, and sent: {render:?}"
+        );
+        let submit = envelope(Hop::Navigation, Method::Post);
+        assert!(
+            has(&submit, &reqwest::header::ORIGIN)
+                && has(&submit, &static_name(super::SEC_FETCH_USER_HEADER)),
+            "the submit is a user-activated navigation that does name it, and sent: {submit:?}"
+        );
+        let xhr = envelope(Hop::GraphqlXhr, Method::Post);
+        assert!(
+            has(&xhr, &reqwest::header::ORIGIN)
+                && xhr.contains(&(static_name(SEC_FETCH_MODE_HEADER), "cors")),
+            "an XHR names the origin and is a cors fetch, and sent: {xhr:?}"
+        );
+        let plain = envelope(Hop::Fetch, Method::Get);
+        assert!(
+            !has(&plain, &reqwest::header::ORIGIN),
+            "the clock read names none either, and sent: {plain:?}"
         );
     }
 
@@ -524,6 +728,11 @@ mod tests {
             Method::Put => client.put(&request.url),
             Method::Delete => client.delete(&request.url),
         };
+        let builder = if request.auth.is_session() {
+            super::apply_session_envelope(builder, &request, "deadbeef")
+        } else {
+            builder
+        };
         let builder = super::apply_auth(builder, &request.auth);
         let builder = super::apply_body(builder, request.body, request.auth.is_session())?;
         let response = builder
@@ -565,6 +774,14 @@ mod tests {
             head.contains("authorization: aws akiaplaceholder00000:"),
             "the signature travels per request, and the head was: {head}"
         );
+        assert!(
+            head.contains(&format!("user-agent: {}", USER_AGENT.to_lowercase()))
+                && head.contains(&format!(
+                    "accept-language: {}",
+                    ACCEPT_LANGUAGE.to_lowercase()
+                )),
+            "both clients carry the seller's browser identity, and the head was: {head}"
+        );
     }
 
     #[tokio::test]
@@ -584,6 +801,21 @@ mod tests {
         assert!(
             head.contains("cookie: csrftoken=deadbeef"),
             "the control: the probe can see a cookie when one is sent, and saw: {head}"
+        );
+        assert!(
+            !head.contains("origin:") && !head.contains("x-csrf-token:"),
+            "a plain session GET names no origin and mirrors no token, and sent: {head}"
+        );
+        assert!(
+            head.contains("accept: */*") && head.contains("sec-fetch-dest: empty"),
+            "the clock read and the signing oracle are plain fetches, and sent: {head}"
+        );
+        assert_eq!(
+            head.lines()
+                .filter(|line| line.starts_with("accept:"))
+                .count(),
+            1,
+            "the per-request Accept replaces reqwest's own rather than joining it: {head}"
         );
         assert_eq!(
             response.status, 302,
@@ -619,6 +851,13 @@ mod tests {
         assert!(
             head.contains("content-type: application/x-www-form-urlencoded"),
             "the four upload hops post a form, and the head was: {head}"
+        );
+        assert!(
+            head.contains("x-csrf-token: deadbeef")
+                && head.contains("x-requested-with: xmlhttprequest")
+                && head.contains(&format!("origin: {}", ORIGIN.to_lowercase())),
+            "an upload hop is an XHR, which mirrors the token and names the origin, and sent: \
+             {head}"
         );
     }
 }

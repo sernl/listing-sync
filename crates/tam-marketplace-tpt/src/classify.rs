@@ -131,8 +131,15 @@ pub fn classify_graphql_read(response: &HttpResponse) -> Result<Value, AdapterEr
 /// Cloudflare's own managed challenge emits rather than by a status: a
 /// challenge answered 200 is the shape that would otherwise be mistaken for a
 /// form.
+///
+/// The orchestration path is matched with its `/h/` segment and not by the
+/// bare prefix, because the challenge platform serves two different things.
+/// A managed challenge loads `/cdn-cgi/challenge-platform/h/b/...`; the
+/// passive JS-detection beacon at `/cdn-cgi/challenge-platform/scripts/jsd/`
+/// is injected into every ordinary page, the successful 200 form render
+/// included. Matching the prefix parks every successful load as a challenge.
 fn looks_like_challenge(body: &str) -> bool {
-    body.contains("/cdn-cgi/challenge-platform")
+    body.contains("/cdn-cgi/challenge-platform/h/")
         || body.contains("cf-browser-verification")
         || body.contains("Just a moment...")
 }
@@ -683,9 +690,9 @@ mod tests {
     #[test]
     fn a_challenge_is_a_challenge_whatever_status_it_arrives_under() {
         use tam_marketplace::ChallengeKind;
-        let interstitial = "<html><head><title>Just a moment...</title></head>\
-                            <body><script src=\"/cdn-cgi/challenge-platform/h\"></script>\
-                            </body></html>";
+        let interstitial = "<html><head><title>Just a moment...</title></head><body>\
+                            <script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1\">\
+                            </script></body></html>";
         for status in [200_u16, 403] {
             assert_eq!(
                 super::classify_form_page(&HttpResponse::plain(
@@ -705,6 +712,23 @@ mod tests {
             )),
             Err(AdapterError::SessionExpired),
             "and a sign-in page is a session condition rather than drift"
+        );
+    }
+
+    #[test]
+    fn the_passive_beacon_every_page_carries_is_not_a_challenge() {
+        let mut render = crate::form::tests_support::create_render();
+        render.push_str(
+            "<form id=\"ItemAddForm\"></form><script \
+             src=\"/cdn-cgi/challenge-platform/scripts/jsd/main.js\"></script>",
+        );
+        let outcome =
+            super::classify_form_page(&HttpResponse::plain(200, render.into_bytes())).map(|_| ());
+        assert_eq!(
+            outcome,
+            Ok(()),
+            "the beacon rides every successful render; reading it as a challenge parks a form \
+             that scraped cleanly"
         );
     }
 

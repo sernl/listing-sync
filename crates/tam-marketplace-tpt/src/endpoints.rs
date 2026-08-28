@@ -405,12 +405,15 @@ pub enum FormTarget {
     EditDigital(ProductId),
 }
 
+const CREATE_DIGITAL_PATH: &str = "/My-Products/New/Digital-Next";
+const EDIT_DIGITAL_PREFIX: &str = "/itemsDigital/editNext/";
+
 impl FormTarget {
     #[must_use]
     pub fn path(self) -> String {
         match self {
-            Self::CreateDigital => "/My-Products/New/Digital-Next".to_owned(),
-            Self::EditDigital(product) => format!("/itemsDigital/editNext/{product}"),
+            Self::CreateDigital => CREATE_DIGITAL_PATH.to_owned(),
+            Self::EditDigital(product) => format!("{EDIT_DIGITAL_PREFIX}{product}"),
         }
     }
 
@@ -418,6 +421,18 @@ impl FormTarget {
     pub fn url(self) -> String {
         format!("{ORIGIN}{}", self.path())
     }
+}
+
+/// True where a URL addresses a product form, which is how the live transport
+/// tells a document navigation from an XHR: the two renders and the two
+/// submits that answer them are the only session hops the browser makes as a
+/// navigation, and the capture gives a navigation a different header envelope.
+#[must_use]
+pub fn is_product_form(url: &str) -> bool {
+    url.starts_with(ORIGIN)
+        && url.get(ORIGIN.len()..).is_some_and(|rest| {
+            rest.starts_with(CREATE_DIGITAL_PATH) || rest.starts_with(EDIT_DIGITAL_PREFIX)
+        })
 }
 
 /// Percent-encodes one `application/x-www-form-urlencoded` component. The
@@ -678,8 +693,9 @@ pub fn remove_resource_request(product: ProductId) -> HttpRequest {
 #[cfg(test)]
 mod tests {
     use super::{
-        all_time_stats_request, is_gateway, my_product_listings_request, remove_resource_request,
-        AllTimeMetric, Service, MY_PRODUCT_LISTINGS_QUERY, ORIGIN,
+        all_time_stats_request, form_page_request, is_gateway, is_product_form,
+        my_product_listings_request, remove_resource_request, AllTimeMetric, FormTarget, Service,
+        MY_PRODUCT_LISTINGS_QUERY, ORIGIN,
     };
     use crate::read_model::ProductId;
     use serde_json::{json, Value};
@@ -702,6 +718,30 @@ mod tests {
             "a path that merely starts alike is not the gateway"
         );
         assert_eq!(Service::Gateway.path(), "/gateway/graphql");
+    }
+
+    #[test]
+    fn both_product_form_urls_are_recognised_as_navigations() {
+        assert!(
+            is_product_form(&form_page_request(FormTarget::CreateDigital).url),
+            "the create render is a document navigation"
+        );
+        assert!(
+            is_product_form(&FormTarget::EditDigital(ProductId(13_042_099)).url()),
+            "so is every edit render, whatever product it addresses"
+        );
+        assert!(
+            !is_product_form(&format!("{ORIGIN}/uploads/time?requestTime=1")),
+            "the clock read is a plain fetch, not a navigation"
+        );
+        assert!(
+            !is_product_form(&my_product_listings_request(100, 0).url),
+            "and a GraphQL call is an XHR"
+        );
+        assert!(
+            !is_product_form("https://s3.amazonaws.com/My-Products/New/Digital-Next"),
+            "the path alone decides nothing: another host is not this origin"
+        );
     }
 
     #[test]
