@@ -14,6 +14,7 @@
 //! submit, which is what makes an ambiguous create survivable.
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tam_marketplace::transport::{HttpRequest, HttpResponse, RequestBody, Transport};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
@@ -725,6 +726,15 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     }
 }
 
+/// The write-evidence body digest, over the raw response bytes. Every
+/// evidence-producing cell states one: an empty body digests to a stable
+/// value, which is a fact, where `None` would say the adapter could not state
+/// one. Byte-identical to the Tes adapter's, because the digest is the
+/// evidence contract rather than a per-adapter convention.
+fn body_digest(bytes: &[u8]) -> ContentHash {
+    ContentHash(Sha256::digest(bytes).into())
+}
+
 /// One signing request. A struct rather than five arguments, which is also
 /// what keeps the string, the ticket and the operation travelling together.
 struct SignRequest<'a> {
@@ -885,7 +895,7 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
         let landing = classify_submit(&response)?;
         Ok(SubmitEvidence {
             http_status: Some(response.status),
-            response_body_digest: None,
+            response_body_digest: Some(body_digest(&response.body)),
             landed_on_route: Some(landing.location.clone()),
             landed: Some(RemoteListingId::Tpt {
                 product_id: landing.product.0,
@@ -922,10 +932,7 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
         let (landing, response) = self.post_edit(product, &plan.fields, status).await?;
         Ok(SubmitEvidence {
             http_status: Some(response.status),
-            // As on `submit`: this crate holds no SHA-256, so it states no
-            // body digest rather than inventing one from the hash it does
-            // hold. Adding the edge is a founder decision.
-            response_body_digest: None,
+            response_body_digest: Some(body_digest(&response.body)),
             landed_on_route: Some(landing.location.clone()),
             landed: Some(RemoteListingId::Tpt {
                 product_id: landing.product.0,
@@ -948,12 +955,10 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
     ) -> Result<SubmitEvidence, AdapterError> {
         let product = product_from_locator(&ListingLocator::Durable(plan.subject))?;
         let route = endpoints::remove_resource_request(product).url;
-        // The raw answer is what a body digest would be taken over; this
-        // crate holds no SHA-256, so none is stated. See `revise`.
-        let (deleted, _body) = self.post_remove(product).await?;
+        let (deleted, body) = self.post_remove(product).await?;
         Ok(SubmitEvidence {
             http_status: None,
-            response_body_digest: None,
+            response_body_digest: Some(body_digest(&body)),
             landed_on_route: Some(route),
             landed: Some(RemoteListingId::Tpt {
                 product_id: deleted.0,

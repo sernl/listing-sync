@@ -2345,6 +2345,7 @@ dependencies = [
  "md-5",
  "reqwest",
  "serde_json",
+ "sha2",
  "tam-marketplace",
  "tam-types",
  "tokio",

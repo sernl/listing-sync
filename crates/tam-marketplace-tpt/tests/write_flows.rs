@@ -22,6 +22,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestAuth, RequestBody, ResponseHeader, Transport,
@@ -38,7 +39,7 @@ use tam_marketplace_tpt::s3::{self, S3Operation, S3Signature, UploadSlot, Upload
 use tam_marketplace_tpt::upload::{cache_buster, Hop, ProcessedHandle, QueueJob, UploadHandle};
 use tam_marketplace_tpt::write_model::{self, AuthorshipDeclaration};
 use tam_marketplace_tpt::{InstantPause, ProductId, TptAdapter};
-use tam_types::{FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{ContentHash, FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
 
 // Placeholders throughout. Same shape as the captured values, same length
 // class where the length matters, and no relationship to anything live.
@@ -1373,6 +1374,13 @@ fn a_removal_posts_remove_resource_and_accepts_only_its_own_id_back() {
             product_id: PRODUCT_ID
         }),
         "the removal states the listing whose disappearance the driver will poll for"
+    );
+    let answer: [u8; 32] = Sha256::digest(delete_answer(PRODUCT_ID).body).into();
+    assert_eq!(
+        evidence.response_body_digest,
+        Some(ContentHash(answer)),
+        "the digest is taken over the raw answer the mutation returned, which is what \
+         makes the write evidence checkable against the recording"
     );
     assert_eq!(
         removing.transport().remaining(),
