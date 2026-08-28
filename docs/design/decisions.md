@@ -128,7 +128,9 @@ Publish is deferred to a later supervised step, so M0 deviated from the mileston
 ## Publish and delete captured, 2026-08-25
 
 A single free test resource was published live to the founder's store, confirmed by the founder, and deleted, capturing the two transitions M0 deferred.
-Publish is `POST /api/v2/resources/{id}/publish` and requires a valid `licence` set on the draft first; free resources use a Creative Commons licence (`CC-BY`, `CC-BY-SA`, `CC-BY-ND`), while `TES-PAID` requires a price.
+Publish requires a valid `licence`; free resources use a Creative Commons licence (`CC-BY`, `CC-BY-SA`, `CC-BY-ND`), while `TES-PAID` requires a price.
+The route this section originally recorded, `POST /api/v2/resources/{id}/publish`, is superseded by the 2026-08-28 browser capture of a draft-to-live publish: the route is `POST /api/v2/resources/{id}/draft/publish` and the body carries the full listing metadata rather than the licence alone — `title`, `descriptionRaw`, `descriptionRawType`, `mainType`, `mainAge`, `additionalAge`, `ageRanges`, `yearGroups`, `ages`, `categories`, `primaryCategory` and `customThumbnails` beside `licence` and, for a paid listing, `price`.
+`price` is an integer in minor units, so `500` is GBP 5.00 under the fixed-GBP decision, and this publish is the one endpoint a paid listing's price reaches: the draft is created first by the unchanged create and `set_metadata` flow, and publishing re-posts the whole metadata with `licence: "TES-PAID"` and the price to take it live.
 The authoritative published-resource delete is `DELETE /api/v2/resources/{id}`; the `/draft`-suffixed delete only removes the draft overlay and returns a misleading 204.
 Verification of publish and delete must read the authoritative API, because the public resource URL soft-404s with HTTP 200, and a mutating call's own 2xx is not evidence the mutation took effect.
 This is a live confirmation of the correctness discipline: the sync engine treats a marketplace's own success signal as untrusted and asserts state from an independent read.
