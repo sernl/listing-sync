@@ -19,14 +19,15 @@ use tam_domain::{
 };
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{project_for_item, seed_from_projection, ProjectionOutcome};
+use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
 };
 use tam_marketplace::{FileContent, FileSource, FileSourceError, RemoteListingId};
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
-    HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
-    TaxonomyRepo, WriteAttemptRepo,
+    BudgetGrant, HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo,
+    RateBudgetRepo, TaxonomyRepo, WriteAttemptRepo,
 };
 use tam_types::{
     CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
@@ -538,5 +539,51 @@ async fn a_refused_create_settles_failed_not_green(pool: PgPool) {
         verdict,
         RunVerdict::Settled(ItemOutcome::Failed),
         "a marketplace refusal is a per-item Failed, never a job-wide lie"
+    );
+}
+
+/// The rate window closing before a submit leaves an open attempt on the
+/// mapping, and `expire_and_steal` settles no orphan: without this settle the
+/// re-leased item abandons on `AttemptInFlight` at `RecordIntent` on every
+/// pass until it burns its whole retry allowance, having sent nothing.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_exhausted_rate_window_settles_the_attempt_before_it_abandons(pool: PgPool) {
+    provision(&pool).await;
+    let engine = engine_pool(&pool).await;
+    let budgets = RateBudgetRepo::new(engine.clone());
+    let connection = tam_types::ConnectionId(Uuid([0x33; 16]));
+    let window = Timestamp(NOW.0 - NOW.0.rem_euclid(60_000));
+    let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
+    while budgets
+        .consume(ORG, connection, window, ceiling)
+        .await
+        .expect("the budget consumes")
+        != BudgetGrant::Exhausted
+    {}
+
+    let fake = FakeTes::new(None);
+    let verdict = drive(&pool, &fake).await;
+    assert!(
+        matches!(verdict, RunVerdict::Abandoned { .. }),
+        "a closed rate window abandons the run rather than inventing an outcome"
+    );
+
+    let settled: Vec<(String, bool)> =
+        sqlx::query_as("SELECT state, settled_at IS NOT NULL FROM write_attempt WHERE org_id = $1")
+            .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+            .fetch_all(&engine)
+            .await
+            .expect("the attempt rows read");
+    assert_eq!(
+        settled,
+        vec![("abandoned".to_owned(), true)],
+        "the attempt the run opened is settled abandoned, so the mapping is free \
+         for the next lease rather than deadlocked on write_attempt_one_in_flight"
+    );
+
+    let creates = fake.state.lock().await.creates_seen;
+    assert_eq!(
+        creates, 1,
+        "only the preflight probe's create was sent; the refused submit sent nothing"
     );
 }

@@ -17,8 +17,8 @@ use tam_marketplace::{
 };
 use tam_storage::{
     append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
-    EventScope, HaltCause, HaltRepo, ItemVerdict, LeaseRepo, LeasedItem, NewOutboxMessage,
-    OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
+    EventScope, HaltCause, HaltRepo, ItemVerdict, LeaseRef, LeaseRepo, LeasedItem,
+    NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
     BindAnomaly, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId, Timestamp, Uuid,
@@ -257,7 +257,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                     }
                 }
                 Effect::Submit {
-                    attempt: _,
+                    attempt,
                     key,
                     fields,
                 } => {
@@ -269,6 +269,16 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                         .consume(org, connection, window, ceiling)
                         .await?;
                     if grant == BudgetGrant::Exhausted {
+                        settle_unsent_attempt(
+                            ctx,
+                            &lease_ref,
+                            AttemptRef {
+                                attempt: attempt.0,
+                                mapping: lease.mapping,
+                            },
+                            now,
+                        )
+                        .await?;
                         return Ok(RunVerdict::Abandoned {
                             reason: "the per-connection rate window is exhausted".to_owned(),
                         });
@@ -427,6 +437,35 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                 })
             }
         }
+    }
+}
+
+/// Settles an attempt whose write never left the process, so abandoning the
+/// run does not strand an `in_flight` row on the mapping.
+///
+/// `expire_and_steal` requeues the item and bumps `job_item.lease_epoch` but
+/// settles no orphan attempt, and `write_attempt_one_in_flight` admits one
+/// open attempt per mapping — so a re-leased item whose predecessor left one
+/// standing abandons on `AttemptInFlight` at `RecordIntent` on every pass,
+/// burning its whole retry allowance without another request leaving the
+/// process. `'abandoned'` rather than `'ambiguous'` because the refusal came
+/// before the write was called and nothing was sent.
+async fn settle_unsent_attempt(
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource>,
+    lease: &LeaseRef,
+    settling: AttemptRef,
+    at: Timestamp,
+) -> Result<(), EngineError> {
+    let verdict = AttemptVerdict {
+        state: "abandoned".to_owned(),
+        failure_code: None,
+        landed: None,
+    };
+    match ctx.attempts.settle(lease, settling, &verdict, at).await {
+        // A fenced settle means the lease was stolen, and the steal owns the
+        // story from here — the same reading the terminal path already takes.
+        Ok(_) | Err(StorageError::StaleLease) => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
