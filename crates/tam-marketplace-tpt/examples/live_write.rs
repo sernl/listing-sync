@@ -11,15 +11,23 @@
 //! `probes/local/tpt-cookies.jar` or named by `--jar <path>`:
 //!
 //!   cargo run -p tam-marketplace-tpt --example live_write -- preflight
-//!   cargo run -p tam-marketplace-tpt --example live_write -- draft <pdf>
-//!   cargo run -p tam-marketplace-tpt --example live_write -- edit  <pdf>
-//!   cargo run -p tam-marketplace-tpt --example live_write -- paid  <pdf> [--yes-publish-live]
+//!   cargo run -p tam-marketplace-tpt --example live_write -- draft  <pdf>
+//!   cargo run -p tam-marketplace-tpt --example live_write -- edit   <pdf>
+//!   cargo run -p tam-marketplace-tpt --example live_write -- paid   <pdf> [--yes-publish-live]
+//!   cargo run -p tam-marketplace-tpt --example live_write -- delete <product-id>
 //!
 //! `preflight` renders one form and creates nothing. `draft` creates a draft,
 //! reads it back and deletes it. `edit` creates a draft, rewrites it, reads
 //! the change back and deletes it. `paid` creates a draft at the form's own
 //! minimum price and, only with `--yes-publish-live`, publishes it before
 //! reading it back and deleting it.
+//!
+//! `delete` creates nothing and takes down a product this script did not
+//! make. It exists for the listing another runner left behind: the engine's
+//! own write path creates through `tam-worker`, and a run that wedges after
+//! the create has no cleanup guard of its own to fall back on. The confirming
+//! read is the same one every mode above ends with, so a delete that answered
+//! 200 and removed nothing is caught here too.
 
 use std::io::Read as _;
 
@@ -535,6 +543,28 @@ async fn run_paid(adapter: &Adapter, now: Timestamp, publish: bool) -> Result<()
     finish(adapter, product, now, outcome).await
 }
 
+/// Take down a product this run did not create, named on the command line.
+///
+/// The identifier is required rather than defaulted: every other mode deletes
+/// what it just made and knows the id for certain, and a cleanup mode that
+/// guessed one would delete a listing nobody asked it to.
+async fn run_delete(
+    adapter: &Adapter,
+    arguments: &[String],
+    now: Timestamp,
+) -> Result<(), Failure> {
+    let raw = arguments
+        .get(1)
+        .filter(|argument| !argument.starts_with("--"))
+        .ok_or("delete needs the numeric TPT product id to take down")?;
+    let product = ProductId(
+        raw.parse::<u64>()
+            .map_err(|error| format!("{raw:?} is not a TPT product id: {error}"))?,
+    );
+    println!("deleting {product}, which this run did not create");
+    delete_and_confirm(adapter, product, now).await
+}
+
 fn adapter_for(mode: &str, arguments: &[String], now: Timestamp) -> Result<Adapter, Failure> {
     let jar_path = arguments
         .iter()
@@ -544,7 +574,9 @@ fn adapter_for(mode: &str, arguments: &[String], now: Timestamp) -> Result<Adapt
     let mut jar = String::new();
     std::fs::File::open(jar_path)?.read_to_string(&mut jar)?;
     let session = TptSession::from_netscape_jar(&jar)?;
-    let bytes = if mode == "preflight" {
+    // Neither mode uploads anything: one renders a form, the other names a
+    // product that already exists.
+    let bytes = if matches!(mode, "preflight" | "delete") {
         Vec::new()
     } else {
         let path = arguments
@@ -587,8 +619,10 @@ async fn main() -> Result<(), Failure> {
                 .any(|argument| argument == "--yes-publish-live");
             run_paid(&adapter, now, publish).await
         }
-        other => {
-            Err(format!("unknown mode {other:?}; expected preflight, draft, edit or paid").into())
-        }
+        "delete" => run_delete(&adapter, &arguments, now).await,
+        other => Err(format!(
+            "unknown mode {other:?}; expected preflight, draft, edit, paid or delete"
+        )
+        .into()),
     }
 }
