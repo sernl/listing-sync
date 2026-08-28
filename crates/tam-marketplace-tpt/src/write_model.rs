@@ -88,6 +88,161 @@ impl StatusUser {
     }
 }
 
+/// Two fractional digits, which is the scale both product forms render money
+/// at: the captured paid edit posted `3.00` against a `2.70` licence price.
+const MINOR_UNITS_PER_UNIT: i64 = 100;
+
+/// The form's own floor, from `min_price: 0.95` in the page bootstrap of both
+/// captured renders. It is enforced here because a submit the form refuses is
+/// answered by a re-rendered page, which [`crate::classify::classify_submit`]
+/// must read as an ambiguity rather than as a rejection: refusing a
+/// below-minimum price locally is what keeps it from becoming a write nobody
+/// can reconcile.
+pub const MIN_PRICE_MINOR_UNITS: i64 = 95;
+
+/// `multiple_license_price_percentage: 90` from the same bootstrap, and the
+/// captured paid edit is the arithmetic: `price` 3.00 against `license_price`
+/// 2.70.
+pub const LICENSE_PRICE_PERCENT: i64 = 90;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriceError {
+    BelowMinimum { minor_units: i64 },
+    NotRepresentable { minor_units: i64 },
+}
+
+impl core::fmt::Display for PriceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {
+            Self::BelowMinimum { minor_units } => write!(
+                f,
+                "a price of {minor_units} minor units is under the {MIN_PRICE_MINOR_UNITS} the \
+                 product form states as its own minimum"
+            ),
+            Self::NotRepresentable { minor_units } => write!(
+                f,
+                "a price of {minor_units} minor units does not render as an amount the product \
+                 form accepts"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for PriceError {}
+
+/// Rounds half up, which is a choice rather than a measurement: the one
+/// captured pair is 3.00 against 2.70, where ninety percent is a whole
+/// hundredth and every rounding rule agrees. A price whose ninetieth part
+/// falls between two hundredths — 1.99 does — is settled here so that it is
+/// settled somewhere legible.
+fn licence_minor_units(minor_units: i64) -> Option<i64> {
+    minor_units
+        .checked_mul(LICENSE_PRICE_PERCENT)?
+        .checked_add(MINOR_UNITS_PER_UNIT.checked_div(2)?)?
+        .checked_div(MINOR_UNITS_PER_UNIT)
+}
+
+fn decimal(minor_units: i64) -> Option<String> {
+    let units = minor_units.checked_div(MINOR_UNITS_PER_UNIT)?;
+    let hundredths = minor_units.checked_rem(MINOR_UNITS_PER_UNIT)?;
+    Some(format!("{units}.{hundredths:02}"))
+}
+
+/// A price the product forms will carry, rendered once at construction so no
+/// field builder has arithmetic left to fail at.
+///
+/// TPT writes money as a bare decimal — `data[Item][price]` is `3.00` and no
+/// field on either form names a currency — so this carries an amount and
+/// states no denomination. TPT's own currency rule is `SellerScoped` and
+/// unverified, which makes what the founder's store is denominated in a
+/// founder question and not one this connector may answer by picking a
+/// symbol; the projection keeps its `Currency` where it can still be compared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidPrice {
+    minor_units: i64,
+    amount: String,
+    licence_amount: String,
+}
+
+impl PaidPrice {
+    /// The amount the projection deliberately set, in its own minor units.
+    /// There is no other constructor: a price reaches the wire only by having
+    /// been named, and never by defaulting.
+    pub fn new(minor_units: i64) -> Result<Self, PriceError> {
+        if minor_units < MIN_PRICE_MINOR_UNITS {
+            return Err(PriceError::BelowMinimum { minor_units });
+        }
+        let licence =
+            licence_minor_units(minor_units).ok_or(PriceError::NotRepresentable { minor_units })?;
+        Ok(Self {
+            minor_units,
+            amount: decimal(minor_units).ok_or(PriceError::NotRepresentable { minor_units })?,
+            licence_amount: decimal(licence).ok_or(PriceError::NotRepresentable { minor_units })?,
+        })
+    }
+
+    #[must_use]
+    pub const fn minor_units(&self) -> i64 {
+        self.minor_units
+    }
+
+    /// `data[Item][price]`.
+    #[must_use]
+    pub fn amount(&self) -> &str {
+        &self.amount
+    }
+
+    /// `data[Item][license_price]`, the ninety percent the form derives.
+    #[must_use]
+    pub fn licence_amount(&self) -> &str {
+        &self.licence_amount
+    }
+}
+
+/// What a submit posts for money. The free shape is the captured create's —
+/// `free` 1 against three zeroed amounts — and the paid shape is the captured
+/// edit's, `price` and `license_price` carrying amounts.
+///
+/// The paid create itself is inference, and the only one in this file: no
+/// paid create exists on the wire, because both captured creates are free.
+/// `free` 0 beside a price is therefore the free create's flag inverted and
+/// the paid *edit's* amounts moved onto the create form that declares the
+/// same field names — sound, and still an inference until a live paid create
+/// settles it. It is reachable only when a projection carries
+/// `PriceIntent::Paid`, which is a price somebody set on purpose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListingPrice {
+    Free,
+    Paid(PaidPrice),
+}
+
+impl ListingPrice {
+    /// `data[Item][free]`, which only the create form carries.
+    #[must_use]
+    pub const fn free_flag(&self) -> &'static str {
+        match *self {
+            Self::Free => "1",
+            Self::Paid(_) => "0",
+        }
+    }
+
+    #[must_use]
+    pub fn amount(&self) -> &str {
+        match *self {
+            Self::Free => "0",
+            Self::Paid(ref paid) => paid.amount(),
+        }
+    }
+
+    #[must_use]
+    pub fn licence_amount(&self) -> &str {
+        match *self {
+            Self::Free => "0",
+            Self::Paid(ref paid) => paid.licence_amount(),
+        }
+    }
+}
+
 /// TPT's five tax codes, the one vocabulary here that is captured whole:
 /// `TaxCodesQuery` returned all five rows, and the create form posts the row
 /// id rather than the code.
@@ -185,6 +340,9 @@ pub struct TptListing {
     pub taxonomy_tags: Vec<String>,
     /// Seller-owned shelves, addressed by their numeric ids.
     pub category_ids: Vec<String>,
+    /// What the three money fields carry. Free on both captured creates;
+    /// priced on the captured edit.
+    pub price: ListingPrice,
     /// Absent on the captured create and present on the captured edit. A
     /// projection that names none posts none.
     pub tax_code: Option<TaxCode>,
@@ -313,11 +471,21 @@ pub fn create_fields(submission: &CreateSubmission<'_>) -> Vec<(String, String)>
     fields.push(field(names::TOKEN_FIELDS, tokens.token_fields()));
     fields.push(field(names::TOKEN_UNLOCKED, tokens.token_unlocked()));
     fields.push(field(names::DESCRIPTION, &listing.description_html));
-    fields.push(field(names::FREE, "1"));
-    fields.push(field(names::PRICE, "0"));
+    fields.push(field(names::FREE, listing.price.free_flag()));
+    fields.push(field(names::PRICE, listing.price.amount()));
+    // Zero on every captured submit, free and paid alike: a sale price is a
+    // seller action neither capture performs.
     fields.push(field(names::DISCOUNTPRICE, "0"));
-    fields.push(field(names::LICENSE_PRICE, "0"));
+    fields.push(field(names::LICENSE_PRICE, listing.price.licence_amount()));
     fields.push(field(names::STATUS_USER, StatusUser::Draft.as_str()));
+    if listing.category_ids.is_empty() {
+        // A create that selects no shelf still posts the name, with an empty
+        // value: that is what the 2026-08-28 create capture recorded, and it
+        // is the only evidence of what the form expects when the seller
+        // picked nothing. The edit form has no such capture and posts what it
+        // has.
+        fields.push(field(names::CATEGORY, ""));
+    }
     for category in &listing.category_ids {
         fields.push(field(names::CATEGORY, category));
     }
@@ -348,6 +516,9 @@ pub struct EditSubmission<'a> {
 /// empty. Empty in `product`, `preview` and `videopreview` paired with an
 /// `*_uploaded` flag of `1` is how the form says "this asset is unchanged" —
 /// the captured edit re-uploaded nothing and touched no S3 host.
+///
+/// `free` is absent, and deliberately: neither captured edit posts it, and the
+/// price fields alone carry the change. Only the create form declares it.
 #[must_use]
 pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
     let EditSubmission {
@@ -397,9 +568,9 @@ pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
     fields.push(field(names::TOKEN_FIELDS, tokens.token_fields()));
     fields.push(field(names::TOKEN_UNLOCKED, tokens.token_unlocked()));
     fields.push(field(names::DESCRIPTION, &listing.description_html));
-    fields.push(field(names::PRICE, "0"));
+    fields.push(field(names::PRICE, listing.price.amount()));
     fields.push(field(names::DISCOUNTPRICE, "0"));
-    fields.push(field(names::LICENSE_PRICE, "0"));
+    fields.push(field(names::LICENSE_PRICE, listing.price.licence_amount()));
     fields.push(field(names::STATUS_USER, status.as_str()));
     for category in &listing.category_ids {
         fields.push(field(names::CATEGORY, category));
@@ -525,9 +696,9 @@ fn is_tpt_tag_slug(native: &str) -> bool {
 pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
     let price = match listing.price {
         PriceIntent::Free => json!({ "free": true }),
-        // M7 ships free create only. The projection still renders the intent
-        // rather than silently freeing it, and `listing_from_field_set`
-        // refuses it by name, mirroring the Tes paid-licence refusal.
+        // The currency travels so a mismatch is visible to whatever compares
+        // projections; TPT's own wire carries an amount and no denomination,
+        // and `listing_from_field_set` reads only the amount back.
         PriceIntent::Paid(money) => json!({
             "free": false,
             "minorUnits": money.minor_units(),
@@ -612,23 +783,43 @@ fn string_list(value: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The mirror of [`project_fields`]. Refuses a paid projection by name: no
-/// paid create is captured, and `min_price: 0.95` in the form's own bootstrap
-/// carries no currency symbol and no ISO code, so this connector cannot state
-/// what a price it posted would be denominated in.
-pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterError> {
-    let price = json_entry(fields, FieldKey::Price)?;
-    if price.get("free").and_then(Value::as_bool) != Some(true) {
-        let currency = price
-            .get("currency")
-            .and_then(Value::as_str)
-            .unwrap_or("an unnamed currency");
-        return Err(refuse(format!(
-            "TPT create is free-listing only in M7: the projection asked for a paid listing in \
-             {currency}, no paid create is captured, and the form's own min_price of 0.95 names \
-             no currency, so the amount cannot be stated on the wire"
-        )));
+/// Reads the `Price` entry back into what the forms post.
+///
+/// The paid branch is reachable only when the projection carried
+/// `PriceIntent::Paid`, whose amount is a positive one somebody set on
+/// purpose; nothing here can arrive at a price by default. The currency the
+/// projection named is not read: TPT's wire carries a bare decimal and its
+/// currency rule is `SellerScoped` and unverified, so the denomination of the
+/// founder's store is a founder question rather than something this connector
+/// resolves by rendering a symbol.
+fn price_from_entry(price: &Value) -> Result<ListingPrice, AdapterError> {
+    match price.get("free").and_then(Value::as_bool) {
+        Some(true) => Ok(ListingPrice::Free),
+        Some(false) => {
+            let minor_units = price
+                .get("minorUnits")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    refuse(
+                        "the projection asked for a paid listing and named no amount in minor \
+                         units, and a price is never inferred"
+                            .to_owned(),
+                    )
+                })?;
+            PaidPrice::new(minor_units)
+                .map(ListingPrice::Paid)
+                .map_err(|error| refuse(error.to_string()))
+        }
+        None => Err(refuse(
+            "the Price entry states no free flag, so whether the listing is free is unknown"
+                .to_owned(),
+        )),
     }
+}
+
+/// The mirror of [`project_fields`].
+pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterError> {
+    let price = price_from_entry(&json_entry(fields, FieldKey::Price)?)?;
     let taxonomy = json_entry(fields, FieldKey::Taxonomy)?;
     let grades = json_entry(fields, FieldKey::Grades)?;
     let mut taxonomy_tags = string_list(&taxonomy, "tags");
@@ -638,6 +829,7 @@ pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterEr
         description_html: entry(fields, FieldKey::Description)?.to_owned(),
         taxonomy_tags,
         category_ids: string_list(&taxonomy, "categories"),
+        price,
         // Absent on the captured create, and a created product therefore
         // carries none for the publishing edit to preserve.
         tax_code: None,
@@ -648,8 +840,8 @@ pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterEr
 mod tests {
     use super::{
         create_fields, dotted_path, edit_fields, listing_from_field_set, project_fields,
-        written_field_paths, AuthorshipDeclaration, CreateSubmission, EditSubmission, StatusUser,
-        TaxCode, TptListing,
+        written_field_paths, AuthorshipDeclaration, CreateSubmission, EditSubmission, ListingPrice,
+        PaidPrice, PriceError, StatusUser, TaxCode, TptListing, MIN_PRICE_MINOR_UNITS,
     };
     use crate::form::TptFormTokens;
     use crate::upload::ProcessedHandle;
@@ -671,6 +863,7 @@ mod tests {
             description_html: "<p>ten worksheets</p>".to_owned(),
             taxonomy_tags: vec!["math".to_owned(), "4th-grade".to_owned()],
             category_ids: vec!["1361944".to_owned()],
+            price: ListingPrice::Free,
             tax_code: None,
         }
     }
@@ -772,6 +965,42 @@ mod tests {
             value_of(&fields, "data[ItemsProperty][copyright_declaration]"),
             Some(attested().wire_value()),
             "the wire value comes from an AuthorshipDeclaration and from nowhere else"
+        );
+    }
+
+    #[test]
+    fn a_create_naming_no_shelf_still_posts_the_category_name_empty() {
+        let tokens = tokens();
+        let authorship = attested();
+        let listing = TptListing {
+            category_ids: Vec::new(),
+            ..listing()
+        };
+        let handle = ProcessedHandle::new("PROCESSEDKEY".to_owned());
+        let fields = create_fields(&CreateSubmission {
+            tokens: &tokens,
+            listing: &listing,
+            product: &handle,
+            thumbs_collection_key: "COLLECTIONKEY",
+            authorship: &authorship,
+        });
+        let posted: Vec<&str> = fields
+            .iter()
+            .filter(|(name, _)| name == "data[Category][Category][]")
+            .map(|(_, value)| value.as_str())
+            .collect();
+        assert_eq!(
+            posted,
+            vec![""],
+            "the capture with no shelf selected posts the name once, empty"
+        );
+        assert_eq!(
+            created()
+                .iter()
+                .filter(|(name, _)| name == "data[Category][Category][]")
+                .count(),
+            1,
+            "and a listing that names one shelf posts that one instead"
         );
     }
 
@@ -956,18 +1185,116 @@ mod tests {
     }
 
     #[test]
-    fn a_paid_projection_is_refused_by_name_rather_than_silently_freed() {
+    fn a_paid_projection_posts_the_captured_paid_shape_rather_than_the_free_one() {
         let money = Money::new(300, Currency::Usd).expect("a positive amount is money");
         let fields =
             project_fields(&projected(PriceIntent::Paid(money))).expect("a paid listing projects");
+        let listing = listing_from_field_set(&fields).expect("a deliberate price parses back");
+        let tokens = tokens();
+        let authorship = attested();
+        let handle = ProcessedHandle::new("PROCESSEDKEY".to_owned());
+        let created = create_fields(&CreateSubmission {
+            tokens: &tokens,
+            listing: &listing,
+            product: &handle,
+            thumbs_collection_key: "COLLECTIONKEY",
+            authorship: &authorship,
+        });
+        assert_eq!(
+            (
+                value_of(&created, "data[Item][free]"),
+                value_of(&created, "data[Item][price]"),
+                value_of(&created, "data[Item][license_price]"),
+                value_of(&created, "data[Item][discountprice]"),
+            ),
+            (Some("0"), Some("3.00"), Some("2.70"), Some("0")),
+            "the captured paid edit is 3.00 against 2.70, and the free create's flag inverts"
+        );
+        let edited = edit_fields(&EditSubmission {
+            tokens: &tokens,
+            listing: &listing,
+            thumbs: &[],
+            status: StatusUser::Live,
+            authorship: &authorship,
+        });
+        assert_eq!(
+            (
+                value_of(&edited, "data[Item][price]"),
+                value_of(&edited, "data[Item][license_price]"),
+            ),
+            (Some("3.00"), Some("2.70")),
+            "the edit carries the same amounts, which is the shape the capture recorded"
+        );
+        assert!(
+            !edited.iter().any(|(name, _)| name == "data[Item][free]"),
+            "and it still omits free, which neither captured edit posts"
+        );
+    }
+
+    #[test]
+    fn the_licence_price_is_ninety_percent_and_says_how_it_rounds() {
+        let paid = |minor| PaidPrice::new(minor).map(|price| price.licence_amount().to_owned());
+        assert_eq!(
+            paid(300).as_deref(),
+            Ok("2.70"),
+            "the one captured pair, where every rounding rule agrees"
+        );
+        assert_eq!(
+            paid(199).as_deref(),
+            Ok("1.79"),
+            "179.1 minor units rounds to 179; no capture settles the tie, so the rule is stated"
+        );
+        assert_eq!(
+            paid(95).as_deref(),
+            Ok("0.86"),
+            "85.5 minor units is the half case itself, and half goes up"
+        );
+    }
+
+    #[test]
+    fn a_price_under_the_forms_own_minimum_is_refused_before_a_submit_opens() {
+        assert_eq!(
+            PaidPrice::new(94).err(),
+            Some(PriceError::BelowMinimum { minor_units: 94 }),
+            "the form states min_price 0.95, and a submit it refuses comes back as an ambiguity"
+        );
+        assert!(
+            PaidPrice::new(MIN_PRICE_MINOR_UNITS).is_ok(),
+            "the minimum itself is a price"
+        );
+        let mut fields =
+            project_fields(&projected(PriceIntent::Free)).expect("a free listing projects");
+        fields.entries.retain(|(key, _)| *key != FieldKey::Price);
+        fields.entries.push((
+            FieldKey::Price,
+            r#"{"free":false,"minorUnits":10,"currency":"Usd"}"#.to_owned(),
+        ));
         let refused = listing_from_field_set(&fields);
         let Err(AdapterError::Rejected { code, detail }) = refused else {
-            panic!("M7 is free-create only, so a paid seed must refuse, got {refused:?}");
+            panic!("a below-minimum price must not reach the form, got {refused:?}");
         };
         assert_eq!(code, FailureCode::UploadRejected);
         assert!(
-            detail.0.contains("Usd") && detail.0.contains("min_price"),
-            "the refusal names the currency asked for and why it cannot be honoured, got {detail:?}"
+            detail.0.contains("minimum"),
+            "the refusal names the floor it failed, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn a_paid_projection_without_an_amount_is_refused_rather_than_freed() {
+        let mut fields =
+            project_fields(&projected(PriceIntent::Free)).expect("a free listing projects");
+        fields.entries.retain(|(key, _)| *key != FieldKey::Price);
+        fields
+            .entries
+            .push((FieldKey::Price, r#"{"free":false}"#.to_owned()));
+        let refused = listing_from_field_set(&fields);
+        let Err(AdapterError::Rejected { detail, .. }) = refused else {
+            panic!("an amountless paid listing has nothing to post, got {refused:?}");
+        };
+        assert!(
+            detail.0.contains("never inferred"),
+            "the refusal says a price is never inferred, got {detail:?}"
         );
     }
 

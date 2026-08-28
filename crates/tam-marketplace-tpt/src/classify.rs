@@ -114,7 +114,7 @@ pub fn classify_graphql_read(response: &HttpResponse) -> Result<Value, AdapterEr
             }
             Ok(body)
         }
-        401 | 403 => Err(AdapterError::SessionExpired),
+        status @ (401 | 403) => Err(denial(status, &response.text())),
         429 => Err(AdapterError::RateLimited { retry_after: None }),
         404 => Err(AdapterError::Rejected {
             code: FailureCode::PreconditionElementAbsent,
@@ -135,6 +135,39 @@ fn looks_like_challenge(body: &str) -> bool {
     body.contains("/cdn-cgi/challenge-platform")
         || body.contains("cf-browser-verification")
         || body.contains("Just a moment...")
+}
+
+/// Cloudflare's edge refusal, which is a different condition from its
+/// interstitial: a blocked request is answered by the `/cdn-cgi/error` page
+/// naming a ray id and a firewall rule, and it clears when the caller's
+/// address is allowed rather than when the session is refreshed. Recognised
+/// by the markers that page carries, because nothing in either capture was
+/// ever blocked.
+fn looks_like_edge_block(body: &str) -> bool {
+    body.contains("/cdn-cgi/error")
+        || body.contains("Sorry, you have been blocked")
+        || body.contains("Attention Required! | Cloudflare")
+        || body.contains("Error 1020")
+}
+
+/// Which condition a 401 or a 403 from the Cloudflare-fronted origin is.
+///
+/// The two call for different remedies and the status alone does not separate
+/// them. A 401 is TPT saying the cookie jar has lapsed, which a re-auth
+/// fixes. A 403 carrying Cloudflare's own markup is the edge refusing the
+/// caller — a managed challenge, or a rule against the address the request
+/// left from — which no cookie refresh clears. Reporting both as
+/// `SessionExpired`, as this crate did until the lifecycle work, sends an
+/// operator looking for the wrong remedy.
+///
+/// A challenge counts as one at either status, because a challenge is
+/// recognised by its markers rather than by the status it arrives under.
+fn denial(status: u16, body: &str) -> AdapterError {
+    if looks_like_challenge(body) || (status == 403 && looks_like_edge_block(body)) {
+        AdapterError::Challenge(ChallengeKind::JavaScriptInterstitial)
+    } else {
+        AdapterError::SessionExpired
+    }
 }
 
 /// A rendered form page, which is the sole source of the write path's tokens.
@@ -159,10 +192,7 @@ pub fn classify_form_page(response: &HttpResponse) -> Result<TptFormPage, Adapte
                 detail: FailureDetail(error.to_string()),
             })
         }
-        401 | 403 if looks_like_challenge(&text) => Err(AdapterError::Challenge(
-            ChallengeKind::JavaScriptInterstitial,
-        )),
-        401 | 403 => Err(AdapterError::SessionExpired),
+        status @ (401 | 403) => Err(denial(status, &text)),
         429 => Err(AdapterError::RateLimited { retry_after: None }),
         503 => Err(AdapterError::Challenge(
             ChallengeKind::JavaScriptInterstitial,
@@ -189,7 +219,7 @@ pub fn classify_xhr_json(response: &HttpResponse) -> Result<Value, AdapterError>
                 detail: FailureDetail(format!("upload hop answered unparseable JSON: {error}")),
             })
         }
-        401 | 403 => Err(AdapterError::SessionExpired),
+        status @ (401 | 403) => Err(denial(status, &text)),
         429 => Err(AdapterError::RateLimited { retry_after: None }),
         _ => Err(AdapterError::Rejected {
             code: FailureCode::UploadRejected,
@@ -240,10 +270,7 @@ pub fn classify_text_hop(response: &HttpResponse, what: &str) -> Result<String, 
             }
             Ok(value)
         }
-        401 | 403 if looks_like_challenge(&text) => Err(AdapterError::Challenge(
-            ChallengeKind::JavaScriptInterstitial,
-        )),
-        401 | 403 => Err(AdapterError::SessionExpired),
+        status @ (401 | 403) => Err(denial(status, &text)),
         429 => Err(AdapterError::RateLimited { retry_after: None }),
         503 => Err(AdapterError::Challenge(
             ChallengeKind::JavaScriptInterstitial,
@@ -471,12 +498,52 @@ mod tests {
         );
     }
 
+    /// Hand-authored: nothing in either capture was ever blocked or bounced,
+    /// so both bodies below are Cloudflare's documented shapes rather than
+    /// recordings.
+    #[test]
+    fn an_edge_block_and_an_expired_session_are_told_apart_rather_than_merged() {
+        use tam_marketplace::ChallengeKind;
+        let blocked = "<html><head><title>Attention Required! | Cloudflare</title></head>\
+                       <body><p>Sorry, you have been blocked</p>\
+                       <script src=\"/cdn-cgi/error/error.js\"></script></body></html>";
+        assert_eq!(
+            classify_graphql_read(&response(403, blocked)),
+            Err(AdapterError::Challenge(
+                ChallengeKind::JavaScriptInterstitial
+            )),
+            "the edge refused the caller, and no cookie refresh clears that"
+        );
+        assert_eq!(
+            classify_graphql_read(&response(401, "")),
+            Err(AdapterError::SessionExpired),
+            "a 401 is the jar having lapsed, which a re-auth fixes"
+        );
+        assert_eq!(
+            classify_graphql_read(&response(403, "")),
+            Err(AdapterError::SessionExpired),
+            "a 403 carrying none of Cloudflare's markers stays what it always was"
+        );
+        assert_eq!(
+            super::classify_form_page(&response(403, blocked)),
+            Err(AdapterError::Challenge(
+                ChallengeKind::JavaScriptInterstitial
+            )),
+            "the form render sits behind the same edge and answers the same way"
+        );
+        assert_eq!(
+            super::classify_text_hop(&response(401, ""), "the server clock read"),
+            Err(AdapterError::SessionExpired),
+            "and the plain-text hops route their statuses through the same rule"
+        );
+    }
+
     #[test]
     fn the_refusal_statuses_map_to_named_conditions() {
         assert_eq!(
             classify_graphql_read(&response(403, "")),
             Err(AdapterError::SessionExpired),
-            "a forbidden read is a session condition"
+            "a forbidden read with nothing else to say is a session condition"
         );
         assert_eq!(
             classify_graphql_read(&response(429, "")),

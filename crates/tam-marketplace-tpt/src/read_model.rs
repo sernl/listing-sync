@@ -307,6 +307,20 @@ pub fn parse_catalogue_page(body: &Value) -> Result<CataloguePage, ShapeError> {
     })
 }
 
+/// Parses the `RemoveResource` answer, which carries the deleted product's
+/// own id and nothing else. An answer without one is not a confirmation, and
+/// whether it echoes the product the caller asked to delete is the caller's
+/// check to make.
+pub fn parse_resource_delete(body: &Value) -> Result<ProductId, ShapeError> {
+    let raw = body
+        .pointer("/data/resourceDelete/id")
+        .and_then(scalar_id)
+        .ok_or_else(|| ShapeError("no data.resourceDelete.id in the response".to_owned()))?;
+    raw.parse::<u64>()
+        .map_err(|_| ShapeError(format!("deleted product id {raw:?} is not numeric")))
+        .map(ProductId)
+}
+
 /// Parses the Relay envelope both statistics root fields answer with. The
 /// cursors decode to `rank:N` and are discarded: this adapter batches by
 /// resource id rather than walking the ranking.

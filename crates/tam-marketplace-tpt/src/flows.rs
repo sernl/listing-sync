@@ -4,9 +4,10 @@
 //! The read half is gated on the first-party-export capability, because an
 //! enumeration-shaped read is exactly that tier and nothing else justifies
 //! one. The write half is the thirteen-hop create chain — form render, staged
-//! S3 upload, two async jobs, then a multipart form navigation — followed by
-//! a publishing edit. Both halves classify every hop on its own answer; no
-//! hop trusts a status another hop produced.
+//! S3 upload, two async jobs, then a multipart form navigation — the edit that
+//! updates or publishes what it created, and the one-hop mutation that removes
+//! it. Both halves classify every hop on its own answer; no hop trusts a
+//! status another hop produced.
 //!
 //! The write is deliberately draft-first. `status_user` is a form field
 //! rather than a route, so a create leaves a draft and publishing is a second
@@ -619,17 +620,26 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             .map_err(|error| refuse_upload(format!("file source: {error:?}")))
     }
 
-    /// The publishing edit: the same 48-field form the captured edit posted,
-    /// with the status selector moved to live.
+    /// The edit submit: the same form the captured edit posted — forty-eight
+    /// fields there, and one per tag and shelf here — with this field set's
+    /// values in place and the status the caller states.
     ///
     /// A read-modify-write whose read is the edit render — the tokens and the
     /// existing thumbnail handles, which an edit that dropped them would drop
-    /// from the product — and whose model is the declared intent this
-    /// connector created the draft from.
-    pub async fn publish(
+    /// from the product — and whose model is the declared intent the caller
+    /// wants the product to carry. Changing a description is this call with a
+    /// changed field set; publishing is this call with the status moved.
+    ///
+    /// The status is stated rather than preserved because no render this
+    /// connector scrapes carries `status_user`, and an edit is a full
+    /// replace: something has to say which side of the draft line the product
+    /// lands on, and a caller that means to keep the current one reads it
+    /// back first.
+    pub async fn update(
         &self,
         product: ProductId,
         fields: &FieldSet,
+        status: StatusUser,
     ) -> Result<SubmitLanding, AdapterError> {
         let authorship = self.attestation()?;
         let listing = write_model::listing_from_field_set(fields)?;
@@ -639,7 +649,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             tokens: page.tokens(),
             listing: &listing,
             thumbs: page.thumbs(),
-            status: StatusUser::Live,
+            status,
             authorship,
         });
         let response = self
@@ -651,6 +661,37 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         } else {
             // The edit route names the product it edits, so a redirect to a
             // different one is not something this flow can reconcile.
+            Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier))
+        }
+    }
+
+    /// Publishing is [`Self::update`] with the status selector moved to live.
+    pub async fn publish(
+        &self,
+        product: ProductId,
+        fields: &FieldSet,
+    ) -> Result<SubmitLanding, AdapterError> {
+        self.update(product, fields, StatusUser::Live).await
+    }
+
+    /// Removes one of the seller's own products, through the captured
+    /// `RemoveResource` mutation.
+    ///
+    /// The mutation answers with the deleted product's own id, and that echo
+    /// is the whole confirmation: nothing else in the answer distinguishes a
+    /// delete that happened from one that did not. An answer that names
+    /// another product, or names none, leaves this product's fate unsettled
+    /// rather than refused — the mutation was posted, and a refusal here
+    /// would be a claim the record survives that nothing observed.
+    pub async fn delete(&self, product: ProductId) -> Result<(), AdapterError> {
+        let body = self
+            .read(endpoints::remove_resource_request(product))
+            .await?;
+        let deleted = read_model::parse_resource_delete(&body)
+            .map_err(|_| AdapterError::Ambiguous(AmbiguityCause::ReadBackIndeterminate))?;
+        if deleted == product {
+            Ok(())
+        } else {
             Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier))
         }
     }

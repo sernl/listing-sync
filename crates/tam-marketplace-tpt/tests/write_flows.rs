@@ -1172,6 +1172,201 @@ fn a_signing_string_naming_another_object_never_becomes_a_request() {
     );
 }
 
+/// The `RemoveResource` answer, whose only payload is the id it removed.
+fn delete_answer(id: u64) -> HttpResponse {
+    text(
+        200,
+        &serde_json::json!({
+            "data": {"resourceDelete": {"__typename": "Product", "id": id.to_string()}}
+        })
+        .to_string(),
+    )
+}
+
+fn delete_cassette(asked: ProductId, answer: HttpResponse) -> Cassette {
+    Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::remove_resource_request(asked),
+            response: answer,
+        }],
+    }
+}
+
+#[test]
+fn a_delete_posts_the_captured_mutation_and_settles_on_the_echoed_id() {
+    let product = ProductId(PRODUCT_ID);
+    let adapter = adapter(delete_cassette(product, delete_answer(PRODUCT_ID)));
+    futures::executor::block_on(adapter.delete(product)).expect("the recorded delete replays");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "a delete is one mutation and nothing else: no render, no read-back inside the call"
+    );
+}
+
+#[test]
+fn a_delete_whose_answer_names_another_product_or_none_is_an_ambiguity() {
+    // Hand-authored. The captured delete echoed the id it was given, so
+    // neither shape below comes off a recording; both are answers this flow
+    // must not read as a confirmation.
+    let product = ProductId(PRODUCT_ID);
+    let elsewhere = futures::executor::block_on(
+        adapter(delete_cassette(product, delete_answer(9))).delete(product),
+    );
+    assert_eq!(
+        elsewhere,
+        Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier)),
+        "an echo naming a product we did not delete settles nothing about this one"
+    );
+    let silent = futures::executor::block_on(
+        adapter(delete_cassette(
+            product,
+            text(200, r#"{"data":{"resourceDelete":null}}"#),
+        ))
+        .delete(product),
+    );
+    assert_eq!(
+        silent,
+        Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate
+        )),
+        "the mutation was posted, so an unreadable answer leaves the record's fate unknown \
+         rather than proving it survives"
+    );
+}
+
+/// The same projection with one description in place of another, which is
+/// what an edit that changes a field looks like from the seam.
+fn described(body: &str) -> FieldSet {
+    let mut fields = fields();
+    for (key, value) in &mut fields.entries {
+        if *key == FieldKey::Description {
+            body.clone_into(value);
+        }
+    }
+    fields
+}
+
+/// The edit body one field set produces against the committed edit render.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+fn edit_body(fields: &FieldSet, status: write_model::StatusUser) -> Vec<(String, String)> {
+    let page = tam_marketplace_tpt::form::scrape_form_page(&edit_render().response.text())
+        .expect("the committed edit render parses");
+    let listing = write_model::listing_from_field_set(fields).expect("the projection parses back");
+    write_model::edit_fields(&write_model::EditSubmission {
+        tokens: page.tokens(),
+        listing: &listing,
+        thumbs: page.thumbs(),
+        status,
+        authorship: &attested(),
+    })
+}
+
+#[test]
+fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
+    let rewritten = described("<p>a second draft</p>");
+    let body = edit_body(&rewritten, write_model::StatusUser::Draft);
+    let value = |name: &str| {
+        body.iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value.clone())
+    };
+    assert_eq!(
+        value("data[Item][description]").as_deref(),
+        Some("<p>a second draft</p>"),
+        "the edit carries the new body, which is the only thing this update changes"
+    );
+    assert_eq!(
+        value("data[Item][status_user]").as_deref(),
+        Some("0"),
+        "an update that is not a publish leaves the draft a draft"
+    );
+    let unchanged = edit_body(&fields(), write_model::StatusUser::Draft);
+    let moved: Vec<&str> = body
+        .iter()
+        .zip(unchanged.iter())
+        .filter(|(after, before)| after != before)
+        .map(|(after, _)| after.0.as_str())
+        .collect();
+    assert_eq!(
+        (moved, body.len()),
+        (vec!["data[Item][description]"], unchanged.len()),
+        "an edit is a full replace, so every other name is posted back exactly as it stood"
+    );
+    let target = FormTarget::EditDigital(ProductId(PRODUCT_ID));
+    let adapter = adapter(Cassette {
+        interactions: vec![
+            edit_render(),
+            Interaction {
+                request: endpoints::submit_form_request(target, body),
+                response: with_header(
+                    302,
+                    "",
+                    ResponseHeader::Location,
+                    "/Product/Fractions-pack-17511712",
+                ),
+            },
+        ],
+    });
+    let landing = futures::executor::block_on(adapter.update(
+        ProductId(PRODUCT_ID),
+        &rewritten,
+        write_model::StatusUser::Draft,
+    ))
+    .expect("the recorded edit replays");
+    assert_eq!(
+        landing.product,
+        ProductId(PRODUCT_ID),
+        "the edit route names the product it edits, and the redirect must agree"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the render and the post, both consumed"
+    );
+}
+
+#[test]
+fn a_paid_create_posts_the_price_the_free_create_zeroed() {
+    let paid = tam_types::PriceIntent::Paid(
+        tam_types::Money::new(300, tam_types::Currency::Usd).expect("a positive amount is money"),
+    );
+    let projection = ProjectedListing {
+        price: paid,
+        ..projected()
+    };
+    let fields = write_model::project_fields(&projection).expect("a paid listing projects");
+    let listing = write_model::listing_from_field_set(&fields).expect("and parses back");
+    let page = tam_marketplace_tpt::form::scrape_form_page(&create_render().response.text())
+        .expect("the committed render parses");
+    let authorship = attested();
+    let body = write_model::create_fields(&write_model::CreateSubmission {
+        tokens: page.tokens(),
+        listing: &listing,
+        product: &ProcessedHandle::new(PROCESSED_HANDLE.to_owned()),
+        thumbs_collection_key: COLLECTION_KEY,
+        authorship: &authorship,
+    });
+    let value = |name: &str| {
+        body.iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(
+        (
+            value("data[Item][free]"),
+            value("data[Item][price]"),
+            value("data[Item][license_price]"),
+            value("data[Item][status_user]"),
+        ),
+        (Some("0"), Some("3.00"), Some("2.70"), Some("0")),
+        "the paid amounts are the captured edit's, and a paid create still lands a draft"
+    );
+}
+
 /// The synthetic store the read fixture carries. Declared here so the canary
 /// below can assert the fixture's store identity without ever holding the
 /// live one it replaced.

@@ -648,11 +648,38 @@ pub fn product_by_id_request(product: ProductId) -> HttpRequest {
     )
 }
 
+/// The delete mutation, verbatim from the `RemoveResource` POST recorded in
+/// `tpt-delete-product.har`. The operation declares `sellerId` and the
+/// capture leaves it out of the variables, so this does too: the server
+/// infers the seller from the session, exactly as the enumeration read does.
+///
+/// The identifier travels quoted here and unquoted on the analytics read.
+/// Each request sends what its own capture sent.
+pub const REMOVE_RESOURCE_MUTATION: &str = r"mutation RemoveResource($id: ID!, $sellerId: ID) {
+  resourceDelete(input: {id: $id}, sellerId: $sellerId) {
+    id
+    __typename
+  }
+}
+";
+
+/// Removes one of the seller's own products. The answer echoes the deleted
+/// id, which is the only confirmation the mutation gives.
+#[must_use]
+pub fn remove_resource_request(product: ProductId) -> HttpRequest {
+    graphql(
+        Service::Graph,
+        "RemoveResource",
+        REMOVE_RESOURCE_MUTATION,
+        &json!({ "id": product.0.to_string() }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        all_time_stats_request, is_gateway, my_product_listings_request, AllTimeMetric, Service,
-        MY_PRODUCT_LISTINGS_QUERY, ORIGIN,
+        all_time_stats_request, is_gateway, my_product_listings_request, remove_resource_request,
+        AllTimeMetric, Service, MY_PRODUCT_LISTINGS_QUERY, ORIGIN,
     };
     use crate::read_model::ProductId;
     use serde_json::{json, Value};
@@ -695,6 +722,36 @@ mod tests {
         assert!(
             MY_PRODUCT_LISTINGS_QUERY.contains("fragment MyResourceFields on Product"),
             "TPT uses no persisted queries, so the fragment ships with every call"
+        );
+    }
+
+    #[test]
+    fn the_delete_mutation_quotes_its_id_and_names_no_seller() {
+        let request = remove_resource_request(ProductId(17_512_457));
+        assert!(
+            request
+                .url
+                .ends_with("/graph/graphql?opname=RemoveResource"),
+            "the delete is on the product service, not the analytics gateway, got {:?}",
+            request.url
+        );
+        let RequestBody::Json(body) = request.body else {
+            panic!("the mutation posts JSON");
+        };
+        assert_eq!(
+            body.pointer("/variables/id"),
+            Some(&json!("17512457")),
+            "the capture quotes the identifier here and leaves it unquoted on the analytics read"
+        );
+        assert!(
+            body.pointer("/variables/sellerId").is_none(),
+            "the operation declares sellerId and the capture omits it; the session names the seller"
+        );
+        assert!(
+            body.pointer("/query")
+                .and_then(Value::as_str)
+                .is_some_and(|query| query.contains("resourceDelete(input: {id: $id}")),
+            "the mutation text is the captured one, field for field"
         );
     }
 

@@ -18,16 +18,19 @@
 //! new product id in its `Location`. The capture read the clock once for the
 //! whole upload; a multi-part upload outlives AWS's skew window, so this reads
 //! it per signed call and the count is two higher than the recording's.
-//! Publishing is the forty-eight-field edit form with its status selector
-//! moved.
+//! An update is the forty-eight-field edit form, and publishing is that same
+//! form with its status selector moved. A delete is the `RemoveResource`
+//! mutation back on `/graph/graphql`, whose answer echoes the id it removed.
 //!
-//! Three things are deliberately absent. A paid create is refused, because no
-//! paid create is captured and the form's own minimum price names no
-//! currency. A create takes exactly one file into the product slot, because
-//! the preview, video and manual-thumbnail slots are exercised by nothing. And
-//! an unrecognised answer to the final POST is an ambiguity rather than a
-//! rejection, because no capture contains a refusal and inferring the shape of
-//! one would be invention.
+//! Two things are deliberately absent and one is inferred. A create takes
+//! exactly one file into the product slot, because the preview, video and
+//! manual-thumbnail slots are exercised by nothing. An unrecognised answer to
+//! the final POST is an ambiguity rather than a rejection, because no capture
+//! contains a refusal and inferring the shape of one would be invention. The
+//! inference is the paid create: both captured creates are free, so a price on
+//! the create form is the captured paid edit's money fields moved onto the
+//! form that declares the same names, reachable only from a projection that
+//! deliberately carries one.
 
 #![forbid(unsafe_code)]
 
@@ -53,7 +56,9 @@ pub use read_model::{ProductId, ResourceStat, TptCatalogueEntry, TptCategory, Tp
 pub use s3::{UploadTicket, PART_SIZE};
 pub use session::{SessionError, TptSession};
 pub use upload::{InstantPause, ProcessedHandle};
-pub use write_model::{AuthorshipDeclaration, StatusUser, TaxCode, TptListing};
+pub use write_model::{
+    AuthorshipDeclaration, ListingPrice, PaidPrice, PriceError, StatusUser, TaxCode, TptListing,
+};
 
 #[cfg(test)]
 mod guard;
