@@ -190,3 +190,17 @@ This supersedes the milestone document's precondition that the connector not be 
 The kill gate stands unchanged: any written objection from TPT or IXL kills the connector.
 The consent model is seller delegation in the shape of TPT's own VA-login programme, where a seller grants store access deliberately, and the connector acts only on the seller's own listings under the first-party capability tier.
 The four M7 measurements from the milestone prose — session longevity, bot-management posture, the real mandatory-field set, and the undocumented bounds — still open the milestone.
+
+## M7 TPT, read-buildable and write-capture-gated, 2026-08-28
+
+Six HAR captures of the founder's own TPT seller account were analysed to open M7.
+They fully expose TPT's read surface and write architecture but contain no write: every capture records browsing (the add-product and bundle forms at load only, the product grid, the dashboard, the store, and statistics), and the only GraphQL mutation present is an automatic privacy-consent toggle.
+Three facts separate TPT from TES.
+The product write is a legacy CakePHP multipart form guarded by a SecurityComponent token hash over its field set, not a GraphQL mutation, so the connector must GET the form and replay its tokens before each write.
+Files upload out of band through Evaporate-to-S3 and a Filestack workflow, with the returned handle written back into a hidden form field, and none of that sequence is captured.
+A three-layer bot-management stack fronts the origin — Cloudflare Bot Management minting cf_clearance from obfuscated-JS fingerprinting, reCAPTCHA Enterprise v3, and Sift — all passive in the captures, but every capture rode a pre-existing cf_clearance cookie and none exercised a gated write.
+The read slice is buildable now on the M6 seam and is not rework-prone: the cookie-plus-double-submit-CSRF envelope, the MyProductListings enumeration query, and TPT's vocabularies are captured and stable.
+The write slice is gated on one further artefact: a capture of a product created and published from a browser with tracking protection disabled, which settles the reCAPTCHA-on-submit question, the upload sequence, the mandatory-field set, the price and length bounds, and whether the write is the CakePHP form or a newer GraphQL mutation.
+Downstream of that capture is an architecture fork that this entry does not settle: if a broker-established cookie jar passes from a server egress IP the connector is the TES session shape, but if Cloudflare or reCAPTCHA rejects a non-browser client the connector needs a headless browser at the egress IP, which reopens the tam-browser removal recorded under "Limits calibration, 2026-08-28" and is a founder decision.
+Correcting the M2 platform-API finding: TPT does expose per-resource views, sales and earnings for a seller's own resources through the gateway's storeResourceStatsNext, so the M2 dashboard has a real TPT analytics source.
+The active plan is plans/2026-08-28-m7-tpt-connector.md.
