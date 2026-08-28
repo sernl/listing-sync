@@ -781,6 +781,19 @@ impl SyncMachine {
         now: LogicalInstant,
     ) -> Result<Transition, MachineError> {
         match input {
+            // A listing that is not there is not a landing. The observation is
+            // evidence that the verification read found nothing, which under
+            // the stall bias is the halting ambiguity rather than a silent
+            // commit of a listing no read has ever seen.
+            Input::ReadBackResult(Ok(observed))
+                if matches!(observed.lifecycle, RemoteLifecycle::Absent) =>
+            {
+                self.halt_ambiguous(
+                    attempt,
+                    AmbiguityCause::ReadBackIndeterminate,
+                    Capture::Diagnostics,
+                )
+            }
             Input::ReadBackResult(Ok(observed)) => {
                 let outcome = settle(
                     as_attempt_id(attempt),
@@ -1313,6 +1326,14 @@ mod machine_tests {
             lifecycle: RemoteLifecycle::Live {
                 since: Timestamp(1),
             },
+        }
+    }
+
+    fn observed_absent() -> ObservedListing {
+        ObservedListing {
+            id: listing(),
+            fields: vec![],
+            lifecycle: RemoteLifecycle::Absent,
         }
     }
 
@@ -1921,6 +1942,37 @@ mod machine_tests {
             transition.effects,
             EffectList(vec![]),
             "a settled read-back asks for nothing"
+        );
+    }
+
+    #[test]
+    fn an_absent_observation_never_settles_committed() {
+        let transition = machine(
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ReadBackResult(Ok(observed_absent())), now())
+        .expect("a read-back result applies in AwaitingReadBack");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::ReadBackIndeterminate)),
+            "a listing the verification read cannot find is ambiguous, never committed"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::CaptureDiagnostics {
+                    attempt: Some(attempt()),
+                    cause: CaptureCause::Ambiguity,
+                },
+                halt(),
+                notify(SellerEvent::InventoryHalted),
+            ]),
+            "an unverifiable write halts the tenant's inventory rather than proceeding"
         );
     }
 
