@@ -1,6 +1,6 @@
 {
-  "_source": "Captured from the Tes uploader DOM and the public taxonomy API on 2026-08-25 (account EBMC, International market). Subject/topic tree is fully crawlable at GET /taxonomy/v4/{country}/{id}, unauthenticated.",
-  "_status": "partial: fixed option sets are complete; the subject/topic tree is sampled and awaits a full per-country crawl",
+  "_source": "Captured from the Tes uploader DOM and the public taxonomy API on 2026-08-25 (account EBMC, International market), then extended by a live poll on 2026-08-29 (author 28768710, GB market) over GET /api/refdata/v2/<name> and the server-rendered editor state at GET /uploader/v2/<resourceId>. The refdata service has no index endpoint, so names must be known: age-ranges, year-groups, licences, subjects, resource-subjects, country-Codes and salutations answer and everything else 404s. The curriculum cascade is reachable only through the uploader page. Subject/topic tree is fully crawlable at GET /taxonomy/v4/{country}/{id}, unauthenticated.",
+  "_status": "complete for every fixed option set the uploader offers; the subject/topic tree is captured per country in tes-taxonomy-GB.json, tes-taxonomy-NZ.json and tes-taxonomy-refs.json, and the 2026-08-29 poll confirmed those captures current at 43 subject roots for each of GB, US, NZ, AU, CA and IE",
   "resourceTypes": {
     "field": "mainType",
     "options": {
@@ -13,25 +13,94 @@
       "99007": "Unit of work",
       "99008": "Visual aid/Display",
       "99009": "Worksheet/Activity"
+    },
+    "note": "RefdataStore.resourceTypes holds 33 rows and the uploader's type select filters them to `99000 < id < 99010`, so these nine are the writable set.",
+    "legacyReadOnlyOptions": {
+      "43788": "Music",
+      "60001": "For pupils",
+      "60002": "Test",
+      "60003": "Worksheet",
+      "60004": "Activity",
+      "60005": "Game, puzzle, quiz",
+      "60006": "Revision",
+      "60007": "Cards and flashcards",
+      "60008": "Display and posters",
+      "60009": "Tutorial",
+      "60010": "Assembly",
+      "60011": "Lesson plan",
+      "60012": "Assessment",
+      "60013": "Unit of work",
+      "60014": "Guide",
+      "60015": "Leadership plan",
+      "60016": "Policy",
+      "60017": "Timetable",
+      "60018": "For parents",
+      "60019": "Other",
+      "80010": "Ebook",
+      "90001": "Lesson starter",
+      "90002": "Presentation",
+      "90003": "Whole lesson"
     }
   },
   "ageRanges": {
     "field": "ageRanges (main-age-range)",
     "options": {
-      "1": {"label": "3-5", "ageLow": 3, "ageHigh": 5},
-      "2": {"label": "5-7", "ageLow": 5, "ageHigh": 7},
-      "3": {"label": "7-11", "ageLow": 7, "ageHigh": 11},
-      "4": {"label": "11-14", "ageLow": 11, "ageHigh": 14},
-      "5": {"label": "14-16", "ageLow": 14, "ageHigh": 16},
-      "6": {"label": "16+", "ageLow": 16, "ageHigh": null},
-      "7": {"label": "Age not applicable", "ageLow": null, "ageHigh": null}
+      "1": {
+        "label": "3-5",
+        "ageLow": 3,
+        "ageHigh": 5
+      },
+      "2": {
+        "label": "5-7",
+        "ageLow": 5,
+        "ageHigh": 7
+      },
+      "3": {
+        "label": "7-11",
+        "ageLow": 7,
+        "ageHigh": 11
+      },
+      "4": {
+        "label": "11-14",
+        "ageLow": 11,
+        "ageHigh": 14
+      },
+      "5": {
+        "label": "14-16",
+        "ageLow": 14,
+        "ageHigh": 16
+      },
+      "6": {
+        "label": "16+",
+        "ageLow": 16,
+        "ageHigh": null
+      },
+      "7": {
+        "label": "Age not applicable",
+        "ageLow": null,
+        "ageHigh": null
+      }
     },
     "note": "The draft body also carries a literal `ages` array (e.g. [16,17,18]) derived from the selected range."
   },
   "curriculum": {
     "field": "curriculum",
-    "options": ["none", "No curriculum", "American", "Australian", "Canadian", "English", "International", "Irish", "New Zealand", "Northern Irish", "Scottish", "Welsh", "Zambian"],
-    "note": "The market/audience of a resource is a Curriculum value on one account, not a separate login. 'American' is the likely US-inventory lever, unconfirmed."
+    "options": [
+      "none",
+      "No curriculum",
+      "American",
+      "Australian",
+      "Canadian",
+      "English",
+      "International",
+      "Irish",
+      "New Zealand",
+      "Northern Irish",
+      "Scottish",
+      "Welsh",
+      "Zambian"
+    ],
+    "note": "The `curriculum` scalar exists on the resource read model alongside `curriculumIds`, but the uploader writes orientation/framework/authority instead. This thirteen-line list is the orientation select as probe 04 transcribed it: it wrote the one synthetic option down twice, as `none` and `No curriculum`, and omitted `[rest of world]`. See curriculumCascade for what the store actually holds. 'American' is the likely US-inventory lever, unconfirmed."
   },
   "subjectsTopics": {
     "field": "categories:[{id}]",
@@ -50,12 +119,1524 @@
         "1000450": "Advanced pure",
         "1000451": "Advanced statistics"
       }
-    }
+    },
+    "mapTo": "Every taxonomy node carries a `mapTo`, which is Tes's own equivalence table between the national subject trees: GB 1000454 and US 5000454 both carry mapTo [91000454]. That is the right join key for a GB-to-US migration within Tes, and the right anchor for a crosswalk to another platform, because it is built once rather than per country.",
+    "primaryCategory": "A resource posts `categories: [{id}]` plus exactly one `primaryCategory` id."
   },
   "fileConstraints": {
-    "supportedTypes": ["PDF", "Word", "Smartboards", "JPEG", "Powerpoint", "Excel", "ePub"],
-    "maxFileSizeMB": 200
+    "supportedTypes": [
+      "PDF",
+      "Word",
+      "Smartboards",
+      "JPEG",
+      "Powerpoint",
+      "Excel",
+      "ePub"
+    ],
+    "maxFileSizeMB": 200,
+    "note": "RefdataStore.fileTypes maps each extension to {ext, description, keywords, mime, authorised}. The 2026-08-25 capture recorded seven type families by name; these 58 extensions are the polled set.",
+    "extensions": [
+      "agg",
+      "ai",
+      "au",
+      "avi",
+      "bmp",
+      "doc",
+      "docm",
+      "docx",
+      "epub",
+      "et",
+      "fjsw",
+      "flipchart",
+      "flp",
+      "gform",
+      "ggb",
+      "gif",
+      "gsp",
+      "htm",
+      "html",
+      "jpeg",
+      "jpg",
+      "key",
+      "midi",
+      "mov",
+      "mp3",
+      "mp4",
+      "mpe",
+      "mpeg",
+      "mpg",
+      "notebook",
+      "numbers",
+      "pages",
+      "pdf",
+      "png",
+      "pps",
+      "ppsm",
+      "ppsx",
+      "ppt",
+      "pptm",
+      "pptx",
+      "pub",
+      "qt",
+      "ra",
+      "rtf",
+      "sb2",
+      "sib",
+      "swf",
+      "txt",
+      "wav",
+      "wma",
+      "wmv",
+      "xbk",
+      "xls",
+      "xlsm",
+      "xlsx",
+      "xml",
+      "yar",
+      "zip"
+    ]
   },
   "descriptionFormat": "Markdown (descriptionRawType: md); external search shows first 155 chars; title guidance 35-45 chars",
-  "durableKey": "numeric resource id, minted at creation; URL fixed to original title and never changes"
+  "durableKey": "numeric resource id, minted at creation; URL fixed to original title and never changes",
+  "yearGroups": {
+    "field": "yearGroups",
+    "note": "The non-GB age field, and an alternative to ageRanges rather than a companion: the editor picks one by country, `ageResourceFieldName = country === \"GB\" ? \"ageRanges\" : \"yearGroups\"`. A GB resource carries age bands; a US resource carries grade-equivalent year groups. The not-applicable sentinels differ too: ageRanges 7, yearGroups 30.",
+    "options": {
+      "1": {
+        "group": "Nursery",
+        "country": "GB",
+        "humanAges": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "2": {
+        "group": "Reception",
+        "country": "GB",
+        "humanAges": [
+          4,
+          5
+        ]
+      },
+      "3": {
+        "group": "1",
+        "country": "GB",
+        "humanAges": [
+          5,
+          6
+        ]
+      },
+      "4": {
+        "group": "2",
+        "country": "GB",
+        "humanAges": [
+          6,
+          7
+        ]
+      },
+      "5": {
+        "group": "3",
+        "country": "GB",
+        "humanAges": [
+          7,
+          8
+        ]
+      },
+      "6": {
+        "group": "4",
+        "country": "GB",
+        "humanAges": [
+          8,
+          9
+        ]
+      },
+      "7": {
+        "group": "5",
+        "country": "GB",
+        "humanAges": [
+          9,
+          10
+        ]
+      },
+      "8": {
+        "group": "6",
+        "country": "GB",
+        "humanAges": [
+          10,
+          11
+        ]
+      },
+      "9": {
+        "group": "7",
+        "country": "GB",
+        "humanAges": [
+          11,
+          12
+        ]
+      },
+      "10": {
+        "group": "8",
+        "country": "GB",
+        "humanAges": [
+          12,
+          13
+        ]
+      },
+      "11": {
+        "group": "9",
+        "country": "GB",
+        "humanAges": [
+          13,
+          14
+        ]
+      },
+      "12": {
+        "group": "10",
+        "country": "GB",
+        "humanAges": [
+          14,
+          15
+        ]
+      },
+      "13": {
+        "group": "11",
+        "country": "GB",
+        "humanAges": [
+          15,
+          16
+        ]
+      },
+      "14": {
+        "group": "12",
+        "country": "GB",
+        "humanAges": [
+          16,
+          17
+        ]
+      },
+      "15": {
+        "group": "13",
+        "country": "GB",
+        "humanAges": [
+          17,
+          18
+        ]
+      },
+      "16": {
+        "group": "Pre-K",
+        "country": "US",
+        "humanAges": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "17": {
+        "group": "Kindergarten",
+        "country": "US",
+        "humanAges": [
+          5,
+          6
+        ]
+      },
+      "18": {
+        "group": "1st",
+        "country": "US",
+        "humanAges": [
+          6,
+          7
+        ]
+      },
+      "19": {
+        "group": "2nd",
+        "country": "US",
+        "humanAges": [
+          7,
+          8
+        ]
+      },
+      "20": {
+        "group": "3rd",
+        "country": "US",
+        "humanAges": [
+          8,
+          9
+        ]
+      },
+      "21": {
+        "group": "4th",
+        "country": "US",
+        "humanAges": [
+          9,
+          10
+        ]
+      },
+      "22": {
+        "group": "5th",
+        "country": "US",
+        "humanAges": [
+          10,
+          11
+        ]
+      },
+      "23": {
+        "group": "6th",
+        "country": "US",
+        "humanAges": [
+          11,
+          12
+        ]
+      },
+      "24": {
+        "group": "7th",
+        "country": "US",
+        "humanAges": [
+          12,
+          13
+        ]
+      },
+      "25": {
+        "group": "8th",
+        "country": "US",
+        "humanAges": [
+          13,
+          14
+        ]
+      },
+      "26": {
+        "group": "9th",
+        "country": "US",
+        "humanAges": [
+          14,
+          15
+        ]
+      },
+      "27": {
+        "group": "10th",
+        "country": "US",
+        "humanAges": [
+          15,
+          16
+        ]
+      },
+      "28": {
+        "group": "11th",
+        "country": "US",
+        "humanAges": [
+          16,
+          17
+        ]
+      },
+      "29": {
+        "group": "12th",
+        "country": "US",
+        "humanAges": [
+          17,
+          18
+        ]
+      },
+      "30": {
+        "group": "Age not applicable",
+        "country": "US",
+        "humanAges": []
+      }
+    }
+  },
+  "licences": {
+    "field": "licence",
+    "note": "RefdataStore.licences holds seven rows; GET /api/refdata/v2/licences returns the first five and omits the legacy pair. Price gates the write: a free resource picks among CC-BY, CC-BY-SA and CC-BY-ND (default CC-BY-SA) and a paid one is TES-PAID. TES-PAID-SCHOOL is the school tier. The editor rewrites TES-V1 and TES-V2 to CC-BY-SA on load, so both read back on older resources and neither is offered on write.",
+    "options": {
+      "CC-BY": {
+        "type": "CC",
+        "title": "Creative Commons Attribution 4.0 International licence",
+        "paid": false,
+        "publishable": true
+      },
+      "CC-BY-ND": {
+        "type": "CC",
+        "title": "Creative Commons Attribution-NoDerivatives 4.0 International licence",
+        "paid": false,
+        "publishable": true
+      },
+      "CC-BY-SA": {
+        "type": "CC",
+        "title": "Creative Commons Attribution-ShareAlike 4.0 International licence",
+        "paid": false,
+        "publishable": true
+      },
+      "TES-PAID": {
+        "type": "TES",
+        "title": "Teaching Resource Licence",
+        "paid": true,
+        "publishable": true
+      },
+      "TES-PAID-SCHOOL": {
+        "type": "TES",
+        "title": "School licence",
+        "paid": true,
+        "publishable": true
+      },
+      "TES-V1": {
+        "type": "TES",
+        "title": "Legacy Licence",
+        "paid": false,
+        "publishable": false
+      },
+      "TES-V2": {
+        "type": "TES",
+        "title": "Legacy Licence",
+        "paid": false,
+        "publishable": false
+      }
+    }
+  },
+  "curriculumCascade": {
+    "fields": [
+      "orientation",
+      "framework",
+      "authority"
+    ],
+    "note": "Three cascading selects, labelled \"Curriculum (optional)\", \"Type of curriculum (optional)\" and \"Awarding body\". A framework is offered when its `orientations` contains the chosen orientation and its `ages` intersects the resource's ages, so the offered set is a function of both earlier answers; an authority is offered when its `frameworks` contains the chosen framework and its ages intersect. The uploader prepends a synthetic `none` labelled \"No curriculum\" to the orientation select and filters `[rest of world]` out of it, leaving eleven of the twelve selectable. Not reachable through the refdata API under any name tried.",
+    "orientation": {
+      "American": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Australian": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Canadian": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "English": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "International": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Irish": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "New Zealand": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Northern Irish": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Scottish": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Welsh": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Zambian": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "[rest of world]": {
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      }
+    },
+    "framework": {
+      "A/AS level": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Aistear": {
+        "orientations": [
+          "Irish"
+        ],
+        "ages": [
+          "3-5"
+        ]
+      },
+      "BTEC": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "Cambridge": {
+        "orientations": [
+          "International",
+          "[rest of world]",
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14"
+        ]
+      },
+      "Cambridge Nationals": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish"
+        ],
+        "ages": [
+          "14-16"
+        ]
+      },
+      "Cambridge O level": {
+        "orientations": [
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "14-16"
+        ]
+      },
+      "Cambridge Pre-U": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Cambridge Technicals": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "College entrance": {
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Common Core": {
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Core Skills": {
+        "orientations": [
+          "Scottish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "Curriculum for Excellence": {
+        "orientations": [
+          "Scottish"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "District/county": {
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16"
+        ]
+      },
+      "District/state": {
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Essential Skills": {
+        "orientations": [
+          "Welsh",
+          "Northern Irish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "European Baccalaureate": {
+        "orientations": [
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "EYFS": {
+        "orientations": [
+          "English"
+        ],
+        "ages": [
+          "3-5"
+        ]
+      },
+      "Foundation Phase": {
+        "orientations": [
+          "Welsh"
+        ],
+        "ages": [
+          "3-5",
+          "5-7"
+        ]
+      },
+      "Foundation Stage": {
+        "orientations": [
+          "Northern Irish"
+        ],
+        "ages": [
+          "3-5"
+        ]
+      },
+      "Functional Skills": {
+        "orientations": [
+          "English"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "GCSE": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "IB Diploma": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "IB MYP": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "11-14",
+          "14-16"
+        ]
+      },
+      "IB PYP": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11"
+        ]
+      },
+      "IMYC": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "11-14"
+        ]
+      },
+      "International A/AS level": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "International GCSE": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "IPC": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "5-7",
+          "7-11"
+        ]
+      },
+      "IPC/IEYC": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "3-5"
+        ]
+      },
+      "Junior Cycle": {
+        "orientations": [
+          "Irish"
+        ],
+        "ages": [
+          "11-14",
+          "14-16"
+        ]
+      },
+      "Montessori": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14"
+        ]
+      },
+      "National Curriculum": {
+        "orientations": [
+          "English",
+          "Welsh"
+        ],
+        "ages": [
+          "5-7",
+          "7-11",
+          "11-14"
+        ]
+      },
+      "NCEA": {
+        "orientations": [
+          "New Zealand"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "New Zealand Curriculum": {
+        "orientations": [
+          "New Zealand"
+        ],
+        "ages": [
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16"
+        ]
+      },
+      "Northern Ireland Curriculum": {
+        "orientations": [
+          "Northern Irish"
+        ],
+        "ages": [
+          "5-7",
+          "7-11",
+          "11-14"
+        ]
+      },
+      "NVQ": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Other branded curriculum": {
+        "orientations": [
+          "American",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "3-5"
+        ]
+      },
+      "Primary School Curriculum": {
+        "orientations": [
+          "Irish"
+        ],
+        "ages": [
+          "5-7",
+          "7-11"
+        ]
+      },
+      "Provincial curriculum": {
+        "orientations": [
+          "Canadian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "School's own": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Senior Cycle": {
+        "orientations": [
+          "Irish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "SSCE": {
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "State/national": {
+        "orientations": [
+          "Australian",
+          "[rest of world]"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "SVQ": {
+        "orientations": [
+          "Scottish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Te Marautanga o Aotearoa": {
+        "orientations": [
+          "New Zealand"
+        ],
+        "ages": [
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16"
+        ]
+      },
+      "Te Wh_riki": {
+        "orientations": [
+          "New Zealand"
+        ],
+        "ages": [
+          "3-5"
+        ]
+      },
+      "Waldorf/Steiner": {
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11"
+        ]
+      },
+      "Welsh Baccalaureate": {
+        "orientations": [
+          "Welsh"
+        ],
+        "ages": [
+          "16+"
+        ]
+      }
+    },
+    "authority": {
+      "ACT": {
+        "frameworks": [
+          "College entrance"
+        ],
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "AP": {
+        "frameworks": [
+          "College entrance"
+        ],
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "AQA": {
+        "frameworks": [
+          "GCSE",
+          "A/AS level"
+        ],
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "Australian Capital Territory": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "CCEA": {
+        "frameworks": [
+          "GCSE",
+          "A/AS level"
+        ],
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "CIE": {
+        "frameworks": [
+          "International GCSE",
+          "International A/AS level"
+        ],
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "CLEP": {
+        "frameworks": [
+          "College entrance"
+        ],
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Edexcel": {
+        "frameworks": [
+          "GCSE",
+          "International GCSE",
+          "A/AS level",
+          "International A/AS level"
+        ],
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish",
+          "Irish",
+          "Australian",
+          "New Zealand",
+          "American",
+          "Canadian",
+          "International",
+          "[rest of world]"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "Higher/Advanced Higher": {
+        "frameworks": [
+          "Curriculum for Excellence"
+        ],
+        "orientations": [
+          "Scottish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "Junior Certificate": {
+        "frameworks": [
+          "Junior Cycle"
+        ],
+        "orientations": [
+          "Irish"
+        ],
+        "ages": [
+          "14-16"
+        ]
+      },
+      "Leaving Certificate": {
+        "frameworks": [
+          "Senior Cycle"
+        ],
+        "orientations": [
+          "Irish"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "National 4 & 5": {
+        "frameworks": [
+          "Curriculum for Excellence"
+        ],
+        "orientations": [
+          "Scottish"
+        ],
+        "ages": [
+          "14-16"
+        ]
+      },
+      "National tests": {
+        "frameworks": [
+          "National Curriculum"
+        ],
+        "orientations": [
+          "English"
+        ],
+        "ages": [
+          "7-11"
+        ]
+      },
+      "New South Wales": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Northern Territory": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "OCR": {
+        "frameworks": [
+          "GCSE",
+          "A/AS level"
+        ],
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      },
+      "Queensland": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "SAT": {
+        "frameworks": [
+          "College entrance"
+        ],
+        "orientations": [
+          "American"
+        ],
+        "ages": [
+          "16+"
+        ]
+      },
+      "South Australia": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Tasmania": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Victoria": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "Western Australia": {
+        "frameworks": [
+          "State/national",
+          "SSCE"
+        ],
+        "orientations": [
+          "Australian"
+        ],
+        "ages": [
+          "3-5",
+          "5-7",
+          "7-11",
+          "11-14",
+          "14-16",
+          "16+"
+        ]
+      },
+      "WJEC/Eduqas": {
+        "frameworks": [
+          "GCSE",
+          "A/AS level"
+        ],
+        "orientations": [
+          "English",
+          "Welsh",
+          "Northern Irish",
+          "Scottish"
+        ],
+        "ages": [
+          "14-16",
+          "16+"
+        ]
+      }
+    }
+  },
+  "resourcePrices": {
+    "field": "price (integer, minor units)",
+    "note": "A hard validation bound on the price field and a migration constraint: a migration can violate the destination's floor. The uploader also renders non-binding priceHints bands from ConfigStore.priceHints.",
+    "options": {
+      "AU": {
+        "minPence": 100,
+        "maxPence": 30000
+      },
+      "CA": {
+        "minPence": 100,
+        "maxPence": 30000
+      },
+      "GB": {
+        "minPence": 100,
+        "maxPence": 30000
+      },
+      "IE": {
+        "minPence": 100,
+        "maxPence": 30000
+      },
+      "NZ": {
+        "minPence": 100,
+        "maxPence": 30000
+      },
+      "US": {
+        "minPence": 150,
+        "maxPence": 30000
+      }
+    }
+  },
+  "attachmentTypes": {
+    "field": "the per-file type on an attachment, not the resource's own mainType",
+    "options": {
+      "43788": "Music",
+      "60003": "Worksheet",
+      "60004": "Activity",
+      "60005": "Game, puzzle, quiz",
+      "60006": "Revision",
+      "60008": "Display and posters",
+      "60010": "Assembly",
+      "60011": "Lesson plan",
+      "60012": "Assessment",
+      "60013": "Unit of work",
+      "60018": "For parents",
+      "60019": "Other",
+      "60020": "Interactive",
+      "90001": "Lesson starter",
+      "90002": "Presentation",
+      "90003": "Whole lesson",
+      "90004": "Video",
+      "90005": "Clip Art",
+      "90006": "Homework",
+      "99001": "Assembly",
+      "99002": "Assessment and revision",
+      "99003": "Game/puzzle/quiz",
+      "99004": "Audio, music & video",
+      "99005": "Lesson (complete)",
+      "99006": "Other",
+      "99007": "Unit of work",
+      "99008": "Visual aid/Display",
+      "99009": "Worksheet/Activity",
+      "100000": "Other",
+      "100001": "Assessment",
+      "100002": "Project/Activity",
+      "100003": "Lesson Plan",
+      "100004": "Study Guide",
+      "100005": "Presentation",
+      "100006": "Video",
+      "100007": "Worksheet",
+      "100008": "Game",
+      "100009": "Poster",
+      "100010": "E-book",
+      "100011": "Resource for Centers",
+      "100012": "Resource for Parents/Carers",
+      "100013": "Room Visuals",
+      "100014": "Clip Art/Fonts/Graphics",
+      "100015": "Audio",
+      "100016": "Interactive"
+    }
+  },
+  "notFound": {
+    "keyStages": "Key stages are not a Tes uploader dropdown: there is no `keyStage` field anywhere in the editor bundle or the uploader state. Key-stage-like granularity is expressed through ageRanges or yearGroups plus the curriculum framework, for example EYFS, National Curriculum, GCSE and A/AS level.",
+    "curriculumCascadeViaRefdata": "resource-orientations, resource-frameworks and resource-authorities 404 under every refdata base and casing tried; the uploader page is currently the only route."
+  }
 }

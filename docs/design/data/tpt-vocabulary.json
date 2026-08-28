@@ -1,0 +1,3245 @@
+{
+  "_source": "Polled live on 2026-08-29 against the founder's own TPT seller session: the `TaxCodesQuery`, `EducationStandardsJurisdictionsQuery` and `MyProductListingsCustomCategories` operations on https://www.teacherspayteachers.com/graph/graphql, the `JSON.parse` blobs embedded in the `tpt-frontend` webpack chunks, and the `var cfg = {...}` bootstrap on GET /My-Products/New/Digital-Next. GraphQL introspection is disabled on both /graph/graphql and /gateway/graphql, so operation text was recovered from the `loc.source.body` literals the client bundles carry.",
+  "_status": "complete for every fixed option set the create and edit forms offer; the education-standards leaf ids below each jurisdiction are deliberately not captured, and the seller custom store categories are seller-scoped rather than a platform vocabulary",
+  "taxonomyTags": {
+    "field": "data[TaxonomyTags][] (read back as `taxonomyTags`)",
+    "note": "One flat slug namespace where a grade, a subject, a resource type, a file format and a language are all the same kind of thing; only `category` tells them apart, and it is metadata about the slug rather than a separate field on the product. Referentially closed: every `parentId` resolves inside the set. Max depth 2.",
+    "hiddenNote": "An `isHidden` facet is a retired value that still reads back on existing products. Accept it on read, never offer it on write.",
+    "countsByCategory": {
+      "PreK-12-Subject-Area": 140,
+      "Type-of-Resource": 71,
+      "theme": 39,
+      "supports": 31,
+      "Format": 26,
+      "Grade-Level": 20,
+      "audience": 10,
+      "topic": 6,
+      "programs-and-methods": 6,
+      "Price-Range": 5,
+      "language": 3,
+      "Featured": 1
+    },
+    "options": {
+      "elementary": {
+        "name": "Elementary",
+        "category": "Grade-Level"
+      },
+      "middle-school": {
+        "name": "Middle School",
+        "category": "Grade-Level"
+      },
+      "high-school": {
+        "name": "High School",
+        "category": "Grade-Level"
+      },
+      "art": {
+        "name": "Art",
+        "category": "PreK-12-Subject-Area"
+      },
+      "performing-arts": {
+        "name": "Performing Arts",
+        "category": "PreK-12-Subject-Area"
+      },
+      "holidays": {
+        "name": "Holidays",
+        "category": "topic",
+        "isHidden": true
+      },
+      "seasonal": {
+        "name": "Seasonal",
+        "category": "theme"
+      },
+      "programs": {
+        "name": "Programs",
+        "category": "programs-and-methods"
+      },
+      "tpt-sellers": {
+        "name": "TPT Sellers",
+        "category": "audience"
+      },
+      "activities": {
+        "name": "Activities",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "19"
+      },
+      "teacher-tools": {
+        "name": "Teacher Tools",
+        "category": "Type-of-Resource"
+      },
+      "forms": {
+        "name": "Forms",
+        "category": "Type-of-Resource"
+      },
+      "independent-work": {
+        "name": "Independent Work",
+        "category": "Type-of-Resource",
+        "isHidden": true
+      },
+      "classroom-decor": {
+        "name": "Classroom Decor",
+        "category": "Type-of-Resource"
+      },
+      "social-emotional": {
+        "name": "Social Emotional",
+        "category": "PreK-12-Subject-Area"
+      },
+      "learning-skills": {
+        "name": "Learning Skills",
+        "category": "topic",
+        "isHidden": true
+      },
+      "preschool": {
+        "name": "Preschool",
+        "category": "Grade-Level",
+        "parentId": "elementary",
+        "legacyId": "1"
+      },
+      "kindergarten": {
+        "name": "Kindergarten",
+        "category": "Grade-Level",
+        "parentId": "elementary",
+        "legacyId": "2"
+      },
+      "1st-grade": {
+        "name": "1st Grade",
+        "category": "Grade-Level",
+        "parentId": "elementary",
+        "legacyId": "3"
+      },
+      "2nd-grade": {
+        "name": "2nd Grade",
+        "category": "Grade-Level",
+        "parentId": "elementary",
+        "legacyId": "4"
+      },
+      "3rd-grade": {
+        "name": "3rd Grade",
+        "category": "Grade-Level",
+        "parentId": "elementary",
+        "legacyId": "5"
+      },
+      "4th-grade": {
+        "name": "4th Grade",
+        "category": "Grade-Level",
+        "parentId": "elementary",
+        "legacyId": "6"
+      },
+      "5th-grade": {
+        "name": "5th Grade",
+        "category": "Grade-Level",
+        "parentId": "elementary",
+        "legacyId": "7"
+      },
+      "6th-grade": {
+        "name": "6th Grade",
+        "category": "Grade-Level",
+        "parentId": "middle-school",
+        "legacyId": "8"
+      },
+      "7th-grade": {
+        "name": "7th Grade",
+        "category": "Grade-Level",
+        "parentId": "middle-school",
+        "legacyId": "9"
+      },
+      "8th-grade": {
+        "name": "8th Grade",
+        "category": "Grade-Level",
+        "parentId": "middle-school",
+        "legacyId": "10"
+      },
+      "9th-grade": {
+        "name": "9th Grade",
+        "category": "Grade-Level",
+        "parentId": "high-school",
+        "legacyId": "11"
+      },
+      "10th-grade": {
+        "name": "10th Grade",
+        "category": "Grade-Level",
+        "parentId": "high-school",
+        "legacyId": "12"
+      },
+      "11th-grade": {
+        "name": "11th Grade",
+        "category": "Grade-Level",
+        "parentId": "high-school",
+        "legacyId": "13"
+      },
+      "12th-grade": {
+        "name": "12th Grade",
+        "category": "Grade-Level",
+        "parentId": "high-school",
+        "legacyId": "14"
+      },
+      "higher-education": {
+        "name": "Higher Education",
+        "category": "Grade-Level",
+        "legacyId": "15"
+      },
+      "adult-education": {
+        "name": "Adult Education",
+        "category": "Grade-Level",
+        "legacyId": "16"
+      },
+      "homeschool": {
+        "name": "Homeschool",
+        "category": "audience",
+        "legacyId": "17"
+      },
+      "staff": {
+        "name": "Staff",
+        "category": "audience",
+        "legacyId": "19",
+        "isHidden": true
+      },
+      "not-grade-specific": {
+        "name": "Not Grade Specific",
+        "category": "Grade-Level",
+        "legacyId": "23"
+      },
+      "activboard-activities": {
+        "name": "Activboard Activities",
+        "category": "Format",
+        "parentId": "interactive-whiteboards",
+        "legacyId": "146"
+      },
+      "assessment": {
+        "name": "Assessment",
+        "category": "Type-of-Resource",
+        "parentId": "student-assessment",
+        "legacyId": "28"
+      },
+      "bibliographies": {
+        "name": "Bibliographies",
+        "category": "Type-of-Resource",
+        "parentId": "instruction",
+        "legacyId": "27"
+      },
+      "bulletin-board-ideas": {
+        "name": "Bulletin Board Ideas",
+        "category": "Type-of-Resource",
+        "parentId": "classroom-decor",
+        "legacyId": "53"
+      },
+      "by-tpt-sellers-for-tpt-sellers": {
+        "name": "By TpT Sellers for TpT Sellers",
+        "category": "audience",
+        "legacyId": "162",
+        "isHidden": true
+      },
+      "centers": {
+        "name": "Centers",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "177"
+      },
+      "classroom-forms": {
+        "name": "Classroom Forms",
+        "category": "Type-of-Resource",
+        "parentId": "forms",
+        "legacyId": "52"
+      },
+      "clip-art": {
+        "name": "Clip Art",
+        "category": "Type-of-Resource",
+        "legacyId": "152"
+      },
+      "cultural-activities": {
+        "name": "Cultural Activities",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "163"
+      },
+      "dbqs": {
+        "name": "DBQs",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "21"
+      },
+      "elective-course-proposals": {
+        "name": "Elective Course Proposals",
+        "category": "Type-of-Resource",
+        "parentId": "forms",
+        "legacyId": "26"
+      },
+      "english-uk": {
+        "name": "English (UK)",
+        "category": "language",
+        "legacyId": "170"
+      },
+      "flash-cards": {
+        "name": "Flash Cards",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "34"
+      },
+      "parents": {
+        "name": "Parents",
+        "category": "audience",
+        "legacyId": "142"
+      },
+      "staff-and-administrators": {
+        "name": "Staff & Administrators",
+        "category": "audience"
+      },
+      "games": {
+        "name": "Games",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "54"
+      },
+      "gate": {
+        "name": "GATE",
+        "category": "audience",
+        "legacyId": "38",
+        "isHidden": true
+      },
+      "grant-proposals": {
+        "name": "Grant Proposals",
+        "category": "Type-of-Resource",
+        "parentId": "forms",
+        "legacyId": "37"
+      },
+      "graphic-organizers": {
+        "name": "Graphic Organizers",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "130"
+      },
+      "guided-reading-books": {
+        "name": "Guided Reading Books",
+        "category": "Type-of-Resource",
+        "parentId": "instruction",
+        "legacyId": "49"
+      },
+      "handouts": {
+        "name": "Handouts",
+        "category": "Type-of-Resource",
+        "parentId": "instruction",
+        "legacyId": "25"
+      },
+      "homeschool-curricula": {
+        "name": "Homeschool Curricula",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "16"
+      },
+      "homework": {
+        "name": "Homework",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "47"
+      },
+      "independent-work-packet": {
+        "name": "Independent Work Packet",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "175"
+      },
+      "interactive-notebooks": {
+        "name": "Interactive Notebooks",
+        "category": "Type-of-Resource",
+        "parentId": "instruction",
+        "legacyId": "169"
+      },
+      "laboratory": {
+        "name": "Laboratory",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "31"
+      },
+      "lectures": {
+        "name": "Lectures",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "2"
+      },
+      "lessons": {
+        "name": "Lessons",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "176"
+      },
+      "literature-circles": {
+        "name": "Literature Circles",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "148"
+      },
+      "microsoft-onedrive": {
+        "name": "Microsoft OneDrive",
+        "category": "Format",
+        "parentId": "microsoft",
+        "legacyId": "173"
+      },
+      "montessori": {
+        "name": "Montessori",
+        "category": "programs-and-methods",
+        "parentId": "programs",
+        "legacyId": "160"
+      },
+      "movie-guides": {
+        "name": "Movie Guides",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "145"
+      },
+      "outlines": {
+        "name": "Outlines",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "32"
+      },
+      "posters": {
+        "name": "Posters",
+        "category": "Type-of-Resource",
+        "parentId": "classroom-decor",
+        "legacyId": "147"
+      },
+      "printables": {
+        "name": "Printables",
+        "category": "Type-of-Resource",
+        "legacyId": "51"
+      },
+      "professional-development": {
+        "name": "Professional Development",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "173"
+      },
+      "professional-documents": {
+        "name": "Professional Documents",
+        "category": "Type-of-Resource",
+        "parentId": "forms",
+        "legacyId": "48"
+      },
+      "projects": {
+        "name": "Projects",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "11"
+      },
+      "reflective-journals-for-teachers": {
+        "name": "Reflective Journals for Teachers",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "39"
+      },
+      "research": {
+        "name": "Research",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "5"
+      },
+      "rubrics": {
+        "name": "Rubrics",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "161"
+      },
+      "scaffolded-notes": {
+        "name": "Scaffolded Notes",
+        "category": "Type-of-Resource",
+        "parentId": "instruction",
+        "legacyId": "131"
+      },
+      "school-nurse-documents": {
+        "name": "School Nurse Documents",
+        "category": "Type-of-Resource",
+        "parentId": "forms",
+        "legacyId": "137"
+      },
+      "scripts": {
+        "name": "Scripts",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "55"
+      },
+      "service-learning": {
+        "name": "Service Learning",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "140"
+      },
+      "simulations": {
+        "name": "Simulations",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "136"
+      },
+      "songs": {
+        "name": "Songs",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "36"
+      },
+      "study-guides": {
+        "name": "Study Guides",
+        "category": "Type-of-Resource",
+        "parentId": "student-assessment",
+        "legacyId": "6"
+      },
+      "syllabi": {
+        "name": "Syllabi",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "18"
+      },
+      "task-cards": {
+        "name": "Task Cards",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "158"
+      },
+      "teacher-manuals": {
+        "name": "Teacher Manuals",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "7"
+      },
+      "thematic-unit-plans": {
+        "name": "Thematic Unit Plans",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "14"
+      },
+      "unit-plans": {
+        "name": "Unit Plans",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "13"
+      },
+      "webquests": {
+        "name": "Webquests",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "135"
+      },
+      "word-walls": {
+        "name": "Word Walls",
+        "category": "Type-of-Resource",
+        "parentId": "classroom-decor",
+        "legacyId": "50"
+      },
+      "workbooks": {
+        "name": "Workbooks",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "3"
+      },
+      "worksheets": {
+        "name": "Worksheets",
+        "category": "Type-of-Resource",
+        "parentId": "student-practice",
+        "legacyId": "10"
+      },
+      "arts": {
+        "name": "Arts & Music",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "56",
+        "isHidden": true
+      },
+      "art-history": {
+        "name": "Art History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "art",
+        "legacyId": "57"
+      },
+      "cooking": {
+        "name": "Cooking",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "194"
+      },
+      "dance": {
+        "name": "Dance",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "performing-arts",
+        "legacyId": "447"
+      },
+      "drama": {
+        "name": "Drama",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "performing-arts",
+        "legacyId": "69"
+      },
+      "graphic-arts": {
+        "name": "Graphic Arts",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "art",
+        "legacyId": "59"
+      },
+      "instrumental-music": {
+        "name": "Instrumentalxa0Music",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "performing-arts",
+        "legacyId": "64"
+      },
+      "music": {
+        "name": "Music",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "performing-arts",
+        "legacyId": "61"
+      },
+      "music-composition": {
+        "name": "Music Composition",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "performing-arts",
+        "legacyId": "62"
+      },
+      "visual-arts": {
+        "name": "Visual Arts",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "art",
+        "legacyId": "58"
+      },
+      "vocal-music": {
+        "name": "Vocal Music",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "performing-arts",
+        "legacyId": "63"
+      },
+      "other-art": {
+        "name": "Other (Art)",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "60",
+        "isHidden": true
+      },
+      "other-performing-arts": {
+        "name": "Other (Performing Arts)",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "performing-arts",
+        "legacyId": "65"
+      },
+      "english-language-arts": {
+        "name": "English Language Arts",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "1"
+      },
+      "balanced-literacy": {
+        "name": "Balanced Literacy",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "2"
+      },
+      "close-reading": {
+        "name": "Close Reading",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "492"
+      },
+      "creative-writing": {
+        "name": "Creative Writing",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "3"
+      },
+      "esl-efl-ell": {
+        "name": "ESL, EFL, and ELL",
+        "category": "supports",
+        "legacyId": "70"
+      },
+      "ela-test-prep": {
+        "name": "ELA Test Prep",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "154"
+      },
+      "grammar": {
+        "name": "Grammar",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "6"
+      },
+      "informational-text": {
+        "name": "Informational Text",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "464"
+      },
+      "literature": {
+        "name": "Literature",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "169"
+      },
+      "phonics": {
+        "name": "Phonics",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "491",
+        "isHidden": true
+      },
+      "poetry": {
+        "name": "Poetry",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "435"
+      },
+      "reading": {
+        "name": "Reading",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "5"
+      },
+      "reading-strategies": {
+        "name": "Reading Strategies",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "427"
+      },
+      "short-stories": {
+        "name": "Short Stories",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "206"
+      },
+      "spelling": {
+        "name": "Spelling",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "7"
+      },
+      "vocabulary": {
+        "name": "Vocabulary",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "8"
+      },
+      "writing": {
+        "name": "Writing",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "414"
+      },
+      "writing-essays": {
+        "name": "Writing-Essays",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "429"
+      },
+      "writing-expository": {
+        "name": "Writing-Expository",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "4"
+      },
+      "other-ela": {
+        "name": "Other (ELA)",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "161"
+      },
+      "holidays-seasonal": {
+        "name": "Holidays/Seasonal",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "430",
+        "isHidden": true
+      },
+      "autumn": {
+        "name": "Autumn",
+        "category": "theme",
+        "parentId": "seasonal",
+        "legacyId": "436"
+      },
+      "back-to-school": {
+        "name": "Back to School",
+        "category": "theme",
+        "parentId": "seasonal",
+        "legacyId": "431"
+      },
+      "black-history-month": {
+        "name": "Black History Month",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "453"
+      },
+      "christmas-chanukah-kwanzaa": {
+        "name": "Christmas-Chanukah-Kwanzaa",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "434"
+      },
+      "earth-day": {
+        "name": "Earth Day",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "460"
+      },
+      "easter": {
+        "name": "Easter",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "455"
+      },
+      "end-of-year": {
+        "name": "End of Year",
+        "category": "theme",
+        "parentId": "seasonal",
+        "legacyId": "489"
+      },
+      "halloween": {
+        "name": "Halloween",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "443"
+      },
+      "hispanic-heritage-month": {
+        "name": "Hispanic Heritage Month",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "497"
+      },
+      "martin-luther-king-day": {
+        "name": "Martin Luther King Day",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "449"
+      },
+      "presidents-day": {
+        "name": "Presidents' Day",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "450"
+      },
+      "spring": {
+        "name": "Spring",
+        "category": "theme",
+        "parentId": "seasonal",
+        "legacyId": "456"
+      },
+      "st-patricks-day": {
+        "name": "St. Patrick's Day",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "454"
+      },
+      "summer": {
+        "name": "Summer",
+        "category": "theme",
+        "parentId": "seasonal",
+        "legacyId": "462"
+      },
+      "thanksgiving": {
+        "name": "Thanksgiving",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "432"
+      },
+      "the-new-year": {
+        "name": "The New Year",
+        "category": "topic",
+        "legacyId": "446",
+        "isHidden": true
+      },
+      "valentines-day": {
+        "name": "Valentine's Day",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "448"
+      },
+      "winter": {
+        "name": "Winter",
+        "category": "theme",
+        "parentId": "seasonal",
+        "legacyId": "445"
+      },
+      "womens-history-month": {
+        "name": "Women's History Month",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "493"
+      },
+      "math": {
+        "name": "Math",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "10"
+      },
+      "algebra": {
+        "name": "Algebra",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "11"
+      },
+      "algebra-2": {
+        "name": "Algebra 2",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "195"
+      },
+      "applied-math": {
+        "name": "Applied Math",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "12"
+      },
+      "arithmetic": {
+        "name": "Arithmetic",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "13"
+      },
+      "basic-operations": {
+        "name": "Basic Operations",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "14"
+      },
+      "calculus": {
+        "name": "Calculus",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "15"
+      },
+      "decimals": {
+        "name": "Decimals",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "451"
+      },
+      "fractions": {
+        "name": "Fractions",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "16"
+      },
+      "geometry": {
+        "name": "Geometry",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "17"
+      },
+      "graphing": {
+        "name": "Graphing",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "18"
+      },
+      "math-test-prep": {
+        "name": "Math Test Prep",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "155"
+      },
+      "measurement": {
+        "name": "Measurement",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "19"
+      },
+      "mental-math": {
+        "name": "Mental Math",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "437"
+      },
+      "numbers": {
+        "name": "Numbers",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "20"
+      },
+      "order-of-operations": {
+        "name": "Order of Operations",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "21"
+      },
+      "place-value": {
+        "name": "Place Value",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "457"
+      },
+      "precalculus": {
+        "name": "PreCalculus",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "22"
+      },
+      "statistics": {
+        "name": "Statistics",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "175"
+      },
+      "trigonometry": {
+        "name": "Trigonometry",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "23",
+        "isHidden": true
+      },
+      "word-problems": {
+        "name": "Word Problems",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "186",
+        "isHidden": true
+      },
+      "other-math": {
+        "name": "Other (Math)",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math",
+        "legacyId": "24"
+      },
+      "science": {
+        "name": "Science",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "25"
+      },
+      "anatomy": {
+        "name": "Anatomy",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "26"
+      },
+      "archaeology": {
+        "name": "Archaeology",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "27"
+      },
+      "astronomy": {
+        "name": "Astronomy",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "28"
+      },
+      "basic-principles": {
+        "name": "Basic Principles",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "29"
+      },
+      "biology": {
+        "name": "Biology",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "30"
+      },
+      "chemistry": {
+        "name": "Chemistry",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "31"
+      },
+      "earth-sciences": {
+        "name": "Earth Sciences",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "32"
+      },
+      "engineering": {
+        "name": "Engineering",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "490"
+      },
+      "environment": {
+        "name": "Environment",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "33"
+      },
+      "forensics": {
+        "name": "Forensics",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "204"
+      },
+      "general-science": {
+        "name": "General Science",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "189"
+      },
+      "physical-science": {
+        "name": "Physical Science",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "190"
+      },
+      "physics": {
+        "name": "Physics",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "34"
+      },
+      "other-science": {
+        "name": "Other (Science)",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "35"
+      },
+      "social-studies": {
+        "name": "Social Studies",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "36"
+      },
+      "african-history": {
+        "name": "African History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "495"
+      },
+      "ancient-history": {
+        "name": "Ancient History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "37"
+      },
+      "asian-studies": {
+        "name": "Asian Studies",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "421"
+      },
+      "australian-history": {
+        "name": "Australian History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "157"
+      },
+      "british-history": {
+        "name": "British History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "158"
+      },
+      "canadian-history": {
+        "name": "Canadian History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "156"
+      },
+      "civics": {
+        "name": "Civics",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "38"
+      },
+      "criminal-justice-law": {
+        "name": "Criminal Justice - Law",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "203"
+      },
+      "economics": {
+        "name": "Economics ",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "183"
+      },
+      "elections-voting": {
+        "name": "Elections - Voting",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "39"
+      },
+      "european-history": {
+        "name": "European History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "43"
+      },
+      "geography": {
+        "name": "Geography",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "159"
+      },
+      "government": {
+        "name": "Government",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "40"
+      },
+      "latino-and-hispanic-studies": {
+        "name": "Latino and Hispanic Studies",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "498"
+      },
+      "middle-ages": {
+        "name": "Middle Ages",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "45"
+      },
+      "native-americans": {
+        "name": "Native Americans",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "41"
+      },
+      "psychology": {
+        "name": "Psychology",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "181"
+      },
+      "us-history": {
+        "name": "U.S. History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "42"
+      },
+      "world-history": {
+        "name": "World History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "44"
+      },
+      "other-social-studies": {
+        "name": "Other (Social Studies)",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "160"
+      },
+      "specialty": {
+        "name": "Specialty",
+        "category": "supports",
+        "legacyId": "9"
+      },
+      "business": {
+        "name": "Business",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "174"
+      },
+      "career-and-technical-education": {
+        "name": "Career and Technical Education",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "71"
+      },
+      "character-education": {
+        "name": "Character Education",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-emotional",
+        "legacyId": "184"
+      },
+      "child-care": {
+        "name": "Child Care",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "426"
+      },
+      "classroom-community": {
+        "name": "Classroom Community",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-emotional",
+        "legacyId": "496"
+      },
+      "classroom-management": {
+        "name": "Classroom Management",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "172"
+      },
+      "coaching": {
+        "name": "Coaching",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "481"
+      },
+      "computer-science-technology": {
+        "name": "Computer Science - Technology",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "67"
+      },
+      "critical-thinking": {
+        "name": "Critical Thinking",
+        "category": "topic",
+        "legacyId": "166",
+        "isHidden": true
+      },
+      "early-intervention": {
+        "name": "Early Intervention",
+        "category": "programs-and-methods",
+        "parentId": "programs",
+        "legacyId": "483"
+      },
+      "family-consumer-sciences": {
+        "name": "Family Consumer Sciences",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "185"
+      },
+      "for-administrators": {
+        "name": "For Administrators",
+        "category": "audience",
+        "legacyId": "478",
+        "isHidden": true
+      },
+      "for-all-subjects": {
+        "name": "For All Subjects",
+        "category": "supports",
+        "legacyId": "461",
+        "isHidden": true
+      },
+      "gifted-and-talented": {
+        "name": "Gifted and Talented",
+        "category": "audience",
+        "legacyId": "165",
+        "isHidden": true
+      },
+      "handwriting": {
+        "name": "Handwriting",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "477"
+      },
+      "health": {
+        "name": "Health",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "72"
+      },
+      "instructional-technology": {
+        "name": "Instructional Technology",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "188"
+      },
+      "international-baccalaureate": {
+        "name": "International Baccalaureate (IB)",
+        "category": "programs-and-methods",
+        "parentId": "programs",
+        "legacyId": "171"
+      },
+      "library-skills": {
+        "name": "Library Skills",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "192"
+      },
+      "life-skills": {
+        "name": "Life Skills",
+        "category": "supports",
+        "parentId": "special-education",
+        "legacyId": "163"
+      },
+      "occupational-therapy": {
+        "name": "Occupational Therapy",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "476"
+      },
+      "oral-communication": {
+        "name": "Oral Communication",
+        "category": "topic",
+        "legacyId": "425",
+        "isHidden": true
+      },
+      "physical-education": {
+        "name": "Physical Education",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "66"
+      },
+      "physical-therapy": {
+        "name": "Physical Therapy",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "442"
+      },
+      "problem-solving": {
+        "name": "Problem Solving",
+        "category": "topic",
+        "legacyId": "193",
+        "isHidden": true
+      },
+      "products-for-tpt-sellers": {
+        "name": "Products For TpT Sellers",
+        "category": "audience",
+        "legacyId": "458",
+        "isHidden": true
+      },
+      "religion": {
+        "name": "Religion",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies",
+        "legacyId": "164"
+      },
+      "robotics": {
+        "name": "Robotics",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science",
+        "legacyId": "417"
+      },
+      "school-counseling": {
+        "name": "School Counseling",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-emotional",
+        "legacyId": "180"
+      },
+      "school-psychology": {
+        "name": "School Psychology",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-emotional",
+        "legacyId": "484"
+      },
+      "social-emotional-learning": {
+        "name": "Social Emotional Learning",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-emotional",
+        "legacyId": "499"
+      },
+      "special-education": {
+        "name": "Special Education",
+        "category": "supports",
+        "legacyId": "68"
+      },
+      "speech-therapy": {
+        "name": "Speech Therapy",
+        "category": "supports",
+        "legacyId": "444"
+      },
+      "student-council": {
+        "name": "Student Council",
+        "category": "Type-of-Resource",
+        "parentId": "forms",
+        "legacyId": "467"
+      },
+      "study-skills": {
+        "name": "Study Skills",
+        "category": "Type-of-Resource",
+        "parentId": "student-assessment",
+        "legacyId": "187"
+      },
+      "test-preparation": {
+        "name": "Test Preparation",
+        "category": "Type-of-Resource",
+        "parentId": "student-assessment",
+        "legacyId": "482"
+      },
+      "tools-for-common-core": {
+        "name": "Tools for Common Core",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools",
+        "legacyId": "459"
+      },
+      "vocational-education": {
+        "name": "Vocational Education",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "480"
+      },
+      "other-specialty": {
+        "name": "Other (Specialty)",
+        "category": "supports",
+        "parentId": "specialty",
+        "legacyId": "73"
+      },
+      "world-languages": {
+        "name": "World Languages",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "46"
+      },
+      "american-sign-language": {
+        "name": "American Sign Language",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "465"
+      },
+      "arabic": {
+        "name": "Arabic",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "167"
+      },
+      "chinese": {
+        "name": "Chinese",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "53"
+      },
+      "en-francais": {
+        "name": "En franxe7ais",
+        "category": "language",
+        "legacyId": "416"
+      },
+      "french": {
+        "name": "French",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "47"
+      },
+      "gaeilge": {
+        "name": "Gaeilge",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "494"
+      },
+      "german": {
+        "name": "German",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "51"
+      },
+      "hebrew": {
+        "name": "Hebrew",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "479"
+      },
+      "italian": {
+        "name": "Italian",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "50"
+      },
+      "japanese": {
+        "name": "Japanese",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "52"
+      },
+      "latin": {
+        "name": "Latin",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "49"
+      },
+      "portuguese": {
+        "name": "Portuguese",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "162"
+      },
+      "russian": {
+        "name": "Russian",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "54"
+      },
+      "spanish": {
+        "name": "Spanish",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "48"
+      },
+      "other-world-language": {
+        "name": "Other (World Language)",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "world-languages",
+        "legacyId": "55"
+      },
+      "for-all-subject-areas": {
+        "name": "For All Subjects",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "168"
+      },
+      "not-subject-specific": {
+        "name": "Not Subject Specific",
+        "category": "PreK-12-Subject-Area"
+      },
+      "easel": {
+        "name": "Easel",
+        "category": "Format"
+      },
+      "easel-activities": {
+        "name": "Easel Activities",
+        "category": "Format",
+        "parentId": "easel"
+      },
+      "easel-assessments": {
+        "name": "Easel Assessments",
+        "category": "Format",
+        "parentId": "easel"
+      },
+      "google-apps": {
+        "name": "Google Apps",
+        "category": "Format",
+        "legacyId": "172"
+      },
+      "microsoft": {
+        "name": "Microsoft",
+        "category": "Format"
+      },
+      "microsoft-powerpoint": {
+        "name": "Microsoft PowerPoint",
+        "category": "Format",
+        "parentId": "microsoft",
+        "legacyId": "8"
+      },
+      "microsoft-word": {
+        "name": "Microsoft Word",
+        "category": "Format",
+        "parentId": "microsoft"
+      },
+      "microsoft-excel": {
+        "name": "Microsoft Excel",
+        "category": "Format",
+        "parentId": "microsoft",
+        "legacyId": "46"
+      },
+      "microsoft-publisher": {
+        "name": "Microsoft Publisher",
+        "category": "Format",
+        "parentId": "microsoft"
+      },
+      "interactive-whiteboards": {
+        "name": "Interactive Whiteboards",
+        "category": "Format"
+      },
+      "smart-notebook": {
+        "name": "SMART Notebook",
+        "category": "Format",
+        "parentId": "interactive-whiteboards",
+        "legacyId": "44"
+      },
+      "activeinspire-flipchart": {
+        "name": "ActiveInspire Flipchart",
+        "category": "Format",
+        "parentId": "interactive-whiteboards"
+      },
+      "pdf": {
+        "name": "PDF",
+        "category": "Format"
+      },
+      "image": {
+        "name": "Image",
+        "category": "Format"
+      },
+      "video": {
+        "name": "Video",
+        "category": "Format",
+        "legacyId": "166"
+      },
+      "audio": {
+        "name": "Audio",
+        "category": "Format"
+      },
+      "internet-activities": {
+        "name": "Internet Activities",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities",
+        "legacyId": "45"
+      },
+      "prezi": {
+        "name": "Prezi",
+        "category": "Format",
+        "parentId": "digital",
+        "legacyId": "168"
+      },
+      "ebook": {
+        "name": "eBook",
+        "category": "Format"
+      },
+      "fonts": {
+        "name": "Fonts",
+        "category": "Format",
+        "legacyId": "174"
+      },
+      "ready-to-go-easel-resources": {
+        "name": "Ready-to-Go Easel Resources",
+        "category": "Featured",
+        "isHidden": true
+      },
+      "free": {
+        "name": "Free",
+        "category": "Price-Range",
+        "legacyId": "1"
+      },
+      "under-5": {
+        "name": "Under $5",
+        "category": "Price-Range",
+        "legacyId": "6"
+      },
+      "5-to-10": {
+        "name": "$5-10",
+        "category": "Price-Range",
+        "legacyId": "4"
+      },
+      "above-10": {
+        "name": "$10 and up",
+        "category": "Price-Range",
+        "legacyId": "5"
+      },
+      "on-sale": {
+        "name": "On Sale",
+        "category": "Price-Range",
+        "legacyId": "7"
+      },
+      "digital": {
+        "name": "Digital",
+        "category": "Format"
+      },
+      "boom-cards": {
+        "name": "Boom Cards",
+        "category": "Format",
+        "parentId": "digital"
+      },
+      "canva": {
+        "name": "Canva",
+        "category": "Format",
+        "parentId": "digital"
+      },
+      "seesaw": {
+        "name": "Seesaw",
+        "category": "Format",
+        "parentId": "digital"
+      },
+      "other-digital": {
+        "name": "Other (Digital)",
+        "category": "Format",
+        "parentId": "digital"
+      },
+      "coloring-pages": {
+        "name": "Coloring Pages",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "art"
+      },
+      "other-arts": {
+        "name": "Other (Arts)",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "art",
+        "legacyId": "60"
+      },
+      "alphabet": {
+        "name": "Alphabet",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts"
+      },
+      "novel-studies": {
+        "name": "Novel Studies",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts"
+      },
+      "phonics-and-phonemic-awareness": {
+        "name": "Phonics and Phonemic Awareness",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "491",
+        "isHidden": true
+      },
+      "phonics-and-phonological-awareness": {
+        "name": "Phonics & Phonological Awareness",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts",
+        "legacyId": "491"
+      },
+      "science-of-reading": {
+        "name": "Science of Reading",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts"
+      },
+      "sight-words": {
+        "name": "Sight Words",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "english-language-arts"
+      },
+      "financial-literacy": {
+        "name": "Financial Literacy",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math"
+      },
+      "money-math": {
+        "name": "Money Math",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math"
+      },
+      "telling-time": {
+        "name": "Telling Time",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "math"
+      },
+      "marine-science": {
+        "name": "Marine Science",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "science"
+      },
+      "aapi-history": {
+        "name": "AAPI History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies"
+      },
+      "black-history": {
+        "name": "Black History",
+        "category": "PreK-12-Subject-Area",
+        "parentId": "social-studies"
+      },
+      "esl-newcomer": {
+        "name": "ESL Newcomer",
+        "category": "supports",
+        "isHidden": true
+      },
+      "leadership": {
+        "name": "Leadership",
+        "category": "supports",
+        "parentId": "specialty"
+      },
+      "applied-behavior-analysis": {
+        "name": "Applied Behavior Analysis",
+        "category": "supports",
+        "parentId": "special-education"
+      },
+      "data": {
+        "name": "Data",
+        "category": "supports",
+        "parentId": "special-education"
+      },
+      "neurodiversity": {
+        "name": "Neurodiversity",
+        "category": "supports",
+        "parentId": "special-education"
+      },
+      "screenings-and-assessments": {
+        "name": "Screenings and Assessments",
+        "category": "supports",
+        "parentId": "special-education"
+      },
+      "social-skills": {
+        "name": "Social Skills",
+        "category": "supports",
+        "parentId": "special-education"
+      },
+      "visual-supports": {
+        "name": "Visual Supports",
+        "category": "supports",
+        "parentId": "special-education"
+      },
+      "aac": {
+        "name": "AAC",
+        "category": "supports",
+        "parentId": "speech-therapy"
+      },
+      "fluency-and-stuttering": {
+        "name": "Fluency and Stuttering",
+        "category": "supports",
+        "parentId": "speech-therapy"
+      },
+      "language": {
+        "name": "Language",
+        "category": "supports",
+        "parentId": "speech-therapy"
+      },
+      "speech-articulation": {
+        "name": "Speech Articulation",
+        "category": "supports",
+        "parentId": "speech-therapy"
+      },
+      "voice": {
+        "name": "Voice",
+        "category": "supports",
+        "parentId": "speech-therapy"
+      },
+      "advanced-placement": {
+        "name": "Advanced Placement (AP)",
+        "category": "programs-and-methods",
+        "parentId": "programs"
+      },
+      "holiday": {
+        "name": "Holiday",
+        "category": "theme"
+      },
+      "aapi-history-month": {
+        "name": "AAPI History Month",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "july-4-independence-day": {
+        "name": "July 4/Independence Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "lunar-new-year": {
+        "name": "Lunar New Year",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "april-fools-day": {
+        "name": "April Fools' Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "groundhog-day": {
+        "name": "Groundhog Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "mardi-gras": {
+        "name": "Mardi Gras",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "cinco-de-mayo": {
+        "name": "Cinco de Mayo",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "mothers-day": {
+        "name": "Mother's Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "fathers-day": {
+        "name": "Father's Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "veterans-day": {
+        "name": "Veterans Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "memorial-day": {
+        "name": "Memorial Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "passover": {
+        "name": "Passover",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "day-of-the-dead": {
+        "name": "Day of the Dead / Dia de los Muertos",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "ramadan": {
+        "name": "Ramadan",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "diwali": {
+        "name": "Diwali",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "arbor-day": {
+        "name": "Arbor Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "juneteenth": {
+        "name": "Juneteenth",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "labor-day": {
+        "name": "Labor Day",
+        "category": "theme",
+        "parentId": "holiday"
+      },
+      "hands-on-activities": {
+        "name": "Hands-on Activities",
+        "category": "Type-of-Resource"
+      },
+      "bell-ringers": {
+        "name": "Bell Ringers",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities"
+      },
+      "escape-rooms": {
+        "name": "Escape Rooms",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities"
+      },
+      "project-based-learning": {
+        "name": "Project-based Learning",
+        "category": "Type-of-Resource",
+        "parentId": "hands-on-activities"
+      },
+      "instruction": {
+        "name": "Instruction",
+        "category": "Type-of-Resource"
+      },
+      "student-practice": {
+        "name": "Student Practice",
+        "category": "Type-of-Resource"
+      },
+      "student-assessment": {
+        "name": "Student Assessment",
+        "category": "Type-of-Resource"
+      },
+      "awards-and-certificates": {
+        "name": "Awards and Certificates",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools"
+      },
+      "leadership-lessons": {
+        "name": "Leadership Lessons",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools"
+      },
+      "teacher-planners": {
+        "name": "Teacher Planners",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools"
+      },
+      "tools-for-sellers": {
+        "name": "Tools for Sellers",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools"
+      },
+      "yearlong-curriculum": {
+        "name": "Yearlong Curriculum",
+        "category": "Type-of-Resource",
+        "parentId": "teacher-tools"
+      },
+      "en-espanol": {
+        "name": "En espaxf1ol",
+        "category": "language"
+      },
+      "speaking-and-listening": {
+        "name": "Speaking & Listening",
+        "category": "PreK-12-Subject-Area",
+        "legacyId": "425"
+      },
+      "critical-thinking-and-problem-solving": {
+        "name": "Critical Thinking and Problem Solving",
+        "category": "Type-of-Resource",
+        "parentId": "student-assessment"
+      },
+      "gate-gifted-and-talented": {
+        "name": "GATE / Gifted and Talented",
+        "category": "programs-and-methods",
+        "parentId": "programs"
+      },
+      "new-year": {
+        "name": "New Year",
+        "category": "theme",
+        "parentId": "holiday",
+        "legacyId": "446"
+      },
+      "other-special-education": {
+        "name": "Other (Special education)",
+        "category": "supports",
+        "parentId": "special-education"
+      },
+      "other-speech-therapy": {
+        "name": "Other (Speech therapy)",
+        "category": "supports",
+        "parentId": "speech-therapy"
+      }
+    }
+  },
+  "gradeLevels": {
+    "field": "the create form's grade selector (legacy numeric grade ids)",
+    "note": "Each id is a `taxonomyTags` facet's own `legacyId`: seventeen resolve into `category: Grade-Level` and the remaining two, Homeschool (17) and Staff (19), into `category: audience`. A second, unrelated grade encoding in chunk 1.7515 drives buyer-facing filters with 18 string values (`early_childhood, prek, k, 1..12, higher, adult, other`); the two must not be crossed.",
+    "options": {
+      "1": {
+        "formLabel": "PreK",
+        "name": "Pre-K",
+        "url": "Pre-K",
+        "level": 0
+      },
+      "2": {
+        "formLabel": "K",
+        "name": "Kindergarten",
+        "url": "Kindergarten",
+        "level": 0
+      },
+      "3": {
+        "formLabel": "1st",
+        "name": "First",
+        "url": "First",
+        "level": 0
+      },
+      "4": {
+        "formLabel": "2nd",
+        "name": "Second",
+        "url": "Second",
+        "level": 0
+      },
+      "5": {
+        "formLabel": "3rd",
+        "name": "Third",
+        "url": "Third",
+        "level": 0
+      },
+      "6": {
+        "formLabel": "4th",
+        "name": "Fourth",
+        "url": "Fourth",
+        "level": 0
+      },
+      "7": {
+        "formLabel": "5th",
+        "name": "Fifth",
+        "url": "Fifth",
+        "level": 0
+      },
+      "8": {
+        "formLabel": "6th",
+        "name": "Sixth",
+        "url": "Sixth",
+        "level": 0
+      },
+      "9": {
+        "formLabel": "7th",
+        "name": "Seventh",
+        "url": "Seventh",
+        "level": 0
+      },
+      "10": {
+        "formLabel": "8th",
+        "name": "Eighth",
+        "url": "Eighth",
+        "level": 0
+      },
+      "11": {
+        "formLabel": "9th",
+        "name": "Ninth",
+        "url": "Ninth",
+        "level": 0
+      },
+      "12": {
+        "formLabel": "10th",
+        "name": "Tenth",
+        "url": "Tenth",
+        "level": 0
+      },
+      "13": {
+        "formLabel": "11th",
+        "name": "Eleventh",
+        "url": "Eleventh",
+        "level": 0
+      },
+      "14": {
+        "formLabel": "12th",
+        "name": "Twelfth",
+        "url": "Twelfth",
+        "level": 0
+      },
+      "15": {
+        "formLabel": "Higher Education",
+        "name": "Higher Education",
+        "url": "Higher-Education",
+        "level": 1
+      },
+      "16": {
+        "formLabel": "Adult Education",
+        "name": "Adult Education",
+        "url": "Adult-Education",
+        "level": 2
+      },
+      "17": {
+        "formLabel": "Homeschool",
+        "name": "Homeschooler",
+        "url": "Homeschooler",
+        "level": 0
+      },
+      "19": {
+        "formLabel": "Staff",
+        "name": "Staff",
+        "url": "Staff",
+        "level": null
+      },
+      "23": {
+        "formLabel": "Not Grade Specific",
+        "name": "Not Grade Specific",
+        "url": "Not-Grade-Specific",
+        "level": null
+      }
+    }
+  },
+  "taxCodes": {
+    "field": "data[ItemTaxCode][tax_code_id]",
+    "note": "The field carries the row `id`, not the `taxCode` string: the captured edit posted 2 for a product reading back as DB031013.",
+    "options": {
+      "1": {
+        "taxCode": "DA051011",
+        "name": "Digital audio works sold to an end user with rights for permanent use"
+      },
+      "2": {
+        "taxCode": "DB031013",
+        "name": "Digital books sold to an end user with rights for permanent use"
+      },
+      "3": {
+        "taxCode": "DI010200",
+        "name": "Digital Images - Streaming / Electronic Download"
+      },
+      "4": {
+        "taxCode": "DV010200",
+        "name": "Videos - Streaming / Electronic Download"
+      },
+      "5": {
+        "taxCode": "DO010000",
+        "name": "Other Digital Goods - No Physical Media"
+      }
+    }
+  },
+  "teachingDuration": {
+    "field": "data[ItemsProperty][duration] (read back as `teachingDuration`)",
+    "note": "The write side posts the id and the GraphQL read side returns the symbolic name. `UNKNOWN` appears in the read-side label map with no numeric counterpart, so it is a read sentinel rather than a member.",
+    "options": {
+      "0": {
+        "enum": "NA",
+        "label": "N/A"
+      },
+      "1": {
+        "enum": "MINUTES_30",
+        "label": "30 minutes"
+      },
+      "2": {
+        "enum": "MINUTES_40",
+        "label": "40 minutes"
+      },
+      "3": {
+        "enum": "MINUTES_45",
+        "label": "45 minutes"
+      },
+      "4": {
+        "enum": "MINUTES_50",
+        "label": "50 minutes"
+      },
+      "5": {
+        "enum": "MINUTES_55",
+        "label": "55 minutes"
+      },
+      "6": {
+        "enum": "HOURS_1",
+        "label": "1 hour"
+      },
+      "7": {
+        "enum": "MINUTES_90",
+        "label": "90 minutes"
+      },
+      "8": {
+        "enum": "HOURS_2",
+        "label": "2 hours"
+      },
+      "9": {
+        "enum": "HOURS_3",
+        "label": "3 hours"
+      },
+      "10": {
+        "enum": "DAYS_2",
+        "label": "2 days"
+      },
+      "11": {
+        "enum": "DAYS_3",
+        "label": "3 days"
+      },
+      "12": {
+        "enum": "DAYS_4",
+        "label": "4 days"
+      },
+      "13": {
+        "enum": "WEEKS_1",
+        "label": "1 Week"
+      },
+      "14": {
+        "enum": "WEEKS_2",
+        "label": "2 Weeks"
+      },
+      "15": {
+        "enum": "WEEKS_3",
+        "label": "3 Weeks"
+      },
+      "16": {
+        "enum": "MONTHS_1",
+        "label": "1 month"
+      },
+      "17": {
+        "enum": "MONTHS_2",
+        "label": "2 months"
+      },
+      "18": {
+        "enum": "MONTHS_3",
+        "label": "3 months"
+      },
+      "19": {
+        "enum": "SEMESTERS_1",
+        "label": "1 Semester"
+      },
+      "20": {
+        "enum": "YEARS_1",
+        "label": "1 Year"
+      },
+      "21": {
+        "enum": "LIFELONG_TOOL",
+        "label": "Lifelong tool"
+      },
+      "22": {
+        "enum": "OTHER",
+        "label": "Other"
+      }
+    }
+  },
+  "answerKey": {
+    "field": "data[ItemsProperty][answer_key] (read back as `answerKey`)",
+    "note": "`UNKNOWN` is again read-side only.",
+    "options": {
+      "0": {
+        "enum": "NA",
+        "label": "N/A"
+      },
+      "1": {
+        "enum": "INCLUDED",
+        "label": "Included"
+      },
+      "2": {
+        "enum": "NOT_INCLUDED",
+        "label": "Not Included"
+      },
+      "3": {
+        "enum": "DOES_NOT_APPLY",
+        "label": "Does Not Apply"
+      },
+      "4": {
+        "enum": "INCLUDED_WITH_RUBRIC",
+        "label": "Included with Rubric"
+      },
+      "5": {
+        "enum": "RUBRIC_ONLY",
+        "label": "Rubric Only"
+      }
+    }
+  },
+  "copyrightDeclaration": {
+    "field": "data[ItemsProperty][copyright_declaration] (read back as `copyrightDeclaration`)",
+    "note": "A legal attestation of authorship, so it is posted only where the seller has made one and never as a constant. The chunk-1564 form wiring names the group `data[Item][...]` where the captured writes posted `data[ItemsProperty][...]`; the captured wire is authoritative for the path and the two members are the same either way.",
+    "options": {
+      "1": {
+        "enum": "ORIGINAL_WORK"
+      },
+      "2": {
+        "enum": "USED_COPYRIGHTED_MATERIALS"
+      }
+    }
+  },
+  "statusUser": {
+    "field": "data[Item][status_user] (read back as `statusUser`)",
+    "note": "Draft versus live is a field rather than a route: the captured create posted 0 and the captured edit 1.",
+    "options": {
+      "0": {
+        "enum": "NOT_ACTIVE"
+      },
+      "1": {
+        "enum": "ACTIVE"
+      }
+    }
+  },
+  "audience": {
+    "field": "data[ItemsProperty][audience]",
+    "note": "A separate scalar from the `audience`-category facets in `taxonomyTags`. `OTHER` pairs with a free-text `audienceText`. Neither captured write posted this field.",
+    "options": {
+      "0": {
+        "enum": "NA",
+        "label": "Select Primary Audience"
+      },
+      "1": {
+        "enum": "TEACHERS_OR_SPECIALISTS",
+        "label": "Teachers or Specialists"
+      },
+      "2": {
+        "enum": "ADMINISTRATORS",
+        "label": "Administrators"
+      },
+      "3": {
+        "enum": "STAFF_DEVELOPERS_COACHES",
+        "label": "Staff developers/coaches"
+      },
+      "4": {
+        "enum": "STUDENTS",
+        "label": "Students"
+      },
+      "5": {
+        "enum": "PARENTS",
+        "label": "Parents"
+      },
+      "6": {
+        "enum": "OTHER",
+        "label": "Other (add your own)"
+      },
+      "7": {
+        "enum": "HOMESCHOOLERS",
+        "label": "Homeschoolers"
+      }
+    }
+  },
+  "videoType": {
+    "field": "videoType (video products only)",
+    "note": "`OTHER` pairs with a free-text `videoTypeText`.",
+    "options": {
+      "0": {
+        "enum": "NA",
+        "label": "Select Video Type"
+      },
+      "1": {
+        "enum": "INSTRUCTIONAL_PRACTICES",
+        "label": "Instructional practices"
+      },
+      "2": {
+        "enum": "MODELING_A_LESSON",
+        "label": "Modeling a lesson"
+      },
+      "3": {
+        "enum": "TEACHING_STRATEGY",
+        "label": "Teaching strategy"
+      },
+      "4": {
+        "enum": "PEDAGOGY",
+        "label": "Pedagogy"
+      },
+      "5": {
+        "enum": "TEACHING_TIPS_ADVICE",
+        "label": "Teaching tips/advice"
+      },
+      "6": {
+        "enum": "OTHER",
+        "label": "Other (add your own)"
+      },
+      "7": {
+        "enum": "SONG",
+        "label": "Song"
+      }
+    }
+  },
+  "itemType": {
+    "field": "itemType (read-only)",
+    "note": "Chosen on the create-type page (`page-CreateProductSelectTypePage`) rather than in a dropdown on the form. Only DIGITAL_PRODUCT occurs across this seller's 154 products.",
+    "options": [
+      "DIGITAL_PRODUCT",
+      "BUNDLE",
+      "ONLINE_RESOURCE",
+      "EASEL",
+      "VIDEO"
+    ]
+  },
+  "educationStandardsJurisdictions": {
+    "field": "data[ItemsCommonCoreStandard][common_core_standard_id][]",
+    "api": "EducationStandardsQuery($id: ID!, $depth: Int) expands one jurisdiction into a flat list carrying id, name, depth, notation, grades, type, parentIds, sequence, categorySequence, descriptionText and descriptionHtml",
+    "note": "The form field takes a standard id from a leaf below one of these roots, not a jurisdiction id. Full expansion across all 166 runs to thousands of nodes and is expanded on demand instead. Verified live against Common Core (id 3054): depth=1 returns 2 nodes of `type: subject`, depth=2 returns 49 (those 2 plus 47 of `type: domain`). 28 of the 166 carry a `notation`.",
+    "options": {
+      "3054": {
+        "name": "Common Core State Standards",
+        "notation": "ccss"
+      },
+      "3055": {
+        "name": "Next Generation Science Standards",
+        "notation": "ngss"
+      },
+      "3326": {
+        "name": "Texas Essential Knowledge and Skills",
+        "notation": "teks"
+      },
+      "5785": {
+        "name": "Virginia Standards of Learning",
+        "notation": "va sol"
+      },
+      "8022": {
+        "name": "Virginia Curriculum Framework",
+        "notation": null
+      },
+      "8023": {
+        "name": "Virginia College and Career Ready Performance Expectations",
+        "notation": null
+      },
+      "8024": {
+        "name": "Virginia Foundation Blocks for Early Learning",
+        "notation": null
+      },
+      "8025": {
+        "name": "Colorado Academic Standards",
+        "notation": null
+      },
+      "8026": {
+        "name": "Colorado 21st Century Skills and Readiness Competencies",
+        "notation": null
+      },
+      "8027": {
+        "name": "Maryland College and Career-Ready Frameworks",
+        "notation": null
+      },
+      "8028": {
+        "name": "Maryland State Curriculum",
+        "notation": null
+      },
+      "8029": {
+        "name": "Maryland College and Career-Ready Standards",
+        "notation": null
+      },
+      "8030": {
+        "name": "Maryland Early Learning Standards",
+        "notation": null
+      },
+      "8031": {
+        "name": "Maryland Next Generation Science Standards",
+        "notation": null
+      },
+      "8032": {
+        "name": "Maryland Core Learning Goals Without Assessment Limits",
+        "notation": null
+      },
+      "8033": {
+        "name": "New York Core Curriculum",
+        "notation": null
+      },
+      "8034": {
+        "name": "New York Learning Standards",
+        "notation": null
+      },
+      "8035": {
+        "name": "New York P-12 Common Core Learning Standards",
+        "notation": null
+      },
+      "8036": {
+        "name": "New York Next Generation Learning Standards",
+        "notation": null
+      },
+      "8037": {
+        "name": "New York Framework",
+        "notation": null
+      },
+      "8038": {
+        "name": "New York Prekindergarten Foundation for the Common Core",
+        "notation": null
+      },
+      "8039": {
+        "name": "Pennsylvania Academic Standards",
+        "notation": null
+      },
+      "8040": {
+        "name": "Pennsylvania Assessment Anchors",
+        "notation": null
+      },
+      "8041": {
+        "name": "Pennsylvania Core Standards",
+        "notation": null
+      },
+      "8042": {
+        "name": "Pennsylvania Early Childhood Education Standards",
+        "notation": null
+      },
+      "8043": {
+        "name": "Pennsylvania Keystone Exams Assessment Anchors and Eligible Content",
+        "notation": null
+      },
+      "8044": {
+        "name": "Ontario Curriculum",
+        "notation": null
+      },
+      "8045": {
+        "name": "Texas State of Texas Assessments of Academic Readiness Resources",
+        "notation": "staar"
+      },
+      "8046": {
+        "name": "Texas Prekindergarten Guidelines",
+        "notation": null
+      },
+      "8047": {
+        "name": "Arizona Grade Level Articulations",
+        "notation": null
+      },
+      "8048": {
+        "name": "Arizona High Academic Standards for Students",
+        "notation": null
+      },
+      "8049": {
+        "name": "Arizona College and Career Ready Standards",
+        "notation": "accrs"
+      },
+      "8050": {
+        "name": "Arizona Early Learning Standards",
+        "notation": null
+      },
+      "8051": {
+        "name": "Kansas College and Career Ready Standards",
+        "notation": "kccrs"
+      },
+      "8052": {
+        "name": "Tennessee Academic Standards",
+        "notation": null
+      },
+      "8053": {
+        "name": "Tennessee Grade Level and Course Level Expectations",
+        "notation": null
+      },
+      "8054": {
+        "name": "Tennessee Early Learning Developmental Standards",
+        "notation": "tn-elds"
+      },
+      "8055": {
+        "name": "Hawaii Common Core State Standards",
+        "notation": null
+      },
+      "8056": {
+        "name": "Hawaii Sample Performance Assessment",
+        "notation": null
+      },
+      "8057": {
+        "name": "Hawaii Core Standards",
+        "notation": null
+      },
+      "8058": {
+        "name": "Hawaii Content Standards",
+        "notation": null
+      },
+      "8059": {
+        "name": "Hawaii Next Generation Science Standards",
+        "notation": null
+      },
+      "8060": {
+        "name": "Georgia Standards of Excellence",
+        "notation": "gse"
+      },
+      "8061": {
+        "name": "Georgia Performance Standards",
+        "notation": "gps"
+      },
+      "8062": {
+        "name": "Georgia Common Core Georgia Performance Standards",
+        "notation": null
+      },
+      "8063": {
+        "name": "Mississippi College- and Career-Readiness Standards",
+        "notation": null
+      },
+      "8064": {
+        "name": "Mississippi State Frameworks",
+        "notation": null
+      },
+      "8065": {
+        "name": "Mississippi Early Learning Standards",
+        "notation": null
+      },
+      "8066": {
+        "name": "Massachusetts Curriculum Frameworks",
+        "notation": null
+      },
+      "8067": {
+        "name": "Massachusetts Preschool & Kindergarten Learning Experiences",
+        "notation": null
+      },
+      "8068": {
+        "name": "Massachusetts Concepts and Skills",
+        "notation": null
+      },
+      "8069": {
+        "name": "Arkansas Academic Standards",
+        "notation": null
+      },
+      "8070": {
+        "name": "Arkansas Curriculum Framework",
+        "notation": null
+      },
+      "8071": {
+        "name": "Kentucky Academic Standards",
+        "notation": "kas"
+      },
+      "8072": {
+        "name": "Kentucky Core Content for Assessment",
+        "notation": null
+      },
+      "8073": {
+        "name": "South Carolina College- and Career-Ready Standards",
+        "notation": "scccr"
+      },
+      "8074": {
+        "name": "South Carolina Academic Standards",
+        "notation": null
+      },
+      "8075": {
+        "name": "South Carolina Early Learning Standards",
+        "notation": null
+      },
+      "8076": {
+        "name": "North Dakota Content Standards",
+        "notation": null
+      },
+      "8077": {
+        "name": "North Dakota Early Learning Standards",
+        "notation": null
+      },
+      "8078": {
+        "name": "Florida Next Generation Sunshine State Standards",
+        "notation": "ngsss"
+      },
+      "8079": {
+        "name": "Florida Standards",
+        "notation": null
+      },
+      "8080": {
+        "name": "Florida Early Learning and Developmental Standards",
+        "notation": null
+      },
+      "8081": {
+        "name": "Washington Learning Standards",
+        "notation": null
+      },
+      "8082": {
+        "name": "Washington Common Core State Standards",
+        "notation": null
+      },
+      "8083": {
+        "name": "Washington Next Generation Science Standards",
+        "notation": null
+      },
+      "8084": {
+        "name": "Michigan K-12 Standards",
+        "notation": null
+      },
+      "8085": {
+        "name": "Michigan Grade Level and High School Content Expectations",
+        "notation": null
+      },
+      "8086": {
+        "name": "Michigan Early Childhood Standards of Quality for Preschool",
+        "notation": null
+      },
+      "8087": {
+        "name": "Wyoming Content and Performance Standards",
+        "notation": null
+      },
+      "8088": {
+        "name": "Wyoming Performance Level Descriptors",
+        "notation": null
+      },
+      "8089": {
+        "name": "Wyoming Guidelines and Foundations",
+        "notation": null
+      },
+      "8090": {
+        "name": "Oregon Standards",
+        "notation": null
+      },
+      "8091": {
+        "name": "Oregon Common Core State Standards",
+        "notation": "ccss"
+      },
+      "8092": {
+        "name": "Oregon Early Learning and Kindergarten Guidelines",
+        "notation": null
+      },
+      "8093": {
+        "name": "South Dakota Content Standards",
+        "notation": null
+      },
+      "8094": {
+        "name": "South Dakota Common Core State Standards",
+        "notation": null
+      },
+      "8095": {
+        "name": "South Dakota Early Learning Guidelines",
+        "notation": null
+      },
+      "8096": {
+        "name": "Wisconsin Standards",
+        "notation": null
+      },
+      "8097": {
+        "name": "Wisconsin Common Core State Standards",
+        "notation": null
+      },
+      "8098": {
+        "name": "Wisconsin Model Academic Standards",
+        "notation": null
+      },
+      "8099": {
+        "name": "Wisconsin Model Early Learning Standards",
+        "notation": null
+      },
+      "8100": {
+        "name": "Oklahoma Academic Standards",
+        "notation": "oas"
+      },
+      "8101": {
+        "name": "Oklahoma Competencies",
+        "notation": null
+      },
+      "8102": {
+        "name": "Oklahoma Early Learning Guidelines",
+        "notation": null
+      },
+      "8103": {
+        "name": "Oklahoma Priority Academic Student Skills",
+        "notation": "pass"
+      },
+      "8104": {
+        "name": "Alaska Standards",
+        "notation": null
+      },
+      "8105": {
+        "name": "Alaska Performance Standards",
+        "notation": null
+      },
+      "8106": {
+        "name": "Alaska Early Learning Guidelines",
+        "notation": null
+      },
+      "8107": {
+        "name": "Ohio Learning Standards",
+        "notation": null
+      },
+      "8108": {
+        "name": "Ohio Early Learning and Development Standards",
+        "notation": null
+      },
+      "8109": {
+        "name": "Indiana Academic Standards",
+        "notation": null
+      },
+      "8110": {
+        "name": "Indiana Early Learning Foundations",
+        "notation": null
+      },
+      "8111": {
+        "name": "Vermont Common Core State Standards",
+        "notation": null
+      },
+      "8112": {
+        "name": "Vermont Early Learning Standards",
+        "notation": null
+      },
+      "8113": {
+        "name": "Vermont Next Generation Science Standards",
+        "notation": null
+      },
+      "8114": {
+        "name": "Vermont College, Career, and Civic Life (C3) Framework",
+        "notation": null
+      },
+      "8115": {
+        "name": "New Mexico Common Core State Standards",
+        "notation": "nmccss"
+      },
+      "8116": {
+        "name": "New Mexico STEM Ready!",
+        "notation": null
+      },
+      "8117": {
+        "name": "New Mexico Content Standards",
+        "notation": null
+      },
+      "8118": {
+        "name": "New Mexico Early Learning Guidelines",
+        "notation": "elg"
+      },
+      "8119": {
+        "name": "Idaho Content Standards",
+        "notation": null
+      },
+      "8120": {
+        "name": "Idaho Early Learning eGuidelines",
+        "notation": null
+      },
+      "8121": {
+        "name": "West Virginia College- and Career-Readiness Standards",
+        "notation": "wvccrs"
+      },
+      "8122": {
+        "name": "West Virginia Next Generation Content Standards and Objectives",
+        "notation": null
+      },
+      "8123": {
+        "name": "West Virginia Pre-K Standards",
+        "notation": null
+      },
+      "8124": {
+        "name": "West Virginia Early Learning Standards",
+        "notation": null
+      },
+      "8125": {
+        "name": "Iowa Core Curriculum",
+        "notation": null
+      },
+      "8126": {
+        "name": "Iowa Grade Level Indicators for Iowa Tests",
+        "notation": null
+      },
+      "8127": {
+        "name": "Iowa Early Learning Standards",
+        "notation": null
+      },
+      "8128": {
+        "name": "Missouri Learning Standards",
+        "notation": "mls"
+      },
+      "8129": {
+        "name": "Missouri Pre-K Standards",
+        "notation": null
+      },
+      "8130": {
+        "name": "Missouri Early Learning Goals",
+        "notation": null
+      },
+      "8131": {
+        "name": "Missouri Show-Me Standards",
+        "notation": null
+      },
+      "8132": {
+        "name": "California Common Core Content Standards",
+        "notation": null
+      },
+      "8133": {
+        "name": "California Content Standards",
+        "notation": null
+      },
+      "8134": {
+        "name": "California Next Generation Science Standards",
+        "notation": null
+      },
+      "8135": {
+        "name": "California NGSS Alternative Discipline Specific Courses",
+        "notation": null
+      },
+      "8136": {
+        "name": "Nevada Academic Content Standards",
+        "notation": null
+      },
+      "8137": {
+        "name": "Nevada Pre-Kindergarten Content Standards",
+        "notation": null
+      },
+      "8138": {
+        "name": "Rhode Island Common Core State Standards",
+        "notation": null
+      },
+      "8139": {
+        "name": "Rhode Island Grade Level and Grade Span Expectations",
+        "notation": null
+      },
+      "8140": {
+        "name": "Rhode Island Next Generation Science Standards",
+        "notation": null
+      },
+      "8141": {
+        "name": "Washington DC Common Core State Standards",
+        "notation": null
+      },
+      "8142": {
+        "name": "Washington DC Learning Standards",
+        "notation": null
+      },
+      "8143": {
+        "name": "Washington DC Next Generation Science Standards",
+        "notation": null
+      },
+      "8144": {
+        "name": "Utah Core Standards",
+        "notation": null
+      },
+      "8145": {
+        "name": "Utah Early Childhood Core Standards",
+        "notation": null
+      },
+      "8146": {
+        "name": "Utah Intended Learning Outcomes",
+        "notation": null
+      },
+      "8147": {
+        "name": "North Carolina Standard Course of Study",
+        "notation": "scos"
+      },
+      "8148": {
+        "name": "North Carolina Essential Standards",
+        "notation": null
+      },
+      "8149": {
+        "name": "North Carolina Foundations for Early Learning and Development",
+        "notation": null
+      },
+      "8150": {
+        "name": "New Hampshire College and Career Ready Standards",
+        "notation": null
+      },
+      "8151": {
+        "name": "New Hampshire Curriculum Frameworks",
+        "notation": null
+      },
+      "8152": {
+        "name": "New Hampshire Early Learning Standards",
+        "notation": null
+      },
+      "8153": {
+        "name": "New Hampshire Kindergarten Readiness Indicators",
+        "notation": null
+      },
+      "8154": {
+        "name": "Alabama Course of Study",
+        "notation": "cos"
+      },
+      "8155": {
+        "name": "Maine Learning Results: Parameters for Essential Instruction",
+        "notation": null
+      },
+      "8156": {
+        "name": "Maine Early Learning and Development Standards (MELDS)",
+        "notation": null
+      },
+      "8157": {
+        "name": "Louisiana Student Standards",
+        "notation": null
+      },
+      "8158": {
+        "name": "Louisiana Grade Level Expectations",
+        "notation": null
+      },
+      "8159": {
+        "name": "Illinois Learning Standards",
+        "notation": "ils"
+      },
+      "8160": {
+        "name": "Illinois Early Learning and Development Standards",
+        "notation": "ields"
+      },
+      "8161": {
+        "name": "Minnesota Academic Standards",
+        "notation": null
+      },
+      "8162": {
+        "name": "Minnesota Academic Standards (Common Core)",
+        "notation": null
+      },
+      "8163": {
+        "name": "Minnesota Early Childhood Indicators of Progress",
+        "notation": null
+      },
+      "8164": {
+        "name": "Connecticut Core Standards",
+        "notation": "ccs"
+      },
+      "8165": {
+        "name": "Connecticut Next Generation Science Standards",
+        "notation": null
+      },
+      "8166": {
+        "name": "Connecticut Curriculum Frameworks",
+        "notation": null
+      },
+      "8167": {
+        "name": "New Jersey Student Learning Standards",
+        "notation": null
+      },
+      "8168": {
+        "name": "New Jersey Preschool Teaching and Learning Standards",
+        "notation": null
+      },
+      "8169": {
+        "name": "Delaware Content Standards",
+        "notation": null
+      },
+      "8170": {
+        "name": "Delaware Next Generation Science Standards",
+        "notation": null
+      },
+      "8171": {
+        "name": "Delaware Early Learning Foundations: Preschool for School Success",
+        "notation": null
+      },
+      "8172": {
+        "name": "Nebraska College and Career Ready Standards",
+        "notation": "ccr"
+      },
+      "8173": {
+        "name": "Nebraska Academic Standards",
+        "notation": null
+      },
+      "8174": {
+        "name": "Nebraska Early Learning Guidelines for Ages 3 to 5",
+        "notation": null
+      },
+      "8175": {
+        "name": "Wales Wales National Curriculum",
+        "notation": null
+      },
+      "8176": {
+        "name": "Montana Common Core Standards",
+        "notation": null
+      },
+      "8177": {
+        "name": "Montana Content Standards",
+        "notation": null
+      },
+      "8178": {
+        "name": "Montana Early Learning Guidelines",
+        "notation": "mels"
+      },
+      "8179": {
+        "name": "California Preschool Learning Foundations",
+        "notation": null
+      },
+      "8180": {
+        "name": "National Curriculum Standards for Social Studies",
+        "notation": "ncss"
+      },
+      "8181": {
+        "name": "Kentucky Early Childhood Standards",
+        "notation": null
+      },
+      "8182": {
+        "name": "Arkansas Child Development and Early Learning Standards",
+        "notation": null
+      },
+      "8183": {
+        "name": "Alabama Performance Standards For 4-Year-Olds",
+        "notation": null
+      }
+    }
+  },
+  "sellerCustomCategories": {
+    "field": "data[Category][Category][] (read back as `categories`, and as `customCategories` on the gateway with the ids stringified)",
+    "note": "Seller-scoped shelves rather than a platform vocabulary: each seller defines their own, so no option set is recorded here. Enumerate a seller's own with `MyProductListingsCustomCategories`, or another's with `GetCategoryList($id: ID!)`."
+  },
+  "constraints": {
+    "titleMaxLength": 80,
+    "descriptionMaxLength": 45000,
+    "minPrice": 0.95,
+    "multipleLicensePricePercentage": 90,
+    "bundleMaxAllowedFiles": 500,
+    "uploadSlots": {
+      "product": {
+        "maxSizeBytes": 4294967296,
+        "fileExtensions": [
+          "avi",
+          "bmp",
+          "bnk",
+          "doc",
+          "docx",
+          "dot",
+          "epub",
+          "flp",
+          "flipchart",
+          "flv",
+          "gif",
+          "htm",
+          "html",
+          "ink",
+          "jpeg",
+          "jpg",
+          "key",
+          "knt",
+          "mov",
+          "m4a",
+          "m4v",
+          "mp3",
+          "mp4",
+          "png",
+          "mpeg",
+          "mpg",
+          "mv4",
+          "notebook",
+          "ods",
+          "pdf",
+          "pps",
+          "ppsx",
+          "ppt",
+          "pptx",
+          "pub",
+          "ram",
+          "rm",
+          "rtf",
+          "swf",
+          "tif",
+          "tiff",
+          "txt",
+          "wav",
+          "wpd",
+          "wmv",
+          "xls",
+          "xlsx",
+          "xlt",
+          "xltx",
+          "zip"
+        ]
+      },
+      "preview": {
+        "maxSizeBytes": 31457280,
+        "fileExtensions": [
+          "avi",
+          "bmp",
+          "bnk",
+          "doc",
+          "docx",
+          "dot",
+          "epub",
+          "flp",
+          "flipchart",
+          "flv",
+          "gif",
+          "htm",
+          "html",
+          "ink",
+          "jpeg",
+          "jpg",
+          "key",
+          "knt",
+          "mov",
+          "m4a",
+          "m4v",
+          "mp3",
+          "mp4",
+          "png",
+          "mpeg",
+          "mpg",
+          "mv4",
+          "notebook",
+          "ods",
+          "pdf",
+          "pps",
+          "ppsx",
+          "ppt",
+          "pptx",
+          "pub",
+          "ram",
+          "rm",
+          "rtf",
+          "swf",
+          "tif",
+          "tiff",
+          "txt",
+          "wav",
+          "wpd",
+          "wmv",
+          "xls",
+          "xlsx",
+          "xlt",
+          "xltx",
+          "zip"
+        ]
+      },
+      "thumbnails": {
+        "slots": 4,
+        "maxSizeBytes": 4194304,
+        "fileExtensions": [
+          "bmp",
+          "gif",
+          "ipeg",
+          "jpg",
+          "jpeg",
+          "png",
+          "tiff",
+          "tif"
+        ]
+      },
+      "videoPreview": {
+        "maxSizeBytes": 1073741824,
+        "fileExtensions": [
+          "avi",
+          "mov",
+          "m4a",
+          "m4v",
+          "mp4",
+          "mv4",
+          "mpeg",
+          "mpg",
+          "avi",
+          "mkv",
+          "wmv"
+        ],
+        "mimeTypes": [
+          "video/avi",
+          "video/mp4",
+          "video/mpeg",
+          "video/mpg",
+          "video/quicktime",
+          "video/x-ms-wm",
+          "video/x-ms-wmv",
+          "video/x-msvideo"
+        ]
+      }
+    },
+    "note": "Every value but the title length comes from the `var cfg` bootstrap the create page hands its own client, so these are the client's bounds and not server refusals anyone measured. 80 is both the title-length constant in chunk `tpt-frontend.1.1564` and the longest of 352 observed titles; the counting unit is unverified, so `crates/tam-domain/src/registry.rs` declares no title cap."
+  },
+  "notFound": {
+    "licence": "TPT has no licence field and no CC-style licence vocabulary at all. The nearest levers are `copyrightDeclaration` and the multiple-license price, which is a pricing mechanism rather than a rights grant.",
+    "productCategory": "There is no separate product-category or subject select. What a seller picks as a subject is a `taxonomyTags` facet with `category: PreK-12-Subject-Area`, and a resource type is one with `category: Type-of-Resource`.",
+    "countryId": "The read side returns `countryId: 153` and a `countryIdFlag`; the country vocabulary itself was not found in any chunk.",
+    "status": "`status`, `statusAdmin` and `statusCopyright` read ACTIVE across this store's 154 products and are single-valued in the sample, so no set is on file."
+  }
+}
