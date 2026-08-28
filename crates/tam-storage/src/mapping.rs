@@ -17,7 +17,8 @@ use tam_types::{
 
 use crate::codec::{
     inventory_from_db, inventory_to_db, marketplace_to_db, price_from_db, timestamp_from_db,
-    timestamp_to_db, uuid_from_db, uuid_to_db, PriceColumns, PRICE_KIND_FREE, PRICE_KIND_PAID,
+    timestamp_to_db, uuid_from_db, uuid_to_db, PriceColumns, RemoteIdColumns, PRICE_KIND_FREE,
+    PRICE_KIND_PAID,
 };
 use crate::{pin_org, StorageError};
 
@@ -376,42 +377,6 @@ impl<'a> VerifyColumns<'a> {
                 verified_at: Some(timestamp_to_db(*at)?),
                 stale_since: None,
                 mismatches: core::iter::once(first).chain(rest.iter()).collect(),
-            },
-        })
-    }
-}
-
-struct RemoteIdColumns<'a> {
-    kind: &'static str,
-    url: Option<&'a str>,
-    numeric_id: Option<i64>,
-}
-
-impl<'a> RemoteIdColumns<'a> {
-    fn encode(id: &'a RemoteListingId) -> Result<Self, StorageError> {
-        Ok(match id {
-            RemoteListingId::Tes { url } => Self {
-                kind: "tes",
-                url: Some(url.as_str()),
-                numeric_id: None,
-            },
-            RemoteListingId::Tpt { product_id } => Self {
-                kind: "tpt",
-                url: None,
-                numeric_id: Some(i64::try_from(*product_id).map_err(|_| {
-                    StorageError::Inconsistent {
-                        reason: format!("tpt product id {product_id} exceeds the column range"),
-                    }
-                })?),
-            },
-            RemoteListingId::Etsy { listing_id } => Self {
-                kind: "etsy",
-                url: None,
-                numeric_id: Some(i64::try_from(*listing_id).map_err(|_| {
-                    StorageError::Inconsistent {
-                        reason: format!("etsy listing id {listing_id} exceeds the column range"),
-                    }
-                })?),
             },
         })
     }

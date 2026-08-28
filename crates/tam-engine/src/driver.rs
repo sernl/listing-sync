@@ -12,7 +12,8 @@ use tam_domain::{
 };
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
-    AdapterError, CreateStrategy, FieldSet, FormId, MarketplaceAdapter, Outcome, WriteAttemptId,
+    AdapterError, CreateStrategy, FieldSet, FormId, MarketplaceAdapter, Outcome, RemoteListingId,
+    WriteAttemptId,
 };
 use tam_storage::{
     append_event, AttemptIntent, AttemptVerdict, BudgetGrant, EventScope, HaltCause, HaltRepo,
@@ -117,6 +118,21 @@ fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
         outcome: item_outcome,
         failure_code,
         failure_detail,
+    }
+}
+
+/// The listing a committed-class outcome landed on. Only the two outcomes
+/// that carry a receipt can state one; every other outcome settled without a
+/// write that landed, so there is nothing to record.
+const fn outcome_to_landed(outcome: &Outcome) -> Option<&RemoteListingId> {
+    match outcome {
+        Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => {
+            Some(receipt.listing())
+        }
+        Outcome::Rejected { .. }
+        | Outcome::Ambiguous { .. }
+        | Outcome::Blocked { .. }
+        | Outcome::Skipped { .. } => None,
     }
 }
 
@@ -344,6 +360,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                     let attempt_verdict = AttemptVerdict {
                         state: outcome_to_attempt_state(outcome).to_owned(),
                         failure_code: verdict.failure_code,
+                        landed: outcome_to_landed(outcome).cloned(),
                     };
                     if let Err(error) = ctx
                         .attempts

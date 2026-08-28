@@ -7,6 +7,7 @@
 //! client and the operator dashboard.
 
 use chrono::{DateTime, Utc};
+use tam_marketplace::RemoteListingId;
 use tam_types::{
     ContentHash, Currency, FailureCode, FileKind, FileRole, InventoryId, Money, PriceIntent,
     ScanOutcome, Timestamp,
@@ -260,6 +261,45 @@ pub(crate) fn failure_code_from_db(raw: &str) -> Result<FailureCode, StorageErro
         .ok_or_else(|| StorageError::CorruptRow {
             reason: format!("unknown failure code {raw:?}"),
         })
+}
+
+/// The three-column rendering of a `RemoteListingId`, shared by the mapping's
+/// binding and the settled `write_attempt`: the `*_remote_id_shape` CHECK
+/// constraints require the url and numeric columns to be exclusive per kind.
+pub(crate) struct RemoteIdColumns<'a> {
+    pub(crate) kind: &'static str,
+    pub(crate) url: Option<&'a str>,
+    pub(crate) numeric_id: Option<i64>,
+}
+
+impl<'a> RemoteIdColumns<'a> {
+    pub(crate) fn encode(id: &'a RemoteListingId) -> Result<Self, StorageError> {
+        Ok(match id {
+            RemoteListingId::Tes { url } => Self {
+                kind: "tes",
+                url: Some(url.as_str()),
+                numeric_id: None,
+            },
+            RemoteListingId::Tpt { product_id } => Self {
+                kind: "tpt",
+                url: None,
+                numeric_id: Some(i64::try_from(*product_id).map_err(|_| {
+                    StorageError::Inconsistent {
+                        reason: format!("tpt product id {product_id} exceeds the column range"),
+                    }
+                })?),
+            },
+            RemoteListingId::Etsy { listing_id } => Self {
+                kind: "etsy",
+                url: None,
+                numeric_id: Some(i64::try_from(*listing_id).map_err(|_| {
+                    StorageError::Inconsistent {
+                        reason: format!("etsy listing id {listing_id} exceeds the column range"),
+                    }
+                })?),
+            },
+        })
+    }
 }
 
 pub(crate) const fn marketplace_to_db(marketplace: tam_types::Marketplace) -> &'static str {

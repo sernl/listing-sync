@@ -12,7 +12,7 @@
 
 use sqlx::{PgPool, Postgres, Transaction};
 use tam_domain::{ItemOutcome, JobItemId};
-use tam_marketplace::IdempotencyKey;
+use tam_marketplace::{IdempotencyKey, RemoteListingId};
 use tam_types::{
     FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp,
     Uuid,
@@ -20,7 +20,7 @@ use tam_types::{
 
 use crate::codec::{
     failure_code_to_db, inventory_from_db, inventory_to_db, marketplace_to_db, timestamp_to_db,
-    uuid_from_db, uuid_to_db,
+    uuid_from_db, uuid_to_db, RemoteIdColumns,
 };
 use crate::StorageError;
 
@@ -644,6 +644,10 @@ pub struct AttemptIntent {
 pub struct AttemptVerdict {
     pub state: String,
     pub failure_code: Option<FailureCode>,
+    /// The listing the write landed on, carried by the receipt a committed
+    /// outcome holds. Without it the ledger cannot say what it created, so
+    /// reconciliation, verification and dedup have nothing to address.
+    pub landed: Option<RemoteListingId>,
 }
 
 /// The fencing token's ledger: the row is written before the click, because
@@ -700,15 +704,20 @@ impl WriteAttemptRepo {
         let AttemptVerdict {
             state,
             failure_code,
+            landed,
         } = verdict;
+        let remote = landed.as_ref().map(RemoteIdColumns::encode).transpose()?;
         let updated = sqlx::query!(
-            "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
+            "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6,                  remote_id_kind = $7, remote_url = $8, remote_numeric_id = $9              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
             uuid_to_db(lease.org.0),
             uuid_to_db(attempt),
             lease.lease_epoch,
             state.as_str(),
             timestamp_to_db(at)?,
             failure_code.map(failure_code_to_db),
+            remote.as_ref().map(|remote| remote.kind),
+            remote.as_ref().and_then(|remote| remote.url),
+            remote.as_ref().and_then(|remote| remote.numeric_id),
         )
         .execute(&self.pool)
         .await?;

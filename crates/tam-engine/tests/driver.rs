@@ -297,6 +297,22 @@ async fn the_happy_path_settles_succeeded(app: PgPool) {
         attempt_state, "committed",
         "the fencing row settled with the item"
     );
+    let remote: (Option<String>, Option<String>, Option<i64>) = sqlx::query_as(
+        "SELECT remote_id_kind, remote_url, remote_numeric_id FROM write_attempt LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the attempt row reads");
+    assert_eq!(
+        (remote.0.as_deref(), remote.1.as_deref(), remote.2),
+        (
+            Some("tes"),
+            Some("https://www.tes.com/api/v2/resources/9001"),
+            None
+        ),
+        "the committed attempt records the listing the write landed on, or nothing can \
+         reconcile what it created"
+    );
     let events: i64 = sqlx::query_scalar("SELECT count(*) FROM job_event")
         .fetch_one(&engine)
         .await
