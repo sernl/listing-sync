@@ -190,28 +190,52 @@ const fn tes(inventory: InventoryId) -> InventoryRegistry {
 
 const TES_NATIVES: &[NativeField] = &[
     // Restated rather than imported: the pure core must not depend on an
-    // adapter crate. Source of the four values and the publish-time refusal:
-    // `TesLicence` and the publish builder in
-    // crates/tam-marketplace-tes/src/endpoints.rs. Written by the draft
-    // metadata request and read back by the first-party import.
+    // adapter crate. The seven values are `RefdataStore.licences` as the
+    // 2026-08-29 live poll read it, catalogued in
+    // docs/design/data/tes-vocabulary.json; `GET /api/refdata/v2/licences`
+    // returns the first five and omits the legacy pair. Price gates the
+    // write: a free resource picks among the three Creative Commons values
+    // and a paid one is `TES-PAID`. `TES-PAID-SCHOOL` is the school tier, and
+    // the editor rewrites `TES-V1` and `TES-V2` to `CC-BY-SA` on load, so
+    // both read back on older resources and neither is offered on write. The
+    // adapter's `TesLicence` in crates/tam-marketplace-tes/src/endpoints.rs
+    // writes four of the seven. Written by the draft metadata request and
+    // read back by the first-party import.
     NativeField {
         name: "licence",
         direction: FieldDirection::Both,
         required: true,
-        vocabulary: NativeVocabulary::Closed(&["CC-BY", "CC-BY-SA", "CC-BY-ND", "TES-PAID"]),
+        vocabulary: NativeVocabulary::Closed(&[
+            "CC-BY",
+            "CC-BY-ND",
+            "CC-BY-SA",
+            "TES-PAID",
+            "TES-PAID-SCHOOL",
+            "TES-V1",
+            "TES-V2",
+        ]),
     },
     // The market-targeting field the GB-to-NZ wedge depends on. Read on import
     // and discarded, and absent from the written-field manifest, so it is
     // declared read-only until a founder-supervised capture of the uploader
-    // setting one. The thirteen values are the dropdown transcribed in
-    // docs/notes/probes/04-dual-inventory-access.md.
+    // setting one. The twelve values are
+    // `TaxonomyStore["resource-orientations"]` as the 2026-08-29 live poll
+    // read it off the uploader page, superseding the thirteen-line
+    // transcription in docs/notes/probes/04-dual-inventory-access.md, which
+    // wrote the one synthetic option down twice as `None` and
+    // `No curriculum` and omitted `[rest of world]`. The uploader prepends
+    // that synthetic `none`, labelled "No curriculum", and filters
+    // `[rest of world]` out of the picker, so eleven of the twelve are
+    // selectable. This is the first of three cascading selects: the
+    // orientation narrows a 48-value `framework`, itself filtered by the
+    // resource's ages, which narrows a 23-value `authority`. The adapter
+    // writes none of the three, so the other two levels are catalogued in
+    // docs/design/data/tes-vocabulary.json rather than held here.
     NativeField {
         name: "curriculum",
         direction: FieldDirection::ReadOnly,
         required: false,
         vocabulary: NativeVocabulary::Closed(&[
-            "None",
-            "No curriculum",
             "American",
             "Australian",
             "Canadian",
@@ -223,30 +247,52 @@ const TES_NATIVES: &[NativeField] = &[
             "Scottish",
             "Welsh",
             "Zambian",
+            "[rest of world]",
         ]),
     },
-    // Category and age-range native ids, drawn from the vocabularies the
-    // taxonomy hub owns rather than from any set this registry could hold.
+    // `RefdataStore.resourceTypes` holds 33 rows and the uploader's type
+    // select filters them to `99000 < id < 99010`, so these nine are the
+    // writable set; the other 24 are legacy or attachment-level types that
+    // read back on older resources and are never offered. The ids are the
+    // wire tokens and the labels are catalogued in
+    // docs/design/data/tes-vocabulary.json.
     NativeField {
         name: "mainType",
         direction: FieldDirection::Written,
         required: false,
-        vocabulary: NativeVocabulary::Numeric,
+        vocabulary: NativeVocabulary::Closed(&[
+            "99001", "99002", "99003", "99004", "99005", "99006", "99007", "99008", "99009",
+        ]),
     },
+    // A pointer into whichever age vocabulary the country selects rather than
+    // a vocabulary of its own: the uploader takes `ageRanges` for GB and
+    // `yearGroups` everywhere else, and the 2026-08-29 poll read `mainAge` as
+    // an `ageRanges` id on a GB resource without establishing what it carries
+    // on the other branch. No single closed set is on file.
     NativeField {
         name: "mainAge",
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Numeric,
     },
-    // The adapter writes the empty list on every draft, so the accepted values
-    // have never been exercised and none are on file; the import reads the
-    // field back off the resource state, so it crosses in both directions.
+    // The non-GB age field, and an alternative to `ageRanges` rather than a
+    // companion: the uploader picks one or the other by country, taking
+    // `ageRanges` for GB and `yearGroups` everywhere else. The thirty ids are
+    // `GET /api/refdata/v2/year-groups` as the 2026-08-29 poll read it — 1
+    // through 15 the GB school years from Nursery and Reception up to 13, and
+    // 16 through 30 the US grades from Pre-K and Kindergarten up to 12th,
+    // with 30 the not-applicable sentinel that `ageRanges` spells 7. The
+    // adapter still writes the empty list on every draft, so none of the
+    // thirty has been exercised on the write side; the import reads the field
+    // back off the resource state, so it crosses in both directions.
     NativeField {
         name: "yearGroups",
         direction: FieldDirection::Both,
         required: false,
-        vocabulary: NativeVocabulary::Unmeasured,
+        vocabulary: NativeVocabulary::Closed(&[
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16",
+            "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+        ]),
     },
     // The adapter writes the constant "md"; whether the API accepts anything
     // else is uncaptured, and one written value is not evidence of a set.
@@ -324,7 +370,11 @@ const ETSY_NATIVES: &[NativeField] = &[
 /// seller account, analysed for the M7 connector: six read captures, one
 /// product create and one product edit. Everything here is a read the
 /// captures contain, a field one of the two writes posted, or a constant the
-/// form hands its own client.
+/// form hands its own client, extended by the 2026-08-29 live poll of the
+/// create and edit vocabularies, which reached the option sets themselves
+/// through live GraphQL operations and the `JSON.parse` blobs the
+/// `tpt-frontend` chunks carry. The polled catalog is
+/// docs/design/data/tpt-vocabulary.json.
 ///
 /// No capture contains a refused write — every recorded request succeeded —
 /// so nothing here is declared required. The written fields below record what
@@ -332,9 +382,12 @@ const ETSY_NATIVES: &[NativeField] = &[
 const TPT: InventoryRegistry = InventoryRegistry {
     inventory: InventoryId::Tpt,
     canonical: CanonicalFields {
-        // The sampled 80-character title cap is real but unproven: 80 is the
-        // longest of 352 observed titles, not a refusal anyone has measured,
-        // and the counting unit is unverified either way. No cap is declared.
+        // 80 is the longest of 352 observed titles and is also the value of
+        // the title-length constant in chunk `tpt-frontend.1.1564`, so the
+        // sample and the client's own constant agree. Neither is a refusal
+        // anyone has measured and the counting unit is unverified either way,
+        // and declaring a cap here would start truncating titles at
+        // projection, so no cap is declared without a founder decision.
         title: FieldSpec::UNRECORDED,
         description: FieldSpec {
             // `description_max_length: 45000` from the `var cfg` bootstrap the
@@ -357,8 +410,12 @@ const TPT: InventoryRegistry = InventoryRegistry {
         taxonomy: FieldSpec::UNRECORDED,
         // TPT has no grades field. Grades arrive inside the flat
         // `taxonomyTags` slug array alongside subjects, resource types and
-        // file formats; the create form offers a separate 14-value grade
-        // selector, whose relationship to those tags is uncaptured.
+        // file formats; the create form offers a separate 19-value grade
+        // selector, and the poll settled its relationship to those tags. Each
+        // of the nineteen legacy grade ids the form posts is a facet's own
+        // `legacyId`: seventeen resolve into `category: Grade-Level` and the
+        // remaining two, Homeschool (17) and Staff (19), into
+        // `category: audience`, which is where TPT itself files them.
         grades: FieldSpec::UNRECORDED,
         // The create form caps each upload slot separately — 4 GiB for the
         // product, 30 MiB for the preview, 4 MiB for each of four thumbnails,
@@ -371,18 +428,24 @@ const TPT: InventoryRegistry = InventoryRegistry {
 };
 
 const TPT_NATIVES: &[NativeField] = &[
-    // One flat namespace: the nine slugs observed across 154 products span
-    // grades (4th-grade), audience (homeschool), subject (math), resource type
-    // (unit-plans) and file format (pdf) without distinguishing them. Nine
-    // slugs from one store is a sample, not a vocabulary, and TPT's own
-    // platform tag set is uncaptured. Both writes post them as a repeated
-    // `data[TaxonomyTags][]` array of the same slugs the read returns, six on
-    // the create and eight on the edit, so the field now crosses both ways.
+    // One flat namespace, and the poll reached it whole: 358 facets,
+    // referentially closed, at most two deep, where a grade (4th-grade), an
+    // audience (homeschool), a subject (math), a resource type (unit-plans)
+    // and a file format (pdf) are all the same kind of thing and only the
+    // facet's own `category` tells them apart. 23 of the 358 are hidden —
+    // retired values that read back on existing products and are never
+    // offered on write. 358 slugs is far past what belongs in a const, so the
+    // members live in docs/design/data/tpt-vocabulary.json and are not
+    // captured here, which is the difference `ClosedUncaptured` names: an
+    // unlisted slug is refused by the platform. Both writes post them as a
+    // repeated `data[TaxonomyTags][]` array of the same slugs the read
+    // returns, six on the create and eight on the edit, so the field crosses
+    // both ways.
     NativeField {
         name: "taxonomyTags",
         direction: FieldDirection::Both,
         required: false,
-        vocabulary: NativeVocabulary::Unmeasured,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
     },
     // Seller-owned shelves, so there is no platform-wide vocabulary to hold:
     // the members are whatever this seller created. The product read names
@@ -408,8 +471,12 @@ const TPT_NATIVES: &[NativeField] = &[
         required: false,
         vocabulary: NativeVocabulary::Closed(&["1", "2", "3", "4", "5"]),
     },
-    // The `ResourceType` enum, recovered whole from the statistics page
-    // bundle. Only DIGITAL_PRODUCT occurs across this seller's 154 products.
+    // The `ResourceType` enum, recovered from the statistics page bundle and
+    // corrected to five members by the poll's sweep of the enum literals
+    // across the chunk set, which found the `EASEL` member the earlier read
+    // missed. Only DIGITAL_PRODUCT occurs across this seller's 154 products,
+    // and the member is chosen on the create-type page rather than in a form
+    // select.
     NativeField {
         name: "itemType",
         direction: FieldDirection::ReadOnly,
@@ -418,6 +485,7 @@ const TPT_NATIVES: &[NativeField] = &[
             "DIGITAL_PRODUCT",
             "BUNDLE",
             "ONLINE_RESOURCE",
+            "EASEL",
             "VIDEO",
         ]),
     },
@@ -439,11 +507,14 @@ const TPT_NATIVES: &[NativeField] = &[
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,
     },
-    // `EducationStandardsQuery` returned 166 jurisdiction roots — Common Core,
-    // NGSS, TEKS and the rest — but the form field takes a standard id from
-    // within a jurisdiction, and neither those ids nor the jurisdiction-to-id
-    // mapping is captured. The set is closed upstream and its members are not
-    // held here, which is exactly what an unlisted value being refused means.
+    // `EducationStandardsJurisdictionsQuery` returned 166 jurisdiction roots
+    // — Common Core, NGSS, TEKS and the rest — and the poll catalogued them,
+    // but the form field takes a standard id from a leaf below one of those
+    // roots. `EducationStandardsQuery($id, $depth)` expands a jurisdiction on
+    // demand and full expansion across all 166 runs to thousands of nodes, so
+    // the leaf ids are deliberately not captured. The set is closed upstream
+    // and its members are not held here, which is exactly what an unlisted
+    // value being refused means.
     NativeField {
         name: "ItemsCommonCoreStandard.common_core_standard_id",
         direction: FieldDirection::Written,
@@ -453,47 +524,59 @@ const TPT_NATIVES: &[NativeField] = &[
     // The eight small-integer fields the two writes post. Each is a member of
     // an enumeration the read side names in words — `statusUser: ACTIVE`,
     // `answerKey: INCLUDED`, `copyrightDeclaration: ORIGINAL_WORK`,
-    // `teachingDuration: HOURS_1` — against an integer the form posts, and in
-    // every case at most two of that enumeration's members were exercised.
-    // One or two observed members is not a vocabulary, and an unlisted member
-    // is refused by the platform, which is exactly what `ClosedUncaptured`
-    // records. Enumerating them properly needs the create form's own <select>
-    // options, which no capture contains.
+    // `teachingDuration: HOURS_1` — against an integer the form posts, and
+    // the captures exercised at most two members of each. The poll recovered
+    // four of those enumerations whole from the constants module in chunk
+    // `tpt-frontend.1.1564`, cross-checked against the read-side label map,
+    // so those four now hold the ids the form posts rather than the two
+    // members a capture happened to carry. For the other four nothing
+    // enumerates the set, and an unlisted member is refused by the platform,
+    // which is exactly what `ClosedUncaptured` records.
     NativeField {
-        // 0 on the captured create (a draft), 1 on the captured edit (live).
+        // 0 NOT_ACTIVE and 1 ACTIVE, which settles the captured create as a
+        // draft and the captured edit as live.
         name: "Item.status_user",
         direction: FieldDirection::Written,
         required: false,
-        vocabulary: NativeVocabulary::ClosedUncaptured,
+        vocabulary: NativeVocabulary::Closed(&["0", "1"]),
     },
     NativeField {
-        // 1 on both writes, read back as ORIGINAL_WORK. A legal attestation
-        // of authorship: the connector posts it only where the seller has
-        // made one, and never as a constant.
+        // 1 ORIGINAL_WORK and 2 USED_COPYRIGHTED_MATERIALS, with no unset
+        // member: both writes posted 1 and read back as ORIGINAL_WORK. A
+        // legal attestation of authorship: the connector posts it only where
+        // the seller has made one, and never as a constant.
         name: "ItemsProperty.copyright_declaration",
         direction: FieldDirection::Both,
         required: false,
-        vocabulary: NativeVocabulary::ClosedUncaptured,
+        vocabulary: NativeVocabulary::Closed(&["1", "2"]),
     },
     NativeField {
-        // 0 on the create, 1 on the edit, read back as INCLUDED.
+        // 0 NA, 1 INCLUDED, 2 NOT_INCLUDED, 3 DOES_NOT_APPLY,
+        // 4 INCLUDED_WITH_RUBRIC, 5 RUBRIC_ONLY. The read-side label map also
+        // carries an UNKNOWN with no posted counterpart, so that one is a
+        // read sentinel rather than a member of the written set.
         name: "ItemsProperty.answer_key",
         direction: FieldDirection::Both,
         required: false,
-        vocabulary: NativeVocabulary::ClosedUncaptured,
+        vocabulary: NativeVocabulary::Closed(&["0", "1", "2", "3", "4", "5"]),
     },
     NativeField {
-        // 0 on the create, 6 on the edit, read back as HOURS_1. The rest of
-        // the scale is uncaptured, and 0 is inferred to mean unset.
+        // 0 NA through 22 OTHER, a scale of durations from 30 minutes to a
+        // lifelong tool, so the captured 0 and 6 read as N/A and 1 hour.
+        // UNKNOWN is again read-side only.
         name: "ItemsProperty.duration",
         direction: FieldDirection::Both,
         required: false,
-        vocabulary: NativeVocabulary::ClosedUncaptured,
+        vocabulary: NativeVocabulary::Closed(&[
+            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+            "16", "17", "18", "19", "20", "21", "22",
+        ]),
     },
     NativeField {
         // 1 on the create and 3 on the edit, with no source stating what
-        // either means. Each write reproduces the value its own capture
-        // carried rather than generalising from one of them.
+        // either means; the poll found no enumeration for it either. Each
+        // write reproduces the value its own capture carried rather than
+        // generalising from one of them.
         name: "Item.generate_thumbnail",
         direction: FieldDirection::Written,
         required: false,
@@ -501,7 +584,8 @@ const TPT_NATIVES: &[NativeField] = &[
     },
     NativeField {
         // 0 on the create, 1 on the edit. The read side returns both a
-        // countryId of 153 and a countryIdFlag; only the flag is ever posted.
+        // countryId of 153 and a countryIdFlag; only the flag is ever posted,
+        // and the poll found no country vocabulary in any chunk.
         name: "ItemsLocalization.country_id_flag",
         direction: FieldDirection::Written,
         required: false,
@@ -598,10 +682,11 @@ mod tests {
     }
 
     #[test]
-    fn the_tpt_title_cap_stays_undeclared_because_eighty_is_a_sample() {
+    fn the_tpt_title_cap_stays_undeclared_though_the_sample_and_the_constant_agree() {
         assert_eq!(
             TPT.canonical.title.cap, None,
-            "the longest observed title is not a refusal anyone measured"
+            "80 is the longest observed title and the client's own constant, and neither is a \
+             refusal anyone measured against a verified counting unit"
         );
     }
 
@@ -660,42 +745,81 @@ mod tests {
     }
 
     #[test]
-    fn the_tpt_taxonomy_is_one_flat_namespace_that_now_crosses_both_ways() {
+    fn the_tpt_taxonomy_is_one_flat_namespace_closed_upstream_and_held_elsewhere() {
         let tags = TPT
             .natives
             .iter()
             .find(|native| native.name == "taxonomyTags");
         assert_eq!(
             tags.map(|native| (native.direction, native.vocabulary)),
-            Some((FieldDirection::Both, NativeVocabulary::Unmeasured)),
-            "both writes post the same slugs the read returns, and nine slugs from one store \
-             is still a sample rather than a vocabulary"
+            Some((FieldDirection::Both, NativeVocabulary::ClosedUncaptured)),
+            "both writes post the same slugs the read returns, and the 358 facets are closed \
+             upstream but catalogued in docs/design/data rather than in this const"
         );
     }
 
+    fn tpt_vocabulary(name: &str) -> Option<NativeVocabulary> {
+        TPT.natives
+            .iter()
+            .find(|native| native.name == name)
+            .map(|native| native.vocabulary)
+    }
+
     #[test]
-    fn every_tpt_enum_to_id_pair_is_recorded_as_closed_but_uncaptured() {
-        const PAIRS: [&str; 6] = [
-            "Item.status_user",
-            "ItemsProperty.copyright_declaration",
-            "ItemsProperty.answer_key",
-            "ItemsProperty.duration",
+    fn the_four_polled_tpt_enum_to_id_pairs_hold_the_ids_the_form_posts() {
+        // Restated from the create form's own constants module rather than
+        // imported, as everything else in this module is.
+        const CAPTURED: [(&str, &[&str]); 4] = [
+            ("Item.status_user", &["0", "1"]),
+            ("ItemsProperty.copyright_declaration", &["1", "2"]),
+            ("ItemsProperty.answer_key", &["0", "1", "2", "3", "4", "5"]),
+            (
+                "ItemsProperty.duration",
+                &[
+                    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14",
+                    "15", "16", "17", "18", "19", "20", "21", "22",
+                ],
+            ),
+        ];
+        for (name, ids) in CAPTURED {
+            assert_eq!(
+                tpt_vocabulary(name),
+                Some(NativeVocabulary::Closed(ids)),
+                "{name} holds the whole posted scale, not the one or two members a capture \
+                 happened to carry"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_unpolled_tpt_enum_to_id_pairs_stay_closed_but_uncaptured() {
+        const UNCAPTURED: [&str; 2] = [
             "Item.generate_thumbnail",
             "ItemsLocalization.country_id_flag",
         ];
-        for name in PAIRS {
-            let native = TPT
-                .natives
-                .iter()
-                .find(|native| native.name == name)
-                .map(|native| native.vocabulary);
+        for name in UNCAPTURED {
             assert_eq!(
-                native,
+                tpt_vocabulary(name),
                 Some(NativeVocabulary::ClosedUncaptured),
-                "{name} exercised at most two members of an enumeration, which is not a \
-                 vocabulary; an unlisted member is refused by the platform"
+                "nothing enumerates {name}, and an unlisted member is refused by the platform"
             );
         }
+    }
+
+    #[test]
+    fn the_tpt_item_type_vocabulary_carries_the_easel_member_too() {
+        assert_eq!(
+            tpt_vocabulary("itemType"),
+            Some(NativeVocabulary::Closed(&[
+                "DIGITAL_PRODUCT",
+                "BUNDLE",
+                "ONLINE_RESOURCE",
+                "EASEL",
+                "VIDEO",
+            ])),
+            "the chunk sweep found five ResourceType members where the statistics page \
+             bundle showed four"
+        );
     }
 
     #[test]
@@ -731,18 +855,28 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_tes_licence_vocabulary_is_the_four_values_the_api_validates() {
-        let licence = TES_NATIVES
+    fn tes_vocabulary(name: &str) -> Option<NativeVocabulary> {
+        TES_NATIVES
             .iter()
-            .find(|native| native.name == "licence")
-            .map(|native| native.vocabulary);
+            .find(|native| native.name == name)
+            .map(|native| native.vocabulary)
+    }
+
+    #[test]
+    fn the_tes_licence_vocabulary_is_the_seven_rows_the_refdata_store_holds() {
         assert_eq!(
-            licence,
+            tes_vocabulary("licence"),
             Some(NativeVocabulary::Closed(&[
-                "CC-BY", "CC-BY-SA", "CC-BY-ND", "TES-PAID"
+                "CC-BY",
+                "CC-BY-ND",
+                "CC-BY-SA",
+                "TES-PAID",
+                "TES-PAID-SCHOOL",
+                "TES-V1",
+                "TES-V2",
             ])),
-            "restated from the adapter's TesLicence without depending on it"
+            "restated from the polled RefdataStore.licences without depending on the adapter, \
+             whose TesLicence writes four of the seven"
         );
         assert_eq!(
             TES_GB.natives.len(),
@@ -752,23 +886,77 @@ mod tests {
     }
 
     #[test]
-    fn the_curriculum_vocabulary_holds_the_thirteen_captured_values() {
-        let curriculum = TES_NATIVES
-            .iter()
-            .find(|native| native.name == "curriculum")
-            .map(|native| native.vocabulary);
+    fn the_tes_licence_vocabulary_holds_the_school_tier_and_both_legacy_values() {
+        let Some(NativeVocabulary::Closed(values)) = tes_vocabulary("licence") else {
+            panic!("the licence vocabulary is captured closed");
+        };
+        for extra in ["TES-PAID-SCHOOL", "TES-V1", "TES-V2"] {
+            assert!(
+                values.contains(&extra),
+                "{extra} is a real row the four-value record left out"
+            );
+        }
+    }
+
+    #[test]
+    fn the_curriculum_vocabulary_is_the_orientation_select_the_uploader_filters() {
+        let curriculum = tes_vocabulary("curriculum");
         let Some(NativeVocabulary::Closed(values)) = curriculum else {
             panic!("the curriculum vocabulary is captured closed, got {curriculum:?}");
         };
         assert_eq!(
             values.len(),
-            13,
-            "probe 04 transcribed thirteen dropdown values"
+            12,
+            "resource-orientations holds twelve rows, of which the uploader offers eleven"
         );
         assert_eq!(
             (values.first(), values.last()),
-            (Some(&"None"), Some(&"Zambian")),
-            "transcribed in the order the dropdown offers them"
+            (Some(&"American"), Some(&"[rest of world]")),
+            "the eleven selectable nationals, then the row the picker filters out"
+        );
+        assert!(
+            !values.contains(&"No curriculum"),
+            "the uploader prepends that label over a synthetic none, so it is not a row"
+        );
+    }
+
+    #[test]
+    fn the_tes_main_type_vocabulary_is_the_nine_the_uploader_can_write() {
+        assert_eq!(
+            tes_vocabulary("mainType"),
+            Some(NativeVocabulary::Closed(&[
+                "99001", "99002", "99003", "99004", "99005", "99006", "99007", "99008", "99009",
+            ])),
+            "the type select keeps 99000 < id < 99010, leaving the other 24 resourceTypes \
+             rows readable but never offered"
+        );
+    }
+
+    #[test]
+    fn the_tes_year_groups_vocabulary_holds_both_countries_ranges() {
+        let year_groups = tes_vocabulary("yearGroups");
+        let Some(NativeVocabulary::Closed(values)) = year_groups else {
+            panic!("the yearGroups vocabulary is captured closed, got {year_groups:?}");
+        };
+        assert_eq!(
+            values.len(),
+            30,
+            "fifteen GB school years and fifteen US grade equivalents"
+        );
+        assert_eq!(
+            (values.first(), values.last()),
+            (Some(&"1"), Some(&"30")),
+            "1 is Nursery and 30 is the not-applicable sentinel of the US half"
+        );
+    }
+
+    #[test]
+    fn the_tes_main_age_holds_no_set_because_the_country_picks_its_vocabulary() {
+        assert_eq!(
+            tes_vocabulary("mainAge"),
+            Some(NativeVocabulary::Numeric),
+            "mainAge points into ageRanges for GB and yearGroups elsewhere, and the poll \
+             read it only on the GB branch"
         );
     }
 
