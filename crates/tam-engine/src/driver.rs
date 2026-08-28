@@ -716,6 +716,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                 let now = ctx.clock.now();
                 let verdict = outcome_to_item(outcome);
                 let item_outcome = verdict.outcome;
+                let mut severed = false;
                 if let Some(attempt) = current_attempt {
                     // Best-effort: a fenced-out attempt settle means the item
                     // was stolen, and the steal owns the story from here.
@@ -742,6 +743,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                         .await;
                     match settled {
                         Ok(disposition) => {
+                            severed = matches!(disposition, BindDisposition::Severed);
                             if let Some(anomaly) = bind_anomaly(disposition) {
                                 record_event(
                                     ctx,
@@ -759,7 +761,27 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                         }
                     }
                 }
-                ctx.leases.settle(&lease_ref, &verdict, now).await?;
+                // Nothing fences the attempt settle against the item's epoch,
+                // so a run whose lease was stolen — and whose item the steal
+                // already settled — still severs the mapping here, and this
+                // fenced item settle is where that becomes knowable. Record
+                // it rather than fence it: real fencing changes the create
+                // path too and is founder-gated.
+                let item_settled = ctx.leases.settle(&lease_ref, &verdict, now).await;
+                if severed && matches!(item_settled, Err(StorageError::StaleLease)) {
+                    record_event(
+                        ctx,
+                        lease,
+                        &JobEventPayload::ItemBindAnomaly {
+                            anomaly: BindAnomaly::SeveredAfterSteal {
+                                lease_epoch: lease_ref.lease_epoch,
+                            },
+                        },
+                        now,
+                    )
+                    .await?;
+                }
+                item_settled?;
                 record_event(
                     ctx,
                     lease,

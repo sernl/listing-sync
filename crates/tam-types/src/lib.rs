@@ -481,6 +481,13 @@ pub enum BindAnomaly {
     /// that the fence matched no row in this binding state: a sever that
     /// diverges fails on the remote identity while the row is still bound.
     SeverDiverged { existing_remote: String },
+    /// A removal severed the binding on a run whose lease had already been
+    /// stolen and whose item the stealer had already settled. The attempt
+    /// settle is fenced on the attempt row's own epoch, which is written and
+    /// compared from the same `LeaseRef` and so cannot mismatch within a
+    /// run, while `expire_and_steal` bumps `job_item.lease_epoch` — so the
+    /// sever reaches the mapping and no other row records that it did.
+    SeveredAfterSteal { lease_epoch: i64 },
 }
 
 /// The body carried beside each `job_event.kind`. The serde tag of each

@@ -18,7 +18,7 @@ use tam_domain::{
     Binding, CanonicalTerm, Decider, EdgeKind, ItemOutcome, ProjectionEdge, TermKind, Verification,
     VocabularyId, VocabularyPath,
 };
-use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
+use tam_engine::driver::{run_item, DriverContext, EngineError, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::transport::{
@@ -570,9 +570,30 @@ async fn drive(app: &PgPool, fake: &FakeTes) -> RunVerdict {
     drive_counting(app, fake).await.0
 }
 
+/// Whether the item's lease is stolen out from under the run before it
+/// starts, the way `expire_and_steal` does to a stalled worker: the epoch is
+/// bumped and the item settled, so every later epoch-fenced item write finds
+/// no row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lease {
+    Held,
+    Stolen,
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn drive_counting(app: &PgPool, fake: &FakeTes) -> (RunVerdict, u32) {
+    let (verdict, pauses) = pump(app, fake, Lease::Held).await;
+    (verdict.expect("the driver runs"), pauses)
+}
+
 /// The whole pump for one item, with the poll's pauses counted: lease,
 /// prepare, seed, drive. A removal takes `seed_for_removal`, which is the
-/// branch that keeps a taxonomy gap from parking a delete.
+/// branch that keeps a taxonomy gap from parking a delete. The run's own
+/// verdict travels as a `Result`, because the stolen-lease case fences the
+/// item settle and has no verdict to report.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -581,7 +602,11 @@ async fn drive(app: &PgPool, fake: &FakeTes) -> RunVerdict {
     clippy::panic,
     reason = "a fixture that cannot be prepared is a broken test, and the message names the gate"
 )]
-async fn drive_counting(app: &PgPool, fake: &FakeTes) -> (RunVerdict, u32) {
+async fn pump(
+    app: &PgPool,
+    fake: &FakeTes,
+    lease_state: Lease,
+) -> (Result<RunVerdict, EngineError>, u32) {
     let pool = &engine_pool(app).await;
     let leases = LeaseRepo::new(pool.clone());
     let item = leases
@@ -589,6 +614,20 @@ async fn drive_counting(app: &PgPool, fake: &FakeTes) -> (RunVerdict, u32) {
         .await
         .expect("the acquire runs")
         .expect("the enqueued item leases");
+    if lease_state == Lease::Stolen {
+        sqlx::query(
+            "UPDATE job_item \
+             SET state = 'settled', outcome = 'failed', failure_code = 'Other', \
+                 settled_at = now(), lease_owner = NULL, lease_expires_at = NULL, \
+                 lease_epoch = lease_epoch + 1 \
+             WHERE org_id = $1 AND id = $2",
+        )
+        .bind(uuid::Uuid::from_bytes(item.org.0 .0))
+        .bind(uuid::Uuid::from_bytes(item.item.0 .0))
+        .execute(pool)
+        .await
+        .expect("the steal settles the item and bumps the epoch");
+    }
     let (operation, projected) = match prepare_item(pool, &item, NOW)
         .await
         .expect("the preparation runs")
@@ -622,7 +661,7 @@ async fn drive_counting(app: &PgPool, fake: &FakeTes) -> (RunVerdict, u32) {
         cancel: &cancel,
         pause: &pause,
     };
-    let verdict = run_item(&ctx, &item, seed).await.expect("the driver runs");
+    let verdict = run_item(&ctx, &item, seed).await;
     (verdict, pause.pauses.load(Ordering::Relaxed))
 }
 
@@ -957,5 +996,52 @@ async fn a_removal_never_projects(pool: PgPool) {
     assert!(
         open.is_empty(),
         "a removal raises no reconciliation item either: nothing about it needs mapping"
+    );
+}
+
+/// The exposure the sever's authorisation does not cover, made visible.
+///
+/// `write_attempt.lease_epoch` is written and compared from the same
+/// `LeaseRef`, so a stalled worker whose lease `expire_and_steal` already
+/// stole — settling its item `failed` and bumping `job_item.lease_epoch` —
+/// still settles its attempt and severs the mapping. Only the item settle is
+/// fenced against the bumped epoch, and it runs after the sever has already
+/// landed. Phase 3 records the divergence rather than fencing it; real
+/// fencing changes the create path too and is founder-gated.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_sever_after_the_lease_was_stolen_records_the_anomaly(pool: PgPool) {
+    provision_with(&pool, Fixture::removal(true)).await;
+    let fake = FakeTes::holding(REMOVAL_ID);
+    let (verdict, _) = pump(&pool, &fake, Lease::Stolen).await;
+    assert!(
+        verdict.is_err(),
+        "the item settle is fenced by the bumped epoch, so the run cannot report a verdict"
+    );
+
+    let engine = engine_pool(&pool).await;
+    let severed: String =
+        sqlx::query_scalar("SELECT binding_state FROM mapping WHERE org_id = $1 AND id = $2")
+            .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+            .bind(uuid::Uuid::from_bytes(MAPPING.0 .0))
+            .fetch_one(&engine)
+            .await
+            .expect("the mapping row reads");
+    assert_eq!(
+        severed, "severed",
+        "the sever reached the mapping despite the steal, which is the divergence"
+    );
+
+    let anomaly: Option<Value> = sqlx::query_scalar(
+        "SELECT payload FROM job_event \
+         WHERE org_id = $1 AND kind = 'ItemBindAnomaly' ORDER BY org_seq DESC LIMIT 1",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .fetch_optional(&engine)
+    .await
+    .expect("the event rows read");
+    let anomaly = anomaly.expect("a sever after a steal records a bind anomaly");
+    assert!(
+        anomaly.pointer("/anomaly/SeveredAfterSteal").is_some(),
+        "the event names the divergence it records, not a generic refusal: {anomaly}"
     );
 }
