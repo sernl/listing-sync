@@ -177,10 +177,7 @@ mod tests {
     const ID: i64 = 42;
 
     fn response(status: u16, body: &str) -> HttpResponse {
-        HttpResponse {
-            status,
-            body: body.as_bytes().to_vec(),
-        }
+        HttpResponse::plain(status, body.as_bytes().to_vec())
     }
 
     #[test]

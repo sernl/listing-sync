@@ -3,8 +3,11 @@
 //! or client dependency.
 //!
 //! `HttpRequest` deliberately has no headers field: authentication is
-//! constructor state on the live transport, never request data, so a recorded
-//! cassette cannot contain a session secret by construction.
+//! constructor state on the live transport, and the only auth a request value
+//! may carry is an ephemeral per-request S3 signature, never a session secret,
+//! so a recorded cassette cannot contain one by construction. `HttpResponse`
+//! mirrors the rule from the other side with a closed header allow-list, which
+//! leaves `Set-Cookie` no variant to be recorded in.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +40,43 @@ pub enum RequestBody {
         fields: Vec<(String, String)>,
         file: Option<FilePart>,
     },
+    /// A raw payload, for the S3 object PUT whose signature covers the bytes
+    /// themselves. Recorded through the same helper a response body uses, so
+    /// a text payload stays legible in a fixture and a binary one survives it.
+    Bytes(#[serde(with = "body_bytes")] Vec<u8>),
+}
+
+/// The only authentication a request value may carry. Closed, and with no
+/// general header field beside it, so a session secret is unrepresentable
+/// here rather than merely discouraged: [`RequestAuth::Session`] names the
+/// credential the live transport holds at construction and carries none of
+/// it, and the one variant that does carry material carries an ephemeral
+/// per-request signature over one object.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequestAuth {
+    #[default]
+    Session,
+    /// A request whose authorisation travels in its own body — the S3
+    /// POST-policy upload, where the policy and its signature are form
+    /// fields. It must reach the network without our session attached.
+    Anonymous,
+    S3SigV2 {
+        access_key_id: String,
+        signature: String,
+        amz_date: String,
+        content_md5: Option<String>,
+        content_type: String,
+    },
+}
+
+impl RequestAuth {
+    /// The serde skip predicate that keeps every session-authenticated
+    /// request byte-identical to the fixtures written before this field
+    /// existed.
+    #[must_use]
+    pub const fn is_session(&self) -> bool {
+        matches!(*self, Self::Session)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +84,72 @@ pub struct HttpRequest {
     pub method: Method,
     pub url: String,
     pub body: RequestBody,
+    #[serde(default, skip_serializing_if = "RequestAuth::is_session")]
+    pub auth: RequestAuth,
+}
+
+impl HttpRequest {
+    /// A session-authenticated read.
+    #[must_use]
+    pub const fn get(url: String) -> Self {
+        Self {
+            method: Method::Get,
+            url,
+            body: RequestBody::Empty,
+            auth: RequestAuth::Session,
+        }
+    }
+
+    /// A session-authenticated delete. The seam carries no body on one,
+    /// which is what every measured delete route accepts.
+    #[must_use]
+    pub const fn delete(url: String) -> Self {
+        Self {
+            method: Method::Delete,
+            url,
+            body: RequestBody::Empty,
+            auth: RequestAuth::Session,
+        }
+    }
+
+    #[must_use]
+    pub const fn post_json(url: String, value: serde_json::Value) -> Self {
+        Self {
+            method: Method::Post,
+            url,
+            body: RequestBody::Json(value),
+            auth: RequestAuth::Session,
+        }
+    }
+
+    /// A multipart form POST. `auth` is the caller's, because the two forms
+    /// this seam sends differ on exactly that point: a marketplace form
+    /// rides the session, and an S3 POST-policy upload must not.
+    #[must_use]
+    pub const fn post_multipart(
+        url: String,
+        fields: Vec<(String, String)>,
+        file: Option<FilePart>,
+        auth: RequestAuth,
+    ) -> Self {
+        Self {
+            method: Method::Post,
+            url,
+            body: RequestBody::Multipart { fields, file },
+            auth,
+        }
+    }
+
+    /// A raw-body PUT under a per-request signature: the S3 object write.
+    #[must_use]
+    pub const fn put_signed(url: String, bytes: Vec<u8>, auth: RequestAuth) -> Self {
+        Self {
+            method: Method::Put,
+            url,
+            body: RequestBody::Bytes(bytes),
+            auth,
+        }
+    }
 }
 
 /// A response body is bytes, never a string. `reqwest::Response::text()`
@@ -57,15 +163,51 @@ pub struct HttpResponse {
     pub status: u16,
     #[serde(with = "body_bytes")]
     pub body: Vec<u8>,
+    /// The allow-listed headers a flow reads. Empty on every response whose
+    /// flow reads none, which is what keeps the recorded shape identical to
+    /// the fixtures written before the field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<(ResponseHeader, String)>,
+}
+
+/// The response headers a flow may see. An allow-list rather than a map:
+/// a live transport projects the real header map through these variants at
+/// the boundary, so `Set-Cookie` has nowhere to land and a recording cannot
+/// carry one however the marketplace answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResponseHeader {
+    Location,
+    ETag,
+    QueueTrackingId,
 }
 
 impl HttpResponse {
+    /// A response carrying no allow-listed header, which is every response
+    /// whose flow reads only status and body.
+    #[must_use]
+    pub const fn plain(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            body,
+            headers: Vec::new(),
+        }
+    }
+
     /// The body decoded as UTF-8 for classification and diagnostics, lossily
     /// and deliberately: a body that does not decode is binary, and binary is
     /// read through `body` itself.
     #[must_use]
     pub fn text(&self) -> std::borrow::Cow<'_, str> {
         String::from_utf8_lossy(&self.body)
+    }
+
+    /// The first value recorded for one allow-listed header.
+    #[must_use]
+    pub fn header(&self, which: ResponseHeader) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(name, _)| *name == which)
+            .map(|(_, value)| value.as_str())
     }
 }
 

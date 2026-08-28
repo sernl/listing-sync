@@ -6,7 +6,7 @@
 
 use base64::Engine;
 use serde_json::{json, Value};
-use tam_marketplace::transport::{FilePart, HttpRequest, Method, RequestBody};
+use tam_marketplace::transport::{FilePart, HttpRequest, RequestAuth};
 
 pub const ORIGIN: &str = "https://www.tes.com";
 
@@ -61,11 +61,7 @@ pub struct TesListing {
 
 #[must_use]
 pub fn create_draft_request() -> HttpRequest {
-    HttpRequest {
-        method: Method::Post,
-        url: format!("{ORIGIN}/api/v2/resources"),
-        body: RequestBody::Json(json!({})),
-    }
+    HttpRequest::post_json(format!("{ORIGIN}/api/v2/resources"), json!({}))
 }
 
 /// The title prefix marking every automation-created artefact disposable, so
@@ -98,10 +94,9 @@ pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
         .iter()
         .map(|category| json!({ "id": category }))
         .collect();
-    HttpRequest {
-        method: Method::Post,
-        url: format!("{ORIGIN}/api/v2/resources/{}/draft", id.0),
-        body: RequestBody::Json(json!({
+    HttpRequest::post_json(
+        format!("{ORIGIN}/api/v2/resources/{}/draft", id.0),
+        json!({
             "title": listing.title,
             "descriptionRaw": listing.description_markdown,
             "descriptionRawType": "md",
@@ -112,21 +107,20 @@ pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
             "mainType": listing.main_type,
             "mainAge": listing.main_age,
             "licence": listing.licence.as_str(),
-        })),
-    }
+        }),
+    )
 }
 
 #[must_use]
 pub fn presign_request(id: DraftId, file_name: &str, temp_id: &str) -> HttpRequest {
-    HttpRequest {
-        method: Method::Post,
-        url: format!("{ORIGIN}/api/resources/v3/draft/{}/attachment", id.0),
-        body: RequestBody::Json(json!([{
+    HttpRequest::post_json(
+        format!("{ORIGIN}/api/resources/v3/draft/{}/attachment", id.0),
+        json!([{
             "name": file_name,
             "tempId": temp_id,
             "previewOption": 0,
-        }])),
-    }
+        }]),
+    )
 }
 
 /// What the presign response yields once decoded: the bucket URL, the exact
@@ -231,16 +225,18 @@ pub fn parse_presign(
 
 /// The S3 form POST: the signed and starts-with fields, then the file last,
 /// which is the ordering the policy grammar requires.
+///
+/// [`RequestAuth::Anonymous`], because the policy and its signature are two
+/// of those form fields: the bucket authorises this request on its own, and
+/// the seller's Tes session must not travel to Amazon with it.
 #[must_use]
 pub fn s3_upload_request(upload: &PresignedUpload, file: FilePart) -> HttpRequest {
-    HttpRequest {
-        method: Method::Post,
-        url: upload.s3_url.clone(),
-        body: RequestBody::Multipart {
-            fields: upload.fields.clone(),
-            file: Some(file),
-        },
-    }
+    HttpRequest::post_multipart(
+        upload.s3_url.clone(),
+        upload.fields.clone(),
+        Some(file),
+        RequestAuth::Anonymous,
+    )
 }
 
 /// The confirm handshake: the full presigned attachment object echoed back
@@ -252,39 +248,29 @@ pub fn confirm_request(id: DraftId, upload: &PresignedUpload) -> HttpRequest {
     let mut echo = upload.attachment.clone();
     echo["type"] = json!("file");
     echo["isUploaded"] = json!(true);
-    HttpRequest {
-        method: Method::Post,
-        url: format!("{ORIGIN}/api/resources/v3/draft/{}/attachment", id.0),
-        body: RequestBody::Json(json!([echo])),
-    }
+    HttpRequest::post_json(
+        format!("{ORIGIN}/api/resources/v3/draft/{}/attachment", id.0),
+        json!([echo]),
+    )
 }
 
 #[must_use]
 pub fn publish_request(id: DraftId) -> HttpRequest {
-    HttpRequest {
-        method: Method::Post,
-        url: format!("{ORIGIN}/api/v2/resources/{}/publish", id.0),
-        body: RequestBody::Json(json!({})),
-    }
+    HttpRequest::post_json(
+        format!("{ORIGIN}/api/v2/resources/{}/publish", id.0),
+        json!({}),
+    )
 }
 
 /// The draft overlay when it exists, else the published resource.
 #[must_use]
 pub fn read_draft_request(id: DraftId) -> HttpRequest {
-    HttpRequest {
-        method: Method::Get,
-        url: format!("{ORIGIN}/api/v2/resources/{}/draft", id.0),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::get(format!("{ORIGIN}/api/v2/resources/{}/draft", id.0))
 }
 
 #[must_use]
 pub fn read_resource_request(id: DraftId) -> HttpRequest {
-    HttpRequest {
-        method: Method::Get,
-        url: format!("{ORIGIN}/api/v2/resources/{}", id.0),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::get(format!("{ORIGIN}/api/v2/resources/{}", id.0))
 }
 
 /// The REAL delete. `DELETE .../{id}/draft` removes only the draft overlay
@@ -293,11 +279,7 @@ pub fn read_resource_request(id: DraftId) -> HttpRequest {
 /// reports success only after the API read returns 404.
 #[must_use]
 pub fn delete_resource_request(id: DraftId) -> HttpRequest {
-    HttpRequest {
-        method: Method::Delete,
-        url: format!("{ORIGIN}/api/v2/resources/{}", id.0),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::delete(format!("{ORIGIN}/api/v2/resources/{}", id.0))
 }
 
 /// Deletes a never-published draft. `DELETE /resources/{id}` (the authoritative
@@ -306,11 +288,7 @@ pub fn delete_resource_request(id: DraftId) -> HttpRequest {
 /// verified by a `/draft` read, not a resource read that 404s either way.
 #[must_use]
 pub fn delete_draft_request(id: DraftId) -> HttpRequest {
-    HttpRequest {
-        method: Method::Delete,
-        url: format!("{ORIGIN}/api/v2/resources/{}/draft", id.0),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::delete(format!("{ORIGIN}/api/v2/resources/{}/draft", id.0))
 }
 
 /// How many rows one dashboard page asks for. The API paginates on `page`
@@ -330,20 +308,16 @@ pub struct CatalogueEntry {
 
 #[must_use]
 pub fn list_resources_request(page: u32, limit: u32) -> HttpRequest {
-    HttpRequest {
-        method: Method::Get,
-        url: format!("{ORIGIN}/api/v2/dashboard/getAllResources?page={page}&limit={limit}"),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::get(format!(
+        "{ORIGIN}/api/v2/dashboard/getAllResources?page={page}&limit={limit}"
+    ))
 }
 
 #[must_use]
 pub fn list_drafts_request(page: u32, limit: u32) -> HttpRequest {
-    HttpRequest {
-        method: Method::Get,
-        url: format!("{ORIGIN}/api/v2/dashboard/getAllDrafts?page={page}&limit={limit}"),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::get(format!(
+        "{ORIGIN}/api/v2/dashboard/getAllDrafts?page={page}&limit={limit}"
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,11 +373,7 @@ pub fn parse_catalogue_page(
 /// redirect to `?error=notfound` rather than JSON.
 #[must_use]
 pub fn download_manifest_request(id: DraftId) -> HttpRequest {
-    HttpRequest {
-        method: Method::Get,
-        url: format!("{ORIGIN}/resource-detail/api/download/{}", id.0),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::get(format!("{ORIGIN}/resource-detail/api/download/{}", id.0))
 }
 
 /// Step two: the bundle itself, at the path the manifest named. The upstream
@@ -411,11 +381,7 @@ pub fn download_manifest_request(id: DraftId) -> HttpRequest {
 /// comes back is the ZIP.
 #[must_use]
 pub fn download_bundle_request(path: &str) -> HttpRequest {
-    HttpRequest {
-        method: Method::Get,
-        url: format!("{ORIGIN}{path}"),
-        body: RequestBody::Empty,
-    }
+    HttpRequest::get(format!("{ORIGIN}{path}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -466,6 +432,7 @@ mod tests {
     };
     use base64::Engine;
     use serde_json::json;
+    use tam_marketplace::transport::RequestBody;
 
     #[test]
     fn the_licence_strings_match_the_api_enum() {
@@ -496,7 +463,7 @@ mod tests {
             licence: TesLicence::CcBy,
         };
         let request = super::set_metadata_request(DraftId(7), &listing);
-        let super::RequestBody::Json(body) = &request.body else {
+        let RequestBody::Json(body) = &request.body else {
             panic!("metadata is a JSON body");
         };
         assert_eq!(
@@ -547,7 +514,7 @@ mod tests {
             "signed params pass through as form fields"
         );
         let confirm = super::confirm_request(DraftId(7), &upload);
-        let super::RequestBody::Json(echo) = &confirm.body else {
+        let RequestBody::Json(echo) = &confirm.body else {
             panic!("confirm is a JSON body");
         };
         assert_eq!(

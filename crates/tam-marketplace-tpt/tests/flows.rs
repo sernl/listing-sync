@@ -22,10 +22,7 @@ fn export() -> FetchReason {
 }
 
 fn ok(body: &Value) -> HttpResponse {
-    HttpResponse {
-        status: 200,
-        body: body.to_string().into_bytes(),
-    }
+    HttpResponse::plain(200, body.to_string().into_bytes())
 }
 
 fn page(rows: &Value, current: u64, total: u64, pages: u64) -> Value {

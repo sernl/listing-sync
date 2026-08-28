@@ -15,6 +15,9 @@ use tam_marketplace_tes::{schema, TesAdapter};
 use tam_types::{FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
+/// The driver's clock reading a submit is handed. Tes ignores it — its JSON
+/// API stamps its own instants — so any fixed instant is the honest value.
+const NOW: Timestamp = Timestamp(1_756_000_000_000);
 const DRAFT: DraftId = DraftId(9001);
 
 struct StaticFiles(Vec<(FileId, FileContent)>);
@@ -46,17 +49,11 @@ fn adapter(
 }
 
 fn ok(body: &Value) -> HttpResponse {
-    HttpResponse {
-        status: 200,
-        body: body.to_string().into_bytes(),
-    }
+    HttpResponse::plain(200, body.to_string().into_bytes())
 }
 
 fn status(code: u16) -> HttpResponse {
-    HttpResponse {
-        status: code,
-        body: Vec::new(),
-    }
+    HttpResponse::plain(code, Vec::new())
 }
 
 fn sample_listing() -> TesListing {
@@ -169,6 +166,7 @@ fn the_full_submit_flow_replays_and_lands() {
         ORG,
         tam_marketplace::IdempotencyKey(Uuid([1; 16])),
         sample_field_set(file_id),
+        NOW,
     ))
     .expect("the recorded flow lands");
     assert_eq!(
@@ -616,10 +614,7 @@ fn a_published_resource_downloads_its_bundle_byte_for_byte() {
             },
             Interaction {
                 request: endpoints::download_bundle_request(BUNDLE_PATH),
-                response: HttpResponse {
-                    status: 200,
-                    body: bundle.clone(),
-                },
+                response: HttpResponse::plain(200, bundle.clone()),
             },
         ],
     };
@@ -663,7 +658,7 @@ fn a_draft_has_no_bundle_and_says_so_distinctly() {
         let cassette = Cassette {
             interactions: vec![Interaction {
                 request: endpoints::download_manifest_request(DRAFT),
-                response: HttpResponse { status: 200, body },
+                response: HttpResponse::plain(200, body),
             }],
         };
         let adapter = adapter(cassette, vec![]);

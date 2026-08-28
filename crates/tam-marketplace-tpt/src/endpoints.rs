@@ -11,7 +11,7 @@
 //! [`crate::read_model`].
 
 use serde_json::{json, Value};
-use tam_marketplace::transport::{HttpRequest, Method, RequestBody};
+use tam_marketplace::transport::HttpRequest;
 
 use crate::read_model::{ProductId, STATS_ALIAS};
 
@@ -56,16 +56,15 @@ fn url(service: Service, operation: &str) -> String {
 /// The client sends the full query text on every call: TPT uses no persisted
 /// queries and no hash allowlist, so nothing here needs registering upstream.
 fn graphql(service: Service, operation: &str, query: &str, variables: &Value) -> HttpRequest {
-    HttpRequest {
-        method: Method::Post,
-        url: url(service, operation),
-        body: RequestBody::Json(json!({
+    HttpRequest::post_json(
+        url(service, operation),
+        json!({
             "operationName": operation,
             "variables": variables,
             "extensions": {},
             "query": query,
-        })),
-    }
+        }),
+    )
 }
 
 /// The seller-owns-these enumeration query, verbatim from the `MyProductListings`

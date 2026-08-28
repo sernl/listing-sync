@@ -417,12 +417,14 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// `IdempotencyKey` is unused here because Tes offers no idempotent
     /// create; the job ledger's fencing (`write_attempt_one_in_flight`) is
     /// what stands in for it, which is why the key still must exist at the
-    /// call site.
+    /// call site. `now` is unused because no Tes request carries an instant:
+    /// the JSON API stamps its own.
     async fn submit(
         &self,
         _org: OrgId,
         _key: IdempotencyKey,
         fields: FieldSet,
+        _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
         let listing = Self::listing_from_field_set(&fields)?;
         let mut contents = Vec::with_capacity(fields.files.len());

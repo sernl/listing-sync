@@ -68,6 +68,7 @@ impl MarketplaceAdapter for ScriptedAdapter {
         _org: OrgId,
         _key: IdempotencyKey,
         _fields: FieldSet,
+        _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
         let position = self.submit_cursor.fetch_add(1, Ordering::SeqCst);
         self.submit_answers

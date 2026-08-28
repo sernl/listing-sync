@@ -215,3 +215,19 @@ The edit flow re-uploads nothing: existing asset handles are echoed back verbati
 The verdict resolves the fork in favour of the TES shape: a server-side plain-HTTP connector carrying a broker-established cookie jar reproduces both writes, and the tam-browser removal stands.
 The one residual browser-shaped dependency is not the write but the session: cf_clearance was carried into both captures rather than minted in them, and login was never captured, so whether a cold server IP is served the form directly or challenged, and whether login requires a reCAPTCHA token, are unproven — both are session-establishment concerns for the broker's link step, handled as TES's session is, and neither blocks building the write path against cassettes.
 The active plan is plans/2026-08-28-m7-tpt-connector.md, whose Task 3 now carries the full recipe.
+
+## The transport seam carries a closed header allow-list and a closed request auth, 2026-08-28
+
+The M7 write path needs a response header (the 302 `Location` and the upload queue's tracking id) and a per-request S3 signature, neither of which the seam could carry.
+A general header map on either side would have deleted the seam's no-secret invariant rather than extended it, because a map that can hold `Location` can hold `Set-Cookie` and a map that can hold an AWS signature can hold a session cookie.
+`HttpResponse` therefore gains `headers: Vec<(ResponseHeader, String)>` over a closed `ResponseHeader` allow-list, projected from the real header map at the live boundary, and `HttpRequest` gains a closed `RequestAuth` rather than headers of its own.
+`RequestAuth` has three variants: `Session`, naming the credential the live transport holds at construction and carrying none of it; `Anonymous`, for a request whose authorisation travels in its own body, which is what the Tes S3 POST-policy upload is; and `S3SigV2`, carrying an ephemeral signature over one object.
+`Anonymous` is an addition to the two-variant enum the design named, because without it the Tes upload — a multipart POST whose policy and signature are form fields — could only be described as `Session`, and an auth-dispatched transport would have had to send the seller's cookie to Amazon to send it at all.
+Both new fields serialise under `skip_serializing_if`, so every committed cassette fixture stays byte-identical and reads back unchanged.
+`RequestBody` gains `Bytes` through the same serde helper a response body uses, `MarketplaceAdapter::submit` gains `now: Timestamp` mirroring `read_back`'s `observed_at` because `SystemTime::now` is disallowed and a write hop needs the caller's clock as data, and a `Pause` capability trait joins the seam so an adapter can wait between hops without this crate acquiring a runtime.
+
+## The Tes session cookie no longer travels to Amazon, 2026-08-28
+
+`ReqwestTransport` put the cookie jar in reqwest's `default_headers`, which apply to every host a client reaches, so the Tes upload's multipart POST to `*.s3.amazonaws.com` sent the seller's full Tes session to Amazon on every file.
+The transport is now two clients: a session client holding the jar, and a bare client carrying nothing but a user agent, chosen by what a request declares about its own authentication.
+A host assertion refuses the mismatches outright — a session-authenticated request to the bucket, or a signed one to the marketplace origin, is `NotSent` and never leaves — so the leak cannot return by a flow building the wrong request value.

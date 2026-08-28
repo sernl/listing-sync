@@ -137,21 +137,18 @@ impl FakeTes {
     async fn answer(&self, request: &HttpRequest) -> HttpResponse {
         let mut state = self.state.lock().await;
         let url = request.url.as_str();
-        let ok = |body: String| HttpResponse {
-            status: 200,
-            body: body.into_bytes(),
-        };
+        let ok = |body: String| HttpResponse::plain(200, body.into_bytes());
 
         if url.ends_with("/api/v2/resources") && request.method == Method::Post {
             state.creates_seen += 1;
             if let Some(after) = state.reject_create_after {
                 if state.creates_seen > after {
-                    return HttpResponse {
-                        status: 400,
-                        body: json!({"error": "upload refused by the fake"})
+                    return HttpResponse::plain(
+                        400,
+                        json!({"error": "upload refused by the fake"})
                             .to_string()
                             .into_bytes(),
-                    };
+                    );
                 }
             }
             state.next_id += 1;
@@ -163,13 +160,12 @@ impl FakeTes {
             let id = path_id(url, "/api/v2/resources/", "/draft");
             match request.method {
                 Method::Get => {
-                    return state.drafts.get(&id).map_or(
-                        HttpResponse {
-                            status: 404,
-                            body: Vec::new(),
-                        },
-                        |draft| ok(draft.to_string()),
-                    );
+                    return state
+                        .drafts
+                        .get(&id)
+                        .map_or(HttpResponse::plain(404, Vec::new()), |draft| {
+                            ok(draft.to_string())
+                        });
                 }
                 Method::Post => {
                     if let RequestBody::Json(metadata) = &request.body {
@@ -193,10 +189,7 @@ impl FakeTes {
                 }
                 Method::Delete => {
                     state.drafts.remove(&id);
-                    return HttpResponse {
-                        status: 204,
-                        body: Vec::new(),
-                    };
+                    return HttpResponse::plain(204, Vec::new());
                 }
                 Method::Put => {}
             }
@@ -224,19 +217,15 @@ impl FakeTes {
             // The authoritative read the delete verification insists on:
             // 404 once the resource is gone, per the measured semantics.
             let id = path_id(url, "/api/v2/resources/", "");
-            return state.drafts.get(&id).map_or(
-                HttpResponse {
-                    status: 404,
-                    body: Vec::new(),
-                },
-                |draft| ok(draft.to_string()),
-            );
+            return state
+                .drafts
+                .get(&id)
+                .map_or(HttpResponse::plain(404, Vec::new()), |draft| {
+                    ok(draft.to_string())
+                });
         }
         if url.starts_with("https://fake-bucket.s3.amazonaws.com/") {
-            return HttpResponse {
-                status: 204,
-                body: Vec::new(),
-            };
+            return HttpResponse::plain(204, Vec::new());
         }
         if url.ends_with("/publish") {
             state.publishes += 1;
@@ -245,19 +234,16 @@ impl FakeTes {
         if request.method == Method::Delete {
             let id = path_id(url, "/api/v2/resources/", "");
             state.drafts.remove(&id);
-            return HttpResponse {
-                status: 204,
-                body: Vec::new(),
-            };
+            return HttpResponse::plain(204, Vec::new());
         }
-        HttpResponse {
-            status: 500,
-            body: format!(
+        HttpResponse::plain(
+            500,
+            format!(
                 "the fake has no route for {} {url}",
                 method_name(request.method)
             )
             .into_bytes(),
-        }
+        )
     }
 }
 

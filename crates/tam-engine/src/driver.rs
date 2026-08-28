@@ -274,7 +274,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                         });
                     }
                     record_action(ctx, lease, sequence, "submit", now).await?;
-                    let submitted = ctx.adapter.submit(org, key, fields).await;
+                    let submitted = ctx.adapter.submit(org, key, fields, now).await;
                     pending = Some(Input::SubmitResult(submitted));
                 }
                 Effect::ReadBack { locator, reason } => {

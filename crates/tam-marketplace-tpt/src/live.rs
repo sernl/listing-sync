@@ -114,10 +114,10 @@ impl Transport for ReqwestTransport {
         let builder = match request.body {
             RequestBody::Empty => builder,
             RequestBody::Json(value) => builder.json(&value),
-            // No TPT flow this crate builds posts a multipart form: the write
-            // path that does is capture-gated in the M7 plan, so sending one
-            // here would be a shape nothing has observed.
-            RequestBody::Multipart { .. } => {
+            // No TPT flow this crate builds posts a multipart form or a raw
+            // body: the write path that does is capture-gated in the M7 plan,
+            // so sending one here would be a shape nothing has observed.
+            RequestBody::Bytes(_) | RequestBody::Multipart { .. } => {
                 return Err(TransportError::NotSent(ConnectFailure::NoRouteToHost))
             }
         };
@@ -134,9 +134,6 @@ impl Transport for ReqwestTransport {
             .map_err(|error| TransportError::AfterSend {
                 detail: error.to_string(),
             })?;
-        Ok(HttpResponse {
-            status,
-            body: body.to_vec(),
-        })
+        Ok(HttpResponse::plain(status, body.to_vec()))
     }
 }

@@ -473,11 +473,16 @@ pub trait MarketplaceAdapter: Send + Sync {
     ) -> impl std::future::Future<Output = Result<FormSchemaFingerprint, AdapterError>> + Send;
 
     /// `IdempotencyKey` is required, so a submit without one does not typecheck.
+    ///
+    /// `now` is the driver's clock reading passed in as data, mirroring
+    /// `read_back`'s `observed_at`: an adapter holds no clock, and a submit
+    /// whose wire shape needs the current instant reads it from here.
     fn submit(
         &self,
         org: OrgId,
         key: IdempotencyKey,
         fields: FieldSet,
+        now: Timestamp,
     ) -> impl std::future::Future<Output = Result<SubmitEvidence, AdapterError>> + Send;
 
     /// `observed_at` is the driver's clock reading passed in as data — an
@@ -635,6 +640,17 @@ pub trait FileSource: Send + Sync {
         &self,
         file: FileId,
     ) -> impl std::future::Future<Output = Result<FileContent, FileSourceError>> + Send;
+}
+
+/// The capability an adapter uses to wait between hops of a flow whose
+/// upstream needs settling time. A capability rather than a runtime call,
+/// because this crate takes no runtime by design: the worker binds a real
+/// sleep, a test binds an instant return, and the flow reads the same in
+/// both. Written as `fn -> impl Future` for the same reason every other
+/// seam trait is: `async_fn_in_trait` is a hard error under a deny-warnings
+/// build.
+pub trait Pause: Send + Sync {
+    fn pause(&self, ms: u32) -> impl std::future::Future<Output = ()> + Send;
 }
 
 /// The six transport faults the research names, plus the two ambiguity faults

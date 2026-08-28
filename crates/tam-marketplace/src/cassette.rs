@@ -80,23 +80,14 @@ impl Transport for CassetteTransport {
 #[cfg(test)]
 mod tests {
     use super::{Cassette, CassetteTransport, Interaction};
-    use crate::transport::{
-        HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
-    };
+    use crate::transport::{HttpRequest, HttpResponse, ResponseHeader, Transport, TransportError};
 
     fn get(url: &str) -> HttpRequest {
-        HttpRequest {
-            method: Method::Get,
-            url: url.to_owned(),
-            body: RequestBody::Empty,
-        }
+        HttpRequest::get(url.to_owned())
     }
 
     fn ok(body: &str) -> HttpResponse {
-        HttpResponse {
-            status: 200,
-            body: body.as_bytes().to_vec(),
-        }
+        HttpResponse::plain(200, body.as_bytes().to_vec())
     }
 
     fn two_step() -> CassetteTransport {
@@ -155,17 +146,77 @@ mod tests {
     fn the_cassette_format_round_trips_as_json() {
         let cassette = Cassette {
             interactions: vec![Interaction {
-                request: HttpRequest {
-                    method: Method::Post,
-                    url: "https://example.test/c".to_owned(),
-                    body: RequestBody::Json(serde_json::json!({"k": 1})),
-                },
+                request: HttpRequest::post_json(
+                    "https://example.test/c".to_owned(),
+                    serde_json::json!({"k": 1}),
+                ),
                 response: ok("{}"),
             }],
         };
         let encoded = serde_json::to_string(&cassette).expect("a cassette serialises");
         let back: Cassette = serde_json::from_str(&encoded).expect("a cassette deserialises");
         assert_eq!(back, cassette, "the fixture format survives a round trip");
+    }
+
+    #[test]
+    fn a_session_request_records_without_an_auth_key() {
+        let encoded =
+            serde_json::to_string(&get("https://example.test/a")).expect("a request serialises");
+        assert_eq!(
+            encoded, r#"{"method":"Get","url":"https://example.test/a","body":"Empty"}"#,
+            "the default auth is skipped, so every fixture written before it existed still round trips"
+        );
+    }
+
+    #[test]
+    fn a_header_less_response_records_without_a_headers_key() {
+        let encoded = serde_json::to_string(&ok("a")).expect("a response serialises");
+        assert_eq!(
+            encoded, r#"{"status":200,"body":"a"}"#,
+            "an empty header allow-list is skipped, which is what keeps the fixtures byte-identical"
+        );
+    }
+
+    #[test]
+    fn the_committed_fixture_shape_still_deserialises() {
+        let fixture = r#"{"interactions":[{"request":{"method":"Delete","url":"https://www.tes.com/api/v2/resources/9001/draft","body":"Empty"},"response":{"status":204,"body":""}}]}"#;
+        let cassette: Cassette =
+            serde_json::from_str(fixture).expect("a pre-seam fixture still reads");
+        let interaction = cassette
+            .interactions
+            .first()
+            .expect("the fixture holds one interaction");
+        assert!(
+            interaction.request.auth.is_session(),
+            "an absent auth key means the session, which is what every recorded request was"
+        );
+        assert!(
+            interaction.response.headers.is_empty(),
+            "an absent headers key means no allow-listed header was read"
+        );
+    }
+
+    #[test]
+    fn a_recorded_header_round_trips_through_the_allow_list() {
+        let response = HttpResponse {
+            headers: vec![(
+                ResponseHeader::Location,
+                "https://example.test/landed".to_owned(),
+            )],
+            ..ok("")
+        };
+        let encoded = serde_json::to_string(&response).expect("a response serialises");
+        let back: HttpResponse = serde_json::from_str(&encoded).expect("a response deserialises");
+        assert_eq!(
+            back.header(ResponseHeader::Location),
+            Some("https://example.test/landed"),
+            "the allow-listed header survives the fixture round trip"
+        );
+        assert_eq!(
+            back.header(ResponseHeader::ETag),
+            None,
+            "a header the recording does not carry reads as absent, never as empty"
+        );
     }
 
     #[test]
@@ -185,10 +236,7 @@ mod tests {
             .copied()
             .chain((0u8..=255).cycle().take(512))
             .collect();
-        let response = HttpResponse {
-            status: 200,
-            body: zip.clone(),
-        };
+        let response = HttpResponse::plain(200, zip.clone());
         let encoded = serde_json::to_string(&response).expect("a binary response serialises");
         let back: HttpResponse =
             serde_json::from_str(&encoded).expect("a binary response deserialises");

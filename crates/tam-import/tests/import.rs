@@ -14,7 +14,7 @@ use tam_import::{
     MeasureTotals, NamedBytes, NoImportFiles,
 };
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
-use tam_marketplace::transport::{HttpRequest, HttpResponse, Method, RequestBody};
+use tam_marketplace::transport::{HttpRequest, HttpResponse};
 use tam_marketplace::FetchReason;
 use tam_marketplace_tes::{endpoints as tes, DraftId, TesAdapter};
 use tam_secrets::Kek;
@@ -51,15 +51,10 @@ fn draft_body(resource: i64) -> String {
 fn adapter_for(resource: i64) -> TesAdapter<CassetteTransport, NoImportFiles> {
     let cassette = Cassette {
         interactions: vec![Interaction {
-            request: HttpRequest {
-                method: Method::Get,
-                url: format!("https://www.tes.com/api/v2/resources/{resource}/draft"),
-                body: RequestBody::Empty,
-            },
-            response: HttpResponse {
-                status: 200,
-                body: draft_body(resource).into_bytes(),
-            },
+            request: HttpRequest::get(format!(
+                "https://www.tes.com/api/v2/resources/{resource}/draft"
+            )),
+            response: HttpResponse::plain(200, draft_body(resource).into_bytes()),
         }],
     };
     TesAdapter::new(
@@ -468,10 +463,7 @@ fn zip_of(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
 }
 
 fn json_ok(value: &serde_json::Value) -> HttpResponse {
-    HttpResponse {
-        status: 200,
-        body: value.to_string().into_bytes(),
-    }
+    HttpResponse::plain(200, value.to_string().into_bytes())
 }
 
 /// The hops discover makes, in order: the catalogue walk, then the two-step
@@ -517,21 +509,13 @@ fn discover_adapter(
             },
             Interaction {
                 request: tes::download_bundle_request(&path),
-                response: HttpResponse {
-                    status: 200,
-                    body: bundle,
-                },
+                response: HttpResponse::plain(200, bundle),
             },
             Interaction {
-                request: HttpRequest {
-                    method: Method::Get,
-                    url: format!("https://www.tes.com/api/v2/resources/{resource}/draft"),
-                    body: RequestBody::Empty,
-                },
-                response: HttpResponse {
-                    status: 200,
-                    body: draft_body(resource).into_bytes(),
-                },
+                request: HttpRequest::get(format!(
+                    "https://www.tes.com/api/v2/resources/{resource}/draft"
+                )),
+                response: HttpResponse::plain(200, draft_body(resource).into_bytes()),
             },
         ],
     };
