@@ -382,7 +382,7 @@ impl<'a> VerifyColumns<'a> {
     }
 }
 
-fn remote_id_from_db(
+pub(crate) fn remote_id_from_db(
     kind: &str,
     url: Option<String>,
     numeric_id: Option<i64>,

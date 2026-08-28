@@ -14,15 +14,15 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tam_domain::{
-    CanonicalTerm, Decider, EdgeKind, ItemOutcome, ProjectionEdge, TermKind, VocabularyId,
-    VocabularyPath,
+    Binding, CanonicalTerm, Decider, EdgeKind, ItemOutcome, ProjectionEdge, TermKind, Verification,
+    VocabularyId, VocabularyPath,
 };
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{seed_for_item, SeedOutcome};
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
 };
-use tam_marketplace::{FileContent, FileSource, FileSourceError};
+use tam_marketplace::{FileContent, FileSource, FileSourceError, RemoteListingId};
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
     HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
@@ -505,7 +505,7 @@ async fn the_clean_run_settles_committed_and_never_touches_publish(pool: PgPool)
         RunVerdict::Settled(ItemOutcome::Succeeded),
         "the whole flow — create, metadata, presign, S3, confirm, read-back — settled honest"
     );
-    let (publishes, landed) = {
+    let (publishes, landed, minted) = {
         let state = fake.state.lock().await;
         (
             state.publishes,
@@ -513,12 +513,31 @@ async fn the_clean_run_settles_committed_and_never_touches_publish(pool: PgPool)
                 .drafts
                 .values()
                 .any(|draft| draft["title"] == "Fractions practice"),
+            state.drafts.keys().copied().max(),
         )
     };
     assert_eq!(publishes, 0, "dry-run never touches publish");
     assert!(
         landed,
         "the metadata the projection produced landed on the marketplace draft"
+    );
+    let minted = minted.expect("the fake minted a draft for the create");
+    let record = MappingRepo::new(pool.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert_eq!(
+        record.mapping.binding,
+        Binding::Bound {
+            id: RemoteListingId::Tes {
+                url: format!("https://www.tes.com/api/v2/resources/{minted}"),
+            },
+            first_seen: NOW,
+            verified: Verification::Stale { since: NOW },
+        },
+        "the run's binding must carry the listing the marketplace minted, stale until \
+         the drift verifier reads it back"
     );
 }
 

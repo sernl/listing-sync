@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE mapping SET binding_state = 'bound', remote_id_kind = $3, remote_url = $4, remote_numeric_id = $5, first_seen_at = $6, verify_state = 'stale', verified_at = NULL, verify_stale_since = $6, binding_attempt = NULL, binding_marker = NULL, ambiguous_since = NULL, severed_at = NULL, sever_cause = NULL, updated_at = $6 WHERE org_id = $1 AND id = $2 AND binding_state IN ('unbound', 'creating')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ca80eb2b81f6bad6d6c951f5affc6f027431f4468f96221f373348c3fe0ccc5e"
+}

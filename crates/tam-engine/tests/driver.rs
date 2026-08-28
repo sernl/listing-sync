@@ -269,6 +269,47 @@ async fn run(
     (verdict, engine)
 }
 
+/// The mapping the seed left unbound, read after the run. The bind is folded
+/// into the attempt settle, so a committed attempt that carries a listing
+/// must leave the mapping bound to it and stale.
+async fn assert_bound_to(engine: &PgPool, url: &str) -> Result<(), sqlx::Error> {
+    let bound: (
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<bool>,
+        Option<bool>,
+    ) = sqlx::query_as(
+        "SELECT binding_state, remote_id_kind, remote_url, verify_state, \
+                    verified_at IS NULL, verify_stale_since = first_seen_at \
+             FROM mapping LIMIT 1",
+    )
+    .fetch_one(engine)
+    .await?;
+    assert_eq!(
+        (
+            bound.0.as_str(),
+            bound.1.as_deref(),
+            bound.2.as_deref(),
+            bound.3.as_str(),
+            bound.4,
+            bound.5
+        ),
+        (
+            "bound",
+            Some("tes"),
+            Some(url),
+            "stale",
+            Some(true),
+            Some(true)
+        ),
+        "the settle must bind the mapping to the listing the write landed on, stale \
+         because the report it settled on was never normalised"
+    );
+    Ok(())
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_happy_path_settles_succeeded(app: PgPool) {
     let adapter = ScriptedAdapter {
@@ -313,6 +354,9 @@ async fn the_happy_path_settles_succeeded(app: PgPool) {
         "the committed attempt records the listing the write landed on, or nothing can \
          reconcile what it created"
     );
+    assert_bound_to(&engine, "https://www.tes.com/api/v2/resources/9001")
+        .await
+        .expect("the mapping row reads");
     let events: i64 = sqlx::query_scalar("SELECT count(*) FROM job_event")
         .fetch_one(&engine)
         .await
@@ -345,4 +389,12 @@ async fn an_ambiguous_submit_halts_the_inventory(app: PgPool) {
         .await
         .expect("the outbox reads");
     assert!(notified >= 1, "the seller notification queued");
+    let binding: String = sqlx::query_scalar("SELECT binding_state FROM mapping LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the mapping row reads");
+    assert_eq!(
+        binding, "unbound",
+        "an ambiguous submit landed nothing, so there is nothing to bind"
+    );
 }

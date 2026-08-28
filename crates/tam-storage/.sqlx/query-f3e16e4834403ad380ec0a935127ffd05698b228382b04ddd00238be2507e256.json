@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT claimant.id AS \"id!\"\n           FROM mapping AS target\n           JOIN mapping AS claimant\n             ON claimant.org_id = target.org_id\n            AND claimant.inventory = target.inventory\n           WHERE target.org_id = $1 AND target.id = $2\n             AND claimant.binding_state = 'bound'\n             AND claimant.remote_id_kind = $3\n             AND claimant.remote_url IS NOT DISTINCT FROM $4\n             AND claimant.remote_numeric_id IS NOT DISTINCT FROM $5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f3e16e4834403ad380ec0a935127ffd05698b228382b04ddd00238be2507e256"
+}

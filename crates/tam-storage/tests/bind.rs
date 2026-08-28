@@ -1,0 +1,503 @@
+//! The bind folded into the attempt settle, proven over the tam_engine role:
+//! a landed write binds an unbound mapping and leaves it stale, re-landing
+//! the same identifier preserves `first_seen_at`, a different identifier is
+//! reported rather than written over the first, and one remote listing
+//! cannot be claimed twice inside an organisation's inventory.
+
+#![cfg(feature = "pg-tests")]
+
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use tam_domain::{
+    Binding, CanonicalProduct, DeclarationSource, FieldPolicies, FieldPolicy, GradeDeclaration,
+    ItemOutcome, JobItemId, Mapping, PublishMode, Verification,
+};
+use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
+use tam_storage::{
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, ItemVerdict, JobRepo, LeaseRef,
+    LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, StorageError, WriteAttemptRepo,
+};
+use tam_types::{
+    CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
+    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
+    Timestamp, Title, Uuid,
+};
+
+const T0: Timestamp = Timestamp(1_756_000_000_000);
+const LANDED_AT: Timestamp = Timestamp(1_756_000_001_000);
+const RELANDED_AT: Timestamp = Timestamp(1_756_000_002_000);
+
+const ORG: OrgId = OrgId(Uuid([0xC1; 16]));
+const JOB: JobId = JobId(Uuid([0xC2; 16]));
+const ITEM: JobItemId = JobItemId(Uuid([0xC3; 16]));
+const MAPPING: MappingId = MappingId(Uuid([0xC4; 16]));
+const RIVAL: MappingId = MappingId(Uuid([0xC5; 16]));
+const RIVAL_JOB: JobId = JobId(Uuid([0xCC; 16]));
+const RIVAL_ITEM: JobItemId = JobItemId(Uuid([0xCD; 16]));
+const PRODUCT: u8 = 0xC6;
+const RIVAL_PRODUCT: u8 = 0xD0;
+
+const LANDED: &str = "https://www.tes.com/teaching-resource/fractions-9001";
+const ELSEWHERE: &str = "https://www.tes.com/teaching-resource/fractions-9002";
+
+fn db_uuid(id: Uuid) -> uuid::Uuid {
+    uuid::Uuid::from_bytes(id.0)
+}
+
+fn tes(url: &str) -> RemoteListingId {
+    RemoteListingId::Tes {
+        url: url.to_owned(),
+    }
+}
+
+fn product(seed: u8) -> CanonicalProduct {
+    CanonicalProduct {
+        id: ProductId(Uuid([seed; 16])),
+        org: ORG,
+        title: Title("Fixture".to_owned()),
+        body: ListingCopy {
+            body: "Fixture".to_owned(),
+        },
+        payload: PayloadSet::new(
+            ProductFile {
+                id: FileId(Uuid([seed.wrapping_add(1); 16])),
+                role: FileRole::Payload,
+                kind: FileKind::Pdf,
+                hash: ContentHash([seed; 32]),
+                byte_len: 4,
+                scan: ScanOutcome::Pending,
+            },
+            vec![],
+        ),
+        cover: None,
+        previews: vec![],
+        subjects: Vec::<CanonicalTermId>::new(),
+        grades: GradeDeclaration {
+            source: DeclarationSource::Seller,
+            raw: vec![],
+            derived: None,
+        },
+        price: PriceIntent::Free,
+    }
+}
+
+fn mapping_of(id: MappingId, product_seed: u8, binding: Binding) -> Mapping {
+    Mapping {
+        id,
+        org: ORG,
+        product: ProductId(Uuid([product_seed; 16])),
+        inventory: InventoryId::TesGb,
+        binding,
+        policies: FieldPolicies {
+            title: FieldPolicy::Managed,
+            description: FieldPolicy::Managed,
+            price: FieldPolicy::Managed,
+            taxonomy: FieldPolicy::Managed,
+            grades: FieldPolicy::Managed,
+            files: FieldPolicy::Managed,
+        },
+        price_rule: PriceRule::Explicit(PriceIntent::Free),
+        publish: PublishMode::DryRun,
+        lifecycle: RemoteLifecycle::Absent,
+    }
+}
+
+/// The binding a fresh insert would hold for a listing landed at `at`: bound,
+/// and stale because the report handed to the settle was never normalised.
+fn freshly_bound(url: &str, at: Timestamp) -> Binding {
+    Binding::Bound {
+        id: tes(url),
+        first_seen: at,
+        verified: Verification::Stale { since: at },
+    }
+}
+
+/// The engine connects as its own role; the per-test database name comes from
+/// the app pool. Host and port are the dev database's, same as DATABASE_URL.
+async fn engine_pool(app: &PgPool) -> Result<PgPool, sqlx::Error> {
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(app)
+        .await?;
+    PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&format!(
+            "postgres://tam_engine:tam_engine_dev@127.0.0.1:5433/{database}"
+        ))
+        .await
+}
+
+async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-bind', now())")
+        .bind(db_uuid(ORG.0))
+        .execute(app)
+        .await?;
+    ProductRepo::new(app.clone())
+        .insert(ORG, &product(PRODUCT), T0)
+        .await?;
+    MappingRepo::new(app.clone())
+        .insert(ORG, &mapping_of(MAPPING, PRODUCT, Binding::Unbound), 0, T0)
+        .await?;
+    let mut tx = app.begin().await?;
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(ORG.0).to_string())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+         VALUES ($1, $2, 'tes', 'linked', now(), now())",
+    )
+    .bind(db_uuid(ORG.0))
+    .bind(db_uuid(Uuid([0xC8; 16])))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    JobRepo::new(engine.clone())
+        .enqueue(
+            ORG,
+            &NewJob {
+                job: JOB,
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            &[NewJobItem {
+                item: ITEM,
+                mapping: MAPPING,
+                idempotency_key: IdempotencyKey(Uuid([0xC9; 16])),
+            }],
+        )
+        .await?;
+    Ok(())
+}
+
+async fn seeded_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, StorageError> {
+    seed(app, engine).await?;
+    Ok(LeaseRepo::new(engine.clone())
+        .acquire("bind-test", T0, 600)
+        .await?
+        .map(|leased| leased.lease_ref()))
+}
+
+/// A second product and mapping in the same organisation and inventory, so
+/// the two can contend for one remote listing.
+async fn seed_rival_mapping(app: &PgPool) -> Result<(), StorageError> {
+    ProductRepo::new(app.clone())
+        .insert(ORG, &product(RIVAL_PRODUCT), T0)
+        .await?;
+    MappingRepo::new(app.clone())
+        .insert(
+            ORG,
+            &mapping_of(RIVAL, RIVAL_PRODUCT, Binding::Unbound),
+            0,
+            T0,
+        )
+        .await?;
+    Ok(())
+}
+
+async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, StorageError> {
+    seed_rival_mapping(app).await?;
+    JobRepo::new(engine.clone())
+        .enqueue(
+            ORG,
+            &NewJob {
+                job: RIVAL_JOB,
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            &[NewJobItem {
+                item: RIVAL_ITEM,
+                mapping: RIVAL,
+                idempotency_key: IdempotencyKey(Uuid([0xCB; 16])),
+            }],
+        )
+        .await?;
+    Ok(LeaseRepo::new(engine.clone())
+        .acquire("bind-test", T0, 600)
+        .await?
+        .map(|leased| leased.lease_ref()))
+}
+
+/// One whole write attempt: opened against the mapping, then settled
+/// committed with whatever the write landed on.
+async fn land(
+    engine: &PgPool,
+    lease: &LeaseRef,
+    mapping: MappingId,
+    landed: Option<RemoteListingId>,
+    at: Timestamp,
+) -> Result<BindDisposition, StorageError> {
+    let attempts = WriteAttemptRepo::new(engine.clone());
+    let attempt = attempts
+        .open(
+            lease,
+            mapping,
+            &AttemptIntent {
+                body: serde_json::json!({}),
+                hash: vec![0x01],
+            },
+            at,
+        )
+        .await?;
+    attempts
+        .settle(
+            lease,
+            AttemptRef { attempt, mapping },
+            &AttemptVerdict {
+                state: "committed".to_owned(),
+                failure_code: None,
+                landed,
+            },
+            at,
+        )
+        .await
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_landed_write_binds_the_mapping_stale(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+
+    let disposition = land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+        .await
+        .expect("the settle runs");
+
+    assert_eq!(
+        disposition,
+        BindDisposition::Bound,
+        "a committed attempt carrying a landed listing binds the mapping it wrote for"
+    );
+    let record = MappingRepo::new(app.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert_eq!(
+        record.mapping,
+        mapping_of(MAPPING, PRODUCT, freshly_bound(LANDED, LANDED_AT)),
+        "the bound row must decode to exactly the mapping a fresh insert of that \
+         binding would hold, or the bind left a state the codec cannot round-trip"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn re_landing_the_same_listing_preserves_first_seen(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+        .await
+        .expect("the first settle runs");
+
+    let again = land(&engine, &lease, MAPPING, Some(tes(LANDED)), RELANDED_AT)
+        .await
+        .expect("the second settle runs");
+
+    assert_eq!(
+        again,
+        BindDisposition::AlreadyBound,
+        "re-landing the identifier the mapping already holds is an idempotent no-op"
+    );
+    let record = MappingRepo::new(app.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert_eq!(
+        record.mapping.binding,
+        freshly_bound(LANDED, LANDED_AT),
+        "first_seen_at names when the listing was first seen, so a second landing \
+         must not move it to the second instant"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_divergent_landing_is_reported_never_written(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+        .await
+        .expect("the first settle runs");
+
+    let divergent = land(&engine, &lease, MAPPING, Some(tes(ELSEWHERE)), RELANDED_AT)
+        .await
+        .expect("the second settle runs");
+
+    assert_eq!(
+        divergent,
+        BindDisposition::DivergentLanding {
+            existing: tes(LANDED)
+        },
+        "a second listing under a bound mapping is reported with the identifier the \
+         mapping holds; the attempt still settles, because refusing to record a write \
+         that landed would retry the item and mint a third listing"
+    );
+    let record = MappingRepo::new(app.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert_eq!(
+        record.mapping.binding,
+        freshly_bound(LANDED, LANDED_AT),
+        "a bind never overwrites: the mapping must still hold the first listing"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_refused_bind_still_settles_the_attempt(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    sqlx::query(
+        "UPDATE mapping \
+         SET binding_state = 'ambiguous_create', binding_attempt = $3, ambiguous_since = now() \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(db_uuid(ORG.0))
+    .bind(db_uuid(MAPPING.0))
+    .bind(db_uuid(Uuid([0xCA; 16])))
+    .execute(&engine)
+    .await
+    .expect("the fixture moves the mapping out of a bindable state");
+
+    let refused = land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+        .await
+        .expect("the settle runs");
+
+    assert_eq!(
+        refused,
+        BindDisposition::Refused {
+            state: "ambiguous_create".to_owned()
+        },
+        "a bind is fenced on the states it may leave, and reports the one it found"
+    );
+    let attempt: (String, Option<String>) =
+        sqlx::query_as("SELECT state, remote_url FROM write_attempt LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the attempt row reads");
+    assert_eq!(
+        (attempt.0.as_str(), attempt.1.as_deref()),
+        ("committed", Some(LANDED)),
+        "a refused bind must never roll back the settle: the write landed, and an \
+         attempt that does not say so would be retried and mint a second listing"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_listing_another_mapping_holds_still_settles_the_attempt(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let leases = LeaseRepo::new(engine.clone());
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+        .await
+        .expect("the first settle runs");
+    leases
+        .settle(
+            &lease,
+            &ItemVerdict {
+                outcome: ItemOutcome::Succeeded,
+                failure_code: None,
+                failure_detail: None,
+            },
+            LANDED_AT,
+        )
+        .await
+        .expect("the first item settles, releasing the tenant mutex");
+    let rival = rival_lease(&app, &engine)
+        .await
+        .expect("the rival fixture seeds")
+        .expect("the rival item leases");
+
+    let clash = land(&engine, &rival, RIVAL, Some(tes(LANDED)), RELANDED_AT)
+        .await
+        .expect("the second settle runs");
+
+    assert_eq!(
+        clash,
+        BindDisposition::ClaimedElsewhere {
+            existing_mapping: MAPPING
+        },
+        "a listing another mapping in the inventory already holds is the cross-mapping \
+         form of a divergent landing, and names the mapping holding it"
+    );
+    let attempt: (String, Option<String>) =
+        sqlx::query_as("SELECT state, remote_url FROM write_attempt WHERE mapping_id = $1")
+            .bind(db_uuid(RIVAL.0))
+            .fetch_one(&engine)
+            .await
+            .expect("the rival attempt row reads");
+    assert_eq!(
+        (attempt.0.as_str(), attempt.1.as_deref()),
+        ("committed", Some(LANDED)),
+        "the clash must not roll the settle back: the write landed, and an attempt that \
+         does not say so would be retried into a third listing"
+    );
+    let repo = MappingRepo::new(app.clone());
+    let rival_record = repo
+        .get(ORG, RIVAL)
+        .await
+        .expect("the rival mapping reads back")
+        .expect("the rival mapping exists");
+    assert_eq!(
+        rival_record.mapping.binding,
+        Binding::Unbound,
+        "the refused bind wrote nothing to the mapping it was refused for"
+    );
+    let held = repo
+        .get(ORG, MAPPING)
+        .await
+        .expect("the holding mapping reads back")
+        .expect("the holding mapping exists");
+    assert_eq!(
+        held.mapping.binding,
+        freshly_bound(LANDED, LANDED_AT),
+        "and nothing touched the mapping that already held the listing"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn one_remote_listing_cannot_be_claimed_twice(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+        .await
+        .expect("the settle runs");
+    seed_rival_mapping(&app)
+        .await
+        .expect("the rival product and mapping insert");
+
+    let refused = sqlx::query(
+        "UPDATE mapping \
+         SET binding_state = 'bound', remote_id_kind = 'tes', remote_url = $3, \
+             first_seen_at = now(), verify_state = 'stale', verify_stale_since = now() \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(db_uuid(ORG.0))
+    .bind(db_uuid(RIVAL.0))
+    .bind(LANDED)
+    .execute(&engine)
+    .await;
+
+    assert!(
+        refused.is_err(),
+        "two mappings in one organisation's inventory must not both claim the same \
+         remote listing; mapping_one_per_inventory guards the product side only"
+    );
+}

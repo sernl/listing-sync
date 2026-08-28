@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT binding_state, remote_id_kind, remote_url, remote_numeric_id FROM mapping WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "binding_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "remote_id_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "remote_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "remote_numeric_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "c19846c2e045ac1c26890a1a7503aba31ccdeb18703eb519227cb2a88e9b6afe"
+}

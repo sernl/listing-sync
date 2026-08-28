@@ -22,6 +22,7 @@ use crate::codec::{
     failure_code_to_db, inventory_from_db, inventory_to_db, marketplace_to_db, timestamp_to_db,
     uuid_from_db, uuid_to_db, RemoteIdColumns,
 };
+use crate::mapping::remote_id_from_db;
 use crate::StorageError;
 
 pub(crate) const fn item_outcome_to_db(outcome: ItemOutcome) -> &'static str {
@@ -650,6 +651,14 @@ pub struct AttemptVerdict {
     pub landed: Option<RemoteListingId>,
 }
 
+/// The two rows a settlement writes: the fenced attempt, and the mapping a
+/// landed write binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttemptRef {
+    pub attempt: Uuid,
+    pub mapping: MappingId,
+}
+
 /// The fencing token's ledger: the row is written before the click, because
 /// the commit boundary is intent recorded rather than response received.
 pub struct WriteAttemptRepo {
@@ -693,39 +702,200 @@ impl WriteAttemptRepo {
         Ok(attempt)
     }
 
-    /// Epoch-fenced settlement of the attempt row.
+    /// Epoch-fenced settlement of the attempt row, and — when the verdict
+    /// carries a landed listing — the mapping bind, in one transaction. A
+    /// separate bind call would leave a crash window where the attempt says
+    /// committed while the mapping stays unbound.
     pub async fn settle(
         &self,
         lease: &LeaseRef,
-        attempt: tam_types::Uuid,
+        settling: AttemptRef,
         verdict: &AttemptVerdict,
         at: Timestamp,
-    ) -> Result<(), StorageError> {
+    ) -> Result<BindDisposition, StorageError> {
+        let AttemptRef { attempt, mapping } = settling;
         let AttemptVerdict {
             state,
             failure_code,
             landed,
         } = verdict;
         let remote = landed.as_ref().map(RemoteIdColumns::encode).transpose()?;
+        let org_db = uuid_to_db(lease.org.0);
+        let at_db = timestamp_to_db(at)?;
+        let mut tx = self.pool.begin().await?;
         let updated = sqlx::query!(
             "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6,                  remote_id_kind = $7, remote_url = $8, remote_numeric_id = $9              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
-            uuid_to_db(lease.org.0),
+            org_db,
             uuid_to_db(attempt),
             lease.lease_epoch,
             state.as_str(),
-            timestamp_to_db(at)?,
+            at_db,
             failure_code.map(failure_code_to_db),
             remote.as_ref().map(|remote| remote.kind),
             remote.as_ref().and_then(|remote| remote.url),
             remote.as_ref().and_then(|remote| remote.numeric_id),
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if updated.rows_affected() == 0 {
             return Err(StorageError::StaleLease);
         }
-        Ok(())
+        let (Some(landed), Some(remote)) = (landed.as_ref(), remote) else {
+            tx.commit().await?;
+            return Ok(BindDisposition::NotLanded);
+        };
+        let mapping_db = uuid_to_db(mapping.0);
+        sqlx::query("SAVEPOINT bind").execute(&mut *tx).await?;
+        let bound = sqlx::query!(
+            "UPDATE mapping \
+             SET binding_state = 'bound', \
+                 remote_id_kind = $3, remote_url = $4, remote_numeric_id = $5, \
+                 first_seen_at = $6, \
+                 verify_state = 'stale', verified_at = NULL, verify_stale_since = $6, \
+                 binding_attempt = NULL, binding_marker = NULL, \
+                 ambiguous_since = NULL, severed_at = NULL, sever_cause = NULL, \
+                 updated_at = $6 \
+             WHERE org_id = $1 AND id = $2 \
+               AND binding_state IN ('unbound', 'creating')",
+            org_db,
+            mapping_db,
+            remote.kind,
+            remote.url,
+            remote.numeric_id,
+            at_db,
+        )
+        .execute(&mut *tx)
+        .await;
+        let disposition = match bound {
+            Ok(bound) if bound.rows_affected() > 0 => BindDisposition::Bound,
+            Ok(_) => classify_bind(&mut tx, org_db, mapping_db, landed).await?,
+            Err(clash) if is_bound_identity_clash(&clash) => {
+                sqlx::query("ROLLBACK TO SAVEPOINT bind")
+                    .execute(&mut *tx)
+                    .await?;
+                claimed_elsewhere(&mut tx, org_db, mapping_db, &remote).await?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        tx.commit().await?;
+        Ok(disposition)
     }
+}
+
+/// What the bind folded into an attempt settle did to the mapping.
+///
+/// A bind never overwrites: re-landing the same identifier is idempotent and
+/// preserves `first_seen_at`, a different identifier against a bound row is
+/// reported rather than written, and a listing another mapping in the same
+/// inventory already holds is the cross-mapping form of the same refusal.
+/// Every one of them still settles the attempt, because the second listing is
+/// already queryable from the settled attempt's own remote-id columns and
+/// refusing to record a write that landed would retry it into a third.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindDisposition {
+    /// The verdict carried no landed listing, so there was nothing to bind.
+    NotLanded,
+    Bound,
+    AlreadyBound,
+    DivergentLanding {
+        existing: RemoteListingId,
+    },
+    ClaimedElsewhere {
+        existing_mapping: MappingId,
+    },
+    Refused {
+        state: String,
+    },
+}
+
+/// The partial unique indexes migration 0018 laid over a bound remote
+/// identity. A violation of either is one mapping landing on the listing
+/// another mapping in the same inventory already holds.
+const BOUND_IDENTITY_INDEXES: [&str; 2] = ["mapping_one_bound_url", "mapping_one_bound_numeric_id"];
+
+fn is_bound_identity_clash(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(database) = error else {
+        return false;
+    };
+    database
+        .constraint()
+        .is_some_and(|name| BOUND_IDENTITY_INDEXES.contains(&name))
+}
+
+/// Which mapping in the same inventory already holds the identifier the bind
+/// tried to claim. The index that refused the bind guarantees at most one.
+async fn claimed_elsewhere(
+    tx: &mut Transaction<'_, Postgres>,
+    org: uuid::Uuid,
+    mapping: uuid::Uuid,
+    remote: &RemoteIdColumns<'_>,
+) -> Result<BindDisposition, StorageError> {
+    let claimant = sqlx::query!(
+        r#"SELECT claimant.id AS "id!"
+           FROM mapping AS target
+           JOIN mapping AS claimant
+             ON claimant.org_id = target.org_id
+            AND claimant.inventory = target.inventory
+           WHERE target.org_id = $1 AND target.id = $2
+             AND claimant.binding_state = 'bound'
+             AND claimant.remote_id_kind = $3
+             AND claimant.remote_url IS NOT DISTINCT FROM $4
+             AND claimant.remote_numeric_id IS NOT DISTINCT FROM $5"#,
+        org,
+        mapping,
+        remote.kind,
+        remote.url,
+        remote.numeric_id,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| StorageError::Inconsistent {
+        reason: "the bound remote identity was refused by an index that names no claimant"
+            .to_owned(),
+    })?;
+    Ok(BindDisposition::ClaimedElsewhere {
+        existing_mapping: MappingId(uuid_from_db(claimant.id)),
+    })
+}
+
+/// Why the fenced bind matched no row, read inside the settling transaction
+/// so the answer is the state the bind was refused against.
+async fn classify_bind(
+    tx: &mut Transaction<'_, Postgres>,
+    org: uuid::Uuid,
+    mapping: uuid::Uuid,
+    landed: &RemoteListingId,
+) -> Result<BindDisposition, StorageError> {
+    let row = sqlx::query!(
+        "SELECT binding_state, remote_id_kind, remote_url, remote_numeric_id \
+         FROM mapping WHERE org_id = $1 AND id = $2",
+        org,
+        mapping,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| StorageError::CorruptRow {
+        reason: "the settled attempt names a mapping that does not exist".to_owned(),
+    })?;
+    if row.binding_state != "bound" {
+        return Ok(BindDisposition::Refused {
+            state: row.binding_state,
+        });
+    }
+    let existing = remote_id_from_db(
+        row.remote_id_kind
+            .as_deref()
+            .ok_or_else(|| StorageError::CorruptRow {
+                reason: "bound binding without a remote id kind".to_owned(),
+            })?,
+        row.remote_url,
+        row.remote_numeric_id,
+    )?;
+    Ok(if existing == *landed {
+        BindDisposition::AlreadyBound
+    } else {
+        BindDisposition::DivergentLanding { existing }
+    })
 }
 
 /// Who raised a halt, why, and when.

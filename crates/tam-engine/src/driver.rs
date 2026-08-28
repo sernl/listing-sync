@@ -16,9 +16,9 @@ use tam_marketplace::{
     WriteAttemptId,
 };
 use tam_storage::{
-    append_event, AttemptIntent, AttemptVerdict, BudgetGrant, EventScope, HaltCause, HaltRepo,
-    ItemVerdict, LeaseRepo, LeasedItem, NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError,
-    WriteAttemptRepo,
+    append_event, AttemptIntent, AttemptRef, AttemptVerdict, BudgetGrant, EventScope, HaltCause,
+    HaltRepo, ItemVerdict, LeaseRepo, LeasedItem, NewOutboxMessage, OutboxRepo, RateBudgetRepo,
+    StorageError, WriteAttemptRepo,
 };
 use tam_types::{
     ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId, Timestamp, Uuid,
@@ -364,7 +364,15 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                     };
                     if let Err(error) = ctx
                         .attempts
-                        .settle(&lease_ref, attempt.0, &attempt_verdict, now)
+                        .settle(
+                            &lease_ref,
+                            AttemptRef {
+                                attempt: attempt.0,
+                                mapping: lease.mapping,
+                            },
+                            &attempt_verdict,
+                            now,
+                        )
                         .await
                     {
                         return Ok(RunVerdict::Abandoned {
