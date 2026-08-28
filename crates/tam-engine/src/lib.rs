@@ -6,6 +6,12 @@
 
 #![forbid(unsafe_code)]
 
+/// The wait capability the driver's verification poll takes, re-exported so
+/// a binary can bind a real sleep without depending on `tam-marketplace`
+/// directly: this crate holds no timer by design, and the poll is the only
+/// place in the engine that waits.
+pub use tam_marketplace::Pause;
+
 pub mod breaker;
 pub mod broker_client;
 pub mod canary;

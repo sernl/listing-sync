@@ -8,6 +8,7 @@
 #![cfg(feature = "pg-tests")]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::Mutex;
 
 use base64::Engine as _;
@@ -18,12 +19,14 @@ use tam_domain::{
     VocabularyId, VocabularyPath,
 };
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
-use tam_engine::seed::{project_for_item, seed_from_projection, ProjectionOutcome};
+use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
 };
-use tam_marketplace::{FileContent, FileSource, FileSourceError, RemoteListingId};
+use tam_marketplace::{
+    FileContent, FileSource, FileSourceError, ListingState, Pause, RemoteLifecycle, RemoteListingId,
+};
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
     BudgetGrant, HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo,
@@ -42,6 +45,8 @@ const MAPPING: MappingId = MappingId(Uuid([0x31; 16]));
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
 const JOB: JobId = JobId(Uuid([0x42; 16]));
 const NOW: Timestamp = Timestamp(1_000);
+/// The listing the removal fixture's mapping is already bound to.
+const REMOVAL_ID: i64 = 9_001;
 
 struct Clock;
 
@@ -74,6 +79,36 @@ struct FakeState {
     creates_seen: usize,
     reject_create_after: Option<usize>,
     publishes: usize,
+    /// How many reads of a given resource, after the first, answer 404 for
+    /// something that is really there — the platform lag both live runs
+    /// measured.
+    lag_reads: usize,
+    reads_of: HashMap<i64, usize>,
+}
+
+impl FakeState {
+    /// Counted per resource and never on the first read of one, because the
+    /// first read of the resource a create just made is that create's own:
+    /// a create that cannot read what it created fails rather than lags, and
+    /// the lag this models begins after it.
+    fn lagging_for(&self, id: i64) -> bool {
+        let seen = self.reads_of.get(&id).copied().unwrap_or_default();
+        self.lag_reads > 0 && seen > 1 && seen - 1 <= self.lag_reads
+    }
+}
+
+/// A [`Pause`] that counts instead of waiting, so the poll's shape is
+/// asserted at zero wall time.
+#[derive(Default)]
+struct CountingPause {
+    pauses: AtomicU32,
+}
+
+impl Pause for CountingPause {
+    fn pause(&self, _ms: u32) -> impl core::future::Future<Output = ()> + Send {
+        self.pauses.fetch_add(1, Ordering::Relaxed);
+        core::future::ready(())
+    }
 }
 
 /// A programmable Tes: every route the adapter's flows hit, answering the
@@ -89,6 +124,30 @@ impl FakeTes {
             state: Mutex::new(FakeState {
                 next_id: 9_000,
                 reject_create_after,
+                ..FakeState::default()
+            }),
+        }
+    }
+
+    /// A fake whose reads lag a create by `lag_reads` answers.
+    fn lagging(lag_reads: usize) -> Self {
+        Self {
+            state: Mutex::new(FakeState {
+                next_id: 9_000,
+                lag_reads,
+                ..FakeState::default()
+            }),
+        }
+    }
+
+    /// A fake already holding the listing a removal will take down.
+    fn holding(id: i64) -> Self {
+        let mut drafts = HashMap::new();
+        drafts.insert(id, Self::base_draft(id));
+        Self {
+            state: Mutex::new(FakeState {
+                next_id: id,
+                drafts,
                 ..FakeState::default()
             }),
         }
@@ -161,6 +220,10 @@ impl FakeTes {
             let id = path_id(url, "/api/v2/resources/", "/draft");
             match request.method {
                 Method::Get => {
+                    *state.reads_of.entry(id).or_default() += 1;
+                    if state.lagging_for(id) {
+                        return HttpResponse::plain(404, Vec::new());
+                    }
                     return state
                         .drafts
                         .get(&id)
@@ -216,8 +279,14 @@ impl FakeTes {
         }
         if url.contains("/api/v2/resources/") && request.method == Method::Get {
             // The authoritative read the delete verification insists on:
-            // 404 once the resource is gone, per the measured semantics.
+            // 404 once the resource is gone, per the measured semantics. It
+            // lags with the draft route rather than independently: a
+            // resource_state 404 means *neither* route answered, which is the
+            // union the live runner proves a deletion with.
             let id = path_id(url, "/api/v2/resources/", "");
+            if state.lagging_for(id) {
+                return HttpResponse::plain(404, Vec::new());
+            }
             return state
                 .drafts
                 .get(&id)
@@ -271,11 +340,62 @@ impl Transport for &FakeTes {
     }
 }
 
+async fn provision(pool: &PgPool) {
+    provision_with(pool, Fixture::default()).await;
+}
+
+/// What varies between the gauntlet's runs: the operation the item carries,
+/// the binding and lifecycle its mapping starts in, and whether the
+/// crosswalk covers the inventory the job targets.
+struct Fixture {
+    operation: tam_domain::ItemOperation,
+    binding: Binding,
+    lifecycle: RemoteLifecycle,
+    crosswalked: bool,
+}
+
+impl Default for Fixture {
+    fn default() -> Self {
+        Self {
+            operation: tam_domain::ItemOperation::Create,
+            binding: Binding::Unbound,
+            lifecycle: RemoteLifecycle::Absent,
+            crosswalked: true,
+        }
+    }
+}
+
+impl Fixture {
+    /// The mapping already holds the listing `REMOVAL_ID` names, in the
+    /// state the removal states it will delete from.
+    fn removal(crosswalked: bool) -> Self {
+        Self {
+            operation: tam_domain::ItemOperation::Remove {
+                subject: removal_subject(),
+                state: ListingState::Draft,
+            },
+            binding: Binding::Bound {
+                id: removal_subject(),
+                first_seen: NOW,
+                verified: Verification::Stale { since: NOW },
+            },
+            lifecycle: RemoteLifecycle::Draft,
+            crosswalked,
+        }
+    }
+}
+
+fn removal_subject() -> RemoteListingId {
+    RemoteListingId::Tes {
+        url: format!("https://www.tes.com/api/v2/resources/{REMOVAL_ID}"),
+    }
+}
+
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn provision(pool: &PgPool) {
+async fn provision_with(pool: &PgPool, fixture: Fixture) {
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
         .bind(uuid::Uuid::from_bytes(ORG.0 .0))
         .execute(pool)
@@ -289,10 +409,16 @@ async fn provision(pool: &PgPool) {
                 parent: None,
                 label: "Maths for early years".to_owned(),
             }],
-            &[
-                edge(InventoryId::TesGb, "1000454"),
-                edge(InventoryId::TesNz, "7000454"),
-            ],
+            &if fixture.crosswalked {
+                vec![
+                    edge(InventoryId::TesGb, "1000454"),
+                    edge(InventoryId::TesNz, "7000454"),
+                ]
+            } else {
+                // No NZ counterpart: a create would park on reconciliation,
+                // which is exactly what a removal must not do.
+                vec![edge(InventoryId::TesGb, "1000454")]
+            },
         )
         .await
         .expect("the crosswalk seeds");
@@ -343,7 +469,7 @@ async fn provision(pool: &PgPool) {
                 org: ORG,
                 product: PRODUCT,
                 inventory: InventoryId::TesNz,
-                binding: tam_domain::Binding::Unbound,
+                binding: fixture.binding,
                 policies: tam_domain::FieldPolicies {
                     title: tam_domain::FieldPolicy::Managed,
                     description: tam_domain::FieldPolicy::Managed,
@@ -354,7 +480,7 @@ async fn provision(pool: &PgPool) {
                 },
                 price_rule: PriceRule::Explicit(PriceIntent::Free),
                 publish: tam_domain::PublishMode::DryRun,
-                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+                lifecycle: fixture.lifecycle,
             },
             0,
             NOW,
@@ -396,7 +522,7 @@ async fn provision(pool: &PgPool) {
                     1,
                     ContentHash([0x51; 32]),
                 ),
-                operation: tam_domain::ItemOperation::Create,
+                operation: fixture.operation,
             }],
         )
         .await
@@ -440,15 +566,22 @@ async fn engine_pool(app: &PgPool) -> PgPool {
         .expect("the engine role connects")
 }
 
+async fn drive(app: &PgPool, fake: &FakeTes) -> RunVerdict {
+    drive_counting(app, fake).await.0
+}
+
+/// The whole pump for one item, with the poll's pauses counted: lease,
+/// prepare, seed, drive. A removal takes `seed_for_removal`, which is the
+/// branch that keeps a taxonomy gap from parking a delete.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
 #[expect(
     clippy::panic,
-    reason = "a fixture that cannot project is a broken test, and the message names the gate"
+    reason = "a fixture that cannot be prepared is a broken test, and the message names the gate"
 )]
-async fn drive(app: &PgPool, fake: &FakeTes) -> RunVerdict {
+async fn drive_counting(app: &PgPool, fake: &FakeTes) -> (RunVerdict, u32) {
     let pool = &engine_pool(app).await;
     let leases = LeaseRepo::new(pool.clone());
     let item = leases
@@ -456,21 +589,28 @@ async fn drive(app: &PgPool, fake: &FakeTes) -> RunVerdict {
         .await
         .expect("the acquire runs")
         .expect("the enqueued item leases");
-    let projected = match project_for_item(pool, &item, NOW)
+    let (operation, projected) = match prepare_item(pool, &item, NOW)
         .await
-        .expect("the projection runs")
+        .expect("the preparation runs")
     {
-        ProjectionOutcome::Ready(projected) => projected,
-        ProjectionOutcome::Blocked { gate, .. } => {
-            panic!("the fixture projects; blocked on {gate}")
+        ItemPreparation::Ready {
+            operation,
+            projected,
+        } => (operation, projected),
+        ItemPreparation::Blocked { gate, .. } => {
+            panic!("the fixture prepares; blocked on {gate}")
         }
     };
     let adapter = TesAdapter::new(InventoryId::TesNz, fake, OneFile).expect("a Tes inventory");
-    let seed = seed_from_projection(&adapter, &item, &projected).expect("the adapter renders");
+    let seed = projected.as_ref().map_or_else(
+        || seed_for_removal(&item, &operation),
+        |projected| seed_from_projection(&adapter, &item, projected).expect("the adapter renders"),
+    );
     let halts = HaltRepo::new(pool.clone());
     let attempts = WriteAttemptRepo::new(pool.clone());
     let budgets = RateBudgetRepo::new(pool.clone());
     let cancel = CancellationToken::new();
+    let pause = CountingPause::default();
     let ctx = DriverContext {
         adapter: &adapter,
         leases: &leases,
@@ -480,8 +620,10 @@ async fn drive(app: &PgPool, fake: &FakeTes) -> RunVerdict {
         pool,
         clock: &Clock,
         cancel: &cancel,
+        pause: &pause,
     };
-    run_item(&ctx, &item, seed).await.expect("the driver runs")
+    let verdict = run_item(&ctx, &item, seed).await.expect("the driver runs");
+    (verdict, pause.pauses.load(Ordering::Relaxed))
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -586,5 +728,234 @@ async fn an_exhausted_rate_window_settles_the_attempt_before_it_abandons(pool: P
     assert_eq!(
         creates, 1,
         "only the preflight probe's create was sent; the refused submit sent nothing"
+    );
+}
+
+/// The lag the poll exists for. `FakeTes` answers the read-back 404 for the
+/// three reads after the create's own, then the draft: a single-shot
+/// read-back — today's behaviour — would settle this run Ambiguous and halt
+/// the tenant's inventory on a listing that is really there.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_create_whose_read_lags_settles_committed_after_polling(pool: PgPool) {
+    provision(&pool).await;
+    let fake = FakeTes::lagging(3);
+    let (verdict, pauses) = drive_counting(&pool, &fake).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "the write landed and the poll saw it; the lag is not an outcome"
+    );
+    assert_eq!(
+        pauses, 3,
+        "one pause per lagged read and none after the read that answered: a poll that \
+         paused after its last try would spend interval_ms of the lease for nothing"
+    );
+    let record = MappingRepo::new(pool.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert!(
+        matches!(record.mapping.binding, Binding::Bound { .. }),
+        "a run that polled through the lag binds, or the poll bought nothing"
+    );
+    assert_eq!(
+        record.mapping.lifecycle,
+        RemoteLifecycle::Draft,
+        "the bound lifecycle is the one the verification read observed, not one derived \
+         from the adapter's create convention"
+    );
+}
+
+/// The other side of the same branch: a poll that settles Committed when its
+/// budget runs out would record a listing we never saw.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_create_that_never_appears_settles_ambiguous_and_halts(pool: PgPool) {
+    provision(&pool).await;
+    let fake = FakeTes::lagging(usize::MAX);
+    let (verdict, pauses) = drive_counting(&pool, &fake).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Ambiguous),
+        "the write may have landed and we cannot see it, which is Ambiguous and never a \
+         silent commit"
+    );
+    assert_eq!(
+        pauses, 7,
+        "the Tes policy's eight tries pause between them and not after the last"
+    );
+    let engine = engine_pool(&pool).await;
+    let halts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM org_inventory_halt WHERE org_id = $1")
+            .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+            .fetch_one(&engine)
+            .await
+            .expect("the halt rows read");
+    assert_eq!(
+        halts, 1,
+        "an unverifiable create halts this tenant's inventory"
+    );
+    let record = MappingRepo::new(pool.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert_eq!(
+        record.mapping.binding,
+        Binding::Unbound,
+        "nothing was observed, so nothing is bound"
+    );
+}
+
+/// A grant per `read_back` call, not per HTTP request: a Tes read is one or
+/// two requests, because `resource_state` reads the draft route and falls
+/// through, so this pins the accounting the driver actually does rather than
+/// a request ceiling it does not enforce.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_poll_consumes_one_grant_per_read_back_call(pool: PgPool) {
+    provision(&pool).await;
+    let fake = FakeTes::lagging(3);
+    let verdict = drive(&pool, &fake).await;
+    assert_eq!(verdict, RunVerdict::Settled(ItemOutcome::Succeeded));
+    let engine = engine_pool(&pool).await;
+    let used: i32 = sqlx::query_scalar("SELECT actions_used FROM rate_budget WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+        .fetch_one(&engine)
+        .await
+        .expect("the budget row reads");
+    assert_eq!(
+        used, 5,
+        "one grant for the submit and one for each of the four reads; a poll placed \
+         outside the budget would leave this at 1 and spend the connection's ceiling \
+         invisibly"
+    );
+}
+
+/// The rate window closing mid-poll is evidence about us, not about the
+/// listing. Handing the machine the last answer instead would feed it
+/// `Absent` during lag, which under the create polarity halts the tenant's
+/// inventory on pure throughput; abandoning without settling would deadlock
+/// the mapping on `write_attempt_one_in_flight` until `ATTEMPTS_MAX`.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_rate_window_closing_mid_poll_settles_the_attempt_ambiguous(pool: PgPool) {
+    provision(&pool).await;
+    let engine = engine_pool(&pool).await;
+    let budgets = RateBudgetRepo::new(engine.clone());
+    let connection = tam_types::ConnectionId(Uuid([0x33; 16]));
+    let window = Timestamp(NOW.0 - NOW.0.rem_euclid(60_000));
+    let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
+    // One grant left: the submit takes it and the first read finds none.
+    for _ in 1..ceiling {
+        assert_ne!(
+            budgets
+                .consume(ORG, connection, window, ceiling)
+                .await
+                .expect("the budget consumes"),
+            BudgetGrant::Exhausted,
+            "the fixture must leave exactly one grant for the submit"
+        );
+    }
+
+    let fake = FakeTes::lagging(3);
+    let verdict = drive(&pool, &fake).await;
+    assert!(
+        matches!(verdict, RunVerdict::Abandoned { .. }),
+        "we stopped looking; the run abandons into the stealer rather than inventing an outcome"
+    );
+
+    let settled: Vec<(String, bool)> =
+        sqlx::query_as("SELECT state, settled_at IS NOT NULL FROM write_attempt WHERE org_id = $1")
+            .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+            .fetch_all(&engine)
+            .await
+            .expect("the attempt rows read");
+    assert_eq!(
+        settled,
+        vec![("ambiguous".to_owned(), true)],
+        "the write went out and could not be verified, which is ambiguous rather than \
+         abandoned; and settling it at all is what stops the next lease deadlocking on \
+         AttemptInFlight"
+    );
+    let record = MappingRepo::new(pool.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert_eq!(
+        record.mapping.binding,
+        Binding::Unbound,
+        "an unverified write binds nothing; LandingEffect::None records that honestly"
+    );
+}
+
+/// A removal end to end: the column, the effect, the adapter's delete, the
+/// absence the poll verifies, and the sever the verdict writes.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_settles_succeeded_and_severs(pool: PgPool) {
+    provision_with(&pool, Fixture::removal(true)).await;
+    let fake = FakeTes::holding(REMOVAL_ID);
+    let verdict = drive(&pool, &fake).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "a removal whose verification read finds nothing is a committed removal"
+    );
+    let gone = { !fake.state.lock().await.drafts.contains_key(&REMOVAL_ID) };
+    assert!(gone, "the delete reached the marketplace");
+
+    let engine = engine_pool(&pool).await;
+    let attempt: (String, Option<String>) =
+        sqlx::query_as("SELECT state, remote_url FROM write_attempt WHERE org_id = $1")
+            .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+            .fetch_one(&engine)
+            .await
+            .expect("the attempt row reads");
+    assert_eq!(
+        (attempt.0.as_str(), attempt.1.as_deref()),
+        (
+            "committed",
+            Some(format!("https://www.tes.com/api/v2/resources/{REMOVAL_ID}").as_str())
+        ),
+        "the settled attempt names the listing it removed"
+    );
+    let severed: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT binding_state, sever_cause, lifecycle_state FROM mapping \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(MAPPING.0 .0))
+    .fetch_one(&engine)
+    .await
+    .expect("the mapping row reads");
+    assert_eq!(
+        (severed.0.as_str(), severed.1.as_deref(), severed.2.as_str()),
+        ("severed", Some("removed_by_seller"), "absent"),
+        "a committed removal severs; binding it would record the mapping against a \
+         listing that no longer exists"
+    );
+}
+
+/// A removal describes nothing, so it never reaches the projection. Leaving
+/// `pump_item` projecting before it branches would make every delete of an
+/// imperfectly-mapped product unrunnable — the listing is being taken down,
+/// not described.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_never_projects(pool: PgPool) {
+    provision_with(&pool, Fixture::removal(false)).await;
+    let fake = FakeTes::holding(REMOVAL_ID);
+    let verdict = drive(&pool, &fake).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "the product's subject has no counterpart in this inventory, which parks a create \
+         on reconciliation and must not park a delete"
+    );
+    let open = TaxonomyRepo::new(pool)
+        .open_items(ORG)
+        .await
+        .expect("the queue reads");
+    assert!(
+        open.is_empty(),
+        "a removal raises no reconciliation item either: nothing about it needs mapping"
     );
 }

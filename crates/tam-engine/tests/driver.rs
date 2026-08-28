@@ -12,11 +12,12 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{ItemOutcome, StepBudget};
 use tam_engine::driver::{run_item, DriverContext, MachineSeed, NowSource, RunVerdict};
+use tam_engine::seed::verify_policy;
 use tam_marketplace::FetchReason;
 use tam_marketplace::{
     AdapterError, AmbiguityCause, CreateStrategy, FieldSet, FormId, FormSchemaFingerprint,
-    IdempotencyKey, ListingLocator, MarketplaceAdapter, ObservedListing, ProjectedListing,
-    RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
+    IdempotencyKey, InstantPause, ListingLocator, MarketplaceAdapter, ObservedListing,
+    ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
 };
 use tam_storage::{
     HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
@@ -266,6 +267,7 @@ fn seed_machine(strategy: CreateStrategy) -> MachineSeed {
         budget: StepBudget {
             actions_remaining: 20,
         },
+        verify: verify_policy(InventoryId::TesGb),
     }
 }
 
@@ -297,6 +299,7 @@ async fn run(
         pool: &engine,
         clock: &clock,
         cancel: &cancel,
+        pause: &InstantPause,
     };
     let verdict = run_item(&ctx, &lease, seed_machine(strategy))
         .await

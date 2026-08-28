@@ -12,8 +12,9 @@ use tam_domain::{
 };
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
-    AdapterError, CreateStrategy, FieldSet, FormId, MarketplaceAdapter, Outcome, RemoteLifecycle,
-    WriteAttemptId,
+    AdapterError, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator, ListingState,
+    MarketplaceAdapter, ObservedListing, Outcome, Pause, RemoteLifecycle, RemoteListingId,
+    RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_storage::{
     append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
@@ -21,7 +22,8 @@ use tam_storage::{
     NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
-    BindAnomaly, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId, Timestamp, Uuid,
+    BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId,
+    Timestamp, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -31,10 +33,41 @@ pub trait NowSource: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
+/// How long the driver polls a marketplace's own read for a write it just
+/// made. Held here rather than in the machine, which is pure and holds no
+/// clock, and produced per inventory by the seed.
+///
+/// The budget has to fit inside the lease, or the item is stolen mid-run and
+/// the epoch-fenced attempt settle fails *after* a listing has landed:
+///
+/// ```text
+/// submit_worst_case + tries * interval_ms < LEASE_TTL_SECS
+/// ```
+///
+/// On today's numbers that holds for the measured Tpt create — roughly 180s
+/// against a 300s lease, with 22s of poll on top — and fails at that
+/// platform's theoretical worst case, where two queue-job polls alone can
+/// spend 360s. That is a pre-existing hazard the poll narrows the margin on
+/// rather than one it creates, and Phase 3 asserts the inequality rather than
+/// raising a limit to hide it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyPolicy {
+    pub tries: u32,
+    pub interval_ms: u32,
+}
+
+impl VerifyPolicy {
+    /// The poll's whole wall time, in milliseconds.
+    #[must_use]
+    pub fn window_ms(self) -> u64 {
+        u64::from(self.tries) * u64::from(self.interval_ms)
+    }
+}
+
 /// The machine's construction data the ledger does not hold: the projected
-/// field set and its hash, the form, and the per-inventory strategy. The
-/// projection (M1g) and the scheduler wiring (M1j) will own producing this;
-/// until then the worker builds it.
+/// field set and its hash, the form, the per-inventory strategy and the
+/// verification budget. The projection (M1g) and the scheduler wiring (M1j)
+/// will own producing this; until then the worker builds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineSeed {
     pub form: FormId,
@@ -42,9 +75,10 @@ pub struct MachineSeed {
     pub intent_hash: ContentHash,
     pub strategy: CreateStrategy,
     pub budget: StepBudget,
+    pub verify: VerifyPolicy,
 }
 
-pub struct DriverContext<'a, A, N> {
+pub struct DriverContext<'a, A, N, P> {
     pub adapter: &'a A,
     pub leases: &'a LeaseRepo,
     pub halts: &'a HaltRepo,
@@ -53,6 +87,11 @@ pub struct DriverContext<'a, A, N> {
     pub pool: &'a sqlx::PgPool,
     pub clock: &'a N,
     pub cancel: &'a CancellationToken,
+    /// The wait between verification reads. A capability rather than a
+    /// runtime call, because this crate takes no timer by design: the worker
+    /// binds a real sleep and a test binds an instant return, so the poll is
+    /// exercised at zero wall time in the gated lane.
+    pub pause: &'a P,
 }
 
 /// What one pump of one item came to.
@@ -107,11 +146,51 @@ impl core::fmt::Display for EngineError {
 
 impl core::error::Error for EngineError {}
 
-fn fields_as_json(fields: &FieldSet) -> serde_json::Value {
-    json!({
-        "entries": serde_json::to_value(&fields.entries).unwrap_or(serde_json::Value::Null),
-        "files": serde_json::to_value(&fields.files).unwrap_or(serde_json::Value::Null),
-    })
+const fn state_name(state: ListingState) -> &'static str {
+    match state {
+        ListingState::Draft => "draft",
+        ListingState::Live => "live",
+    }
+}
+
+fn subject_as_json(subject: &RemoteListingId) -> serde_json::Value {
+    match subject {
+        RemoteListingId::Tes { url } => json!({ "kind": "tes", "url": url }),
+        RemoteListingId::Tpt { product_id } => json!({ "kind": "tpt", "id": product_id }),
+        RemoteListingId::Etsy { listing_id } => json!({ "kind": "etsy", "id": listing_id }),
+    }
+}
+
+/// What the attempt row records it intended. A create records the field set
+/// it will post, as it always has, now tagged with the operation; a revise
+/// adds the listing it addresses and both ends of the transition; a removal
+/// carries no field set at all, because a removal describes nothing.
+pub(crate) fn intent_as_json(operation: &ItemOperation, fields: &FieldSet) -> serde_json::Value {
+    let entries = serde_json::to_value(&fields.entries).unwrap_or(serde_json::Value::Null);
+    let files = serde_json::to_value(&fields.files).unwrap_or(serde_json::Value::Null);
+    match operation {
+        ItemOperation::Create => json!({
+            "operation": "create",
+            "entries": entries,
+            "files": files,
+        }),
+        ItemOperation::Revise {
+            subject,
+            transition,
+        } => json!({
+            "operation": "revise",
+            "subject": subject_as_json(subject),
+            "from": state_name(transition.from),
+            "to": state_name(transition.to),
+            "entries": entries,
+            "files": files,
+        }),
+        ItemOperation::Remove { subject, state } => json!({
+            "operation": "remove",
+            "subject": subject_as_json(subject),
+            "state": state_name(*state),
+        }),
+    }
 }
 
 fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
@@ -132,34 +211,158 @@ fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
     }
 }
 
-/// What a settled outcome did to the mapping. Only the two outcomes that
-/// carry a receipt can name a listing; every other outcome settled without a
-/// write that landed, so there is nothing to record.
+/// What a settled outcome did to the mapping, as a total function of the
+/// operation. A committed removal severs rather than binding, because binding
+/// would record the mapping against a listing that no longer exists; a revise
+/// or removal that did not commit still names what it addressed, so a failed
+/// removal says what it failed to remove; and a create that did not commit
+/// knows no identifier at all.
 ///
 /// The bound lifecycle is the one the verification read observed, not one
 /// derived from the adapter's create convention: `Outcome::Committed` is
 /// reachable only through a read-back, so an observation is always in hand,
 /// and where it somehow is not the honest answer is to record nothing rather
 /// than to invent a state the mapping was never seen in.
-fn outcome_to_landing(outcome: &Outcome, observed: Option<&RemoteLifecycle>) -> LandingEffect {
-    match (outcome, observed) {
-        (
-            Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. },
-            Some(lifecycle),
-        ) => LandingEffect::Landed {
-            id: receipt.listing().clone(),
-            lifecycle: lifecycle.clone(),
-        },
-        (
-            Outcome::Committed { .. }
-            | Outcome::Degraded { .. }
-            | Outcome::Rejected { .. }
-            | Outcome::Ambiguous { .. }
-            | Outcome::Blocked { .. }
-            | Outcome::Skipped { .. },
-            _,
-        ) => LandingEffect::None,
+fn outcome_to_landing(
+    operation: &ItemOperation,
+    outcome: &Outcome,
+    observed: Option<&RemoteLifecycle>,
+) -> LandingEffect {
+    let committed = match outcome {
+        Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => {
+            Some(receipt.listing())
+        }
+        Outcome::Rejected { .. }
+        | Outcome::Ambiguous { .. }
+        | Outcome::Blocked { .. }
+        | Outcome::Skipped { .. } => None,
+    };
+    match (operation, committed) {
+        (ItemOperation::Remove { .. }, Some(id)) => LandingEffect::Severed { id: id.clone() },
+        (ItemOperation::Create | ItemOperation::Revise { .. }, Some(id)) => {
+            observed.map_or(LandingEffect::None, |lifecycle| LandingEffect::Landed {
+                id: id.clone(),
+                lifecycle: lifecycle.clone(),
+            })
+        }
+        (ItemOperation::Create, None) => LandingEffect::None,
+        (ItemOperation::Revise { subject, .. } | ItemOperation::Remove { subject, .. }, None) => {
+            LandingEffect::Addressed {
+                id: subject.clone(),
+            }
+        }
     }
+}
+
+/// When the verification read has answered, per operation — mirroring what
+/// the live runners learned. A create and a revise-to-draft are proved by
+/// finding the listing, a publish by finding it live, and a removal by not
+/// finding it.
+fn verification_settles(operation: &ItemOperation, observed: &ObservedListing) -> bool {
+    let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
+    match operation {
+        ItemOperation::Create => !absent,
+        ItemOperation::Revise { transition, .. } => match transition.to {
+            ListingState::Draft => !absent,
+            ListingState::Live => matches!(observed.lifecycle, RemoteLifecycle::Live { .. }),
+        },
+        ItemOperation::Remove { .. } => absent,
+    }
+}
+
+/// What one verification poll is asked to establish. A struct rather than six
+/// arguments, and it is also what keeps the locator, the reason and the
+/// operation's predicate travelling together.
+struct Verification<'a> {
+    policy: VerifyPolicy,
+    locator: ListingLocator,
+    reason: FetchReason,
+    operation: &'a ItemOperation,
+    connection: ConnectionId,
+    deadline: i64,
+}
+
+/// Three answers, because evidence about the listing and evidence about us
+/// settle differently.
+enum VerifyOutcome {
+    /// The predicate accepted, the read returned a condition the machine has
+    /// an arm for, or the try budget ran out. Either way this is evidence
+    /// about the listing, and the machine settles on it.
+    Observed(Result<ObservedListing, AdapterError>),
+    /// The per-connection rate window closed before the predicate could be
+    /// answered. The write may have landed; we simply stopped looking.
+    RateWindowClosed,
+    /// The wall clock or the cancellation token ended the run.
+    Cut,
+}
+
+/// Polls the marketplace's own read until the operation's predicate accepts,
+/// the budget runs out, or something other than lag stops us.
+///
+/// Exhaustion is *not* reported as a failure of the read: the last answer
+/// goes to the machine, so a create the poll never saw settles the halting
+/// ambiguity rather than a silent commit. Exhaustion of the *rate window*
+/// is different in kind and never reads as absence, because at one submit
+/// plus eleven reads against a thirty-per-minute ceiling the third item on
+/// one connection inside one minute would otherwise halt the tenant's
+/// inventory on pure throughput.
+///
+/// The deadline and the cancellation token are checked between tries, which
+/// leaves up to one `interval_ms` of uninterruptible pause after a ctrl-c —
+/// two seconds, stated rather than implied. Neither is answered by stepping
+/// `Input::BudgetExhausted`: in `AwaitingReadBack` that input is
+/// `InputNotApplicable`, so it would crash the run instead of settling it.
+async fn verify_with_backoff<A: MarketplaceAdapter, N: NowSource, P: Pause>(
+    ctx: &DriverContext<'_, A, N, P>,
+    lease: &LeasedItem,
+    request: Verification<'_>,
+) -> Result<VerifyOutcome, EngineError> {
+    let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
+    let mut last: Option<Result<ObservedListing, AdapterError>> = None;
+    for attempted in 0..request.policy.tries {
+        let now = ctx.clock.now();
+        if ctx.cancel.is_cancelled() || now.0 >= request.deadline {
+            return Ok(VerifyOutcome::Cut);
+        }
+        // Recomputed on every read: `consume` is keyed on the window start,
+        // so one window carried across a poll that straddles a minute
+        // boundary keeps incrementing a bucket it has already left.
+        let window = Timestamp(now.0 - now.0.rem_euclid(60_000));
+        let grant = ctx
+            .budgets
+            .consume(lease.org, request.connection, window, ceiling)
+            .await?;
+        if grant == BudgetGrant::Exhausted {
+            return Ok(VerifyOutcome::RateWindowClosed);
+        }
+        let observed = ctx
+            .adapter
+            .read_back(
+                lease.org,
+                request.locator.clone(),
+                request.reason.clone(),
+                now,
+            )
+            .await;
+        match &observed {
+            // Every `AdapterError` is a condition rather than lag —
+            // absence became an observation precisely so that lag is not one
+            // — and the machine has an arm for each, so polling through one
+            // would only spend the budget.
+            Err(_) => return Ok(VerifyOutcome::Observed(observed)),
+            Ok(listing) if verification_settles(request.operation, listing) => {
+                return Ok(VerifyOutcome::Observed(observed))
+            }
+            Ok(_) => {}
+        }
+        last = Some(observed);
+        if attempted + 1 < request.policy.tries {
+            ctx.pause.pause(request.policy.interval_ms).await;
+        }
+    }
+    // A policy of zero tries never looked, which is the one case with no
+    // answer to hand over; the stall bias reports it as a cut run.
+    Ok(last.map_or(VerifyOutcome::Cut, VerifyOutcome::Observed))
 }
 
 const fn outcome_to_attempt_state(outcome: &Outcome) -> &'static str {
@@ -186,8 +389,8 @@ const fn seller_event_topic(event: SellerEvent) -> &'static str {
     clippy::too_many_lines,
     reason = "the effect loop is one cohesive interpreter; the lint is advisory here by charter"
 )]
-pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
-    ctx: &DriverContext<'_, A, N>,
+pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
+    ctx: &DriverContext<'_, A, N, P>,
     lease: &LeasedItem,
     seed: MachineSeed,
 ) -> Result<RunVerdict, EngineError> {
@@ -202,6 +405,12 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
     let wall_deadline =
         started.0 + i64::try_from(tam_limits::job::WALL_CLOCK_MAX.as_millis()).unwrap_or(i64::MAX);
 
+    // The ledger's own statement of what this item does, validated against
+    // the mapping's binding by `prepare_item` before the seed was built: the
+    // machine, the verification predicate and the landing effect are all
+    // total functions of it, so all three read the same value.
+    let operation = lease.operation.clone();
+    let verify = seed.verify;
     let mut transition = SyncMachine::initial(
         org,
         lease.inventory,
@@ -212,11 +421,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
         seed.intent_hash,
         seed.fields,
         seed.strategy,
-        // Every item in the ledger is a create: `Effect::Submit` is the only
-        // write effect the driver interprets, and the column that will carry
-        // an operation does not exist yet. The two lifecycle arms below are
-        // therefore unreachable until the ledger and the seed can state one.
-        ItemOperation::Create,
+        operation.clone(),
         seed.budget,
     )?;
     let mut current_attempt: Option<WriteAttemptId> = None;
@@ -260,7 +465,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                             &lease_ref,
                             lease.mapping,
                             &AttemptIntent {
-                                body: fields_as_json(&next.fields),
+                                body: intent_as_json(&operation, &next.fields),
                                 hash: intent_hash.0.to_vec(),
                             },
                             now,
@@ -285,15 +490,9 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                     key,
                     fields,
                 } => {
-                    let window = Timestamp(now.0 - now.0.rem_euclid(60_000));
-                    let ceiling =
-                        i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
-                    let grant = ctx
-                        .budgets
-                        .consume(org, connection, window, ceiling)
-                        .await?;
+                    let grant = consume_write_grant(ctx, org, connection, now).await?;
                     if grant == BudgetGrant::Exhausted {
-                        settle_unsent_attempt(
+                        return rate_refused_before_the_write(
                             ctx,
                             &lease_ref,
                             AttemptRef {
@@ -302,30 +501,137 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                             },
                             now,
                         )
-                        .await?;
-                        return Ok(RunVerdict::Abandoned {
-                            reason: "the per-connection rate window is exhausted".to_owned(),
-                        });
+                        .await;
                     }
                     record_action(ctx, lease, sequence, "submit", now).await?;
                     let submitted = ctx.adapter.submit(org, key, fields, now).await;
                     pending = Some(Input::SubmitResult(submitted));
                 }
-                // Unreachable while every item is a create; the stall bias is
-                // the honest placeholder until the driver can hold a budget to
-                // verify a lifecycle write with.
-                Effect::Revise { .. } | Effect::Remove { .. } => {
-                    return Ok(RunVerdict::Abandoned {
-                        reason: "the driver does not interpret the lifecycle writes yet".to_owned(),
-                    })
+                Effect::Revise {
+                    attempt,
+                    subject,
+                    fields,
+                    transition: lifecycle,
+                } => {
+                    let grant = consume_write_grant(ctx, org, connection, now).await?;
+                    if grant == BudgetGrant::Exhausted {
+                        return rate_refused_before_the_write(
+                            ctx,
+                            &lease_ref,
+                            AttemptRef {
+                                attempt: attempt.0,
+                                mapping: lease.mapping,
+                            },
+                            now,
+                        )
+                        .await;
+                    }
+                    record_action(ctx, lease, sequence, "revise", now).await?;
+                    let revised = ctx
+                        .adapter
+                        .revise(
+                            org,
+                            RevisePlan {
+                                subject,
+                                fields,
+                                transition: lifecycle,
+                            },
+                            now,
+                        )
+                        .await;
+                    pending = Some(Input::SubmitResult(revised));
+                }
+                Effect::Remove {
+                    attempt,
+                    subject,
+                    state,
+                } => {
+                    let grant = consume_write_grant(ctx, org, connection, now).await?;
+                    if grant == BudgetGrant::Exhausted {
+                        return rate_refused_before_the_write(
+                            ctx,
+                            &lease_ref,
+                            AttemptRef {
+                                attempt: attempt.0,
+                                mapping: lease.mapping,
+                            },
+                            now,
+                        )
+                        .await;
+                    }
+                    record_action(ctx, lease, sequence, "remove", now).await?;
+                    let removed = ctx
+                        .adapter
+                        .remove(
+                            org,
+                            RemovalPlan {
+                                attempt,
+                                subject,
+                                state,
+                            },
+                            now,
+                        )
+                        .await;
+                    pending = Some(Input::SubmitResult(removed));
                 }
                 Effect::ReadBack { locator, reason } => {
+                    // One action for the whole poll: a poll is one logical
+                    // read of the marketplace, and recording each try would
+                    // multiply the item's event stream by the try budget.
                     record_action(ctx, lease, sequence, "read-back", now).await?;
-                    let observed = ctx.adapter.read_back(org, locator, reason, now).await;
-                    if let Ok(listing) = &observed {
-                        observed_lifecycle = Some(listing.lifecycle.clone());
+                    let verified = verify_with_backoff(
+                        ctx,
+                        lease,
+                        Verification {
+                            policy: verify,
+                            locator,
+                            reason,
+                            operation: &operation,
+                            connection,
+                            deadline: wall_deadline,
+                        },
+                    )
+                    .await?;
+                    match verified {
+                        VerifyOutcome::Observed(observed) => {
+                            if let Ok(listing) = &observed {
+                                observed_lifecycle = Some(listing.lifecycle.clone());
+                            }
+                            pending = Some(Input::ReadBackResult(observed));
+                        }
+                        // The write went out and we stopped looking, so the
+                        // attempt is ambiguous rather than abandoned. The
+                        // settle is what breaks the deadlock: without it the
+                        // next lease abandons on `AttemptInFlight` and the
+                        // item burns its whole retry allowance with nothing
+                        // leaving the process.
+                        VerifyOutcome::RateWindowClosed | VerifyOutcome::Cut => {
+                            let stopped_by = match verified {
+                                VerifyOutcome::RateWindowClosed => {
+                                    "the per-connection rate window closed"
+                                }
+                                VerifyOutcome::Observed(_) | VerifyOutcome::Cut => {
+                                    "the run was cut"
+                                }
+                            };
+                            if let Some(attempt) = current_attempt {
+                                settle_open_attempt(
+                                    ctx,
+                                    &lease_ref,
+                                    AttemptRef {
+                                        attempt: attempt.0,
+                                        mapping: lease.mapping,
+                                    },
+                                    "ambiguous",
+                                    now,
+                                )
+                                .await?;
+                            }
+                            return Ok(RunVerdict::Abandoned {
+                                reason: format!("{stopped_by} before the write could be verified"),
+                            });
+                        }
                     }
-                    pending = Some(Input::ReadBackResult(observed));
                 }
                 Effect::Reconcile { .. } => {
                     // No adapter in this milestone can search by marker; the
@@ -416,7 +722,11 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                     let attempt_verdict = AttemptVerdict {
                         state: outcome_to_attempt_state(outcome).to_owned(),
                         failure_code: verdict.failure_code,
-                        landing: outcome_to_landing(outcome, observed_lifecycle.as_ref()),
+                        landing: outcome_to_landing(
+                            &operation,
+                            outcome,
+                            observed_lifecycle.as_ref(),
+                        ),
                     };
                     let settled = ctx
                         .attempts
@@ -475,24 +785,68 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
     }
 }
 
-/// Settles an attempt whose write never left the process, so abandoning the
-/// run does not strand an `in_flight` row on the mapping.
+/// One grant against the connection's declared per-minute ceiling, with the
+/// window recomputed from the clock at the moment of the call.
+///
+/// What the ceiling bounds is *effects* rather than requests, and always
+/// has: one submit issues a create, a metadata write, a three-step upload per
+/// file and a state read, and consumes one grant for all of it. So this is a
+/// lower bound on outbound traffic rather than a count of it. Making it exact
+/// means consuming inside the transport seam, which is recorded as founder-
+/// gated rather than assumed here.
+async fn consume_write_grant(
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    org: OrgId,
+    connection: ConnectionId,
+    now: Timestamp,
+) -> Result<BudgetGrant, EngineError> {
+    let window = Timestamp(now.0 - now.0.rem_euclid(60_000));
+    let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
+    Ok(ctx
+        .budgets
+        .consume(org, connection, window, ceiling)
+        .await?)
+}
+
+/// The rate window closed before a lifecycle write was called. Nothing was
+/// sent, so the attempt settles `'abandoned'` exactly as the submit path's
+/// refusal does, and the run abandons into the stealer.
+async fn rate_refused_before_the_write(
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    lease_ref: &LeaseRef,
+    settling: AttemptRef,
+    at: Timestamp,
+) -> Result<RunVerdict, EngineError> {
+    settle_open_attempt(ctx, lease_ref, settling, "abandoned", at).await?;
+    Ok(RunVerdict::Abandoned {
+        reason: "the per-connection rate window is exhausted".to_owned(),
+    })
+}
+
+/// Settles an attempt the run is about to walk away from, so abandoning does
+/// not strand an `in_flight` row on the mapping.
 ///
 /// `expire_and_steal` requeues the item and bumps `job_item.lease_epoch` but
 /// settles no orphan attempt, and `write_attempt_one_in_flight` admits one
 /// open attempt per mapping — so a re-leased item whose predecessor left one
 /// standing abandons on `AttemptInFlight` at `RecordIntent` on every pass,
 /// burning its whole retry allowance without another request leaving the
-/// process. `'abandoned'` rather than `'ambiguous'` because the refusal came
-/// before the write was called and nothing was sent.
-async fn settle_unsent_attempt(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource>,
+/// process.
+///
+/// `state` is the whole difference between the two callers: `'abandoned'`
+/// where the refusal came before the write was called and nothing was sent,
+/// `'ambiguous'` where the write went out and the verification could not
+/// finish. The mapping is left alone either way, which `LandingEffect::None`
+/// records honestly.
+async fn settle_open_attempt(
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     lease: &LeaseRef,
     settling: AttemptRef,
+    state: &str,
     at: Timestamp,
 ) -> Result<(), EngineError> {
     let verdict = AttemptVerdict {
-        state: "abandoned".to_owned(),
+        state: state.to_owned(),
         failure_code: None,
         landing: LandingEffect::None,
     };
@@ -546,7 +900,7 @@ const fn block_cause_name(cause: BlockCause) -> &'static str {
 }
 
 async fn record_event(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource>,
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     lease: &LeasedItem,
     payload: &JobEventPayload,
     at: Timestamp,
@@ -568,7 +922,7 @@ async fn record_event(
 }
 
 async fn record_action(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource>,
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     lease: &LeasedItem,
     sequence: u32,
     label: &str,
@@ -587,7 +941,7 @@ async fn record_action(
 }
 
 async fn notify(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource>,
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     org: OrgId,
     lease: &LeasedItem,
     event: SellerEvent,
@@ -616,10 +970,11 @@ const _: fn(sqlx::PgPool) -> OutboxRepo = OutboxRepo::new;
 #[cfg(test)]
 mod tests {
     use super::{bind_anomaly, outcome_to_item};
+    use crate::seed::verify_policy;
     use tam_domain::ItemOutcome;
     use tam_marketplace::{Outcome, RemoteListingId};
     use tam_storage::BindDisposition;
-    use tam_types::{BindAnomaly, FailureCode, FailureDetail, MappingId, Uuid};
+    use tam_types::{BindAnomaly, FailureCode, FailureDetail, InventoryId, MappingId, Uuid};
 
     #[test]
     fn a_rejection_carries_its_detail_into_the_verdict() {
@@ -748,5 +1103,40 @@ mod tests {
              does, which a refusal against the binding state could not say without \
              contradicting itself"
         );
+    }
+
+    /// The lease TTL the worker leases with. Mirrored rather than imported:
+    /// it is a binary's constant and `tam-engine` is a library, so the
+    /// inequality is asserted where `VerifyPolicy` lives and this value is
+    /// kept in step with `crates/tam-worker/src/main.rs` by hand.
+    const LEASE_TTL_SECS: i64 = 300;
+
+    /// The slowest Tpt create actually measured, recorded as "nearly three
+    /// minutes" at `crates/tam-marketplace-tpt/src/flows.rs`. The theoretical
+    /// worst case is larger — two queue-job polls at `QUEUE_POLL_MAX` can
+    /// spend 360s inside `submit` alone — and exceeds the lease before any
+    /// poll is added. That is a pre-existing hazard recorded for the founder,
+    /// not one this poll creates and not one Phase 3 hides by raising a
+    /// limit.
+    const MEASURED_SUBMIT_WORST_CASE_MS: u64 = 180_000;
+
+    #[test]
+    fn the_verification_poll_fits_inside_the_lease() {
+        let lease_ms = u64::try_from(LEASE_TTL_SECS * 1_000).unwrap_or(u64::MAX);
+        for inventory in [
+            InventoryId::TesGb,
+            InventoryId::TesUs,
+            InventoryId::TesNz,
+            InventoryId::Etsy,
+            InventoryId::Tpt,
+        ] {
+            let spent = MEASURED_SUBMIT_WORST_CASE_MS + verify_policy(inventory).window_ms();
+            assert!(
+                spent < lease_ms,
+                "{inventory:?}: submit_worst_case + tries * interval is {spent}ms against a \
+                 {lease_ms}ms lease; when the lease expires mid-run the epoch-fenced attempt \
+                 settle fails after a listing has landed, and the mapping never binds"
+            );
+        }
     }
 }

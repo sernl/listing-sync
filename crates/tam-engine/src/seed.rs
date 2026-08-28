@@ -1,66 +1,202 @@
-//! The machine seed produced from the projection: the worker cannot lease
-//! what it cannot project, so this is the gate between the ledger and the
-//! marketplace. A blocked projection raises its queue items and parks the
-//! item rather than settling it, because a drained queue un-parks it into a
-//! clean retry — the treadmill inverted into the drain's own retry loop.
+//! The machine seed produced from the ledger and the projection: the worker
+//! cannot lease what it cannot project, so this is the gate between the
+//! ledger and the marketplace. A blocked preparation raises its queue items
+//! and parks the item rather than settling it, because a drained queue
+//! un-parks it into a clean retry — the treadmill inverted into the drain's
+//! own retry loop.
 //!
-//! Two halves, deliberately separate. [`project_for_item`] is the ledger's:
-//! it reads, projects, and parks, and it needs no adapter, so an item that
-//! cannot project never costs a gateway session. [`seed_from_projection`] is
-//! the marketplace's: the adapter renders its own wire shape, so no
-//! platform's encoding lives here.
+//! Two halves, deliberately separate. [`prepare_item`] is the ledger's: it
+//! reads, checks the item's operation against the binding the mapping
+//! actually holds, projects, and parks, and it needs no adapter, so an item
+//! that cannot run never costs a gateway session. [`seed_from_projection`]
+//! and [`seed_for_removal`] are the marketplace's: the adapter renders its
+//! own wire shape, so no platform's encoding lives here.
 
 use sqlx::PgPool;
-use tam_domain::{Binding, ProjectionBlocked, StepBudget, TermKind, VocabularyId, VocabularyPath};
+use tam_domain::{
+    Binding, ItemOperation, ProjectionBlocked, StepBudget, TermKind, VocabularyId, VocabularyPath,
+};
 use tam_marketplace::{
-    AgeSpan, CreateStrategy, FormId, MarketplaceAdapter, NativeTerm, ProjectedListing,
-    RemoteLifecycleKind,
+    AgeSpan, CreateStrategy, FieldSet, FormId, ListingState, MarketplaceAdapter, NativeTerm,
+    ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
 };
 use tam_storage::{
     LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing, ListingContext};
-use tam_types::Timestamp;
+use tam_types::{InventoryId, Timestamp};
 
-use crate::driver::{EngineError, MachineSeed};
+use crate::driver::{intent_as_json, EngineError, MachineSeed, VerifyPolicy};
 
 /// Per-item action ceiling; generous against the longest measured flow
 /// (create, metadata, three-step file upload per file, read-back).
 const ACTIONS_PER_ITEM: u32 = 32;
 
-pub enum ProjectionOutcome {
-    Ready(ProjectedListing),
-    /// The projection refused; the gaps (when taxonomy) are raised already.
+/// The verification poll's budget, per inventory, sized to the slowest
+/// convergence each platform was measured at: Tpt twenty seconds
+/// (`crates/tam-marketplace-tpt/examples/live_write.rs`, 2026-08-28), Tes
+/// sixteen (`crates/tam-marketplace-tes/examples/live_smoke.rs`,
+/// 2026-08-29). Configuration in the engine's seed beside `ACTIONS_PER_ITEM`,
+/// which is the existing precedent for a driver-shaped bound living here
+/// rather than in `tam-limits`, where it would be a third bound on a resource
+/// `WALL_CLOCK_MAX` and the lease TTL already bound.
+#[must_use]
+pub const fn verify_policy(inventory: InventoryId) -> VerifyPolicy {
+    match inventory {
+        // No adapter serves Etsy, so this policy is unexercised; it takes the
+        // Tes numbers rather than one invented for a platform nothing has
+        // measured.
+        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy => {
+            VerifyPolicy {
+                tries: 8,
+                interval_ms: 2_000,
+            }
+        }
+        InventoryId::Tpt => VerifyPolicy {
+            tries: 11,
+            interval_ms: 2_000,
+        },
+    }
+}
+
+/// One form identity per inventory, deterministic: byte one is the
+/// idempotency module's durable inventory ordinal reused as a tag.
+const fn form_id(inventory: InventoryId) -> FormId {
+    let tag = match inventory {
+        InventoryId::TesGb => 0x01,
+        InventoryId::TesUs => 0x02,
+        InventoryId::TesNz => 0x03,
+        InventoryId::Etsy => 0x04,
+        InventoryId::Tpt => 0x05,
+    };
+    FormId(tam_types::Uuid([tag; 16]))
+}
+
+/// What the ledger says an item is, once its operation has been checked
+/// against the binding the mapping actually holds.
+pub enum ItemPreparation {
+    /// The item may run. `projected` is `None` for a removal, which describes
+    /// nothing: routing a removal through `project_listing` would let a
+    /// taxonomy gap, a missing cover or an unmeasured currency park a delete,
+    /// and the listing is being taken down rather than described.
+    Ready {
+        operation: ItemOperation,
+        projected: Option<ProjectedListing>,
+    },
+    /// The item may not run; the gaps (when taxonomy) are raised already.
     Blocked {
         gate: &'static str,
         raised: RaiseReport,
     },
 }
 
-pub async fn project_for_item(
+fn blocked(gate: &'static str) -> ItemPreparation {
+    ItemPreparation::Blocked {
+        gate,
+        raised: RaiseReport {
+            new: 0,
+            already_open: 0,
+        },
+    }
+}
+
+/// Which side of the draft line a stored lifecycle puts a listing on, where
+/// it says anything at all. `Absent` — which every mapping written before the
+/// bind recorded a lifecycle reads — and the moderation states no write
+/// addresses say nothing an item's stated `from` can be checked against.
+const fn observed_state(lifecycle: &RemoteLifecycle) -> Option<ListingState> {
+    match lifecycle {
+        RemoteLifecycle::Draft => Some(ListingState::Draft),
+        RemoteLifecycle::Live { .. } => Some(ListingState::Live),
+        RemoteLifecycle::Absent
+        | RemoteLifecycle::Submitted { .. }
+        | RemoteLifecycle::InReview { .. }
+        | RemoteLifecycle::Rejected { .. }
+        | RemoteLifecycle::Withdrawn { .. } => None,
+    }
+}
+
+/// The gate, as a total function of the operation and the mapping. `None`
+/// admits.
+///
+/// The item states the listing it means to act on and the mapping's binding
+/// stays the authority for it: an unstated subject would let a revise
+/// enqueued against listing X silently retarget to listing Y if the mapping
+/// were rebound between enqueue and lease, and nothing would notice. Storing
+/// it is what makes the divergence detectable; refusing on it is what keeps
+/// the mapping authoritative.
+fn admission(
+    operation: &ItemOperation,
+    binding: &Binding,
+    lifecycle: &RemoteLifecycle,
+) -> Option<&'static str> {
+    let stated = match operation {
+        // A create against a bound mapping makes a second listing, and the
+        // duplicate refusal does not catch it: the ordinary trigger is the
+        // seller editing the product and re-syncing, and a changed payload
+        // mints a fresh idempotency key. Every other state admits it,
+        // `Severed` included — `mapping_one_per_inventory` is unpredicated,
+        // so a re-create has no row but that one to reuse, and the bind's
+        // fence now reuses it.
+        ItemOperation::Create => {
+            return matches!(binding, Binding::Bound { .. }).then_some("binding");
+        }
+        ItemOperation::Revise {
+            subject,
+            transition,
+        } => match binding {
+            Binding::Bound { id, .. } if id == subject => transition.from,
+            Binding::Bound { .. } => return Some("subject_diverged"),
+            Binding::Unbound
+            | Binding::Creating { .. }
+            | Binding::AmbiguousCreate { .. }
+            | Binding::Severed { .. } => return Some("unbound"),
+        },
+        ItemOperation::Remove { subject, state } => match binding {
+            Binding::Bound { id, .. } if id == subject => *state,
+            Binding::Bound { .. } => return Some("subject_diverged"),
+            Binding::Unbound
+            | Binding::Creating { .. }
+            | Binding::AmbiguousCreate { .. }
+            | Binding::Severed { .. } => return Some("unbound"),
+        },
+    };
+    // The bind writes a truthful lifecycle for everything this system
+    // creates, so a mapping that reads 'draft' or 'live' is something the
+    // item's stated `from` can genuinely contradict. A create binds 'draft',
+    // a publish states `from: Draft` and agrees, the publish binds 'live', a
+    // later revise states `from: Live` and agrees; no legacy row parks here,
+    // because 'absent' is not comparable.
+    match observed_state(lifecycle) {
+        Some(observed) if observed == stated => None,
+        Some(_) => Some("lifecycle_diverged"),
+        None => None,
+    }
+}
+
+pub async fn prepare_item(
     pool: &PgPool,
     lease: &LeasedItem,
     now: Timestamp,
-) -> Result<ProjectionOutcome, EngineError> {
+) -> Result<ItemPreparation, EngineError> {
     let mapping = MappingRepo::new(pool.clone())
         .get(lease.org, lease.mapping)
         .await?
         .ok_or(StorageError::Inconsistent {
             reason: "a leased item's mapping must exist".to_owned(),
         })?;
-    // No update path exists yet and `CreateStrategy::DraftThenPublish` is the
-    // only strategy, so a projection against a bound mapping would create a
-    // second listing rather than revise the first. The duplicate refusal does
-    // not catch it either: the ordinary trigger is the seller editing the
-    // product and re-syncing, and a changed payload mints a fresh idempotency
-    // key. Parking is the stall bias until the update path lands.
-    if matches!(mapping.mapping.binding, Binding::Bound { .. }) {
-        return Ok(ProjectionOutcome::Blocked {
-            gate: "binding",
-            raised: RaiseReport {
-                new: 0,
-                already_open: 0,
-            },
+    let operation = lease.operation.clone();
+    if let Some(gate) = admission(
+        &operation,
+        &mapping.mapping.binding,
+        &mapping.mapping.lifecycle,
+    ) {
+        return Ok(blocked(gate));
+    }
+    if matches!(operation, ItemOperation::Remove { .. }) {
+        return Ok(ItemPreparation::Ready {
+            operation,
+            projected: None,
         });
     }
     let product = ProductRepo::new(pool.clone())
@@ -115,52 +251,37 @@ pub async fn project_for_item(
                     &causes,
                 )
                 .await?;
-            return Ok(ProjectionOutcome::Blocked {
+            return Ok(ItemPreparation::Blocked {
                 gate: "reconciliation",
                 raised,
             });
         }
         Err(ProjectionBlocked::CurrencyUnknown { .. }) => {
-            return Ok(ProjectionOutcome::Blocked {
-                gate: "currency_unknown",
-                raised: RaiseReport {
-                    new: 0,
-                    already_open: 0,
-                },
-            });
+            return Ok(blocked("currency_unknown"));
         }
         Err(ProjectionBlocked::CoverMissing) => {
-            return Ok(ProjectionOutcome::Blocked {
-                gate: "cover_missing",
-                raised: RaiseReport {
-                    new: 0,
-                    already_open: 0,
-                },
-            });
+            return Ok(blocked("cover_missing"));
         }
         Err(ProjectionBlocked::ScanIncomplete { .. }) => {
-            return Ok(ProjectionOutcome::Blocked {
-                gate: "scan_incomplete",
-                raised: RaiseReport {
-                    new: 0,
-                    already_open: 0,
-                },
-            });
+            return Ok(blocked("scan_incomplete"));
         }
     };
 
-    Ok(ProjectionOutcome::Ready(ProjectedListing {
-        title: projection.title,
-        body: projection.body,
-        price: projection.price,
-        taxonomy: projection.taxonomy.iter().map(native_term).collect(),
-        grades: projection.grades.iter().map(native_term).collect(),
-        ages: product.grades.derived.map(|interval| AgeSpan {
-            low_years: interval.low_years(),
-            high_years: interval.high_years(),
+    Ok(ItemPreparation::Ready {
+        operation,
+        projected: Some(ProjectedListing {
+            title: projection.title,
+            body: projection.body,
+            price: projection.price,
+            taxonomy: projection.taxonomy.iter().map(native_term).collect(),
+            grades: projection.grades.iter().map(native_term).collect(),
+            ages: product.grades.derived.map(|interval| AgeSpan {
+                low_years: interval.low_years(),
+                high_years: interval.high_years(),
+            }),
+            files: projection.files,
         }),
-        files: projection.files,
-    }))
+    })
 }
 
 fn native_term(path: &VocabularyPath) -> NativeTerm {
@@ -196,17 +317,8 @@ pub fn seed_from_projection<A: MarketplaceAdapter>(
         .as_bytes(),
     );
 
-    // One form identity per inventory, deterministic: byte one is the
-    // idempotency module's durable inventory ordinal reused as a tag.
-    let form_tag = match lease.inventory {
-        tam_types::InventoryId::TesGb => 0x01,
-        tam_types::InventoryId::TesUs => 0x02,
-        tam_types::InventoryId::TesNz => 0x03,
-        tam_types::InventoryId::Etsy => 0x04,
-        tam_types::InventoryId::Tpt => 0x05,
-    };
     Ok(MachineSeed {
-        form: FormId(tam_types::Uuid([form_tag; 16])),
+        form: form_id(lease.inventory),
         fields,
         intent_hash,
         strategy: CreateStrategy::DraftThenPublish {
@@ -215,5 +327,33 @@ pub fn seed_from_projection<A: MarketplaceAdapter>(
         budget: StepBudget {
             actions_remaining: ACTIONS_PER_ITEM,
         },
+        verify: verify_policy(lease.inventory),
     })
+}
+
+/// The removal's seed. A sibling of [`seed_from_projection`] rather than an
+/// `Option` argument on it, because a removal has nothing for an adapter to
+/// render: `project_fields` renders a listing, and a removal describes none.
+/// The intent hash is taken over the removal's own recorded intent, so what
+/// the ledger fingerprints is what the ledger stores.
+#[must_use]
+pub fn seed_for_removal(lease: &LeasedItem, operation: &ItemOperation) -> MachineSeed {
+    let fields = FieldSet {
+        entries: vec![],
+        files: vec![],
+    };
+    let intent_hash =
+        tam_pipeline::hash::content_hash(intent_as_json(operation, &fields).to_string().as_bytes());
+    MachineSeed {
+        form: form_id(lease.inventory),
+        fields,
+        intent_hash,
+        strategy: CreateStrategy::DraftThenPublish {
+            draft_state: RemoteLifecycleKind::Draft,
+        },
+        budget: StepBudget {
+            actions_remaining: ACTIONS_PER_ITEM,
+        },
+        verify: verify_policy(lease.inventory),
+    }
 }

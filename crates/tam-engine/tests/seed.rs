@@ -13,7 +13,7 @@ use sqlx::PgPool;
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
-use tam_engine::seed::{project_for_item, seed_from_projection, ProjectionOutcome};
+use tam_engine::seed::{prepare_item, seed_from_projection, ItemPreparation};
 use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
@@ -159,6 +159,10 @@ fn edge(inventory: InventoryId, native: &str) -> ProjectionEdge {
 }
 
 fn lease() -> LeasedItem {
+    leasing(tam_domain::ItemOperation::Create)
+}
+
+fn leasing(operation: tam_domain::ItemOperation) -> LeasedItem {
     LeasedItem {
         org: ORG,
         item: tam_domain::JobItemId(Uuid([0x41; 16])),
@@ -172,9 +176,33 @@ fn lease() -> LeasedItem {
             1,
             ContentHash([0x51; 32]),
         ),
-        operation: tam_domain::ItemOperation::Create,
+        operation,
         lease_epoch: 0,
         attempt_count: 0,
+    }
+}
+
+fn tes(url: &str) -> tam_marketplace::RemoteListingId {
+    tam_marketplace::RemoteListingId::Tes {
+        url: url.to_owned(),
+    }
+}
+
+const HELD: &str = "https://www.tes.com/teaching-resource/fractions-9001";
+const OTHER: &str = "https://www.tes.com/teaching-resource/fractions-9002";
+
+fn bound_to(url: &str) -> tam_domain::Binding {
+    tam_domain::Binding::Bound {
+        id: tes(url),
+        first_seen: NOW,
+        verified: tam_domain::Verification::Stale { since: NOW },
+    }
+}
+
+fn removing(url: &str) -> tam_domain::ItemOperation {
+    tam_domain::ItemOperation::Remove {
+        subject: tes(url),
+        state: tam_marketplace::ListingState::Draft,
     }
 }
 
@@ -194,10 +222,14 @@ fn entry(seed: &tam_engine::driver::MachineSeed, key: FieldKey) -> String {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
     provision(&pool, true, tam_domain::Binding::Unbound).await;
-    let outcome = project_for_item(&pool, &lease(), NOW)
+    let outcome = prepare_item(&pool, &lease(), NOW)
         .await
-        .expect("the projection runs");
-    let ProjectionOutcome::Ready(projected) = outcome else {
+        .expect("the preparation runs");
+    let ItemPreparation::Ready {
+        projected: Some(projected),
+        ..
+    } = outcome
+    else {
         panic!("a covered mapping seeds");
     };
     let adapter = TesAdapter::new(
@@ -232,10 +264,10 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
     provision(&pool, false, tam_domain::Binding::Unbound).await;
-    let outcome = project_for_item(&pool, &lease(), NOW)
+    let outcome = prepare_item(&pool, &lease(), NOW)
         .await
-        .expect("the projection runs");
-    let ProjectionOutcome::Blocked { gate, raised } = outcome else {
+        .expect("the preparation runs");
+    let ItemPreparation::Blocked { gate, raised } = outcome else {
         panic!("no NZ edge means the seed blocks");
     };
     assert_eq!(gate, "reconciliation");
@@ -261,13 +293,13 @@ async fn a_bound_mapping_parks_behind_the_binding_gate(pool: PgPool) {
         },
     )
     .await;
-    let outcome = project_for_item(&pool, &lease(), NOW)
+    let outcome = prepare_item(&pool, &lease(), NOW)
         .await
-        .expect("the projection runs");
+        .expect("the preparation runs");
     // Blocked rather than Ready is the whole assertion: there is no
     // ProjectedListing to hand seed_from_projection, so the create that would
     // have minted a second listing cannot be built.
-    let ProjectionOutcome::Blocked { gate, raised } = outcome else {
+    let ItemPreparation::Blocked { gate, raised } = outcome else {
         panic!("a mapping already bound has no create left to make");
     };
     assert_eq!(gate, "binding", "the gate names the binding, not a gap");
@@ -275,5 +307,67 @@ async fn a_bound_mapping_parks_behind_the_binding_gate(pool: PgPool) {
         (raised.new, raised.already_open),
         (0, 0),
         "a bound mapping raises no reconciliation item; nothing is missing"
+    );
+}
+
+/// The item states the listing it means to act on and the mapping's binding
+/// stays the authority for it. An unstored subject would let a removal
+/// enqueued against listing X silently retarget to listing Y if the mapping
+/// were rebound between enqueue and lease, and nothing would notice; storing
+/// it is what makes the divergence detectable, and refusing on it is what
+/// keeps the mapping authoritative.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operation_naming_a_listing_the_mapping_does_not_hold_is_refused(pool: PgPool) {
+    provision(&pool, true, bound_to(OTHER)).await;
+    let outcome = prepare_item(&pool, &leasing(removing(HELD)), NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Blocked { gate, raised } = outcome else {
+        panic!("a removal must not run against a listing the mapping does not hold");
+    };
+    assert_eq!(
+        gate, "subject_diverged",
+        "the gate names the divergence, not a missing binding: the mapping is bound, \
+         just to something else"
+    );
+    assert_eq!(
+        (raised.new, raised.already_open),
+        (0, 0),
+        "a divergence raises no reconciliation item; nothing is missing"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operation_against_an_unbound_mapping_is_refused(pool: PgPool) {
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
+    let outcome = prepare_item(&pool, &leasing(removing(HELD)), NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Blocked { gate, .. } = outcome else {
+        panic!("there is nothing to remove");
+    };
+    assert_eq!(gate, "unbound", "a removal needs a binding to address");
+}
+
+/// A removal reaches `Ready` with no projection at all. Routing it through
+/// `project_listing` would let a taxonomy gap park a delete, and this fixture
+/// has exactly that gap.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_is_ready_without_a_projection(pool: PgPool) {
+    provision(&pool, false, bound_to(HELD)).await;
+    let outcome = prepare_item(&pool, &leasing(removing(HELD)), NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Ready {
+        operation,
+        projected,
+    } = outcome
+    else {
+        panic!("a removal against the listing the mapping holds is ready");
+    };
+    assert_eq!(operation, removing(HELD), "the operation travels whole");
+    assert!(
+        projected.is_none(),
+        "a removal describes nothing, so nothing was projected and no gap could park it"
     );
 }

@@ -20,7 +20,8 @@ use std::io::Read as _;
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::request_lease;
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
-use tam_engine::seed::{project_for_item, seed_from_projection, ProjectionOutcome};
+use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
+use tam_engine::Pause;
 use tam_marketplace_tes::{GatewayTransport, TesAdapter};
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
@@ -36,6 +37,17 @@ const LEASE_TTL_SECS: i64 = 300;
 /// A projection-blocked item parks for a day; a drained queue un-parks it
 /// into a clean retry on the next steal pass after expiry.
 const BLOCKED_PARK_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// The real wait the driver's verification poll takes between reads. The
+/// engine holds no timer by design, so the sleep enters here, at the process
+/// boundary, exactly as the wall clock does.
+struct SleepingPause;
+
+impl Pause for SleepingPause {
+    fn pause(&self, ms: u32) -> impl core::future::Future<Output = ()> + Send {
+        tokio::time::sleep(core::time::Duration::from_millis(u64::from(ms)))
+    }
+}
 
 /// Wall-clock enters here, at the process boundary, as the design's
 /// time-as-data rule requires. A clock before the epoch saturates to zero,
@@ -78,9 +90,12 @@ impl Pump {
     /// the lease to expire into the stealer, which is the stall bias.
     async fn pump_item(&self, worker: &str, item: &LeasedItem) {
         let now = WallClock.now();
-        let projected = match project_for_item(&self.pool, item, now).await {
-            Ok(ProjectionOutcome::Ready(projected)) => projected,
-            Ok(ProjectionOutcome::Blocked { gate, raised }) => {
+        let (operation, projected) = match prepare_item(&self.pool, item, now).await {
+            Ok(ItemPreparation::Ready {
+                operation,
+                projected,
+            }) => (operation, projected),
+            Ok(ItemPreparation::Blocked { gate, raised }) => {
                 let until = Timestamp(now.0.saturating_add(BLOCKED_PARK_MS));
                 match self.leases.park(&item.lease_ref(), gate, until).await {
                     Ok(()) => eprintln!(
@@ -95,7 +110,7 @@ impl Pump {
                 return;
             }
             Err(error) => {
-                eprintln!("tam-worker {worker}: projection failed, lease left to expire: {error}");
+                eprintln!("tam-worker {worker}: preparation failed, lease left to expire: {error}");
                 return;
             }
         };
@@ -157,7 +172,12 @@ impl Pump {
                 return;
             }
         };
-        let seed = match seed_from_projection(&adapter, item, &projected) {
+        // A removal renders nothing, so it never reaches the adapter's
+        // projection: the listing is being taken down rather than described.
+        let seed = match projected.as_ref().map_or_else(
+            || Ok(seed_for_removal(item, &operation)),
+            |projected| seed_from_projection(&adapter, item, projected),
+        ) {
             Ok(seed) => seed,
             Err(error) => {
                 eprintln!("tam-worker {worker}: seed failed, lease left to expire: {error}");
@@ -173,6 +193,7 @@ impl Pump {
             pool: &self.pool,
             clock: &WallClock,
             cancel: &self.cancel,
+            pause: &SleepingPause,
         };
         match run_item(&ctx, item, seed).await {
             Ok(RunVerdict::Settled(outcome)) => {
