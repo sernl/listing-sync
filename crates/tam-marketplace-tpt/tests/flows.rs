@@ -3,12 +3,14 @@
 //! recording in order, and every test asserts the cassette is fully consumed,
 //! so a hop that silently vanished fails too.
 //!
-//! The catalogue fixture keeps the recorded envelope and nothing the seller
-//! owns. The store identity, product names, slugs, prices, sale counts, asset
-//! names and thumbnail urls are synthetic; the wire shape, the resource ids
-//! the analytics fixture shares, and the flat taxonomy vocabulary are the
-//! capture's own, because those are what the parser is being held to. The
-//! canaries in `write_flows.rs` hold that line by shape.
+//! Both fixtures keep the recorded envelope and nothing the seller owns. The
+//! store identity, product names, slugs, prices, sale counts, asset names,
+//! thumbnail urls and the analytics totals are synthetic; the wire shape, the
+//! resource ids the two fixtures share, and the flat taxonomy vocabulary are
+//! the capture's own, because those are what the parser is being held to. The
+//! resource ids stay because they appear in public storefront urls and are
+//! not the seller's to lose; what those resources earned is. The canaries in
+//! `write_flows.rs` hold that line by shape.
 
 use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
@@ -286,8 +288,9 @@ fn the_all_time_statistics_read_maps_one_metric_per_resource() {
             .iter()
             .map(|stat| stat.total_value)
             .collect::<Vec<_>>(),
-        vec![2.0, 3.0, 0.0],
-        "the recorded sales counts survive the Relay envelope"
+        vec![111.0, 0.0, 222.0],
+        "the counts survive the Relay envelope in the ranking it returned, and the zero among \
+         them survives as a zero rather than being dropped as an absent node"
     );
     assert_eq!(
         adapter.transport().remaining(),
@@ -310,9 +313,11 @@ fn the_time_resolved_statistics_read_asks_the_gateway_for_a_window() {
     };
     let ids = [ProductId(12_854_712)];
     // The Relay envelope the recorded StoreResources response answers with,
-    // reduced to the fields this adapter selects.
+    // reduced to the fields this adapter selects and carrying a synthetic
+    // total: what the seller's resources actually earned or were viewed is
+    // theirs, and no assertion here depends on the figure.
     let response = ok(&json!({"data": {"totals": {"edges": [
-        {"cursor": "cmFuazox", "node": {"resourceId": "12854712", "totalValue": 41}}
+        {"cursor": "cmFuazox", "node": {"resourceId": "12854712", "totalValue": 333}}
     ]}}}));
     let cassette = Cassette {
         interactions: vec![Interaction {

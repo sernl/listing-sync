@@ -1217,15 +1217,15 @@ fn hex_runs(body: &str, least: usize) -> Vec<String> {
     runs
 }
 
-/// Every `Store` object a recorded response body carries, wherever it sits in
-/// the envelope.
-fn store_blocks(value: &Value) -> Vec<&Value> {
+/// Every object of one GraphQL type a recorded response body carries, wherever
+/// it sits in the envelope.
+fn typed_blocks<'a>(value: &'a Value, typename: &str) -> Vec<&'a Value> {
     let mut found: Vec<&Value> = Vec::new();
     let mut stack: Vec<&Value> = vec![value];
     while let Some(node) = stack.pop() {
         match *node {
             Value::Object(ref map) => {
-                if map.get("__typename").and_then(Value::as_str) == Some("Store") {
+                if map.get("__typename").and_then(Value::as_str) == Some(typename) {
                     found.push(node);
                 }
                 stack.extend(map.values());
@@ -1236,6 +1236,12 @@ fn store_blocks(value: &Value) -> Vec<&Value> {
     }
     found
 }
+
+/// Every value the committed analytics fixture reports. A sales count has no
+/// shape that tells a live figure from a synthetic one, so the guard is an
+/// allow-list of the numbers this repository deliberately made up: a fixture
+/// re-mined from a fresh capture fails until its totals are synthesised too.
+const SYNTHETIC_TOTALS: [i64; 3] = [111, 0, 222];
 
 #[expect(
     clippy::expect_used,
@@ -1294,6 +1300,32 @@ fn no_committed_fixture_carries_a_live_token_or_key_id() {
 }
 
 #[test]
+fn no_committed_fixture_carries_a_live_analytics_total() {
+    let mut seen = 0_usize;
+    for (name, fixture) in FIXTURES {
+        for body in recorded_bodies(fixture) {
+            let Ok(parsed) = serde_json::from_str::<Value>(&body) else {
+                continue;
+            };
+            for stat in typed_blocks(&parsed, "StoreResourceStats") {
+                seen = seen.saturating_add(1);
+                let total = stat.get("totalValue").and_then(Value::as_i64);
+                assert!(
+                    total.is_some_and(|value| SYNTHETIC_TOTALS.contains(&value)),
+                    "{name} reports a per-resource total this repository did not synthesise; \
+                     what a seller's resources earned or sold is theirs"
+                );
+            }
+        }
+    }
+    assert!(
+        seen > 0,
+        "the analytics fixture carries a total per resource, and finding none means the walk \
+         stopped looking rather than that the fixtures are clean"
+    );
+}
+
+#[test]
 fn no_committed_fixture_carries_a_live_store_identity() {
     let mut seen = 0_usize;
     for (name, fixture) in FIXTURES {
@@ -1301,7 +1333,7 @@ fn no_committed_fixture_carries_a_live_store_identity() {
             let Ok(parsed) = serde_json::from_str::<Value>(&body) else {
                 continue;
             };
-            for store in store_blocks(&parsed) {
+            for store in typed_blocks(&parsed, "Store") {
                 seen = seen.saturating_add(1);
                 let field = |key: &str| store.get(key).and_then(Value::as_str).map(str::to_owned);
                 assert_eq!(
