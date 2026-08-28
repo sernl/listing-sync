@@ -7,7 +7,8 @@
 //! client and the operator dashboard.
 
 use chrono::{DateTime, Utc};
-use tam_marketplace::RemoteListingId;
+use tam_domain::ItemOperation;
+use tam_marketplace::{LifecycleTransition, ListingState, RemoteListingId};
 use tam_types::{
     ContentHash, Currency, FailureCode, FileKind, FileRole, InventoryId, Money, PriceIntent,
     ScanOutcome, Timestamp,
@@ -299,6 +300,125 @@ impl<'a> RemoteIdColumns<'a> {
                 })?),
             },
         })
+    }
+}
+
+pub(crate) const fn listing_state_to_db(state: ListingState) -> &'static str {
+    match state {
+        ListingState::Draft => "draft",
+        ListingState::Live => "live",
+    }
+}
+
+pub(crate) fn listing_state_from_db(raw: &str) -> Result<ListingState, StorageError> {
+    match raw {
+        "draft" => Ok(ListingState::Draft),
+        "live" => Ok(ListingState::Live),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown listing state {other:?}"),
+        }),
+    }
+}
+
+/// The six-column rendering of an [`ItemOperation`]: what the item does, the
+/// listing it asserts it does it to, and the transition it states. The
+/// subject reuses [`RemoteIdColumns`], because an item's subject and a
+/// mapping's binding are the same shape and `job_item_subject_shape` is
+/// `mapping_remote_id_shape` restated.
+pub(crate) struct OperationColumns<'a> {
+    pub(crate) operation: &'static str,
+    pub(crate) subject_kind: Option<&'static str>,
+    pub(crate) subject_url: Option<&'a str>,
+    pub(crate) subject_numeric_id: Option<i64>,
+    pub(crate) state_from: Option<&'static str>,
+    pub(crate) state_to: Option<&'static str>,
+}
+
+impl<'a> OperationColumns<'a> {
+    pub(crate) fn encode(operation: &'a ItemOperation) -> Result<Self, StorageError> {
+        Ok(match operation {
+            ItemOperation::Create => Self {
+                operation: "create",
+                subject_kind: None,
+                subject_url: None,
+                subject_numeric_id: None,
+                state_from: None,
+                state_to: None,
+            },
+            ItemOperation::Revise {
+                subject,
+                transition,
+            } => {
+                let remote = RemoteIdColumns::encode(subject)?;
+                Self {
+                    operation: "revise",
+                    subject_kind: Some(remote.kind),
+                    subject_url: remote.url,
+                    subject_numeric_id: remote.numeric_id,
+                    state_from: Some(listing_state_to_db(transition.from)),
+                    state_to: Some(listing_state_to_db(transition.to)),
+                }
+            }
+            ItemOperation::Remove { subject, state } => {
+                let remote = RemoteIdColumns::encode(subject)?;
+                Self {
+                    operation: "remove",
+                    subject_kind: Some(remote.kind),
+                    subject_url: remote.url,
+                    subject_numeric_id: remote.numeric_id,
+                    state_from: Some(listing_state_to_db(*state)),
+                    state_to: None,
+                }
+            }
+        })
+    }
+}
+
+/// The same six columns as read back, before they are decoded. A struct
+/// rather than six arguments, which is also what lets a query hand its row
+/// over field by field without an ordering to get wrong.
+pub(crate) struct StoredOperation {
+    pub(crate) operation: String,
+    pub(crate) subject_kind: Option<String>,
+    pub(crate) subject_url: Option<String>,
+    pub(crate) subject_numeric_id: Option<i64>,
+    pub(crate) state_from: Option<String>,
+    pub(crate) state_to: Option<String>,
+}
+
+impl StoredOperation {
+    pub(crate) fn decode(self) -> Result<ItemOperation, StorageError> {
+        let subject = match self.subject_kind {
+            Some(kind) => Some(crate::mapping::remote_id_from_db(
+                &kind,
+                self.subject_url,
+                self.subject_numeric_id,
+            )?),
+            None => None,
+        };
+        let from = self
+            .state_from
+            .as_deref()
+            .map(listing_state_from_db)
+            .transpose()?;
+        let to = self
+            .state_to
+            .as_deref()
+            .map(listing_state_from_db)
+            .transpose()?;
+        match (self.operation.as_str(), subject, from, to) {
+            ("create", None, None, None) => Ok(ItemOperation::Create),
+            ("revise", Some(subject), Some(from), Some(to)) => Ok(ItemOperation::Revise {
+                subject,
+                transition: LifecycleTransition { from, to },
+            }),
+            ("remove", Some(subject), Some(state), None) => {
+                Ok(ItemOperation::Remove { subject, state })
+            }
+            (operation, _, _, _) => Err(StorageError::CorruptRow {
+                reason: format!("inconsistent operation columns for {operation:?}"),
+            }),
+        }
     }
 }
 

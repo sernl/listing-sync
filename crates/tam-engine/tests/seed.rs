@@ -172,6 +172,7 @@ fn lease() -> LeasedItem {
             1,
             ContentHash([0x51; 32]),
         ),
+        operation: tam_domain::ItemOperation::Create,
         lease_epoch: 0,
         attempt_count: 0,
     }

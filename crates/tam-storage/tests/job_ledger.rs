@@ -93,8 +93,9 @@ async fn one_write_attempt_in_flight_per_mapping(pool: PgPool) {
     .await
     .expect("the fixture job inserts");
     sqlx::query(
-        "INSERT INTO job_item (org_id, id, job_id, mapping_id, idempotency_key, state, created_at) \
-         VALUES ($1, $2, $3, $4, $5, 'queued', now())",
+        "INSERT INTO job_item \
+         (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, operation) \
+         VALUES ($1, $2, $3, $4, $5, 'queued', now(), 'create')",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(ITEM_1))
@@ -144,8 +145,8 @@ async fn a_reused_idempotency_key_is_refused(pool: PgPool) {
     for (item, expect_ok) in [(ITEM_1, true), (Uuid([0x43; 16]), false)] {
         let inserted = sqlx::query(
             "INSERT INTO job_item \
-             (org_id, id, job_id, mapping_id, idempotency_key, state, created_at) \
-             VALUES ($1, $2, $3, $4, $5, 'queued', now())",
+             (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, operation) \
+             VALUES ($1, $2, $3, $4, $5, 'queued', now(), 'create')",
         )
         .bind(db_uuid(ORG_A.0))
         .bind(db_uuid(item))

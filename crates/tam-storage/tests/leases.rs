@@ -9,9 +9,12 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{
-    Binding, FieldPolicies, FieldPolicy, ItemOutcome, JobItemId, Mapping, PublishMode,
+    Binding, FieldPolicies, FieldPolicy, ItemOperation, ItemOutcome, JobItemId, Mapping,
+    PublishMode,
 };
-use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
+use tam_marketplace::{
+    IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
+};
 use tam_storage::{
     BudgetGrant, HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LeaseRepo, MappingRepo,
     NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo, StorageError,
@@ -160,16 +163,28 @@ fn item(seed: u8) -> NewJobItem {
         item: JobItemId(Uuid([seed; 16])),
         mapping: MappingId(Uuid([0; 16])),
         idempotency_key: IdempotencyKey(Uuid([seed.wrapping_add(0x40); 16])),
+        operation: ItemOperation::Create,
     }
+}
+
+async fn enqueue_one(engine: &PgPool, tenant: &Tenant, job_seed: u8, item_seed: u8) -> JobItemId {
+    enqueue_operation(engine, tenant, job_seed, item_seed, ItemOperation::Create).await
 }
 
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn enqueue_one(engine: &PgPool, tenant: &Tenant, job_seed: u8, item_seed: u8) -> JobItemId {
+async fn enqueue_operation(
+    engine: &PgPool,
+    tenant: &Tenant,
+    job_seed: u8,
+    item_seed: u8,
+    operation: ItemOperation,
+) -> JobItemId {
     let mut new_item = item(item_seed);
     new_item.mapping = tenant.mapping;
+    new_item.operation = operation;
     JobRepo::new(engine.clone())
         .enqueue(
             tenant.org,
@@ -183,6 +198,14 @@ async fn enqueue_one(engine: &PgPool, tenant: &Tenant, job_seed: u8, item_seed: 
         .await
         .expect("the fixture job enqueues");
     new_item.item
+}
+
+/// The listing an item asserts it acts on, distinct per seed so a subject
+/// that survives the round trip is provably this item's.
+fn subject(seed: u8) -> RemoteListingId {
+    RemoteListingId::Tes {
+        url: format!("https://www.tes.com/teaching-resource/fixture-{seed}"),
+    }
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -615,5 +638,98 @@ async fn the_rate_budget_grants_then_exhausts(app: PgPool) {
         refused,
         BudgetGrant::Exhausted,
         "the governor refuses rather than errors at the ceiling"
+    );
+}
+
+/// The whole operation survives the ledger: not only which of the three it
+/// is, but the listing it names and the transition it states. A `RETURNING`
+/// list that stops at `operation` would read a revise back with no subject
+/// and no ends, and the lift would have nothing to validate against the
+/// binding.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_enqueued_removal_leases_as_a_removal(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let remover = seed_tenant(&app, 0xA0, true).await;
+    let reviser = seed_tenant(&app, 0xB0, true).await;
+    let removal = ItemOperation::Remove {
+        subject: subject(0x21),
+        state: ListingState::Live,
+    };
+    let revision = ItemOperation::Revise {
+        subject: subject(0x22),
+        transition: LifecycleTransition {
+            from: ListingState::Draft,
+            to: ListingState::Live,
+        },
+    };
+    enqueue_operation(&engine, &remover, 0x11, 0x21, removal.clone()).await;
+    enqueue_operation(&engine, &reviser, 0x12, 0x22, revision.clone()).await;
+
+    let leases = LeaseRepo::new(engine.clone());
+    let first = leases
+        .acquire("w1", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("something is leasable");
+    let second = leases
+        .acquire("w2", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the other tenant is leasable");
+    for leased in [first, second] {
+        let expected = if leased.org == remover.org {
+            &removal
+        } else {
+            &revision
+        };
+        assert_eq!(
+            &leased.operation, expected,
+            "the leased item must carry the operation, subject and transition it was enqueued with"
+        );
+    }
+}
+
+/// The request-idempotency-key path is the one the API actually enqueues
+/// through, and it is a second `INSERT INTO job_item`. Both route through one
+/// helper; were they to drift, a removal enqueued here would fail the NOT
+/// NULL that migration 0019 leaves behind when it drops the default, rather
+/// than lease as a create and run as a second listing.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xA0, true).await;
+    let removal = ItemOperation::Remove {
+        subject: subject(0x31),
+        state: ListingState::Draft,
+    };
+    let mut new_item = item(0x31);
+    new_item.mapping = tenant.mapping;
+    new_item.operation = removal.clone();
+    let created = JobRepo::new(engine.clone())
+        .create_with_request_key(
+            tenant.org,
+            Uuid([0x71; 16]),
+            &NewJob {
+                job: JobId(Uuid([0x15; 16])),
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            std::slice::from_ref(&new_item),
+        )
+        .await
+        .expect("the request-keyed job enqueues");
+    assert!(
+        !created.replay,
+        "the first carrier of the key creates a job"
+    );
+
+    let leased = LeaseRepo::new(engine.clone())
+        .acquire("w1", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the enqueued removal is leasable");
+    assert_eq!(
+        leased.operation, removal,
+        "an item enqueued through the request-key path leases as what it was enqueued as"
     );
 }

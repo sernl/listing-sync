@@ -10,7 +10,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{
     Binding, CanonicalProduct, DeclarationSource, FieldPolicies, FieldPolicy, GradeDeclaration,
-    ItemOutcome, JobItemId, Mapping, PublishMode, Verification,
+    ItemOperation, ItemOutcome, JobItemId, Mapping, PublishMode, Verification,
 };
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
@@ -163,6 +163,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
                 item: ITEM,
                 mapping: MAPPING,
                 idempotency_key: IdempotencyKey(Uuid([0xC9; 16])),
+                operation: ItemOperation::Create,
             }],
         )
         .await?;
@@ -208,6 +209,7 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
                 item: RIVAL_ITEM,
                 mapping: RIVAL,
                 idempotency_key: IdempotencyKey(Uuid([0xCB; 16])),
+                operation: ItemOperation::Create,
             }],
         )
         .await?;

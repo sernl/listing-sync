@@ -396,6 +396,7 @@ async fn provision(pool: &PgPool) {
                     1,
                     ContentHash([0x51; 32]),
                 ),
+                operation: tam_domain::ItemOperation::Create,
             }],
         )
         .await

@@ -9,7 +9,7 @@ use axum::http::{request::Parts, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_domain::{ItemOutcome, JobItemId};
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_storage::{
     payload_digest, EventRow, ItemCounts, ItemRow, JobReadRepo, JobRepo, LedgerCursor, NewJob,
@@ -361,6 +361,10 @@ pub(crate) async fn create_job(
                 INTENT_VERSION,
                 payload_digest(&seed.payload_hashes),
             ),
+            // The sync endpoint enqueues creates only; a seller-facing
+            // publish or migrate lands with Phase 4's orchestration, which is
+            // where seller vocabulary lowers into an operation.
+            operation: ItemOperation::Create,
         })
         .collect();
     let new = NewJob {

@@ -10,8 +10,9 @@
 //! design: a stalled queue is recoverable and a duplicate-upload storm is
 //! not, so every refusal here biases toward stalling.
 
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
-use tam_domain::{ItemOutcome, JobItemId};
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::{IdempotencyKey, RemoteListingId};
 use tam_types::{
     FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp,
@@ -20,7 +21,7 @@ use tam_types::{
 
 use crate::codec::{
     failure_code_to_db, inventory_from_db, inventory_to_db, marketplace_to_db, timestamp_to_db,
-    uuid_from_db, uuid_to_db, RemoteIdColumns,
+    uuid_from_db, uuid_to_db, OperationColumns, RemoteIdColumns, StoredOperation,
 };
 use crate::mapping::remote_id_from_db;
 use crate::StorageError;
@@ -66,6 +67,12 @@ pub struct NewJobItem {
     pub item: JobItemId,
     pub mapping: MappingId,
     pub idempotency_key: IdempotencyKey,
+    /// What this item does to the listing its mapping names, and which
+    /// listing the enqueuer asserts that is. Stored rather than derived: no
+    /// column records which side of the draft line a listing sits on, and a
+    /// subject the caller states is a divergence the engine can detect,
+    /// where an unstated one silently retargets a rebound mapping.
+    pub operation: ItemOperation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +83,7 @@ pub struct LeasedItem {
     pub mapping: MappingId,
     pub inventory: InventoryId,
     pub idempotency_key: IdempotencyKey,
+    pub operation: ItemOperation,
     pub lease_epoch: i64,
     pub attempt_count: i32,
 }
@@ -127,24 +135,7 @@ impl JobRepo {
         .execute(&mut *tx)
         .await?;
         for item in items {
-            let inserted = sqlx::query!(
-                "INSERT INTO job_item \
-                 (org_id, id, job_id, mapping_id, idempotency_key, state, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, 'queued', $6)",
-                org_db,
-                uuid_to_db(item.item.0),
-                uuid_to_db(job.0),
-                uuid_to_db(item.mapping.0),
-                uuid_to_db(item.idempotency_key.0),
-                at_db,
-            )
-            .execute(&mut *tx)
-            .await;
-            map_unique(inserted, "job_item_idempotent", || {
-                StorageError::DuplicateIdempotencyKey {
-                    key: uuid_to_db(item.idempotency_key.0),
-                }
-            })?;
+            insert_job_item(&mut tx, org_db, uuid_to_db(job.0), item, at_db).await?;
         }
         let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
             reason: format!("{} items exceed the event range", items.len()),
@@ -263,6 +254,48 @@ impl JobRepo {
     }
 }
 
+/// The one `INSERT INTO job_item`. Both enqueue paths route through it, so a
+/// column the item grows cannot reach one site and miss the other: migration
+/// 0019 drops `operation`'s default after backfilling, which turns such an
+/// omission into a NOT NULL violation rather than a removal silently stored
+/// and later run as a create.
+async fn insert_job_item(
+    tx: &mut Transaction<'_, Postgres>,
+    org: uuid::Uuid,
+    job: uuid::Uuid,
+    item: &NewJobItem,
+    at: DateTime<Utc>,
+) -> Result<(), StorageError> {
+    let operation = OperationColumns::encode(&item.operation)?;
+    let inserted = sqlx::query!(
+        "INSERT INTO job_item \
+         (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, \
+          operation, subject_kind, subject_url, subject_numeric_id, \
+          state_from, state_to) \
+         VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11, $12)",
+        org,
+        uuid_to_db(item.item.0),
+        job,
+        uuid_to_db(item.mapping.0),
+        uuid_to_db(item.idempotency_key.0),
+        at,
+        operation.operation,
+        operation.subject_kind,
+        operation.subject_url,
+        operation.subject_numeric_id,
+        operation.state_from,
+        operation.state_to,
+    )
+    .execute(&mut **tx)
+    .await;
+    map_unique(inserted, "job_item_idempotent", || {
+        StorageError::DuplicateIdempotencyKey {
+            key: uuid_to_db(item.idempotency_key.0),
+        }
+    })?;
+    Ok(())
+}
+
 /// Appends one event inside the caller's transaction, allocating `org_seq`
 /// by locking the per-organisation counter row — identity values are
 /// allocated before commit and can appear out of order, which is exactly the
@@ -376,6 +409,8 @@ impl LeaseRepo {
                  AND j2.org_id = item.org_id AND j2.id = item.job_id
                RETURNING item.org_id, item.id, item.job_id, item.mapping_id,
                  item.idempotency_key, item.lease_epoch, item.attempt_count,
+                 item.operation, item.subject_kind, item.subject_url,
+                 item.subject_numeric_id, item.state_from, item.state_to,
                  j2.inventory AS "inventory!""#,
             worker,
             expires,
@@ -402,6 +437,15 @@ impl LeaseRepo {
                     mapping: MappingId(uuid_from_db(row.mapping_id)),
                     inventory: inventory_from_db(&row.inventory)?,
                     idempotency_key: IdempotencyKey(uuid_from_db(row.idempotency_key)),
+                    operation: StoredOperation {
+                        operation: row.operation,
+                        subject_kind: row.subject_kind,
+                        subject_url: row.subject_url,
+                        subject_numeric_id: row.subject_numeric_id,
+                        state_from: row.state_from,
+                        state_to: row.state_to,
+                    }
+                    .decode()?,
                     lease_epoch: row.lease_epoch,
                     attempt_count: row.attempt_count,
                 })
@@ -1215,24 +1259,7 @@ impl JobRepo {
             Err(error) => return Err(error.into()),
         }
         for item in items {
-            let inserted = sqlx::query!(
-                "INSERT INTO job_item \
-                 (org_id, id, job_id, mapping_id, idempotency_key, state, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, 'queued', $6)",
-                org_db,
-                uuid_to_db(item.item.0),
-                uuid_to_db(job.0),
-                uuid_to_db(item.mapping.0),
-                uuid_to_db(item.idempotency_key.0),
-                at_db,
-            )
-            .execute(&mut *tx)
-            .await;
-            map_unique(inserted, "job_item_idempotent", || {
-                StorageError::DuplicateIdempotencyKey {
-                    key: uuid_to_db(item.idempotency_key.0),
-                }
-            })?;
+            insert_job_item(&mut tx, org_db, uuid_to_db(job.0), item, at_db).await?;
         }
         let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
             reason: format!("{} items exceed the event range", items.len()),
