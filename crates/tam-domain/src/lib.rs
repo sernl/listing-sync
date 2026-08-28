@@ -9,6 +9,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod registry;
+
 use tam_marketplace::{
     settle, verify_after, AdapterError, AmbiguityCause, ChallengeKind, CorrelationMarker,
     CreateStrategy, EvidenceRef, FetchReason, FieldDiffReport, FieldSet, FormId,

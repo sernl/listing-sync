@@ -9,9 +9,15 @@
 //! account-scoped rather than inventory-scoped. A `Free` price needs no
 //! currency, so free listings pass an unmeasured-currency inventory while a
 //! priced one blocks honestly until the probe lands.
+//!
+//! Verbatim is qualified by the field registry: a cap it declares for the
+//! target inventory is applied here, at projection, and never at authoring,
+//! which is where the seller's own text stays whole. No Tes inventory
+//! declares one, so every Tes projection is byte-identical to its product.
 
 use std::collections::HashMap;
 
+use tam_domain::registry::{registry, truncate, FieldSpec};
 use tam_domain::{
     CanonicalProduct, CanonicalTerm, ListingProjection, ProjectionBlocked, ProjectionEdge,
     ReconciliationItem, ReconciliationState, TermKind, VocabularyId, VocabularyPath,
@@ -133,16 +139,23 @@ pub fn project_listing(
         })
         .collect();
 
+    let declared = &registry(ctx.inventory).canonical;
+
     Ok(ListingProjection {
         inventory: ctx.inventory,
-        title: product.title.0.clone(),
-        body: product.body.body.clone(),
+        title: capped(&product.title.0, &declared.title),
+        body: capped(&product.body.body, &declared.description),
         price: product.price,
         taxonomy: included,
         grades,
         files: product.payload.iter().map(|file| file.id).collect(),
         loss,
     })
+}
+
+fn capped(text: &str, spec: &FieldSpec) -> String {
+    spec.cap
+        .map_or_else(|| text.to_owned(), |cap| truncate(text, cap))
 }
 
 #[cfg(test)]
@@ -361,6 +374,70 @@ mod tests {
                 })
             ),
             "a seller-scoped inventory's currency is unverified, so a priced listing blocks: {blocked:?}"
+        );
+    }
+
+    #[test]
+    fn a_tes_projection_is_verbatim_because_no_tes_cap_is_declared() {
+        let catalogue = terms();
+        let edges = [nz_edge()];
+        let long = "A worksheet ".repeat(400);
+        let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        source.title = Title(long.clone());
+        source.body = ListingCopy { body: long.clone() };
+        let projection =
+            project_listing(&source, &ctx(&catalogue, &edges)).expect("everything is in order");
+        assert_eq!(
+            (projection.title.as_str(), projection.body.as_str()),
+            (long.as_str(), long.as_str()),
+            "the registry declares no Tes cap, so projection copies every byte"
+        );
+    }
+
+    #[test]
+    fn a_declared_cap_truncates_at_projection() {
+        // Etsy is the only inventory with a cap on file, and its currency is
+        // seller-scoped, so a free listing is the one that reaches the cap
+        // rather than blocking at the currency gate first.
+        let catalogue = terms();
+        let etsy_edge = ProjectionEdge {
+            from: TERM,
+            to: VocabularyPath {
+                vocabulary: VocabularyId(InventoryId::Etsy, TermKind::Subject),
+                segments: vec!["Maths".to_owned()],
+                native_id: Some("e-1".to_owned()),
+            },
+            kind: EdgeKind::Exact,
+            decided_by: Decider::Imported {
+                source: "test".to_owned(),
+            },
+            decided_at: NOW,
+        };
+        let etsy_ctx = ListingContext {
+            org: ORG,
+            mapping: MAPPING,
+            inventory: InventoryId::Etsy,
+            now: NOW,
+            terms: &catalogue,
+            edges: std::slice::from_ref(&etsy_edge),
+            no_counterparts: &[],
+        };
+        let long: String = std::iter::repeat_n('é', 200).collect();
+        let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        source.title = Title(long.clone());
+        let projection = project_listing(&source, &etsy_ctx).expect("a free listing projects");
+        assert_eq!(
+            projection.title.chars().count(),
+            140,
+            "Etsy's documented cap counts codepoints, not the 400 bytes these occupy"
+        );
+        assert!(
+            long.starts_with(&projection.title),
+            "truncation keeps a prefix and never rewrites it"
+        );
+        assert_eq!(
+            projection.body, "Body text.",
+            "Etsy declares no description cap, so the body is untouched"
         );
     }
 
