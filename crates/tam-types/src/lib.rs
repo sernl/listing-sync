@@ -462,6 +462,22 @@ pub const NAMESPACE_TAM_TAXONOMY: Uuid = Uuid([
     0x7b, 0x3a, 0x22, 0x9e, 0x5d, 0x41, 0x4c, 0x8a, 0x8f, 0x0d, 0x6e, 0x2b, 0x91, 0x54, 0xc7, 0x33,
 ]);
 
+/// Why a bind folded into an attempt settle left the landing unrecorded.
+/// Each variant carries what acting on it needs: the identifier the mapping
+/// already holds, the mapping that claims the landed listing, or the binding
+/// state the fenced bind was refused against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BindAnomaly {
+    /// The mapping is bound, and to a different listing than this write
+    /// landed on.
+    DivergentLanding { existing_remote: String },
+    /// Another mapping in the same inventory already claims the landed
+    /// listing.
+    ClaimedElsewhere { claiming_mapping: MappingId },
+    /// The prior-state fence matched no row, in this binding state.
+    Refused { binding_state: String },
+}
+
 /// The body carried beside each `job_event.kind`. The serde tag of each
 /// variant is exactly one `JobEventKind` name — the agreement test below is
 /// the tripwire — and the pair is one tagged union split across the two
@@ -530,12 +546,20 @@ pub enum JobEventPayload {
         items_new: u32,
         items_already_open: u32,
     },
+    /// A write landed on a listing the mapping does not record. The clean
+    /// dispositions stay silent by construction — a bind, an idempotent
+    /// re-land and a verdict with nothing to bind leave nothing to act on —
+    /// so a row here is always a live listing the ledger is the only witness
+    /// to.
+    ItemBindAnomaly {
+        anomaly: BindAnomaly,
+    },
 }
 
 impl JobEventPayload {
     /// Every kind name, in a stable order, for the vocabulary generator and
     /// the client's stream subscriptions.
-    pub const ALL_KINDS: [&'static str; 13] = [
+    pub const ALL_KINDS: [&'static str; 14] = [
         "JobQueued",
         "JobStarted",
         "ItemQueued",
@@ -549,6 +573,7 @@ impl JobEventPayload {
         "JobSettled",
         "JobHalted",
         "ImportDrainMeasured",
+        "ItemBindAnomaly",
     ];
 
     /// The serde tag, which is the `job_event.kind` column value. Total, so
@@ -569,6 +594,7 @@ impl JobEventPayload {
             Self::JobSettled { .. } => "JobSettled",
             Self::JobHalted { .. } => "JobHalted",
             Self::ImportDrainMeasured { .. } => "ImportDrainMeasured",
+            Self::ItemBindAnomaly { .. } => "ItemBindAnomaly",
         }
     }
 }
@@ -620,7 +646,7 @@ mod tests {
         );
     }
 
-    /// The thirteen serde tags and the thirteen kind strings are one set; the
+    /// The fourteen serde tags and the fourteen kind strings are one set; the
     /// wildcard-free construction plus this agreement loop is the tripwire.
     #[test]
     fn every_job_event_tag_is_its_kind_string() {
@@ -668,8 +694,13 @@ mod tests {
                 items_new: 1,
                 items_already_open: 0,
             },
+            super::JobEventPayload::ItemBindAnomaly {
+                anomaly: super::BindAnomaly::Refused {
+                    binding_state: "severed".to_owned(),
+                },
+            },
         ];
-        assert_eq!(samples.len(), 13, "one sample per JobEventKind");
+        assert_eq!(samples.len(), 14, "one sample per JobEventKind");
         for payload in samples {
             let encoded = serde_json::to_value(&payload).expect("a payload serialises");
             let tag = encoded

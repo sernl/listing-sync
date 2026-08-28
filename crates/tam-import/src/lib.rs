@@ -59,9 +59,13 @@ pub struct NamedBytes {
     pub bytes: Vec<u8>,
 }
 
-/// Everything an import run holds constant across entries. The adapter is
-/// the first-party-export capability rather than one marketplace's client,
-/// so a second platform's import is this same run over its own adapter.
+/// Everything an import run holds constant across entries. The adapter seam
+/// is the capability — the run reads through `FirstPartyExport` rather than
+/// one marketplace's client — but the run's own vocabulary is still
+/// Tes-shaped: it labels grades from `TES_MAIN_AGE_RANGES`, decodes Tes
+/// licence tokens into a price intent, mints GBP, and addresses resources
+/// numerically through `A::Resource: From<i64>`. Generalising the run is
+/// M7's, with the second platform's import.
 pub struct ImportRun<'a, A: FirstPartyExport> {
     pub pool: PgPool,
     pub kek: Kek,

@@ -47,7 +47,7 @@ const NOW: Timestamp = Timestamp(1_000);
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn provision(pool: &PgPool, with_nz_edge: bool) {
+async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Binding) {
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
         .bind(uuid::Uuid::from_bytes(ORG.0 .0))
         .execute(pool)
@@ -122,7 +122,7 @@ async fn provision(pool: &PgPool, with_nz_edge: bool) {
                 org: ORG,
                 product: PRODUCT,
                 inventory: InventoryId::TesNz,
-                binding: tam_domain::Binding::Unbound,
+                binding,
                 policies: tam_domain::FieldPolicies {
                     title: tam_domain::FieldPolicy::Managed,
                     description: tam_domain::FieldPolicy::Managed,
@@ -192,7 +192,7 @@ fn entry(seed: &tam_engine::driver::MachineSeed, key: FieldKey) -> String {
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
-    provision(&pool, true).await;
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
     let outcome = project_for_item(&pool, &lease(), NOW)
         .await
         .expect("the projection runs");
@@ -230,7 +230,7 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
-    provision(&pool, false).await;
+    provision(&pool, false, tam_domain::Binding::Unbound).await;
     let outcome = project_for_item(&pool, &lease(), NOW)
         .await
         .expect("the projection runs");
@@ -244,4 +244,35 @@ async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
         .await
         .expect("the queue reads");
     assert_eq!(open.len(), 1, "the founder sees the gap the worker hit");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_bound_mapping_parks_behind_the_binding_gate(pool: PgPool) {
+    provision(
+        &pool,
+        true,
+        tam_domain::Binding::Bound {
+            id: tam_marketplace::RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/fractions-9001".to_owned(),
+            },
+            first_seen: NOW,
+            verified: tam_domain::Verification::Stale { since: NOW },
+        },
+    )
+    .await;
+    let outcome = project_for_item(&pool, &lease(), NOW)
+        .await
+        .expect("the projection runs");
+    // Blocked rather than Ready is the whole assertion: there is no
+    // ProjectedListing to hand seed_from_projection, so the create that would
+    // have minted a second listing cannot be built.
+    let ProjectionOutcome::Blocked { gate, raised } = outcome else {
+        panic!("a mapping already bound has no create left to make");
+    };
+    assert_eq!(gate, "binding", "the gate names the binding, not a gap");
+    assert_eq!(
+        (raised.new, raised.already_open),
+        (0, 0),
+        "a bound mapping raises no reconciliation item; nothing is missing"
+    );
 }

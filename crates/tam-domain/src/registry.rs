@@ -240,10 +240,11 @@ const TES_NATIVES: &[NativeField] = &[
         vocabulary: NativeVocabulary::Numeric,
     },
     // The adapter writes the empty list on every draft, so the accepted values
-    // have never been exercised and none are on file.
+    // have never been exercised and none are on file; the import reads the
+    // field back off the resource state, so it crosses in both directions.
     NativeField {
         name: "yearGroups",
-        direction: FieldDirection::Written,
+        direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,
     },

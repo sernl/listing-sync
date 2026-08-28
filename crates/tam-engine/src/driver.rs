@@ -16,12 +16,12 @@ use tam_marketplace::{
     WriteAttemptId,
 };
 use tam_storage::{
-    append_event, AttemptIntent, AttemptRef, AttemptVerdict, BudgetGrant, EventScope, HaltCause,
-    HaltRepo, ItemVerdict, LeaseRepo, LeasedItem, NewOutboxMessage, OutboxRepo, RateBudgetRepo,
-    StorageError, WriteAttemptRepo,
+    append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
+    EventScope, HaltCause, HaltRepo, ItemVerdict, LeaseRepo, LeasedItem, NewOutboxMessage,
+    OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
-    ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId, Timestamp, Uuid,
+    BindAnomaly, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId, Timestamp, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -373,7 +373,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                         failure_code: verdict.failure_code,
                         landed: outcome_to_landed(outcome).cloned(),
                     };
-                    if let Err(error) = ctx
+                    let settled = ctx
                         .attempts
                         .settle(
                             &lease_ref,
@@ -384,11 +384,24 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                             &attempt_verdict,
                             now,
                         )
-                        .await
-                    {
-                        return Ok(RunVerdict::Abandoned {
-                            reason: format!("the attempt settle was fenced: {error}"),
-                        });
+                        .await;
+                    match settled {
+                        Ok(disposition) => {
+                            if let Some(anomaly) = bind_anomaly(disposition) {
+                                record_event(
+                                    ctx,
+                                    lease,
+                                    &JobEventPayload::ItemBindAnomaly { anomaly },
+                                    now,
+                                )
+                                .await?;
+                            }
+                        }
+                        Err(error) => {
+                            return Ok(RunVerdict::Abandoned {
+                                reason: format!("the attempt settle was fenced: {error}"),
+                            })
+                        }
                     }
                 }
                 ctx.leases.settle(&lease_ref, &verdict, now).await?;
@@ -414,6 +427,26 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource>(
                 })
             }
         }
+    }
+}
+
+/// The ledger's share of a bind disposition. The three that leave a landed
+/// listing unrecorded travel; the three that recorded it, or had nothing to
+/// record, do not, so a row in the ledger is always something to act on.
+fn bind_anomaly(disposition: BindDisposition) -> Option<BindAnomaly> {
+    match disposition {
+        BindDisposition::Bound | BindDisposition::AlreadyBound | BindDisposition::NotLanded => None,
+        BindDisposition::DivergentLanding { existing } => Some(BindAnomaly::DivergentLanding {
+            existing_remote: format!("{existing:?}"),
+        }),
+        BindDisposition::ClaimedElsewhere { existing_mapping } => {
+            Some(BindAnomaly::ClaimedElsewhere {
+                claiming_mapping: existing_mapping,
+            })
+        }
+        BindDisposition::Refused { state } => Some(BindAnomaly::Refused {
+            binding_state: state,
+        }),
     }
 }
 
@@ -496,10 +529,11 @@ const _: fn(sqlx::PgPool) -> OutboxRepo = OutboxRepo::new;
 
 #[cfg(test)]
 mod tests {
-    use super::outcome_to_item;
+    use super::{bind_anomaly, outcome_to_item};
     use tam_domain::ItemOutcome;
-    use tam_marketplace::Outcome;
-    use tam_types::{FailureCode, FailureDetail};
+    use tam_marketplace::{Outcome, RemoteListingId};
+    use tam_storage::BindDisposition;
+    use tam_types::{BindAnomaly, FailureCode, FailureDetail, MappingId, Uuid};
 
     #[test]
     fn a_rejection_carries_its_detail_into_the_verdict() {
@@ -543,6 +577,61 @@ mod tests {
         assert_eq!(
             verdict.failure_detail, None,
             "no detail is written where the adapter supplied none"
+        );
+    }
+
+    #[test]
+    fn the_dispositions_that_recorded_the_landing_leave_the_ledger_silent() {
+        for disposition in [
+            BindDisposition::Bound,
+            BindDisposition::AlreadyBound,
+            BindDisposition::NotLanded,
+        ] {
+            assert_eq!(
+                bind_anomaly(disposition.clone()),
+                None,
+                "{disposition:?} left nothing unrecorded, so it writes no event"
+            );
+        }
+    }
+
+    #[test]
+    fn every_landing_the_mapping_does_not_record_reaches_the_ledger() {
+        let url = "https://www.tes.com/teaching-resource/fractions-9001";
+        assert_eq!(
+            bind_anomaly(BindDisposition::DivergentLanding {
+                existing: RemoteListingId::Tes {
+                    url: url.to_owned(),
+                },
+            }),
+            Some(BindAnomaly::DivergentLanding {
+                existing_remote: format!(
+                    "{:?}",
+                    RemoteListingId::Tes {
+                        url: url.to_owned()
+                    }
+                ),
+            }),
+            "a divergent landing carries the identifier the mapping already holds"
+        );
+        let claimant = MappingId(Uuid([0x31; 16]));
+        assert_eq!(
+            bind_anomaly(BindDisposition::ClaimedElsewhere {
+                existing_mapping: claimant,
+            }),
+            Some(BindAnomaly::ClaimedElsewhere {
+                claiming_mapping: claimant,
+            }),
+            "a cross-mapping claim names the mapping holding the listing"
+        );
+        assert_eq!(
+            bind_anomaly(BindDisposition::Refused {
+                state: "severed".to_owned(),
+            }),
+            Some(BindAnomaly::Refused {
+                binding_state: "severed".to_owned(),
+            }),
+            "a refused bind carries the state the fence was refused against"
         );
     }
 }

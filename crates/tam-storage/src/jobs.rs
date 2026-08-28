@@ -791,7 +791,12 @@ impl WriteAttemptRepo {
 /// Every one of them still settles the attempt, because the second listing is
 /// already queryable from the settled attempt's own remote-id columns and
 /// refusing to record a write that landed would retry it into a third.
+///
+/// `#[must_use]` because the three anomalous dispositions are the only record
+/// that a landed listing went unbound: dropping one loses the listing, since
+/// the item outcome and the run verdict are deliberately unchanged by it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
 pub enum BindDisposition {
     /// The verdict carried no landed listing, so there was nothing to bind.
     NotLanded,

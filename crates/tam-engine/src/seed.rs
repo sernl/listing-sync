@@ -11,7 +11,7 @@
 //! platform's encoding lives here.
 
 use sqlx::PgPool;
-use tam_domain::{ProjectionBlocked, StepBudget, TermKind, VocabularyId, VocabularyPath};
+use tam_domain::{Binding, ProjectionBlocked, StepBudget, TermKind, VocabularyId, VocabularyPath};
 use tam_marketplace::{
     AgeSpan, CreateStrategy, FormId, MarketplaceAdapter, NativeTerm, ProjectedListing,
     RemoteLifecycleKind,
@@ -48,6 +48,21 @@ pub async fn project_for_item(
         .ok_or(StorageError::Inconsistent {
             reason: "a leased item's mapping must exist".to_owned(),
         })?;
+    // No update path exists yet and `CreateStrategy::DraftThenPublish` is the
+    // only strategy, so a projection against a bound mapping would create a
+    // second listing rather than revise the first. The duplicate refusal does
+    // not catch it either: the ordinary trigger is the seller editing the
+    // product and re-syncing, and a changed payload mints a fresh idempotency
+    // key. Parking is the stall bias until the update path lands.
+    if matches!(mapping.mapping.binding, Binding::Bound { .. }) {
+        return Ok(ProjectionOutcome::Blocked {
+            gate: "binding",
+            raised: RaiseReport {
+                new: 0,
+                already_open: 0,
+            },
+        });
+    }
     let product = ProductRepo::new(pool.clone())
         .get(lease.org, mapping.mapping.product)
         .await?

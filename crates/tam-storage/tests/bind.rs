@@ -289,9 +289,13 @@ async fn re_landing_the_same_listing_preserves_first_seen(app: PgPool) {
         .await
         .expect("the fixture seeds")
         .expect("the enqueued item leases");
-    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
-        .await
-        .expect("the first settle runs");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the first settle runs"),
+        BindDisposition::Bound,
+        "the setup landing binds before the re-land under test runs"
+    );
 
     let again = land(&engine, &lease, MAPPING, Some(tes(LANDED)), RELANDED_AT)
         .await
@@ -322,9 +326,13 @@ async fn a_divergent_landing_is_reported_never_written(app: PgPool) {
         .await
         .expect("the fixture seeds")
         .expect("the enqueued item leases");
-    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
-        .await
-        .expect("the first settle runs");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the first settle runs"),
+        BindDisposition::Bound,
+        "the setup landing binds before the divergent one under test runs"
+    );
 
     let divergent = land(&engine, &lease, MAPPING, Some(tes(ELSEWHERE)), RELANDED_AT)
         .await
@@ -402,9 +410,13 @@ async fn a_listing_another_mapping_holds_still_settles_the_attempt(app: PgPool) 
         .await
         .expect("the fixture seeds")
         .expect("the enqueued item leases");
-    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
-        .await
-        .expect("the first settle runs");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the first settle runs"),
+        BindDisposition::Bound,
+        "the first mapping holds the listing the rival then lands on"
+    );
     leases
         .settle(
             &lease,
@@ -476,9 +488,13 @@ async fn one_remote_listing_cannot_be_claimed_twice(app: PgPool) {
         .await
         .expect("the fixture seeds")
         .expect("the enqueued item leases");
-    land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
-        .await
-        .expect("the settle runs");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the settle runs"),
+        BindDisposition::Bound,
+        "the first claim binds, so the index has something to refuse against"
+    );
     seed_rival_mapping(&app)
         .await
         .expect("the rival product and mapping insert");
