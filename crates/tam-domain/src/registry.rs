@@ -320,11 +320,15 @@ const ETSY_NATIVES: &[NativeField] = &[
     },
 ];
 
-/// Populated from the six 2026-08-28 HAR captures of the founder's own TPT
-/// seller account, analysed for the M7 connector. Everything here is a read
-/// the captures contain or a constant the create form hands its own client;
-/// no product write is captured, so nothing about the write's mandatory-field
-/// set is declared.
+/// Populated from the eight 2026-08-28 HAR captures of the founder's own TPT
+/// seller account, analysed for the M7 connector: six read captures, one
+/// product create and one product edit. Everything here is a read the
+/// captures contain, a field one of the two writes posted, or a constant the
+/// form hands its own client.
+///
+/// No capture contains a refused write — every recorded request succeeded —
+/// so nothing here is declared required. The written fields below record what
+/// the wire carried, not what the server would insist on.
 const TPT: InventoryRegistry = InventoryRegistry {
     inventory: InventoryId::Tpt,
     canonical: CanonicalFields {
@@ -371,38 +375,38 @@ const TPT_NATIVES: &[NativeField] = &[
     // grades (4th-grade), audience (homeschool), subject (math), resource type
     // (unit-plans) and file format (pdf) without distinguishing them. Nine
     // slugs from one store is a sample, not a vocabulary, and TPT's own
-    // platform tag set is uncaptured. The create form's posted-field
-    // whitelist names a `TaxonomyTags` field, so the write very likely sets
-    // these, but no captured write does, so the read is all that is declared.
+    // platform tag set is uncaptured. Both writes post them as a repeated
+    // `data[TaxonomyTags][]` array of the same slugs the read returns, six on
+    // the create and eight on the edit, so the field now crosses both ways.
     NativeField {
         name: "taxonomyTags",
-        direction: FieldDirection::ReadOnly,
+        direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,
     },
     // Seller-owned shelves, so there is no platform-wide vocabulary to hold:
     // the members are whatever this seller created. The product read names
     // them `categories` with numeric ids and the gateway names the same
-    // entities `customCategories` with the ids stringified.
+    // entities `customCategories` with the ids stringified; both writes post
+    // those same numeric ids as a repeated `data[Category][Category][]`.
     NativeField {
         name: "categories",
-        direction: FieldDirection::ReadOnly,
+        direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Numeric,
     },
     // `TaxCodesQuery` on /graph/graphql returned the complete five-row
     // `taxData` set: id 1 DA051011 digital audio, 2 DB031013 digital books,
     // 3 DI010200 digital images, 4 DV010200 videos, 5 DO010000 other digital
-    // goods. The create form posts `data[ItemTaxCode][tax_code_id]`, and no
-    // capture shows whether that field carries the id or the code, so the
-    // write must settle which of the two it sends before it sends one.
+    // goods. The captured edit settles which half travels: it posted
+    // `data[ItemTaxCode][tax_code_id] = 2` for a product the read reported as
+    // `taxCode {id: "2"}` and DB031013, so the field carries the row id. The
+    // create posted the field not at all.
     NativeField {
-        name: "taxCode",
-        direction: FieldDirection::Written,
+        name: "ItemTaxCode.tax_code_id",
+        direction: FieldDirection::Both,
         required: false,
-        vocabulary: NativeVocabulary::Closed(&[
-            "DA051011", "DB031013", "DI010200", "DV010200", "DO010000",
-        ]),
+        vocabulary: NativeVocabulary::Closed(&["1", "2", "3", "4", "5"]),
     },
     // The `ResourceType` enum, recovered whole from the statistics page
     // bundle. Only DIGITAL_PRODUCT occurs across this seller's 154 products.
@@ -445,6 +449,98 @@ const TPT_NATIVES: &[NativeField] = &[
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    // The nine small-integer fields the two writes post. Each is a member of
+    // an enumeration the read side names in words — `statusUser: ACTIVE`,
+    // `answerKey: INCLUDED`, `copyrightDeclaration: ORIGINAL_WORK`,
+    // `teachingDuration: HOURS_1` — against an integer the form posts, and in
+    // every case at most two of that enumeration's members were exercised.
+    // One or two observed members is not a vocabulary, and an unlisted member
+    // is refused by the platform, which is exactly what `ClosedUncaptured`
+    // records. Enumerating them properly needs the create form's own <select>
+    // options, which no capture contains.
+    NativeField {
+        // 0 on the captured create (a draft), 1 on the captured edit (live).
+        name: "Item.status_user",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // 1 on both writes, read back as ORIGINAL_WORK. A legal attestation
+        // of authorship: the connector posts it only where the seller has
+        // made one, and never as a constant.
+        name: "ItemsProperty.copyright_declaration",
+        direction: FieldDirection::Both,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // 0 on the create, 1 on the edit, read back as INCLUDED.
+        name: "ItemsProperty.answer_key",
+        direction: FieldDirection::Both,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // 0 on the create, 6 on the edit, read back as HOURS_1. The rest of
+        // the scale is uncaptured, and 0 is inferred to mean unset.
+        name: "ItemsProperty.duration",
+        direction: FieldDirection::Both,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // 1 on the create and 3 on the edit, with no source stating what
+        // either means. Each write reproduces the value its own capture
+        // carried rather than generalising from one of them.
+        name: "Item.generate_thumbnail",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // 0 on the create, 1 on the edit. The read side returns both a
+        // countryId of 153 and a countryIdFlag; only the flag is ever posted.
+        name: "ItemsLocalization.country_id_flag",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // 1 on the create alongside price 0; the edit form omits the field
+        // entirely, so the two endpoints disagree on whether it exists.
+        name: "Item.free",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // Posted as the literal 0 on the create while a generated thumbnail
+        // collection was also posted. Whether it counts manual thumbnails,
+        // selects between generated and manual, or means something else is
+        // unsettled, so the captured value is reproduced rather than derived.
+        name: "thumbs",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+    NativeField {
+        // The two opaque handles the create consumes: a 576-character
+        // processed-asset key from the upload queue and an 88-character
+        // thumbnail collection key. Server-issued encrypted envelopes over an
+        // object path, with no vocabulary and no client-side derivation.
+        name: "ItemDigital.product",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::Unmeasured,
+    },
+    NativeField {
+        // See `ItemDigital.product`.
+        name: "thumbs_collection_key",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::Unmeasured,
     },
 ];
 
@@ -519,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn no_tpt_field_is_declared_required_because_no_write_is_captured() {
+    fn no_tpt_field_is_declared_required_because_no_refusal_is_captured() {
         for key in [
             FieldKey::Title,
             FieldKey::Description,
@@ -530,7 +626,7 @@ mod tests {
         ] {
             assert!(
                 !TPT.canonical.get(key).required,
-                "no capture contains a TPT product write, so {key:?} records no refusal"
+                "both captured writes succeeded, so {key:?} records no refusal"
             );
         }
         for native in TPT.natives {
@@ -543,34 +639,80 @@ mod tests {
     }
 
     #[test]
-    fn the_tpt_tax_code_vocabulary_is_the_five_taxdata_rows() {
+    fn the_tpt_tax_code_field_carries_the_row_id_the_edit_posted() {
         let tax = TPT
             .natives
             .iter()
-            .find(|native| native.name == "taxCode")
+            .find(|native| native.name == "ItemTaxCode.tax_code_id")
             .map(|native| native.vocabulary);
         let Some(NativeVocabulary::Closed(values)) = tax else {
             panic!("TaxCodesQuery returned a complete set, got {tax:?}");
         };
-        assert_eq!(values.len(), 5, "taxData carried exactly five rows");
         assert_eq!(
-            values.first(),
-            Some(&"DA051011"),
-            "recorded in the order the query returned them"
+            values,
+            ["1", "2", "3", "4", "5"],
+            "taxData carried five rows"
+        );
+        assert!(
+            !values.contains(&"DA051011"),
+            "the captured edit posted 2 for DB031013, so the field carries the id not the code"
         );
     }
 
     #[test]
-    fn the_tpt_taxonomy_is_one_flat_read_only_namespace() {
+    fn the_tpt_taxonomy_is_one_flat_namespace_that_now_crosses_both_ways() {
         let tags = TPT
             .natives
             .iter()
             .find(|native| native.name == "taxonomyTags");
         assert_eq!(
             tags.map(|native| (native.direction, native.vocabulary)),
-            Some((FieldDirection::ReadOnly, NativeVocabulary::Unmeasured)),
-            "tags come back on read; whether a write sets them is uncaptured, and nine slugs \
-             from one store is a sample rather than a vocabulary"
+            Some((FieldDirection::Both, NativeVocabulary::Unmeasured)),
+            "both writes post the same slugs the read returns, and nine slugs from one store \
+             is still a sample rather than a vocabulary"
+        );
+    }
+
+    #[test]
+    fn every_tpt_enum_to_id_pair_is_recorded_as_closed_but_uncaptured() {
+        const PAIRS: [&str; 6] = [
+            "Item.status_user",
+            "ItemsProperty.copyright_declaration",
+            "ItemsProperty.answer_key",
+            "ItemsProperty.duration",
+            "Item.generate_thumbnail",
+            "ItemsLocalization.country_id_flag",
+        ];
+        for name in PAIRS {
+            let native = TPT
+                .natives
+                .iter()
+                .find(|native| native.name == name)
+                .map(|native| native.vocabulary);
+            assert_eq!(
+                native,
+                Some(NativeVocabulary::ClosedUncaptured),
+                "{name} exercised at most two members of an enumeration, which is not a \
+                 vocabulary; an unlisted member is refused by the platform"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tpt_write_path_fields_are_all_present_in_the_registry() {
+        let written = TPT
+            .natives
+            .iter()
+            .filter(|native| {
+                matches!(
+                    native.direction,
+                    FieldDirection::Written | FieldDirection::Both
+                )
+            })
+            .count();
+        assert_eq!(
+            written, 14,
+            "the registry is the per-inventory record of what the adapter puts on the wire"
         );
     }
 

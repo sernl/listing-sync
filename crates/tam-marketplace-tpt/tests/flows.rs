@@ -6,13 +6,15 @@
 use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::HttpResponse;
-use tam_marketplace::{AdapterError, FetchReason, FirstPartyExport};
+use tam_marketplace::{
+    AdapterError, FetchReason, FileContent, FileSource, FileSourceError, FirstPartyExport,
+};
 use tam_marketplace_tpt::endpoints::{
     self, AllTimeMetric, MetricResolution, ResolvedMetric, ResolvedStatsQuery, StatsWindow,
 };
 use tam_marketplace_tpt::read_model::ProductId;
-use tam_marketplace_tpt::TptAdapter;
-use tam_types::{FailureCode, InventoryId};
+use tam_marketplace_tpt::{InstantPause, TptAdapter};
+use tam_types::{FailureCode, FileId, InventoryId};
 
 /// The one reason that justifies an enumeration-shaped read.
 fn export() -> FetchReason {
@@ -36,8 +38,26 @@ fn page(rows: &Value, current: u64, total: u64, pages: u64) -> Value {
     }}}})
 }
 
-fn adapter(cassette: Cassette, page_limit: u32) -> TptAdapter<CassetteTransport> {
-    TptAdapter::with_page_limit(CassetteTransport::new(cassette), page_limit)
+/// A file source no read flow reaches. The read half of the adapter takes
+/// one because the write half needs one, and a read that fetched a file
+/// would be a read this crate does not perform.
+struct NoFiles;
+
+impl FileSource for NoFiles {
+    fn fetch(
+        &self,
+        file: FileId,
+    ) -> impl core::future::Future<Output = Result<FileContent, FileSourceError>> + Send {
+        core::future::ready(Err(FileSourceError::Missing(file)))
+    }
+}
+
+fn adapter(
+    cassette: Cassette,
+    page_limit: u32,
+) -> TptAdapter<CassetteTransport, NoFiles, InstantPause> {
+    TptAdapter::new(CassetteTransport::new(cassette), NoFiles, InstantPause)
+        .with_page_limit(page_limit)
 }
 
 #[test]

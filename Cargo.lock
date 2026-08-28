@@ -2340,11 +2340,14 @@ dependencies = [
 name = "tam-marketplace-tpt"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "futures",
+ "md-5",
  "reqwest",
  "serde_json",
  "tam-marketplace",
  "tam-types",
+ "tokio",
 ]
 
 [[package]]

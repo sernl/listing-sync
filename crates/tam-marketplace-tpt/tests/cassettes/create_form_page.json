@@ -1,0 +1,15 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "Get",
+        "url": "https://www.teacherspayteachers.com/My-Products/New/Digital-Next",
+        "body": "Empty"
+      },
+      "response": {
+        "status": 200,
+        "body": "<!doctype html><html><head><title>Digital product</title></head><body><form action=\"/My-Products/New/Digital-Next\" enctype=\"multipart/form-data\" id=\"ItemAddForm\" method=\"post\" accept-charset=\"utf-8\"><input type=\"hidden\" name=\"_method\" value=\"POST\"/><input type=\"hidden\" name=\"data[_Token][key]\" autocomplete=\"off\" value=\"0000000000000000000000000000000000000000\"/><input type=\"hidden\" name=\"data[_Csrf][csrfKey]\" autocomplete=\"off\" value=\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.1787893947.7446\"/><input type=\"hidden\" name=\"data[_Csrf][csrfToken]\" autocomplete=\"off\" value=\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.1787893947.7446\"/><input type=\"hidden\" name=\"data[_Token][fields]\" autocomplete=\"off\" value=\"1111111111111111111111111111111111111111%3A\"/><input type=\"hidden\" name=\"data[_Token][unlocked]\" autocomplete=\"off\" value=\"Category%7CCategory.Category%7CItem.description%7CItem.discount%7CItem.discountprice%7CItem.error%7CItem.free%7CItem.generate_thumbnail%7CItem.generate_thumbnail.error%7CItem.generate_thumbnail.size%7CItem.generate_thumbnail.tmp_name%7CItem.generate_thumbnail.type%7CItem.license_price%7CItem.name%7CItem.price%7CItem.size%7CItem.status_user%7CItem.tmp_name%7CItem.type%7CItemDigital.preview%7CItemDigital.product%7CItemDigital.thumb1%7CItemDigital.thumb2%7CItemDigital.thumb3%7CItemDigital.thumb4%7CItemTaxCode.tax_code_id%7CItemsBundlesProperty.title%7CItemsCommonCoreStandard.common_core_standard_id%7CItemsCommonCoreStandard.common_core_standards_num%7CItemsLocalization.country_id_flag%7CItemsProperty.answer_key%7CItemsProperty.copyright_declaration%7CItemsProperty.duration%7CItemsProperty.pages%7CItemsProperty.preview_uploaded%7CItemsProperty.product_uploaded%7CItemsProperty.thumb1_uploaded%7CItemsProperty.thumb2_uploaded%7CItemsProperty.thumb3_uploaded%7CItemsProperty.thumb4_uploaded%7CItemsVideoProperty.video_type_text%7CRevisedItem.comment%7CRevisedItem.is_post%7CTaxonomyTags%7CUpload.custom_videopreview_uploaded%7CUpload.videopreview%7Cthumbs%7Cthumbs_collection_key\"/></form><script>var cfg = {\"min_price\":0.95,\"description_max_length\":45000,\"aws\":{\"credentials\":{\"key\":\"AKIAPLACEHOLDER00000\",\"region\":\"us-east-1\"}},\"upload_digital\":[{\"name\":\"product\",\"maxSize\":4294967296},{\"name\":\"preview\",\"maxSize\":31457280},{\"name\":\"thumb1\",\"maxSize\":4194304},{\"name\":\"thumb2\",\"maxSize\":4194304},{\"name\":\"thumb3\",\"maxSize\":4194304},{\"name\":\"thumb4\",\"maxSize\":4194304}]};</script></body></html>"
+      }
+    }
+  ]
+}

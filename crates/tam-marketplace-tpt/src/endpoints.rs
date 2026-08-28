@@ -11,9 +11,14 @@
 //! [`crate::read_model`].
 
 use serde_json::{json, Value};
-use tam_marketplace::transport::HttpRequest;
+use tam_marketplace::transport::{HttpRequest, Method, RequestAuth, RequestBody};
 
 use crate::read_model::{ProductId, STATS_ALIAS};
+use crate::s3::{
+    sign_auth_scope, AwsKeyId, S3Error, S3Operation, S3Signature, StringToSign, UploadSlot,
+    UploadTicket,
+};
+use crate::upload::{ProcessedHandle, QueueJob, UploadHandle};
 
 pub const ORIGIN: &str = "https://www.teacherspayteachers.com";
 
@@ -387,6 +392,258 @@ pub fn resolved_stats_request(query: ResolvedStatsQuery, ids: &[ProductId]) -> H
             "resourceIds": resource_id_values(ids),
             "timeFrom": query.window.from_unix_seconds,
             "timeTo": query.window.to_unix_seconds,
+        }),
+    )
+}
+
+/// Which product form a render addresses. The create and edit forms are one
+/// CakePHP form rendered in add and edit mode, which is why one scrape serves
+/// both and one type names both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormTarget {
+    CreateDigital,
+    EditDigital(ProductId),
+}
+
+impl FormTarget {
+    #[must_use]
+    pub fn path(self) -> String {
+        match self {
+            Self::CreateDigital => "/My-Products/New/Digital-Next".to_owned(),
+            Self::EditDigital(product) => format!("/itemsDigital/editNext/{product}"),
+        }
+    }
+
+    #[must_use]
+    pub fn url(self) -> String {
+        format!("{ORIGIN}{}", self.path())
+    }
+}
+
+/// Percent-encodes one `application/x-www-form-urlencoded` component. The
+/// unreserved set is RFC 3986's; a space becomes `+`, which is the one place
+/// form encoding departs from percent encoding.
+fn form_encode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(*byte));
+            }
+            b' ' => out.push('+'),
+            other => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(char::from(HEX[usize::from(other >> 4)]));
+                out.push(char::from(HEX[usize::from(other & 0x0F)]));
+            }
+        }
+    }
+    out
+}
+
+/// The four XHR hops post `application/x-www-form-urlencoded`, which the seam
+/// has no variant for; the body travels as raw bytes and this crate's live
+/// transport labels a session-authenticated raw body as a form, because these
+/// four are the only raw session bodies TPT sends.
+fn form_body(fields: &[(&str, &str)]) -> RequestBody {
+    let encoded = fields
+        .iter()
+        .map(|(name, value)| format!("{}={}", form_encode(name), form_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    RequestBody::Bytes(encoded.into_bytes())
+}
+
+fn post_form(url: String, fields: &[(&str, &str)]) -> HttpRequest {
+    HttpRequest {
+        method: Method::Post,
+        url,
+        body: form_body(fields),
+        auth: RequestAuth::Session,
+    }
+}
+
+/// One form render, the sole source of the token triple, the CSRF pair, the
+/// published AWS key id and — on an edit — the existing asset handles.
+#[must_use]
+pub fn form_page_request(target: FormTarget) -> HttpRequest {
+    HttpRequest::get(target.url())
+}
+
+/// What `/uploads/upload_file` is told about the file it is reserving a key
+/// for. `item_id` is empty on a create and the product id on an edit; only
+/// the empty form is captured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UploadReservation<'a> {
+    pub slot: UploadSlot,
+    pub file_name: &'a str,
+    pub size: usize,
+    /// The file's own modification instant in milliseconds, as the browser's
+    /// `File.lastModified` reports it. Passed in as data; this crate reads no
+    /// clock.
+    pub last_modified_ms: i64,
+    pub item_id: Option<ProductId>,
+}
+
+/// Reserves an S3 object key. The bucket and path in the answer are the
+/// server's choice and are never computed locally.
+#[must_use]
+pub fn upload_file_request(reservation: &UploadReservation<'_>) -> HttpRequest {
+    let size = reservation.size.to_string();
+    let last_modified = reservation.last_modified_ms.to_string();
+    let item_id = reservation
+        .item_id
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    post_form(
+        format!("{ORIGIN}/uploads/upload_file"),
+        &[
+            ("file_type", reservation.slot.as_str()),
+            ("file_name", reservation.file_name),
+            ("size", &size),
+            ("lastModified", &last_modified),
+            ("item_id", &item_id),
+            ("path", ""),
+        ],
+    )
+}
+
+/// TPT's own clock, in RFC 1123. Used verbatim as `x-amz-date` and inside the
+/// `StringToSign`, because AWS rejects a signature whose date has skewed and
+/// the server that signs it is the one whose clock matters.
+#[must_use]
+pub fn time_request(request_time_ms: i64) -> HttpRequest {
+    HttpRequest::get(format!(
+        "{ORIGIN}/uploads/time?requestTime={request_time_ms}"
+    ))
+}
+
+/// Asks TPT to sign one string. The ticket is taken alongside the string and
+/// the scope is re-checked here, at the last point before a request value
+/// exists: the oracle itself performs no such check, so a caller that
+/// assembled a resource elsewhere gets a refusal rather than a signature.
+pub fn sign_auth_request(
+    ticket: &UploadTicket,
+    to_sign: &StringToSign,
+    datetime: &str,
+) -> Result<HttpRequest, S3Error> {
+    sign_auth_scope(ticket, to_sign)?;
+    Ok(HttpRequest::get(format!(
+        "{ORIGIN}/uploads/sign_auth?to_sign={}&datetime={}",
+        form_encode(to_sign.as_str()),
+        form_encode(datetime),
+    )))
+}
+
+/// Everything one signed S3 call carries beside its body.
+#[derive(Debug, Clone, Copy)]
+pub struct SignedS3Call<'a> {
+    pub ticket: &'a UploadTicket,
+    pub operation: &'a S3Operation,
+    pub key_id: &'a AwsKeyId,
+    pub signature: &'a S3Signature,
+    pub amz_date: &'a str,
+    /// Bound into the signature, so it must be the file's real type on every
+    /// one of the three calls — including the completion, whose body is XML
+    /// and whose content type is nonetheless the file's.
+    pub content_type: &'a str,
+    pub content_md5: Option<&'a str>,
+}
+
+/// One S3 request under a per-request SigV2 signature. Path-style addressing,
+/// no cookies, and the signature carried as request state so it cannot
+/// outlive the one call it authorises.
+#[must_use]
+pub fn s3_request(call: &SignedS3Call<'_>, body: RequestBody) -> HttpRequest {
+    let method = match *call.operation {
+        S3Operation::UploadPart { .. } => Method::Put,
+        S3Operation::Initiate | S3Operation::Complete { .. } => Method::Post,
+    };
+    HttpRequest {
+        method,
+        url: call.ticket.object_url(&call.operation.query()),
+        body,
+        auth: RequestAuth::S3SigV2 {
+            access_key_id: call.key_id.as_str().to_owned(),
+            signature: call.signature.as_str().to_owned(),
+            amz_date: call.amz_date.to_owned(),
+            content_md5: call.content_md5.map(str::to_owned),
+            content_type: call.content_type.to_owned(),
+        },
+    }
+}
+
+/// Hands the staged object to the async processor. The answer's body says
+/// only `{"success":true}`; the job id is in the `x-queue-tracking-id`
+/// response header.
+#[must_use]
+pub fn process_file_request(
+    handle: &UploadHandle,
+    item_id: Option<ProductId>,
+    cache_buster: &str,
+) -> HttpRequest {
+    let item_id = item_id.map(|id| id.to_string()).unwrap_or_default();
+    post_form(
+        format!("{ORIGIN}/uploads/process_file?rand={cache_buster}"),
+        &[("key", handle.as_str()), ("item_id", &item_id)],
+    )
+}
+
+/// Polls one async job. `retryCount` is sent empty, which is what all five
+/// recorded polls did; its increment semantics are uncaptured.
+#[must_use]
+pub fn queue_results_request(job: &QueueJob, cache_buster: &str) -> HttpRequest {
+    post_form(
+        format!("{ORIGIN}/queue/results?rand={cache_buster}&retryCount="),
+        &[("job", job.as_str())],
+    )
+}
+
+/// Requests thumbnail generation from the processed asset — the processed
+/// handle, never the staged one.
+#[must_use]
+pub fn generate_thumbs_request(
+    handle: &ProcessedHandle,
+    item_id: Option<ProductId>,
+    cache_buster: &str,
+) -> HttpRequest {
+    let item_id = item_id.map(|id| id.to_string()).unwrap_or_default();
+    post_form(
+        format!("{ORIGIN}/converter/generate_thumbs?rand={cache_buster}"),
+        &[
+            ("key", handle.as_str()),
+            ("item_id", &item_id),
+            ("item_type_id", "0"),
+        ],
+    )
+}
+
+/// The product form itself: a multipart navigation carrying no CSRF header,
+/// because the pair travels in the body and the cookie. The transport must
+/// not follow the redirect it answers with — the `Location` is the only place
+/// the new product id appears.
+#[must_use]
+pub fn submit_form_request(target: FormTarget, fields: Vec<(String, String)>) -> HttpRequest {
+    HttpRequest::post_multipart(target.url(), fields, None, RequestAuth::Session)
+}
+
+/// One of the seller's own products by id, through the same
+/// `MyProductListings` operation the catalogue walk uses: the captured query
+/// text declares a `resourceIds` variable, and naming one product is the
+/// narrowest read that query supports.
+#[must_use]
+pub fn product_by_id_request(product: ProductId) -> HttpRequest {
+    graphql(
+        Service::Graph,
+        "MyProductListings",
+        MY_PRODUCT_LISTINGS_QUERY,
+        &json!({
+            "limit": 1,
+            "offset": 0,
+            "filters": [],
+            "orderBy": CATALOGUE_ORDER,
+            "resourceIds": [product.0.to_string()],
         }),
     )
 }
