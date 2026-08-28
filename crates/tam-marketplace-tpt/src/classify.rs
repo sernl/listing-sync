@@ -432,6 +432,33 @@ pub fn classify_submit(response: &HttpResponse) -> Result<SubmitLanding, Adapter
     landed.ok_or(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier))
 }
 
+/// The edit submit, whose refusal has a shape the create's does not.
+///
+/// An edit posts to the route that names the product it edits, so the route a
+/// refusal redirects back to ends in that same product id — and
+/// [`classify_submit`] alone cannot tell it from a landing. Measured live on
+/// 2026-08-29: four edit bodies the form would not accept each answered 302
+/// to `/itemsDigital/editNext/{id}` and left the listing exactly as it stood,
+/// while the body it accepted answered 302 to `/Product/{slug}-{id}` and
+/// applied within one read. That is a refusal with a measured shape rather
+/// than an inferred one, so it is reported as one.
+pub fn classify_edit_submit(
+    response: &HttpResponse,
+    form_path: &str,
+) -> Result<SubmitLanding, AdapterError> {
+    let landing = classify_submit(response)?;
+    if landing.location.starts_with(form_path) {
+        return Err(AdapterError::Rejected {
+            code: FailureCode::SubmitNoConfirmation,
+            detail: FailureDetail(format!(
+                "the edit form answered by redirecting back to itself ({}), which is how it                  refuses a body it will not accept",
+                landing.location
+            )),
+        });
+    }
+    Ok(landing)
+}
+
 /// Where a submit landed: the durable identifier and the route that carried
 /// it, both of which the write evidence records.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -502,6 +529,39 @@ mod tests {
             classify_graphql_read(&response(200, body)),
             Err(AdapterError::SessionExpired),
             "an edge cache answering 200 with a sign-in page is not a read"
+        );
+    }
+
+    /// Measured live on 2026-08-29, not hand-authored: the edit route ends in
+    /// the product id, so a refusal redirecting back to it carried the very id
+    /// the caller was editing and read as agreement.
+    #[test]
+    fn an_edit_bounced_back_to_its_own_form_is_a_refusal_not_a_landing() {
+        let form = "/itemsDigital/editNext/17513133";
+        let redirect = |location: &str| HttpResponse {
+            status: 302,
+            body: Vec::new(),
+            headers: vec![(
+                tam_marketplace::transport::ResponseHeader::Location,
+                location.to_owned(),
+            )],
+        };
+        let bounced = super::classify_edit_submit(&redirect(form), form);
+        assert!(
+            matches!(
+                bounced,
+                Err(AdapterError::Rejected {
+                    code: FailureCode::SubmitNoConfirmation,
+                    ..
+                })
+            ),
+            "the form redirecting to itself is how it refuses a body, got {bounced:?}"
+        );
+        assert_eq!(
+            super::classify_edit_submit(&redirect("/Product/ZZ-DELETE-ME-17513133"), form)
+                .map(|landing| landing.product),
+            Ok(crate::read_model::ProductId(17_513_133)),
+            "and the product page is still the landing it always was"
         );
     }
 

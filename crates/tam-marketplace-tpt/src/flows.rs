@@ -26,9 +26,9 @@ use tam_types::{
 };
 
 use crate::classify::{
-    classify_form_page, classify_graphql_read, classify_pre_write_transport, classify_queue_poll,
-    classify_s3, classify_submit, classify_text_hop, classify_transport, classify_xhr_json,
-    part_etag, queue_job, SubmitLanding,
+    classify_edit_submit, classify_form_page, classify_graphql_read, classify_pre_write_transport,
+    classify_queue_poll, classify_s3, classify_submit, classify_text_hop, classify_transport,
+    classify_xhr_json, part_etag, queue_job, SubmitLanding,
 };
 use crate::endpoints::{
     self, AllTimeMetric, FormTarget, ResolvedStatsQuery, SignedS3Call, UploadReservation,
@@ -655,7 +655,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         let response = self
             .send_ambiguous_on_loss(endpoints::submit_form_request(target, body))
             .await?;
-        let landing = classify_submit(&response)?;
+        let landing = classify_edit_submit(&response, &target.path())?;
         if landing.product == product {
             Ok(landing)
         } else {

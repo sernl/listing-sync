@@ -1284,6 +1284,11 @@ fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
         Some("0"),
         "an update that is not a publish leaves the draft a draft"
     );
+    assert_eq!(
+        value("data[Item][free]").as_deref(),
+        Some("1"),
+        "a free listing's edit posts the flag; the live form refuses the body without it"
+    );
     let unchanged = edit_body(&fields(), write_model::StatusUser::Draft);
     let moved: Vec<&str> = body
         .iter()
@@ -1326,6 +1331,45 @@ fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
         adapter.transport().remaining(),
         0,
         "the render and the post, both consumed"
+    );
+}
+
+/// The regression the live run of 2026-08-29 exposed: a refused edit answers
+/// 302 to the very route it was posted to, and that route ends in the product
+/// id being edited, so the landing check alone agreed with it.
+#[test]
+fn an_edit_bounced_back_to_its_own_form_is_not_reported_as_a_landing() {
+    let rewritten = described("<p>a second draft</p>");
+    let body = edit_body(&rewritten, write_model::StatusUser::Draft);
+    let target = FormTarget::EditDigital(ProductId(PRODUCT_ID));
+    let adapter = adapter(Cassette {
+        interactions: vec![
+            edit_render(),
+            Interaction {
+                request: endpoints::submit_form_request(target, body),
+                response: with_header(
+                    302,
+                    "",
+                    ResponseHeader::Location,
+                    "/itemsDigital/editNext/17511712",
+                ),
+            },
+        ],
+    });
+    let outcome = futures::executor::block_on(adapter.update(
+        ProductId(PRODUCT_ID),
+        &rewritten,
+        write_model::StatusUser::Draft,
+    ));
+    assert!(
+        matches!(
+            outcome,
+            Err(AdapterError::Rejected {
+                code: FailureCode::SubmitNoConfirmation,
+                ..
+            })
+        ),
+        "a redirect back to the edit form is the form refusing the body, got {outcome:?}"
     );
 }
 

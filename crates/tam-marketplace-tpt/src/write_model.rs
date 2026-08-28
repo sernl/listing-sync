@@ -217,12 +217,34 @@ pub enum ListingPrice {
 }
 
 impl ListingPrice {
-    /// `data[Item][free]`, which only the create form carries.
+    /// `data[Item][free]`, as the create form posts it: always present,
+    /// carrying the flag either way.
     #[must_use]
     pub const fn free_flag(&self) -> &'static str {
         match *self {
             Self::Free => "1",
             Self::Paid(_) => "0",
+        }
+    }
+
+    /// `data[Item][free]`, as the edit form posts it: present on a free
+    /// listing and absent on a priced one.
+    ///
+    /// The captured edit is of a paid product and posts no `free` at all,
+    /// which this file once read as the edit form never carrying the field.
+    /// Measured live on 2026-08-29 against a free draft, that omission is what
+    /// a paid edit looks like and not what the form permits generally: the
+    /// edit body without `free` was answered 302 back to the edit route with
+    /// the listing untouched, and the same body carrying `free` 1 answered 302
+    /// to `/Product/…` and applied on the next read. Three other differences
+    /// from the capture — an empty category, a page count and a tax code —
+    /// were each posted alone and each still bounced, so this flag is the one
+    /// the form was missing.
+    #[must_use]
+    pub const fn free_flag_on_edit(&self) -> Option<&'static str> {
+        match *self {
+            Self::Free => Some(self.free_flag()),
+            Self::Paid(_) => None,
         }
     }
 
@@ -509,16 +531,17 @@ pub struct EditSubmission<'a> {
     pub authorship: &'a AuthorshipDeclaration,
 }
 
-/// The edit body: the 48 fields the captured `POST /itemsDigital/editNext/{id}`
-/// carried, in its order.
+/// The edit body: the fields the captured `POST /itemsDigital/editNext/{id}`
+/// carried, in its order, plus the one a free listing adds.
 ///
 /// An edit is a full replace, so every name is posted even where its value is
 /// empty. Empty in `product`, `preview` and `videopreview` paired with an
 /// `*_uploaded` flag of `1` is how the form says "this asset is unchanged" —
 /// the captured edit re-uploaded nothing and touched no S3 host.
 ///
-/// `free` is absent, and deliberately: neither captured edit posts it, and the
-/// price fields alone carry the change. Only the create form declares it.
+/// `free` follows [`ListingPrice::free_flag_on_edit`]: a free listing posts
+/// it and a priced one does not, which is what the captured paid edit and the
+/// live free edit respectively recorded.
 #[must_use]
 pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
     let EditSubmission {
@@ -568,6 +591,9 @@ pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
     fields.push(field(names::TOKEN_FIELDS, tokens.token_fields()));
     fields.push(field(names::TOKEN_UNLOCKED, tokens.token_unlocked()));
     fields.push(field(names::DESCRIPTION, &listing.description_html));
+    if let Some(free) = listing.price.free_flag_on_edit() {
+        fields.push(field(names::FREE, free));
+    }
     fields.push(field(names::PRICE, listing.price.amount()));
     fields.push(field(names::DISCOUNTPRICE, "0"));
     fields.push(field(names::LICENSE_PRICE, listing.price.licence_amount()));
@@ -1044,14 +1070,48 @@ mod tests {
             Some("1"),
             "publishing is the edit form with the status selector moved"
         );
-        assert!(
-            !fields.iter().any(|(name, _)| name == "data[Item][free]"),
-            "the edit form omits free entirely, and adding it would be a field TPT never sent"
+        assert_eq!(
+            value_of(&fields, "data[Item][free]"),
+            Some("1"),
+            "a free listing's edit posts the flag; without it the form refuses the zero price"
         );
         assert_eq!(
             value_of(&fields, "data[ItemTaxCode][tax_code_id]"),
             Some(""),
             "a listing created without a tax code posts none back"
+        );
+    }
+
+    #[test]
+    fn a_free_edit_carries_the_flag_where_the_create_carries_it() {
+        let tokens = tokens();
+        let listing = listing();
+        let authorship = attested();
+        let fields = edit_fields(&EditSubmission {
+            tokens: &tokens,
+            listing: &listing,
+            thumbs: &[],
+            status: StatusUser::Draft,
+            authorship: &authorship,
+        });
+        let money: Vec<&str> = fields
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .filter(|name| {
+                matches!(
+                    *name,
+                    "data[Item][description]" | "data[Item][free]" | "data[Item][price]"
+                )
+            })
+            .collect();
+        assert_eq!(
+            money,
+            vec![
+                "data[Item][description]",
+                "data[Item][free]",
+                "data[Item][price]"
+            ],
+            "the flag sits between the description and the price, as the create posts it"
         );
     }
 
@@ -1227,7 +1287,7 @@ mod tests {
         );
         assert!(
             !edited.iter().any(|(name, _)| name == "data[Item][free]"),
-            "and it still omits free, which neither captured edit posts"
+            "and a priced edit still omits free, which is what the captured paid edit posts"
         );
     }
 
