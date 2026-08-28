@@ -7,12 +7,18 @@ use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{FilePart, HttpResponse};
 use tam_marketplace::{
-    AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FileSourceError,
-    FormId, ListingLocator, MarketplaceAdapter, RemoteLifecycle, RemoteListingId, WriteAttemptId,
+    AdapterError, AgeSpan, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource,
+    FileSourceError, FormId, ListingLocator, MarketplaceAdapter, NativeTerm, ProjectedListing,
+    RemoteLifecycle, RemoteListingId, WriteAttemptId,
 };
-use tam_marketplace_tes::endpoints::{self, CatalogueEntry, DraftId, TesLicence, TesListing};
+use tam_marketplace_tes::endpoints::{
+    self, CatalogueEntry, DraftId, FreeLicence, TesListing, TesPrice, TesPricing,
+};
 use tam_marketplace_tes::{schema, TesAdapter};
-use tam_types::{FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{
+    Currency, FailureCode, FieldKey, FileId, InventoryId, Money, OrgId, PriceIntent, Timestamp,
+    Uuid,
+};
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
 /// The driver's clock reading a submit is handed. Tes ignores it — its JSON
@@ -65,7 +71,22 @@ fn sample_listing() -> TesListing {
         ages: vec![11, 12],
         main_type: 99_009,
         main_age: 4,
-        licence: TesLicence::CcBy,
+        pricing: TesPricing::Free(FreeLicence::CcBy),
+    }
+}
+
+/// The same listing priced, which is the only difference a paid write makes
+/// to the metadata the draft and the publish both carry.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+fn paid_listing(minor_units: i64) -> TesListing {
+    TesListing {
+        pricing: TesPricing::Paid(
+            TesPrice::new(minor_units).expect("the fixture price is a price"),
+        ),
+        ..sample_listing()
     }
 }
 
@@ -245,7 +266,7 @@ fn delete_reports_success_only_after_the_read_returns_not_found() {
         ],
     };
     let adapter = adapter(cassette, vec![]);
-    futures::executor::block_on(adapter.delete(DRAFT)).expect("a verified delete succeeds");
+    futures::executor::block_on(adapter.delete_draft(DRAFT)).expect("a verified delete succeeds");
     assert_eq!(adapter.transport().remaining(), 0, "both hops ran");
 }
 
@@ -264,7 +285,7 @@ fn the_misleading_204_is_refused() {
         ],
     };
     let adapter = adapter(cassette, vec![]);
-    let refused = futures::executor::block_on(adapter.delete(DRAFT));
+    let refused = futures::executor::block_on(adapter.delete_draft(DRAFT));
     assert!(
         matches!(
             refused,
@@ -283,7 +304,7 @@ fn publish_proves_itself_by_reading_back() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::publish_request(DRAFT),
+                request: endpoints::publish_request(DRAFT, &sample_listing()),
                 response: ok(&json!({})),
             },
             Interaction {
@@ -293,8 +314,8 @@ fn publish_proves_itself_by_reading_back() {
         ],
     };
     let adapter = adapter(cassette, vec![]);
-    let state =
-        futures::executor::block_on(adapter.publish(DRAFT)).expect("a verified publish succeeds");
+    let state = futures::executor::block_on(adapter.publish(DRAFT, &sample_listing()))
+        .expect("a verified publish succeeds");
     assert_eq!(state["draft"], false, "the read-back is the verdict");
 }
 
@@ -303,7 +324,7 @@ fn an_unconfirmed_publish_is_ambiguous() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::publish_request(DRAFT),
+                request: endpoints::publish_request(DRAFT, &sample_listing()),
                 response: ok(&json!({})),
             },
             Interaction {
@@ -313,10 +334,384 @@ fn an_unconfirmed_publish_is_ambiguous() {
         ],
     };
     let adapter = adapter(cassette, vec![]);
-    let unproven = futures::executor::block_on(adapter.publish(DRAFT));
+    let unproven = futures::executor::block_on(adapter.publish(DRAFT, &sample_listing()));
     assert!(
         matches!(unproven, Err(AdapterError::Ambiguous(_))),
         "a publish the read-back cannot confirm proves nothing"
+    );
+}
+
+/// The seam-side listing every projection test renders, carrying the numeric
+/// native ids Tes addresses its taxonomy by.
+fn projected(price: PriceIntent) -> ProjectedListing {
+    ProjectedListing {
+        title: "Fractions pack".to_owned(),
+        body: "A pack.".to_owned(),
+        price,
+        taxonomy: vec![NativeTerm {
+            native_id: Some("1000448".to_owned()),
+            segments: vec!["Mathematics".to_owned()],
+        }],
+        grades: vec![NativeTerm {
+            native_id: Some("4".to_owned()),
+            segments: vec!["Secondary".to_owned()],
+        }],
+        ages: Some(AgeSpan {
+            low_years: 11,
+            high_years: 12,
+        }),
+        files: vec![FileId(Uuid([0x21; 16]))],
+    }
+}
+
+/// What the projection put under one key, or the marker for an entry it never
+/// rendered — which an assertion reports as the mismatch it is rather than as
+/// a panic in a helper.
+fn entry(fields: &FieldSet, key: FieldKey) -> String {
+    fields
+        .entries
+        .iter()
+        .find(|(field, _)| *field == key)
+        .map_or_else(|| "<absent>".to_owned(), |(_, value)| value.clone())
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+fn money(minor_units: i64, currency: Currency) -> Money {
+    Money::new(minor_units, currency).expect("the fixture price is positive")
+}
+
+#[test]
+fn a_paid_projection_carries_the_tes_paid_licence_and_its_price_in_minor_units() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let fields = adapter
+        .project_fields(&projected(PriceIntent::Paid(money(500, Currency::Gbp))))
+        .expect("a paid listing projects into the GB inventory");
+    assert_eq!(
+        entry(&fields, FieldKey::Price),
+        "TES-PAID:500",
+        "the paid licence travels with the amount the API refuses it without"
+    );
+    let free = adapter
+        .project_fields(&projected(PriceIntent::Free))
+        .expect("a free listing projects");
+    assert_eq!(
+        entry(&free, FieldKey::Price),
+        "CC-BY",
+        "and a free listing is still the bare Creative Commons token"
+    );
+}
+
+#[test]
+fn a_price_denominated_in_another_currency_than_the_inventorys_is_refused() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let refused = adapter.project_fields(&projected(PriceIntent::Paid(money(500, Currency::Usd))));
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: FailureCode::UploadRejected,
+                ..
+            })
+        ),
+        "the Tes wire carries a bare amount, so a dollar price into the GB inventory would \
+         be posted as pounds: {refused:?}"
+    );
+}
+
+#[test]
+fn a_paid_field_set_parses_back_into_the_priced_draft_the_projection_named() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::create_draft_request(),
+                response: ok(&json!({"id": 9001})),
+            },
+            // The cassette is the assertion: a token read back as free would
+            // build a CC-BY metadata request and diverge here.
+            Interaction {
+                request: endpoints::set_metadata_request(DRAFT, &paid_listing(500)),
+                response: ok(&json!({"id": 9001})),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let fields = FieldSet {
+        entries: vec![
+            (FieldKey::Title, "Fractions pack".to_owned()),
+            (FieldKey::Description, "A pack.".to_owned()),
+            (FieldKey::Price, "TES-PAID:500".to_owned()),
+            (
+                FieldKey::Taxonomy,
+                json!({"categories": [1_000_448], "mainType": 99_009}).to_string(),
+            ),
+            (
+                FieldKey::Grades,
+                json!({"ageRanges": [4], "ages": [11, 12], "mainAge": 4}).to_string(),
+            ),
+        ],
+        files: vec![],
+    };
+    futures::executor::block_on(adapter.submit(
+        ORG,
+        tam_marketplace::IdempotencyKey(Uuid([2; 16])),
+        fields,
+        NOW,
+    ))
+    .expect("the paid submit lands");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the priced draft was written exactly as the projection named it"
+    );
+}
+
+#[test]
+fn a_paid_token_without_a_usable_amount_is_refused_rather_than_freed() {
+    for token in ["TES-PAID", "TES-PAID:0", "TES-PAID:-1", "TES-PAID:free"] {
+        let adapter = adapter(
+            Cassette {
+                interactions: vec![],
+            },
+            vec![],
+        );
+        let fields = FieldSet {
+            entries: vec![
+                (FieldKey::Title, "T".to_owned()),
+                (FieldKey::Description, "D".to_owned()),
+                (FieldKey::Price, token.to_owned()),
+                (FieldKey::Taxonomy, json!({"categories": []}).to_string()),
+                (FieldKey::Grades, json!({"ageRanges": []}).to_string()),
+            ],
+            files: vec![],
+        };
+        let refused = futures::executor::block_on(adapter.submit(
+            ORG,
+            tam_marketplace::IdempotencyKey(Uuid([3; 16])),
+            fields,
+            NOW,
+        ));
+        assert!(
+            matches!(
+                refused,
+                Err(AdapterError::Rejected {
+                    code: FailureCode::UploadRejected,
+                    ..
+                })
+            ),
+            "{token:?} names no price, and a listing quietly demoted to free is the one failure \
+             that costs the seller money: {refused:?}"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{token:?}: the refusal happens before the first request"
+        );
+    }
+}
+
+#[test]
+fn a_paid_publish_carries_the_price_to_the_drafts_own_publish_route() {
+    let listing = paid_listing(500);
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::publish_request(DRAFT, &listing),
+                response: ok(&json!({})),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, false)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let state = futures::executor::block_on(adapter.publish(DRAFT, &listing))
+        .expect("a verified paid publish succeeds");
+    assert_eq!(
+        state["draft"], false,
+        "the read-back is the verdict here too"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the publish went to the captured route carrying the captured body"
+    );
+}
+
+#[test]
+fn a_published_delete_takes_the_resource_route_and_proves_it_by_a_404_read() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::delete_resource_request(DRAFT),
+                response: status(204),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(404),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    futures::executor::block_on(adapter.delete_published(DRAFT))
+        .expect("a verified published delete succeeds");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the delete and its proof both ran on the route a published resource lives at"
+    );
+}
+
+#[test]
+fn a_published_resource_still_readable_after_its_delete_is_a_mismatch() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::delete_resource_request(DRAFT),
+                response: status(204),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: ok(&draft_state(9001, false)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.delete_published(DRAFT));
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                ..
+            })
+        ),
+        "a 204 with the resource still readable is not a delete on this route either"
+    );
+}
+
+#[test]
+fn delete_routes_each_state_to_the_endpoint_it_lives_at() {
+    for (label, probe, deletion, proof) in [
+        (
+            "a never-published draft, which 404s on the resource route",
+            status(404),
+            endpoints::delete_draft_request(DRAFT),
+            endpoints::read_draft_request(DRAFT),
+        ),
+        (
+            "a published resource, which does not",
+            ok(&draft_state(9001, false)),
+            endpoints::delete_resource_request(DRAFT),
+            endpoints::read_resource_request(DRAFT),
+        ),
+    ] {
+        let cassette = Cassette {
+            interactions: vec![
+                Interaction {
+                    request: endpoints::read_resource_request(DRAFT),
+                    response: probe,
+                },
+                Interaction {
+                    request: deletion,
+                    response: status(204),
+                },
+                Interaction {
+                    request: proof,
+                    response: status(404),
+                },
+            ],
+        };
+        let adapter = adapter(cassette, vec![]);
+        let deleted = futures::executor::block_on(adapter.delete(DRAFT));
+        assert!(
+            deleted.is_ok(),
+            "{label}: the state decides the route, and this one deleted where it lives: \
+             {deleted:?}"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{label}: the state was probed, then deleted where it lives, then proved gone"
+        );
+    }
+}
+
+#[test]
+fn a_delete_whose_state_cannot_be_read_names_the_condition_rather_than_a_route() {
+    let cassette = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::read_resource_request(DRAFT),
+            response: status(401),
+        }],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.delete(DRAFT));
+    assert_eq!(
+        refused,
+        Err(AdapterError::SessionExpired),
+        "a lapsed session is not a resource that happens to be absent, and no delete is guessed \
+         from it"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "nothing was deleted on the strength of an unreadable state"
+    );
+}
+
+#[test]
+fn an_edit_reposts_the_draft_metadata_carrying_the_change() {
+    let edited = TesListing {
+        title: "Fractions pack, second edition".to_owned(),
+        description_markdown: "A better pack.".to_owned(),
+        ..sample_listing()
+    };
+    let cassette = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::set_metadata_request(DRAFT, &edited),
+            response: ok(&json!({"id": 9001, "title": "Fractions pack, second edition"})),
+        }],
+    };
+    let adapter = adapter(cassette, vec![]);
+    futures::executor::block_on(adapter.update(DRAFT, &edited)).expect("the edit lands");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "an edit is the draft metadata POST restated, and nothing else"
+    );
+}
+
+#[test]
+fn an_edit_the_response_does_not_name_is_never_a_landing() {
+    let cassette = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::set_metadata_request(DRAFT, &sample_listing()),
+            response: ok(&json!({"id": 9002})),
+        }],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let unproven = futures::executor::block_on(adapter.update(DRAFT, &sample_listing()));
+    assert!(
+        matches!(unproven, Err(AdapterError::Ambiguous(_))),
+        "a 200 naming another resource proves nothing about this one: {unproven:?}"
     );
 }
 
@@ -448,7 +843,7 @@ fn the_cassette_fixture_format_loads_from_disk() {
     let cassette: Cassette = serde_json::from_str(include_str!("cassettes/delete_verified.json"))
         .expect("the committed fixture parses");
     let adapter = adapter(cassette, vec![]);
-    futures::executor::block_on(adapter.delete(DRAFT))
+    futures::executor::block_on(adapter.delete_draft(DRAFT))
         .expect("the fixture-driven verified delete succeeds");
     assert_eq!(
         adapter.transport().remaining(),

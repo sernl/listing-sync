@@ -44,6 +44,92 @@ impl TesLicence {
     }
 }
 
+/// The three Creative Commons licences, which are the free tier: the API
+/// refuses a price against one of them and refuses `TES-PAID` without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeLicence {
+    CcBy,
+    CcBySa,
+    CcByNd,
+}
+
+impl FreeLicence {
+    #[must_use]
+    pub const fn licence(self) -> TesLicence {
+        match self {
+            Self::CcBy => TesLicence::CcBy,
+            Self::CcBySa => TesLicence::CcBySa,
+            Self::CcByNd => TesLicence::CcByNd,
+        }
+    }
+}
+
+/// A price in the minor units the API's own integer carries: the captured
+/// publish body reads `"price": 500` for GBP 5.00. The denomination is not a
+/// per-listing datum here — Tes fixes the currency by inventory — so this
+/// carries the integer alone, exactly as the wire does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TesPrice(i64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotAPrice(pub i64);
+
+impl core::fmt::Display for NotAPrice {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "a Tes price is a positive number of minor units, and {} is not one",
+            self.0
+        )
+    }
+}
+
+impl core::error::Error for NotAPrice {}
+
+impl TesPrice {
+    /// A positive amount. Zero is not a price on this marketplace either; it
+    /// is a Creative Commons licence, which is a different listing.
+    pub const fn new(minor_units: i64) -> Result<Self, NotAPrice> {
+        if minor_units <= 0 {
+            return Err(NotAPrice(minor_units));
+        }
+        Ok(Self(minor_units))
+    }
+
+    #[must_use]
+    pub const fn minor_units(self) -> i64 {
+        self.0
+    }
+}
+
+/// The licence and the price as one value, so a `TES-PAID` listing without a
+/// price and a Creative Commons listing carrying one are both unrepresentable
+/// rather than merely validated. `TES-PAID` beside `price` in minor units is
+/// the pairing the captured publish body carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TesPricing {
+    Free(FreeLicence),
+    Paid(TesPrice),
+}
+
+impl TesPricing {
+    #[must_use]
+    pub const fn licence(self) -> TesLicence {
+        match self {
+            Self::Free(free) => free.licence(),
+            Self::Paid(_) => TesLicence::TesPaid,
+        }
+    }
+
+    #[must_use]
+    pub const fn price(self) -> Option<TesPrice> {
+        match self {
+            Self::Free(_) => None,
+            Self::Paid(price) => Some(price),
+        }
+    }
+}
+
 /// The metadata the draft endpoint accepts, in the field names the API uses.
 /// Category and age identifiers arrive already projected; the taxonomy hub
 /// (M1g) owns how they are derived.
@@ -56,7 +142,7 @@ pub struct TesListing {
     pub ages: Vec<i64>,
     pub main_type: i64,
     pub main_age: i64,
-    pub licence: TesLicence,
+    pub pricing: TesPricing,
 }
 
 #[must_use]
@@ -83,32 +169,57 @@ pub fn probe_listing() -> TesListing {
         ages: vec![11, 12, 13, 14],
         main_type: 99_009,
         main_age: 4,
-        licence: TesLicence::CcBy,
+        pricing: TesPricing::Free(FreeLicence::CcBy),
     }
 }
 
-#[must_use]
-pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
+/// The listing metadata in the API's own field names, which the draft POST
+/// and the publish POST both carry — the captured publish body restates every
+/// field the draft holds rather than referring to it.
+///
+/// `price` accompanies the `TES-PAID` licence and is absent otherwise, which
+/// is the pairing [`TesPricing`] makes unrepresentable to get wrong.
+fn metadata_body(listing: &TesListing) -> Value {
     let categories: Vec<Value> = listing
         .category_ids
         .iter()
         .map(|category| json!({ "id": category }))
         .collect();
+    let mut body = json!({
+        "title": listing.title,
+        "descriptionRaw": listing.description_markdown,
+        "descriptionRawType": "md",
+        "categories": categories,
+        "ageRanges": listing.age_range_ids,
+        "ages": listing.ages,
+        "yearGroups": [],
+        "mainType": listing.main_type,
+        "mainAge": listing.main_age,
+        "licence": listing.pricing.licence().as_str(),
+    });
+    if let Some(price) = listing.pricing.price() {
+        body["price"] = json!(price.minor_units());
+    }
+    body
+}
+
+#[must_use]
+pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
     HttpRequest::post_json(
         format!("{ORIGIN}/api/v2/resources/{}/draft", id.0),
-        json!({
-            "title": listing.title,
-            "descriptionRaw": listing.description_markdown,
-            "descriptionRawType": "md",
-            "categories": categories,
-            "ageRanges": listing.age_range_ids,
-            "ages": listing.ages,
-            "yearGroups": [],
-            "mainType": listing.main_type,
-            "mainAge": listing.main_age,
-            "licence": listing.licence.as_str(),
-        }),
+        metadata_body(listing),
     )
+}
+
+/// The age range the publish body carries beside `mainAge`: the other range
+/// the draft declares. Absent from a draft declaring only its main one, and
+/// omitted rather than invented when there is none.
+fn additional_age(listing: &TesListing) -> Option<i64> {
+    listing
+        .age_range_ids
+        .iter()
+        .copied()
+        .find(|range| *range != listing.main_age)
 }
 
 #[must_use]
@@ -254,11 +365,31 @@ pub fn confirm_request(id: DraftId, upload: &PresignedUpload) -> HttpRequest {
     )
 }
 
+/// The publish that takes a draft live, and the one endpoint a paid listing's
+/// price reaches: `POST .../{id}/draft/publish` re-posting the FULL metadata
+/// beside the licence, with `price` when that licence is `TES-PAID`.
+///
+/// The route and the body are the browser's own, captured 2026-08-28 from a
+/// draft-to-live publish. It supersedes the `POST .../{id}/publish` recorded
+/// at M0 in docs/design/decisions.md, which no capture of this flow shows and
+/// which carries no metadata for the licence to be validated against.
+///
+/// `primaryCategory` is the first category the draft declares, which is what
+/// the capture carries; both it and `additionalAge` are omitted rather than
+/// invented when the draft declares nothing to fill them with.
 #[must_use]
-pub fn publish_request(id: DraftId) -> HttpRequest {
+pub fn publish_request(id: DraftId, listing: &TesListing) -> HttpRequest {
+    let mut body = metadata_body(listing);
+    body["customThumbnails"] = json!([]);
+    if let Some(primary) = listing.category_ids.first() {
+        body["primaryCategory"] = json!(primary);
+    }
+    if let Some(additional) = additional_age(listing) {
+        body["additionalAge"] = json!(additional);
+    }
     HttpRequest::post_json(
-        format!("{ORIGIN}/api/v2/resources/{}/publish", id.0),
-        json!({}),
+        format!("{ORIGIN}/api/v2/resources/{}/draft/publish", id.0),
+        body,
     )
 }
 
@@ -273,10 +404,12 @@ pub fn read_resource_request(id: DraftId) -> HttpRequest {
     HttpRequest::get(format!("{ORIGIN}/api/v2/resources/{}", id.0))
 }
 
-/// The REAL delete. `DELETE .../{id}/draft` removes only the draft overlay
-/// and answers 204 anyway — the misleading-204 measured in M0 — so this
-/// module deliberately offers no draft-delete builder, and the delete flow
-/// reports success only after the API read returns 404.
+/// The published resource's delete, answering 204 — the M0 reading, confirmed
+/// against a live published resource by the 2026-08-28 capture. `DELETE
+/// .../{id}/draft` removes only the draft overlay and answers 204 anyway (the
+/// misleading-204 measured in M0), so which route a delete takes follows the
+/// resource's state and the flow reports success only after the read for that
+/// state returns 404.
 #[must_use]
 pub fn delete_resource_request(id: DraftId) -> HttpRequest {
     HttpRequest::delete(format!("{ORIGIN}/api/v2/resources/{}", id.0))
@@ -428,7 +561,8 @@ pub fn parse_download_manifest(body: &Value, id: DraftId) -> Result<String, Down
 mod tests {
     use super::{
         parse_catalogue_page, parse_download_manifest, parse_presign, CataloguePageError,
-        DownloadManifestError, DraftId, PresignParseError, TesLicence, TesListing,
+        DownloadManifestError, DraftId, FreeLicence, NotAPrice, PresignParseError, TesLicence,
+        TesListing, TesPrice, TesPricing,
     };
     use base64::Engine;
     use serde_json::json;
@@ -450,18 +584,66 @@ mod tests {
         }
     }
 
-    #[test]
-    fn metadata_request_carries_the_licence_and_the_markdown_type() {
-        let listing = TesListing {
+    fn listing(pricing: TesPricing) -> TesListing {
+        TesListing {
             title: "T".to_owned(),
             description_markdown: "D".to_owned(),
-            category_ids: vec![1_000_448],
-            age_range_ids: vec![4],
+            category_ids: vec![1_000_448, 1_000_977],
+            age_range_ids: vec![3, 4],
             ages: vec![11, 12],
             main_type: 99_009,
             main_age: 4,
-            licence: TesLicence::CcBy,
-        };
+            pricing,
+        }
+    }
+
+    fn paid(minor_units: i64) -> TesPricing {
+        TesPricing::Paid(TesPrice::new(minor_units).expect("the fixture price is positive"))
+    }
+
+    #[test]
+    fn a_price_is_a_positive_number_of_minor_units() {
+        assert_eq!(
+            TesPrice::new(500).map(TesPrice::minor_units),
+            Ok(500),
+            "the captured publish body carries GBP 5.00 as the integer 500"
+        );
+        for refused in [0, -1] {
+            assert_eq!(
+                TesPrice::new(refused),
+                Err(NotAPrice(refused)),
+                "a non-positive amount is not a price; free is a Creative Commons licence"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pricing_pairs_each_licence_with_what_the_api_demands_of_it() {
+        assert_eq!(
+            TesPricing::Free(FreeLicence::CcBySa).licence(),
+            TesLicence::CcBySa,
+            "a free listing carries the Creative Commons licence it named"
+        );
+        assert_eq!(
+            TesPricing::Free(FreeLicence::CcBySa).price(),
+            None,
+            "the API refuses a price against a Creative Commons licence"
+        );
+        assert_eq!(
+            paid(500).licence(),
+            TesLicence::TesPaid,
+            "a priced listing is TES-PAID and nothing else"
+        );
+        assert_eq!(
+            paid(500).price().map(TesPrice::minor_units),
+            Some(500),
+            "and it cannot exist without the price the API refuses it without"
+        );
+    }
+
+    #[test]
+    fn metadata_request_carries_the_licence_and_the_markdown_type() {
+        let listing = listing(TesPricing::Free(FreeLicence::CcBy));
         let request = super::set_metadata_request(DraftId(7), &listing);
         let RequestBody::Json(body) = &request.body else {
             panic!("metadata is a JSON body");
@@ -477,6 +659,103 @@ mod tests {
         assert_eq!(
             body["categories"][0]["id"], 1_000_448,
             "categories travel as objects carrying ids"
+        );
+        assert_eq!(
+            body.get("price"),
+            None,
+            "a free draft names no price, which is what the licence demands of it"
+        );
+    }
+
+    #[test]
+    fn a_paid_draft_carries_the_price_the_tes_paid_licence_is_refused_without() {
+        let request = super::set_metadata_request(DraftId(7), &listing(paid(500)));
+        let RequestBody::Json(body) = &request.body else {
+            panic!("metadata is a JSON body");
+        };
+        assert_eq!(
+            body["licence"], "TES-PAID",
+            "the paid licence is the one the capture pairs with a price"
+        );
+        assert_eq!(
+            body["price"], 500,
+            "the price rides in minor units, the integer the wire carries"
+        );
+    }
+
+    #[test]
+    fn the_publish_body_restates_the_metadata_with_the_price_and_the_primary_category() {
+        let request = super::publish_request(DraftId(13_264_370), &listing(paid(500)));
+        assert_eq!(
+            request.url, "https://www.tes.com/api/v2/resources/13264370/draft/publish",
+            "the captured publish is the draft's own route, not the resource's"
+        );
+        let RequestBody::Json(body) = &request.body else {
+            panic!("publish is a JSON body");
+        };
+        assert_eq!(
+            body["licence"], "TES-PAID",
+            "publish is what carries the paid licence live"
+        );
+        assert_eq!(body["price"], 500, "and the price it is refused without");
+        assert_eq!(
+            body["primaryCategory"], 1_000_448,
+            "the primary category is the first the draft declares"
+        );
+        assert_eq!(
+            body["additionalAge"], 3,
+            "the additional age is the range beside mainAge, as the capture carries it"
+        );
+        assert_eq!(
+            body["mainAge"], 4,
+            "publish restates the whole draft rather than referring to it"
+        );
+        assert_eq!(
+            body["descriptionRawType"], "md",
+            "the description type accompanies the raw markdown here too"
+        );
+        assert_eq!(
+            body["customThumbnails"],
+            serde_json::json!([]),
+            "the capture carries the empty thumbnail list"
+        );
+        assert_eq!(
+            body["categories"][1]["id"], 1_000_977,
+            "every category travels, not only the primary one"
+        );
+    }
+
+    #[test]
+    fn a_free_publish_carries_a_creative_commons_licence_and_no_price() {
+        let request = super::publish_request(
+            DraftId(7),
+            &TesListing {
+                category_ids: Vec::new(),
+                age_range_ids: vec![4],
+                ..listing(TesPricing::Free(FreeLicence::CcByNd))
+            },
+        );
+        let RequestBody::Json(body) = &request.body else {
+            panic!("publish is a JSON body");
+        };
+        assert_eq!(
+            body["licence"], "CC-BY-ND",
+            "a free publish is licensed, not priced"
+        );
+        assert_eq!(
+            body.get("price"),
+            None,
+            "no price is invented for a listing that has none"
+        );
+        assert_eq!(
+            body.get("primaryCategory"),
+            None,
+            "a draft declaring no category names no primary one rather than a guessed id"
+        );
+        assert_eq!(
+            body.get("additionalAge"),
+            None,
+            "and a draft with only its main age range carries no additional one"
         );
     }
 

@@ -5,10 +5,10 @@
 //!
 //! The `FieldSet` contract is this crate's on both sides: `project_fields`
 //! renders it from a projected listing and the submit parses it back.
-//! `Title` is plain text, `Description` is markdown, `Price` is a free-tier
-//! licence token (`CC-BY`, `CC-BY-SA`, `CC-BY-ND`), `Taxonomy` is JSON
-//! `{"categories": [..], "mainType": n}`, and `Grades` is JSON
-//! `{"ageRanges": [..], "ages": [..], "mainAge": n}`.
+//! `Title` is plain text, `Description` is markdown, `Price` is a licence
+//! token — a free-tier `CC-BY`, `CC-BY-SA` or `CC-BY-ND`, or `TES-PAID:<minor
+//! units>` — `Taxonomy` is JSON `{"categories": [..], "mainType": n}`, and
+//! `Grades` is JSON `{"ageRanges": [..], "ages": [..], "mainAge": n}`.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -20,14 +20,18 @@ use tam_marketplace::{
     SubmitEvidence,
 };
 use tam_types::{
-    ContentHash, FailureCode, FailureDetail, FieldKey, InventoryId, OrgId, PriceIntent, Timestamp,
+    ContentHash, CurrencyRule, FailureCode, FailureDetail, FieldKey, InventoryId, Money, OrgId,
+    PriceIntent, Timestamp,
 };
 
 use crate::classify::{
     classify_create, classify_read, classify_read_bytes, classify_transport, classify_write,
     classify_write_json, classify_write_status,
 };
-use crate::endpoints::{self, CatalogueEntry, DraftId, PresignedUpload, TesLicence, TesListing};
+use crate::endpoints::{
+    self, CatalogueEntry, DraftId, FreeLicence, PresignedUpload, TesLicence, TesListing, TesPrice,
+    TesPricing,
+};
 use crate::schema;
 
 /// The two Tes inventories share this one adapter type; everything that
@@ -155,10 +159,26 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         Ok(())
     }
 
+    /// Rewrites an existing draft's metadata. Tes has no partial edit: the
+    /// draft POST is a full restatement, so the caller hands over the listing
+    /// it wants the draft to carry, exactly as the create does. The response
+    /// must be JSON naming this draft, which is the same positive assertion
+    /// the create's own metadata step makes.
+    pub async fn update(&self, id: DraftId, listing: &TesListing) -> Result<(), AdapterError> {
+        let written = self
+            .send(endpoints::set_metadata_request(id, listing))
+            .await?;
+        classify_write(&written, id.0).map(drop)
+    }
+
     /// Publishes the draft, then proves it by reading the state back. The
     /// publish POST's own 2xx is never the verdict.
-    pub async fn publish(&self, id: DraftId) -> Result<Value, AdapterError> {
-        let published = self.send(endpoints::publish_request(id)).await?;
+    ///
+    /// The listing travels because the publish endpoint re-posts the whole of
+    /// it: the licence and, for a paid listing, the price both reach the API
+    /// here rather than on the draft alone.
+    pub async fn publish(&self, id: DraftId, listing: &TesListing) -> Result<Value, AdapterError> {
+        let published = self.send(endpoints::publish_request(id, listing)).await?;
         classify_write_status(&published)?;
         let state = self.resource_state(id).await?;
         let is_published = state.get("draft").and_then(Value::as_bool) == Some(false)
@@ -178,19 +198,42 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// 404s for a draft whether or not it was deleted, so verifying deletion
     /// against the resource route is a false "gone" — the deletion and its
     /// proof both run on the `/draft` route the draft actually lives at.
-    pub async fn delete(&self, id: DraftId) -> Result<(), AdapterError> {
+    pub async fn delete_draft(&self, id: DraftId) -> Result<(), AdapterError> {
         self.send(endpoints::delete_draft_request(id)).await?;
         let after = self.send(endpoints::read_draft_request(id)).await?;
-        match after.status {
-            404 => Ok(()),
-            200 => Err(AdapterError::Rejected {
-                code: FailureCode::VerificationMismatch,
-                detail: FailureDetail("the draft is still readable after delete".to_owned()),
-            }),
-            _ => Err(AdapterError::Ambiguous(
-                AmbiguityCause::ReadBackIndeterminate,
-            )),
+        gone(after.status, "draft")
+    }
+
+    /// Deletes a published resource and reports success only after the
+    /// resource read returns 404. The mirror of [`Self::delete_draft`]: the
+    /// deletion and its proof both run on the route the resource lives at,
+    /// which for a published one is `/resources/{id}` rather than its draft
+    /// overlay — a `/draft` read of a published resource answers 200 whether
+    /// or not the resource behind it is gone.
+    pub async fn delete_published(&self, id: DraftId) -> Result<(), AdapterError> {
+        self.send(endpoints::delete_resource_request(id)).await?;
+        let after = self.send(endpoints::read_resource_request(id)).await?;
+        gone(after.status, "published resource")
+    }
+
+    /// Deletes a listing in whichever state it is in, deciding which by the
+    /// route the resource answers on rather than by a flag inside a body: a
+    /// never-published draft 404s on `/resources/{id}` and a published
+    /// resource does not, which is the same M0 measurement that decides which
+    /// route removes it. Each delete answers the other's resource with a
+    /// status that reads like success, so guessing wrong here is how a
+    /// listing survives its own delete.
+    ///
+    /// Anything that is neither of those two answers settles as the read
+    /// classifier's own verdict — a lapsed session and a rate limit are named
+    /// conditions, not a resource that happens to be absent.
+    pub async fn delete(&self, id: DraftId) -> Result<(), AdapterError> {
+        let resource = self.send(endpoints::read_resource_request(id)).await?;
+        if resource.status == 404 {
+            return self.delete_draft(id).await;
         }
+        classify_read(&resource)?;
+        self.delete_published(id).await
     }
 
     /// A tier-two read internal to a write flow: one fetch of one listing by
@@ -255,19 +298,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                     detail: FailureDetail(format!("the projection omitted {key:?}")),
                 })
         };
-        let licence = match entry(FieldKey::Price)? {
-            "CC-BY" => TesLicence::CcBy,
-            "CC-BY-SA" => TesLicence::CcBySa,
-            "CC-BY-ND" => TesLicence::CcByNd,
-            other => {
-                return Err(AdapterError::Rejected {
-                    code: FailureCode::UploadRejected,
-                    detail: FailureDetail(format!(
-                        "unsupported licence token {other:?}; paid listings land with price wiring"
-                    )),
-                })
-            }
-        };
+        let pricing = pricing_from_token(entry(FieldKey::Price)?)?;
         let taxonomy: Value =
             serde_json::from_str(entry(FieldKey::Taxonomy)?).map_err(|error| {
                 AdapterError::Rejected {
@@ -299,7 +330,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
             main_age: grades.get("mainAge").and_then(Value::as_i64).unwrap_or(0),
-            licence,
+            pricing,
         })
     }
 }
@@ -310,20 +341,18 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     }
 
     /// Tes's own wire shape, rendered here rather than in the engine that
-    /// seeds the item: a licence token in `Price`, the numeric category ids
-    /// in `Taxonomy`, and the age ranges with the derived age list in
-    /// `Grades`. The submit's own `listing_from_field_set` parses exactly
-    /// this back, so both halves of the contract sit in one file.
+    /// seeds the item: a licence token in `Price` — carrying the price too
+    /// where the licence is the paid one — the numeric category ids in
+    /// `Taxonomy`, and the age ranges with the derived age list in `Grades`.
+    /// The submit's own `listing_from_field_set` parses exactly this back, so
+    /// both halves of the contract sit in one file.
     ///
     /// A category the crosswalk left without a numeric id is refused: Tes
     /// addresses categories by number and there is nothing to send.
     fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
         let licence = match listing.price {
-            PriceIntent::Free => "CC-BY".to_owned(),
-            // The Tes write path's licence vocabulary is Creative Commons
-            // only so far; a paid seed reaches this adapter's own closed
-            // refusal and settles honestly rather than being silently freed.
-            PriceIntent::Paid(_) => "TES-PAID".to_owned(),
+            PriceIntent::Free => TesLicence::CcBy.as_str().to_owned(),
+            PriceIntent::Paid(money) => paid_price_token(self.inventory, money)?,
         };
         let mut categories: Vec<i64> = Vec::new();
         for term in &listing.taxonomy {
@@ -395,7 +424,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
             Ok(()) => self.resource_state(id).await,
             Err(error) => Err(error),
         };
-        let deleted = self.delete(id).await;
+        let deleted = self.delete_draft(id).await;
         let observed = schema::field_names(&state?);
         deleted?;
         let missing = schema::missing_written_fields(&observed);
@@ -719,14 +748,111 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-/// A projection Tes cannot express. The category ids it addresses are
-/// numbers, so a term the crosswalk left without one is refused before an
-/// attempt is opened rather than sent as something else.
-fn unprojectable_category(detail: String) -> AdapterError {
+/// The verdict of a delete, which is the follow-up read's status and never
+/// the delete's own: `DELETE` answers 204 on both Tes routes whether or not
+/// the resource behind the one it took is gone.
+fn gone(status: u16, what: &str) -> Result<(), AdapterError> {
+    match status {
+        404 => Ok(()),
+        200 => Err(AdapterError::Rejected {
+            code: FailureCode::VerificationMismatch,
+            detail: FailureDetail(format!("the {what} is still readable after delete")),
+        }),
+        _ => Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate,
+        )),
+    }
+}
+
+/// The separator between the paid licence token and its amount in the `Price`
+/// entry. Neither half can contain it: the licence tokens are a closed set of
+/// hyphenated words and the amount is an integer.
+const PRICE_TOKEN_SEPARATOR: char = ':';
+
+/// The `Price` entry for a paid listing: the `TES-PAID` licence and the price
+/// in the minor units the wire carries.
+///
+/// The currency is asserted against the inventory's own rule rather than
+/// travelling in the token. Tes denominates by inventory and its wire carries
+/// a bare integer, so a price whose currency disagrees with the inventory it
+/// is bound for would be posted as an amount in a denomination nobody chose;
+/// that is refused here rather than converted, because converting is a
+/// mapping decision and this is a rendering.
+fn paid_price_token(inventory: InventoryId, money: Money) -> Result<String, AdapterError> {
+    match inventory.currency_rule() {
+        CurrencyRule::Fixed(currency) => {
+            if currency == money.currency() {
+                Ok(format!(
+                    "{}{PRICE_TOKEN_SEPARATOR}{}",
+                    TesLicence::TesPaid.as_str(),
+                    money.minor_units()
+                ))
+            } else {
+                Err(refused(format!(
+                    "{inventory:?} denominates in {currency:?} and the price is {:?}; Tes carries \
+                     a bare amount, so posting this one would state a denomination nobody \
+                     chose",
+                    money.currency()
+                )))
+            }
+        }
+        CurrencyRule::SellerScoped | CurrencyRule::Unmeasured => Err(refused(format!(
+            "{inventory:?} has no fixed currency, so there is no denomination to post a price in"
+        ))),
+    }
+}
+
+/// The mirror of [`paid_price_token`] and of the free branch beside it: a
+/// bare Creative Commons token, or `TES-PAID` carrying its amount.
+///
+/// A paid token whose amount is missing, unparseable or non-positive is
+/// refused rather than read as free. The licence the API refuses without a
+/// price must never reach it without one, and a listing quietly demoted to
+/// free is the one failure that costs the seller money.
+fn pricing_from_token(token: &str) -> Result<TesPricing, AdapterError> {
+    if let Some((licence, amount)) = token.split_once(PRICE_TOKEN_SEPARATOR) {
+        if licence != TesLicence::TesPaid.as_str() {
+            return Err(refused(format!(
+                "only {} carries an amount, and {licence:?} is not it",
+                TesLicence::TesPaid.as_str()
+            )));
+        }
+        let minor_units: i64 = amount.parse().map_err(|error| {
+            refused(format!(
+                "the paid licence names {amount:?} as its minor units: {error}"
+            ))
+        })?;
+        return TesPrice::new(minor_units)
+            .map(TesPricing::Paid)
+            .map_err(|error| refused(error.to_string()));
+    }
+    match token {
+        "CC-BY" => Ok(TesPricing::Free(FreeLicence::CcBy)),
+        "CC-BY-SA" => Ok(TesPricing::Free(FreeLicence::CcBySa)),
+        "CC-BY-ND" => Ok(TesPricing::Free(FreeLicence::CcByNd)),
+        other => Err(refused(format!(
+            "unsupported licence token {other:?}; a paid listing carries \
+             {}{PRICE_TOKEN_SEPARATOR}<minor units>",
+            TesLicence::TesPaid.as_str()
+        ))),
+    }
+}
+
+/// A projection this adapter will not send. The seam's one rejection code for
+/// a payload Tes cannot accept, so a refusal always names its own cause in
+/// the detail rather than in a code the driver would have to interpret.
+fn refused(detail: String) -> AdapterError {
     AdapterError::Rejected {
         code: FailureCode::UploadRejected,
         detail: FailureDetail(detail),
     }
+}
+
+/// A projection Tes cannot express. The category ids it addresses are
+/// numbers, so a term the crosswalk left without one is refused before an
+/// attempt is opened rather than sent as something else.
+fn unprojectable_category(detail: String) -> AdapterError {
+    refused(detail)
 }
 
 /// A resource with no bundle behind it. Distinct from a failed read: the
