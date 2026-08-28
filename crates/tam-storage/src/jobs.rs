@@ -874,7 +874,23 @@ impl WriteAttemptRepo {
                 .await;
                 match bound {
                     Ok(bound) if bound.rows_affected() > 0 => BindDisposition::Bound,
-                    Ok(_) => classify_bind(&mut tx, org_db, mapping_db, id).await?,
+                    Ok(_) => {
+                        let classified = classify_bind(&mut tx, org_db, mapping_db, id).await?;
+                        if classified == BindDisposition::AlreadyBound {
+                            relanded(
+                                &mut tx,
+                                MappingWrite {
+                                    org: org_db,
+                                    mapping: mapping_db,
+                                    at: at_db,
+                                },
+                                &remote,
+                                &lifecycle,
+                            )
+                            .await?;
+                        }
+                        classified
+                    }
                     Err(clash) if is_bound_identity_clash(&clash) => {
                         sqlx::query("ROLLBACK TO SAVEPOINT bind")
                             .execute(&mut *tx)
@@ -922,6 +938,59 @@ impl WriteAttemptRepo {
         tx.commit().await?;
         Ok(disposition)
     }
+}
+
+/// The three columns every mapping write inside a settle is keyed and
+/// stamped by. A struct because the writer below would otherwise run past
+/// `too-many-arguments-threshold`, and because they always travel together.
+#[derive(Clone, Copy)]
+struct MappingWrite {
+    org: uuid::Uuid,
+    mapping: uuid::Uuid,
+    at: DateTime<Utc>,
+}
+
+/// A landing on a mapping already bound to the very listing it landed on.
+///
+/// The bind's own fence excludes `'bound'` on purpose — re-landing must not
+/// overwrite `first_seen_at` or reclaim an identity — but the lifecycle the
+/// verification read observed is new information every time, and it is the
+/// only record of which side of the draft line the listing now sits on.
+/// Without this write a committed publish left the mapping reading
+/// `'draft'`, and `admission`'s `lifecycle_diverged` gate then parked every
+/// later item on that mapping permanently.
+///
+/// Fenced on the binding it is updating, so a mapping rebound underneath the
+/// settle keeps the divergent disposition `classify_bind` reported rather
+/// than having a foreign listing's lifecycle written over it.
+async fn relanded(
+    tx: &mut Transaction<'_, Postgres>,
+    target: MappingWrite,
+    remote: &RemoteIdColumns<'_>,
+    lifecycle: &LifecycleColumns,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "UPDATE mapping \
+         SET lifecycle_state = $4, lifecycle_since = $5, lifecycle_reason = $6, \
+             updated_at = $7 \
+         WHERE org_id = $1 AND id = $2 \
+           AND binding_state = 'bound' \
+           AND remote_id_kind = $3 \
+           AND remote_url IS NOT DISTINCT FROM $8 \
+           AND remote_numeric_id IS NOT DISTINCT FROM $9",
+        target.org,
+        target.mapping,
+        remote.kind,
+        lifecycle.state,
+        lifecycle.since,
+        lifecycle.reason,
+        target.at,
+        remote.url,
+        remote.numeric_id,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// What the bind folded into an attempt settle did to the mapping.

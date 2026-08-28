@@ -427,6 +427,30 @@ impl ItemOperation {
     }
 }
 
+/// What the verification read has to show for the operation to be proved,
+/// mirroring what the live runners learned. A create and a revise-to-draft
+/// are proved by finding the listing, a publish by finding it live, and a
+/// removal by not finding it.
+///
+/// One function with two callers deliberately: the driver polls until this
+/// answers true, and the machine settles on whatever the poll hands back
+/// when it stops. Two copies of it drifted apart once already — the poll
+/// required `Live` for a publish while the machine asked only whether the
+/// listing was absent, so a publish whose budget ran out while the listing
+/// still read `Draft` settled Succeeded and bound the mapping `'draft'`.
+#[must_use]
+pub fn verification_settles(operation: &ItemOperation, observed: &ObservedListing) -> bool {
+    let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
+    match operation {
+        ItemOperation::Create => !absent,
+        ItemOperation::Revise { transition, .. } => match transition.to {
+            ListingState::Draft => !absent,
+            ListingState::Live => matches!(observed.lifecycle, RemoteLifecycle::Live { .. }),
+        },
+        ItemOperation::Remove { .. } => absent,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncState {
     AwaitingPreflight,
@@ -951,24 +975,25 @@ impl SyncMachine {
         }
     }
 
-    /// What the verification read proves, which is the one thing that inverts
-    /// with the operation: a create and a revise are proved by finding the
-    /// listing, a removal by not finding it.
+    /// What the verification read proves, deferred whole to
+    /// [`verification_settles`] so the machine settles on exactly the
+    /// predicate the driver polled for.
     ///
-    /// A create or revise that observes absence after the whole poll budget is
-    /// the stall bias doing its job — the write may have landed and we cannot
-    /// see it, which is `Ambiguous`, never a silent commit. A removal that
-    /// still finds the listing did not take, which is a refusal the ledger can
-    /// act on rather than an ambiguity that halts the tenant.
+    /// A create, a revise or a publish the read never proved after the whole
+    /// poll budget is the stall bias doing its job — the write may have
+    /// landed and we cannot see it, which is `Ambiguous`, never a silent
+    /// commit. That covers a publish still reading `Draft` as much as a
+    /// create reading `Absent`: both are a write we could not confirm. A
+    /// removal that still finds the listing is the one unproved read that is
+    /// not an ambiguity, because it did not take — a refusal the ledger can
+    /// act on rather than one that halts the tenant.
     fn observed_rows(
         self,
         observed: ObservedListing,
         attempt: WriteAttemptId,
         now: LogicalInstant,
     ) -> Result<Transition, MachineError> {
-        let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
-        let removing = matches!(self.operation, ItemOperation::Remove { .. });
-        if absent == removing {
+        if verification_settles(&self.operation, &observed) {
             let outcome = settle(
                 as_attempt_id(attempt),
                 observed.id,
@@ -977,7 +1002,7 @@ impl SyncMachine {
             );
             return self.advance(SyncState::Terminal(outcome), vec![]);
         }
-        if removing {
+        if matches!(self.operation, ItemOperation::Remove { .. }) {
             let outcome = Outcome::Rejected {
                 code: FailureCode::VerificationMismatch,
                 detail: FailureDetail(

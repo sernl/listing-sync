@@ -7,8 +7,8 @@
 
 use serde_json::json;
 use tam_domain::{
-    BlockCause, Effect, HaltScope, Input, ItemOperation, ItemOutcome, MachineError, SellerEvent,
-    StepBudget, SyncMachine, SyncState, Transition,
+    verification_settles, BlockCause, Effect, HaltScope, Input, ItemOperation, ItemOutcome,
+    MachineError, SellerEvent, StepBudget, SyncMachine, SyncState, Transition,
 };
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
@@ -251,22 +251,6 @@ fn outcome_to_landing(
                 id: subject.clone(),
             }
         }
-    }
-}
-
-/// When the verification read has answered, per operation — mirroring what
-/// the live runners learned. A create and a revise-to-draft are proved by
-/// finding the listing, a publish by finding it live, and a removal by not
-/// finding it.
-fn verification_settles(operation: &ItemOperation, observed: &ObservedListing) -> bool {
-    let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
-    match operation {
-        ItemOperation::Create => !absent,
-        ItemOperation::Revise { transition, .. } => match transition.to {
-            ListingState::Draft => !absent,
-            ListingState::Live => matches!(observed.lifecycle, RemoteLifecycle::Live { .. }),
-        },
-        ItemOperation::Remove { .. } => absent,
     }
 }
 

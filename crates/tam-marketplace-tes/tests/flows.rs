@@ -1527,3 +1527,51 @@ fn a_bundle_download_without_the_export_capability_is_refused() {
         "the refusal happens before the first request"
     );
 }
+
+/// A delete answering 404 is not a marketplace refusal. It is the ordinary
+/// answer for a resource that is not on that route, which is what an
+/// already-removed listing gives — and `post_delete`'s own contract is that
+/// the status is not a verdict, so the driver's absence poll is what settles
+/// a removal. Reading it as `UploadRejected` settled the item Failed and
+/// skipped the poll, leaving the mapping bound to a listing that was gone
+/// with no path left to sever it.
+#[test]
+fn a_delete_that_404s_is_evidence_for_the_poll_and_a_400_is_still_a_refusal() {
+    let cassette = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::delete_draft_request(DRAFT),
+            response: status(404),
+        }],
+    };
+    let gone = adapter(cassette, vec![]);
+    let evidence =
+        futures::executor::block_on(gone.remove(ORG, removal_plan(ListingState::Draft), NOW))
+            .unwrap_or_else(|error| panic!("a 404 delete is evidence, not a rejection: {error:?}"));
+    assert_eq!(
+        evidence.http_status,
+        Some(404),
+        "the evidence records the status verbatim; what changed is that it is no longer \
+         read as a verdict"
+    );
+
+    let refused = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::delete_draft_request(DRAFT),
+            response: status(400),
+        }],
+    };
+    let refusing = adapter(refused, vec![]);
+    let refusal =
+        futures::executor::block_on(refusing.remove(ORG, removal_plan(ListingState::Draft), NOW));
+    assert!(
+        matches!(
+            refusal,
+            Err(AdapterError::Rejected {
+                code: FailureCode::UploadRejected,
+                ..
+            })
+        ),
+        "only the 404 moved: a refused delete is still a refusal, so this is not the \
+         classifier being opened up: {refusal:?}"
+    );
+}

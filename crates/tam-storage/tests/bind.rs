@@ -389,6 +389,71 @@ async fn a_divergent_landing_is_reported_never_written(app: PgPool) {
         freshly_bound(LANDED, LANDED_AT),
         "a bind never overwrites: the mapping must still hold the first listing"
     );
+    assert_eq!(
+        record.mapping.lifecycle,
+        RemoteLifecycle::Draft,
+        "and the lifecycle-only write a re-landing gets is fenced on the identity: a \
+         landing on some other listing says nothing about the state of this one"
+    );
+}
+
+/// The publish's half of a landing. The bind's fence excludes `'bound'` so
+/// that re-landing preserves `first_seen_at` and the binding identity — but
+/// the lifecycle the verification read observed is new information every
+/// time, and it is the only record of which side of the draft line the
+/// listing now sits on. Without this write a committed publish left the
+/// mapping reading `'draft'`, and `admission`'s `lifecycle_diverged` gate
+/// then parked every later item on that mapping for good.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_relanding_records_the_lifecycle_the_read_observed(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the enqueued item leases");
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the create's settle runs"),
+        BindDisposition::Bound,
+        "the create binds the mapping as a draft before the publish under test runs"
+    );
+
+    let published = settle_attempt(
+        &engine,
+        &lease,
+        MAPPING,
+        LandingEffect::Landed {
+            id: tes(LANDED),
+            lifecycle: RemoteLifecycle::Live { since: RELANDED_AT },
+        },
+        RELANDED_AT,
+    )
+    .await
+    .expect("the publish's settle runs");
+
+    assert_eq!(
+        published,
+        BindDisposition::AlreadyBound,
+        "the binding is unchanged, which is what AlreadyBound has always meant; what \
+         changed is that the observation no longer goes nowhere"
+    );
+    let record = MappingRepo::new(app.clone())
+        .get(ORG, MAPPING)
+        .await
+        .expect("the mapping reads back")
+        .expect("the mapping exists");
+    assert_eq!(
+        record.mapping.lifecycle,
+        RemoteLifecycle::Live { since: RELANDED_AT },
+        "the publish's read observed a live listing, so the mapping says so"
+    );
+    assert_eq!(
+        record.mapping.binding,
+        freshly_bound(LANDED, LANDED_AT),
+        "and it says so without moving first_seen_at or re-minting the binding, which is \
+         why the lifecycle write is separate from the bind rather than a relaxed fence"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

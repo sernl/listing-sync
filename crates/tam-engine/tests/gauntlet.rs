@@ -25,7 +25,8 @@ use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
 };
 use tam_marketplace::{
-    FileContent, FileSource, FileSourceError, ListingState, Pause, RemoteLifecycle, RemoteListingId,
+    FileContent, FileSource, FileSourceError, LifecycleTransition, ListingState, Pause,
+    RemoteLifecycle, RemoteListingId,
 };
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
@@ -84,6 +85,11 @@ struct FakeState {
     /// measured.
     lag_reads: usize,
     reads_of: HashMap<i64, usize>,
+    /// Reads still owed before an accepted publish shows in the resource,
+    /// which is the lag the live runs measured. `None` where nothing has
+    /// been published.
+    publish_pending: Option<usize>,
+    publish_lag: usize,
 }
 
 impl FakeState {
@@ -94,6 +100,26 @@ impl FakeState {
     fn lagging_for(&self, id: i64) -> bool {
         let seen = self.reads_of.get(&id).copied().unwrap_or_default();
         self.lag_reads > 0 && seen > 1 && seen - 1 <= self.lag_reads
+    }
+
+    /// One read's worth of publish lag. The resource keeps answering
+    /// `draft: true` until the owed reads are spent, which is what makes the
+    /// verification poll poll rather than settle on its first try.
+    ///
+    /// Counted on the draft route alone: `resource_state` reads that one
+    /// first and only falls through to `/resources/{id}` on a 404, so one
+    /// try is one decrement.
+    fn advance_publish(&mut self, id: i64) {
+        let Some(owed) = self.publish_pending else {
+            return;
+        };
+        let owed = owed.saturating_sub(1);
+        self.publish_pending = Some(owed);
+        if owed == 0 {
+            if let Some(draft) = self.drafts.get_mut(&id) {
+                draft["draft"] = json!(false);
+            }
+        }
     }
 }
 
@@ -142,12 +168,31 @@ impl FakeTes {
 
     /// A fake already holding the listing a removal will take down.
     fn holding(id: i64) -> Self {
+        Self::holding_with(id, 0)
+    }
+
+    /// A fake holding `id` whose publish shows in the resource only after
+    /// `lag` further reads.
+    fn publishing(id: i64, lag: usize) -> Self {
+        Self::holding_with(id, lag)
+    }
+
+    /// A fake holding `id` that accepts the publish and never shows it. The
+    /// lag outlasts the whole try budget, which is the case the poll cannot
+    /// distinguish from a publish that will arrive one read later — and so
+    /// the case it must refuse to call a success.
+    fn never_publishing(id: i64) -> Self {
+        Self::holding_with(id, usize::MAX)
+    }
+
+    fn holding_with(id: i64, publish_lag: usize) -> Self {
         let mut drafts = HashMap::new();
         drafts.insert(id, Self::base_draft(id));
         Self {
             state: Mutex::new(FakeState {
                 next_id: id,
                 drafts,
+                publish_lag,
                 ..FakeState::default()
             }),
         }
@@ -224,6 +269,7 @@ impl FakeTes {
                     if state.lagging_for(id) {
                         return HttpResponse::plain(404, Vec::new());
                     }
+                    state.advance_publish(id);
                     return state
                         .drafts
                         .get(&id)
@@ -299,6 +345,11 @@ impl FakeTes {
         }
         if url.ends_with("/publish") {
             state.publishes += 1;
+            // Accepted here and visible in the resource `publish_lag` reads
+            // later, which is the shape both live runs measured: the POST
+            // answers long before the read agrees. One read is the floor,
+            // because a publish nothing ever reads back is not observable.
+            state.publish_pending = Some(state.publish_lag.max(1));
             return ok(json!({}).to_string());
         }
         if request.method == Method::Delete {
@@ -381,6 +432,29 @@ impl Fixture {
             },
             lifecycle: RemoteLifecycle::Draft,
             crosswalked,
+        }
+    }
+}
+
+impl Fixture {
+    /// The mapping already holds `REMOVAL_ID` and records it as a draft;
+    /// the item is the publish that takes it live.
+    fn publication() -> Self {
+        Self {
+            operation: tam_domain::ItemOperation::Revise {
+                subject: removal_subject(),
+                transition: LifecycleTransition {
+                    from: ListingState::Draft,
+                    to: ListingState::Live,
+                },
+            },
+            binding: Binding::Bound {
+                id: removal_subject(),
+                first_seen: NOW,
+                verified: Verification::Stale { since: NOW },
+            },
+            lifecycle: RemoteLifecycle::Draft,
+            crosswalked: true,
         }
     }
 }
@@ -1137,5 +1211,105 @@ async fn a_sever_after_the_lease_was_stolen_records_the_anomaly(pool: PgPool) {
     assert!(
         anomaly.pointer("/anomaly/SeveredAfterSteal").is_some(),
         "the event names the divergence it records, not a generic refusal: {anomaly}"
+    );
+}
+
+/// The publish path end to end, which nothing drove before: the column, the
+/// machine's `Effect::Revise`, the adapter's publish POST, the poll that
+/// waits for the resource to agree, and the lifecycle the settle records.
+///
+/// The predicate is the point. A publish is proved by observing `Live`, not
+/// by observing anything at all, and the mapping must come out reading
+/// 'live' — without which the next item on it parks on `lifecycle_diverged`
+/// for good.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_publish_that_lags_settles_succeeded_and_binds_live(pool: PgPool) {
+    provision_with(&pool, Fixture::publication()).await;
+    let fake = FakeTes::publishing(REMOVAL_ID, 3);
+    let (verdict, pauses) = drive_counting(&pool, &fake).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "a publish whose resource catches up inside the budget is a committed publish"
+    );
+    assert!(
+        pauses > 0,
+        "the resource answered 'draft' first, so the poll had to wait for it"
+    );
+    let publishes = { fake.state.lock().await.publishes };
+    assert_eq!(
+        publishes, 1,
+        "the publish reached the marketplace exactly once"
+    );
+
+    let engine = engine_pool(&pool).await;
+    let attempt: (String, Option<String>) =
+        sqlx::query_as("SELECT state, remote_url FROM write_attempt WHERE org_id = $1")
+            .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+            .fetch_one(&engine)
+            .await
+            .expect("the attempt row reads");
+    assert_eq!(
+        (attempt.0.as_str(), attempt.1.as_deref()),
+        (
+            "committed",
+            Some(format!("https://www.tes.com/api/v2/resources/{REMOVAL_ID}").as_str())
+        ),
+        "the settled attempt names the listing it published"
+    );
+    let mapping: (String, String, bool) = sqlx::query_as(
+        "SELECT binding_state, lifecycle_state, lifecycle_since IS NOT NULL FROM mapping \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(MAPPING.0 .0))
+    .fetch_one(&engine)
+    .await
+    .expect("the mapping row reads");
+    assert_eq!(
+        (mapping.0.as_str(), mapping.1.as_str(), mapping.2),
+        ("bound", "live", true),
+        "the binding is unchanged and the lifecycle is the one the read observed; a bind \
+         that refuses to write it leaves every later item on this mapping parked"
+    );
+}
+
+/// The same publish, never agreed to by the resource. The poll exhausts on a
+/// draft observation, which is a write we could not confirm rather than a
+/// success: settling it Succeeded would report a published listing to the
+/// seller and record the mapping 'draft' in the same breath.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_publish_the_read_never_confirms_settles_ambiguous(pool: PgPool) {
+    provision_with(&pool, Fixture::publication()).await;
+    let fake = FakeTes::never_publishing(REMOVAL_ID);
+    let verdict = drive(&pool, &fake).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Ambiguous),
+        "the publish POST was accepted and the resource never said so; the stall bias \
+         refuses to call that a success"
+    );
+
+    let engine = engine_pool(&pool).await;
+    let halted: i64 = sqlx::query_scalar("SELECT count(*) FROM org_inventory_halt")
+        .fetch_one(&engine)
+        .await
+        .expect("the halt reads");
+    assert_eq!(
+        halted, 1,
+        "an unresolved ambiguity halts the tenant's inventory"
+    );
+    let mapping: (String, String) = sqlx::query_as(
+        "SELECT binding_state, lifecycle_state FROM mapping WHERE org_id = $1 AND id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(MAPPING.0 .0))
+    .fetch_one(&engine)
+    .await
+    .expect("the mapping row reads");
+    assert_eq!(
+        (mapping.0.as_str(), mapping.1.as_str()),
+        ("bound", "draft"),
+        "nothing was proved, so nothing about the listing is rewritten"
     );
 }

@@ -96,6 +96,28 @@ pub fn classify_write_status(response: &HttpResponse) -> Result<(), AdapterError
     }
 }
 
+/// Classifies a delete, where the status is evidence rather than a verdict.
+///
+/// A 404 from either delete route is the ordinary answer for a resource that
+/// is not there *on that route*, which is what an already-removed listing
+/// answers and what `endpoints` records a draft answering on the published
+/// route. `classify_write_status` reads it as `UploadRejected`, which
+/// settles the item `Failed` and skips the driver's absence poll entirely —
+/// so the one read that can tell those apart is never made, and a mapping
+/// stays bound to a listing that is already gone with no path to sever it.
+/// Handing the 404 to the poll instead lets the removal's own predicate,
+/// which settles on absence, be the verdict.
+///
+/// Every other status keeps `classify_write_status`'s reading, the
+/// misleading 204 included: a delete that answered success is still unproven
+/// until the read agrees.
+pub fn classify_delete_status(response: &HttpResponse) -> Result<(), AdapterError> {
+    if response.status == 404 {
+        return Ok(());
+    }
+    classify_write_status(response)
+}
+
 /// Classifies a create: the positive assertion is a JSON body carrying the
 /// new identifier, and a 2xx without one is precisely the
 /// no-durable-identifier ambiguity.

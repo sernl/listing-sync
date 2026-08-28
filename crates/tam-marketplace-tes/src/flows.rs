@@ -25,8 +25,8 @@ use tam_types::{
 };
 
 use crate::classify::{
-    classify_create, classify_read, classify_read_bytes, classify_transport, classify_write,
-    classify_write_json, classify_write_status,
+    classify_create, classify_delete_status, classify_read, classify_read_bytes,
+    classify_transport, classify_write, classify_write_json, classify_write_status,
 };
 use crate::endpoints::{
     self, CatalogueEntry, DraftId, FreeLicence, PresignedUpload, TesLicence, TesListing, TesPrice,
@@ -662,6 +662,11 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// is the 2026-08-29 incident, where a publish-lagged read said "draft"
     /// for a live listing and only its overlay was removed.
     ///
+    /// The delete's own status settles nothing, which is why this classifies
+    /// with [`classify_delete_status`] rather than the write classifier: the
+    /// 404 an already-gone listing answers is the same 404 the wrong route
+    /// answers, and only the driver's absence poll can tell them apart.
+    ///
     /// `plan.attempt` is unused here: the authorisation is structural, in the
     /// closed `Effect` set that is the only thing able to reach this call.
     async fn remove(
@@ -672,7 +677,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     ) -> Result<SubmitEvidence, AdapterError> {
         let id = Self::draft_id_from_locator(&ListingLocator::Durable(plan.subject))?;
         let response = self.post_delete(id, plan.state).await?;
-        classify_write_status(&response)?;
+        classify_delete_status(&response)?;
         let route = match plan.state {
             ListingState::Draft => format!("{}/api/v2/resources/{}/draft", endpoints::ORIGIN, id.0),
             ListingState::Live => canonical_url(id),
