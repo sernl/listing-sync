@@ -14,7 +14,7 @@ use tam_marketplace::{
 use tam_marketplace_tes::endpoints::{
     self, CatalogueEntry, DraftId, FreeLicence, TesListing, TesPrice, TesPricing,
 };
-use tam_marketplace_tes::{schema, TesAdapter};
+use tam_marketplace_tes::{schema, ListingState, TesAdapter};
 use tam_types::{
     Currency, FailureCode, FieldKey, FileId, InventoryId, Money, OrgId, PriceIntent, Timestamp,
     Uuid,
@@ -608,27 +608,23 @@ fn a_published_resource_still_readable_after_its_delete_is_a_mismatch() {
 }
 
 #[test]
-fn delete_routes_each_state_to_the_endpoint_it_lives_at() {
-    for (label, probe, deletion, proof) in [
+fn a_stated_delete_takes_its_states_route_without_probing_for_it() {
+    for (label, state, deletion, proof) in [
         (
-            "a never-published draft, which 404s on the resource route",
-            status(404),
+            "a draft",
+            ListingState::Draft,
             endpoints::delete_draft_request(DRAFT),
             endpoints::read_draft_request(DRAFT),
         ),
         (
-            "a published resource, which does not",
-            ok(&draft_state(9001, false)),
+            "a published resource",
+            ListingState::Published,
             endpoints::delete_resource_request(DRAFT),
             endpoints::read_resource_request(DRAFT),
         ),
     ] {
         let cassette = Cassette {
             interactions: vec![
-                Interaction {
-                    request: endpoints::read_resource_request(DRAFT),
-                    response: probe,
-                },
                 Interaction {
                     request: deletion,
                     response: status(204),
@@ -640,22 +636,134 @@ fn delete_routes_each_state_to_the_endpoint_it_lives_at() {
             ],
         };
         let adapter = adapter(cassette, vec![]);
-        let deleted = futures::executor::block_on(adapter.delete(DRAFT));
+        let deleted = futures::executor::block_on(adapter.delete(DRAFT, state));
         assert!(
             deleted.is_ok(),
-            "{label}: the state decides the route, and this one deleted where it lives: \
-             {deleted:?}"
+            "{label}: the stated state decides the route: {deleted:?}"
         );
         assert_eq!(
             adapter.transport().remaining(),
             0,
-            "{label}: the state was probed, then deleted where it lives, then proved gone"
+            "{label}: the delete and its proof, and NO state probe before them — a probe of \
+             /resources/{{id}} lags a publish and misroutes a live listing to the draft delete"
         );
     }
 }
 
 #[test]
-fn a_delete_whose_state_cannot_be_read_names_the_condition_rather_than_a_route() {
+fn a_published_delete_is_stated_even_while_the_resource_route_still_404s() {
+    // The 2026-08-29 live failure, as a cassette: seconds after a confirmed
+    // publish the resource route still answered 404, the dispatcher read that
+    // as "this is a draft", and the draft delete cleared only the overlay
+    // while the live paid listing stayed up. A stated Published never asks.
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::delete_resource_request(DRAFT),
+                response: status(204),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(404),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    futures::executor::block_on(adapter.delete(DRAFT, ListingState::Published))
+        .expect("a freshly published resource deletes on the route it was published to");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "nothing was read to decide the route, so nothing lagging could misdirect it"
+    );
+}
+
+#[test]
+fn presence_is_read_on_the_route_the_state_lives_at() {
+    for (label, state, read, response, expected) in [
+        (
+            "a draft that is still there",
+            ListingState::Draft,
+            endpoints::read_draft_request(DRAFT),
+            ok(&draft_state(9001, true)),
+            true,
+        ),
+        (
+            "a draft that is gone",
+            ListingState::Draft,
+            endpoints::read_draft_request(DRAFT),
+            status(404),
+            false,
+        ),
+        (
+            "a published resource that is still there",
+            ListingState::Published,
+            endpoints::read_resource_request(DRAFT),
+            ok(&draft_state(9001, false)),
+            true,
+        ),
+        (
+            "a published resource that is gone",
+            ListingState::Published,
+            endpoints::read_resource_request(DRAFT),
+            status(404),
+            false,
+        ),
+    ] {
+        let cassette = Cassette {
+            interactions: vec![Interaction {
+                request: read,
+                response,
+            }],
+        };
+        let adapter = adapter(cassette, vec![]);
+        assert_eq!(
+            futures::executor::block_on(adapter.is_present(DRAFT, state)),
+            Ok(expected),
+            "{label}: only the state's own route can witness whether it is there"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "{label}: one read, on that route and no other"
+        );
+    }
+}
+
+#[test]
+fn probing_for_a_state_reads_a_resource_route_that_lags_a_publish() {
+    // The documented hazard, pinned so it cannot be reintroduced silently as
+    // the default: this path is for reconciliation, which meets listings it
+    // did not create, and never for a caller that just wrote.
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(404),
+            },
+            Interaction {
+                request: endpoints::delete_draft_request(DRAFT),
+                response: status(204),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: status(404),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    futures::executor::block_on(adapter.delete_probing_state(DRAFT))
+        .expect("a 404 on the resource route probes as a draft");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the probe answered 404 and the draft route was taken — which is right for a real draft \
+         and wrong for a resource published moments ago, hence the stated-state path above"
+    );
+}
+
+#[test]
+fn a_probed_delete_whose_state_cannot_be_read_names_the_condition_rather_than_a_route() {
     let cassette = Cassette {
         interactions: vec![Interaction {
             request: endpoints::read_resource_request(DRAFT),
@@ -663,7 +771,7 @@ fn a_delete_whose_state_cannot_be_read_names_the_condition_rather_than_a_route()
         }],
     };
     let adapter = adapter(cassette, vec![]);
-    let refused = futures::executor::block_on(adapter.delete(DRAFT));
+    let refused = futures::executor::block_on(adapter.delete_probing_state(DRAFT));
     assert_eq!(
         refused,
         Err(AdapterError::SessionExpired),

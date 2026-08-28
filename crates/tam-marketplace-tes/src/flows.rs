@@ -42,6 +42,45 @@ pub struct TesAdapter<T, F> {
     file_source: F,
 }
 
+/// Which of Tes's two listing states a resource is in, and therefore which
+/// pair of routes addresses it. Every write knows the state it produced, so
+/// this travels from the caller rather than being recovered from a read; the
+/// routes are asymmetric and each answers the other's resource with a status
+/// that reads like success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingState {
+    Draft,
+    Published,
+}
+
+impl ListingState {
+    /// The read that witnesses whether this state's resource is still there.
+    fn read_request(self, id: DraftId) -> tam_marketplace::transport::HttpRequest {
+        match self {
+            Self::Draft => endpoints::read_draft_request(id),
+            Self::Published => endpoints::read_resource_request(id),
+        }
+    }
+
+    /// The delete that removes it. `DELETE .../{id}/draft` removes only the
+    /// draft overlay and `DELETE .../{id}` 404s for a draft-only resource, so
+    /// neither stands in for the other.
+    fn delete_request(self, id: DraftId) -> tam_marketplace::transport::HttpRequest {
+        match self {
+            Self::Draft => endpoints::delete_draft_request(id),
+            Self::Published => endpoints::delete_resource_request(id),
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Published => "published resource",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotATesInventory(pub InventoryId);
 
@@ -192,48 +231,82 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         }
     }
 
-    /// Deletes a never-published draft and reports success only after the
-    /// `/draft` read returns 404. The authoritative `DELETE /resources/{id}`
-    /// 404s for a draft-only resource without removing it, and a resource read
-    /// 404s for a draft whether or not it was deleted, so verifying deletion
-    /// against the resource route is a false "gone" — the deletion and its
-    /// proof both run on the `/draft` route the draft actually lives at.
-    pub async fn delete_draft(&self, id: DraftId) -> Result<(), AdapterError> {
-        self.send(endpoints::delete_draft_request(id)).await?;
-        let after = self.send(endpoints::read_draft_request(id)).await?;
-        gone(after.status, "draft")
-    }
-
-    /// Deletes a published resource and reports success only after the
-    /// resource read returns 404. The mirror of [`Self::delete_draft`]: the
-    /// deletion and its proof both run on the route the resource lives at,
-    /// which for a published one is `/resources/{id}` rather than its draft
-    /// overlay — a `/draft` read of a published resource answers 200 whether
-    /// or not the resource behind it is gone.
-    pub async fn delete_published(&self, id: DraftId) -> Result<(), AdapterError> {
-        self.send(endpoints::delete_resource_request(id)).await?;
-        let after = self.send(endpoints::read_resource_request(id)).await?;
-        gone(after.status, "published resource")
-    }
-
-    /// Deletes a listing in whichever state it is in, deciding which by the
-    /// route the resource answers on rather than by a flag inside a body: a
-    /// never-published draft 404s on `/resources/{id}` and a published
-    /// resource does not, which is the same M0 measurement that decides which
-    /// route removes it. Each delete answers the other's resource with a
-    /// status that reads like success, so guessing wrong here is how a
-    /// listing survives its own delete.
+    /// Deletes a listing in the state the caller states it is in, and reports
+    /// success only after the route that state lives at returns 404.
     ///
-    /// Anything that is neither of those two answers settles as the read
-    /// classifier's own verdict — a lapsed session and a rate limit are named
-    /// conditions, not a resource that happens to be absent.
-    pub async fn delete(&self, id: DraftId) -> Result<(), AdapterError> {
-        let resource = self.send(endpoints::read_resource_request(id)).await?;
-        if resource.status == 404 {
-            return self.delete_draft(id).await;
+    /// The state is an argument rather than something this method discovers,
+    /// because discovering it is unsound: `/resources/{id}` lags a publish by
+    /// seconds — measured live 2026-08-29, a resource whose publish had
+    /// already been confirmed still answered 404 there — so a probe run soon
+    /// after a write reads a live listing as a draft and deletes only its
+    /// overlay, leaving the live listing standing. That is exactly what
+    /// happened, and a caller that just wrote always knows what it wrote.
+    ///
+    /// Each route answers the other's resource with a status that reads like
+    /// success, which is why the verdict is the follow-up read on the stated
+    /// state's own route and never the delete's own status.
+    pub async fn delete(&self, id: DraftId, state: ListingState) -> Result<(), AdapterError> {
+        self.send(state.delete_request(id)).await?;
+        let after = self.send(state.read_request(id)).await?;
+        gone(after.status, state.name())
+    }
+
+    /// Deletes a never-published draft. `DELETE /resources/{id}` 404s for a
+    /// draft-only resource without removing it, and a resource read 404s for a
+    /// draft whether or not it was deleted, so both the deletion and its proof
+    /// run on the `/draft` route the draft actually lives at.
+    pub async fn delete_draft(&self, id: DraftId) -> Result<(), AdapterError> {
+        self.delete(id, ListingState::Draft).await
+    }
+
+    /// Deletes a published resource. The mirror of [`Self::delete_draft`]:
+    /// `/resources/{id}` is the buyer-facing route, the one the delete has to
+    /// stop answering, and the one the live run confirmed goes to 404 first —
+    /// the dashboard catalogue kept listing a resource this route had already
+    /// stopped serving, so the catalogue cannot witness a deletion.
+    pub async fn delete_published(&self, id: DraftId) -> Result<(), AdapterError> {
+        self.delete(id, ListingState::Published).await
+    }
+
+    /// Whether the route a state lives at still answers for this id — the one
+    /// read that can witness a deletion, and the one a caller polls when the
+    /// API has not caught up with its own write.
+    ///
+    /// Each route answers only for its own state, so this is not a way to
+    /// discover which state a listing is in: a published resource 404s here
+    /// under [`ListingState::Published`] for the seconds after its publish,
+    /// and a draft 404s under it forever.
+    pub async fn is_present(&self, id: DraftId, state: ListingState) -> Result<bool, AdapterError> {
+        let read = self.send(state.read_request(id)).await?;
+        if read.status == 404 {
+            return Ok(false);
         }
-        classify_read(&resource)?;
-        self.delete_published(id).await
+        classify_read(&read)?;
+        Ok(true)
+    }
+
+    /// Deletes a listing whose state the caller genuinely does not know,
+    /// recovering it from the route the resource answers on: a never-published
+    /// draft 404s on `/resources/{id}` and a published resource does not.
+    ///
+    /// A last resort, and never the path for a caller that just wrote. The
+    /// probe reads the lagging route described on [`Self::delete`], so soon
+    /// after a publish it answers "draft" for a live listing and this deletes
+    /// the wrong thing. Reconciliation, which meets listings it did not
+    /// create, is what this exists for.
+    ///
+    /// Anything that is neither answer settles as the read classifier's own
+    /// verdict — a lapsed session and a rate limit are named conditions, not a
+    /// resource that happens to be absent.
+    pub async fn delete_probing_state(&self, id: DraftId) -> Result<(), AdapterError> {
+        let probe = self.send(endpoints::read_resource_request(id)).await?;
+        let state = if probe.status == 404 {
+            ListingState::Draft
+        } else {
+            classify_read(&probe)?;
+            ListingState::Published
+        };
+        self.delete(id, state).await
     }
 
     /// A tier-two read internal to a write flow: one fetch of one listing by

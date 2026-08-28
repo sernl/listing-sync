@@ -32,7 +32,7 @@ use tam_marketplace::{
 use tam_marketplace_tes::endpoints::{
     self, DraftId, FreeLicence, TesListing, TesPrice, TesPricing, ZZ_TITLE_PREFIX,
 };
-use tam_marketplace_tes::{ReqwestTransport, TesAdapter, TesSession};
+use tam_marketplace_tes::{ListingState, ReqwestTransport, TesAdapter, TesSession};
 use tam_types::{FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
 
 /// Neither identifier reaches Tes. The org scopes nothing here because this
@@ -253,75 +253,117 @@ async fn confirm_live(adapter: &Adapter, id: DraftId, now: Timestamp) -> Result<
     .into())
 }
 
-/// A read that no longer finds the resource. The adapter's own deletes prove
-/// this once; this is the independent second proof, and the one the guard uses
-/// to decide whether there is anything left to clean up.
-fn is_gone(seen: &Result<ObservedListing, AdapterError>) -> bool {
-    matches!(
-        *seen,
-        Err(AdapterError::Rejected {
-            code: tam_types::FailureCode::PreconditionElementAbsent,
-            ..
-        })
-    )
-}
-
-async fn confirm_gone(adapter: &Adapter, id: DraftId, now: Timestamp) -> Result<(), Failure> {
-    let seen = poll_until(adapter, id, now, is_gone).await;
-    if is_gone(&seen) {
-        println!("  confirmed gone: the account no longer returns {}", id.0);
-        return Ok(());
-    }
-    Err(format!(
-        "{} still reads back after its delete and the whole verification budget: {seen:?}",
-        id.0
-    )
-    .into())
-}
-
-/// Deletes through the route the resource's own state names, tolerating an
-/// upstream that has not caught up: the adapter proves the delete on one
-/// immediate read, and a lagging API answering that read with the resource
-/// still present is retried here rather than reported as a failed delete.
-async fn delete_and_confirm(adapter: &Adapter, id: DraftId, now: Timestamp) -> Result<(), Failure> {
-    match adapter.delete(id).await {
-        Ok(()) => {
-            println!("  deleted {} and the adapter proved it gone", id.0);
-            Ok(())
-        }
-        Err(error) => {
-            println!(
-                "  the delete of {} is unproven so far ({}); re-reading",
-                id.0,
-                describe(&error)
-            );
-            confirm_gone(adapter, id, now).await
+/// The states a listing can still be answering on, checked directly rather
+/// than through the read-back the presence checks use.
+///
+/// The catalogue-backed read lags a delete: the founder's live run saw the
+/// dashboard still listing a resource whose own route had already gone to 404,
+/// so it cannot witness a removal. These two routes can, and a delete has to
+/// silence both — `/resources/{id}` is the buyer-facing read and `/{id}/draft`
+/// serves the overlay, or the published resource itself where none exists.
+async fn still_answering(
+    adapter: &Adapter,
+    id: DraftId,
+) -> Result<Option<ListingState>, AdapterError> {
+    for state in [ListingState::Published, ListingState::Draft] {
+        if adapter.is_present(id, state).await? {
+            return Ok(Some(state));
         }
     }
+    Ok(None)
+}
+
+/// Polls both routes until neither answers. The proof of a delete, and the
+/// only proof: the adapter's delete asserts once on the instant read, and this
+/// is what an API that has not caught up with its own write gets measured
+/// against.
+async fn confirm_gone(adapter: &Adapter, id: DraftId) -> Result<(), Failure> {
+    let mut last = format!("{} was never read after its delete", id.0);
+    for read in 1..=VERIFY_TRIES {
+        match still_answering(adapter, id).await {
+            Ok(None) => {
+                println!("  confirmed gone: neither route answers for {}", id.0);
+                return Ok(());
+            }
+            Ok(Some(state)) => {
+                last = format!("{} still answers on its {} route", id.0, state.name());
+            }
+            Err(error) => last = describe(&error),
+        }
+        if read < VERIFY_TRIES {
+            println!("  {last}; waiting {VERIFY_INTERVAL:?} ({read}/{VERIFY_TRIES})");
+            tokio::time::sleep(VERIFY_INTERVAL).await;
+        }
+    }
+    Err(format!("the whole verification budget is spent and {last}").into())
+}
+
+/// Deletes the state the caller knows it created, then proves it gone against
+/// the routes rather than against the delete's own verdict: the adapter
+/// asserts on one immediate read, and this API does not always answer that
+/// read with what it has already done.
+async fn delete_and_confirm(
+    adapter: &Adapter,
+    id: DraftId,
+    state: ListingState,
+) -> Result<(), Failure> {
+    if let Err(error) = adapter.delete(id, state).await {
+        println!(
+            "  the {} delete of {} is unproven so far ({}); re-reading",
+            state.name(),
+            id.0,
+            describe(&error)
+        );
+    } else {
+        println!("  deleted the {} {}", state.name(), id.0);
+    }
+    confirm_gone(adapter, id).await
 }
 
 /// The cleanup guard every mode that creates something ends with.
 ///
+/// It issues BOTH deletes rather than choosing one from a read. `DELETE
+/// /resources/{id}` is a 404 no-op for a draft-only resource and the draft
+/// delete only ever removes an overlay, so issuing both cannot remove anything
+/// the right single choice would have kept — while choosing one from a route
+/// that lags a publish is precisely how a live listing survived its own
+/// cleanup on 2026-08-29. The order is fixed — the resource before its overlay
+/// — and the stated state is reported, not acted on. Each delete's own verdict
+/// is printed and never trusted: a resource-route delete of a draft-only
+/// listing reports a clean 404 having removed nothing, so the proof is the
+/// read on both routes afterwards.
+async fn sweep(adapter: &Adapter, id: DraftId, state: ListingState) -> Result<(), Failure> {
+    for attempt in [ListingState::Published, ListingState::Draft] {
+        if let Err(error) = adapter.delete(id, attempt).await {
+            println!(
+                "  the {} delete answered {}",
+                attempt.name(),
+                describe(&error)
+            );
+        }
+    }
+    println!(
+        "  swept both routes for what this run left as a {}",
+        state.name()
+    );
+    confirm_gone(adapter, id).await
+}
+
 /// Whatever the operation concluded, what this run created is removed and its
 /// removal confirmed, and the two outcomes are reported separately: a failed
 /// assertion must never be a reason to leave a listing on the founder's
-/// account. A resource a mode already deleted is not deleted twice.
+/// account.
 async fn finish(
     adapter: &Adapter,
     id: DraftId,
-    now: Timestamp,
+    state: ListingState,
     outcome: Result<(), Failure>,
 ) -> Result<(), Failure> {
     println!(
         "cleanup: removing {} whatever the operation concluded",
         id.0
     );
-    let cleaned = if is_gone(&observe(adapter, id, now).await) {
-        println!("  already gone; nothing to clean up");
-        Ok(())
-    } else {
-        delete_and_confirm(adapter, id, now).await
-    };
+    let cleaned = sweep(adapter, id, state).await;
     match (outcome, cleaned) {
         (Ok(()), Ok(())) => {
             println!("ok: the operation succeeded and {} is gone", id.0);
@@ -376,7 +418,7 @@ async fn run_draft(adapter: &Adapter, file: FileContent, now: Timestamp) -> Resu
     println!("draft: creating {:?}", listing.title);
     let id = create(adapter, &listing, file).await?;
     let outcome = confirm_present(adapter, id, now).await.map(drop);
-    finish(adapter, id, now, outcome).await
+    finish(adapter, id, ListingState::Draft, outcome).await
 }
 
 /// The edit itself, run under [`finish`]: nothing in here may return in a way
@@ -406,30 +448,29 @@ async fn run_edit(adapter: &Adapter, file: FileContent, now: Timestamp) -> Resul
     println!("edit: creating {:?}", listing.title);
     let id = create(adapter, &listing, file).await?;
     let outcome = edit_and_verify(adapter, id, &listing, now).await;
-    finish(adapter, id, now, outcome).await
+    finish(adapter, id, ListingState::Draft, outcome).await
 }
 
-/// The priced half, run under [`finish`] for the same reason the edit is.
-async fn paid_and_verify(
+/// The publish, and the state change that must outlive it.
+///
+/// The state is stated before the request leaves rather than after it answers:
+/// a publish whose response is lost or ambiguous may still have gone live, and
+/// the cleanup that follows has to be told to expect a live listing in that
+/// case. Getting this backwards is how a live paid listing survived its own
+/// cleanup on 2026-08-29.
+async fn publish_and_verify(
     adapter: &Adapter,
     id: DraftId,
     listing: &TesListing,
-    publish: bool,
     now: Timestamp,
+    state: &mut ListingState,
 ) -> Result<(), Failure> {
-    confirm_present(adapter, id, now).await?;
-    if !publish {
-        println!("  left as a priced draft; pass --yes-publish-live to publish it");
-        return Ok(());
-    }
+    *state = ListingState::Published;
     adapter
         .publish(id, listing)
         .await
         .map_err(|error| failed("the publish failed", &error))?;
-    println!(
-        "  PUBLISHED {} live; the cleanup below removes it again",
-        id.0
-    );
+    println!("  PUBLISHED {} live", id.0);
     confirm_live(adapter, id, now).await
 }
 
@@ -447,8 +488,18 @@ async fn run_paid(
         price.minor_units()
     );
     let id = create(adapter, &listing, file).await?;
-    let outcome = paid_and_verify(adapter, id, &listing, publish, now).await;
-    finish(adapter, id, now, outcome).await
+    // Every step after the id exists runs under the cleanup guard, and the
+    // state it will clean up is tracked from here.
+    let mut state = ListingState::Draft;
+    let outcome = match confirm_present(adapter, id, now).await {
+        Err(error) => Err(error),
+        Ok(_) if !publish => {
+            println!("  left as a priced draft; pass --yes-publish-live to publish it");
+            Ok(())
+        }
+        Ok(_) => publish_and_verify(adapter, id, &listing, now, &mut state).await,
+    };
+    finish(adapter, id, state, outcome).await
 }
 
 /// Publishes a free listing for the sole purpose of deleting it through the
@@ -459,23 +510,18 @@ async fn publish_then_delete(
     id: DraftId,
     listing: &TesListing,
     now: Timestamp,
+    state: &mut ListingState,
 ) -> Result<(), Failure> {
     confirm_present(adapter, id, now).await?;
-    adapter
-        .publish(id, listing)
-        .await
-        .map_err(|error| failed("the publish failed", &error))?;
+    publish_and_verify(adapter, id, listing, now, state).await?;
+    // The state is stated, never probed: `/resources/{id}` lags a publish, so
+    // a probe here reads a live listing as a draft and deletes its overlay
+    // instead — which is what left a live paid listing standing on 2026-08-29.
     println!(
-        "  PUBLISHED {} live; deleting it as a published resource",
+        "  deleting {} through DELETE /api/v2/resources/{{id}}",
         id.0
     );
-    confirm_live(adapter, id, now).await?;
-    adapter
-        .delete_published(id)
-        .await
-        .map_err(|error| failed("the published delete failed", &error))?;
-    println!("  deleted {} through DELETE /api/v2/resources/{{id}}", id.0);
-    confirm_gone(adapter, id, now).await
+    delete_and_confirm(adapter, id, ListingState::Published).await
 }
 
 async fn run_delete_published(
@@ -494,8 +540,9 @@ async fn run_delete_published(
     let listing = listing("delete-published", now, FREE);
     println!("delete-published: creating {:?}", listing.title);
     let id = create(adapter, &listing, file).await?;
-    let outcome = publish_then_delete(adapter, id, &listing, now).await;
-    finish(adapter, id, now, outcome).await
+    let mut state = ListingState::Draft;
+    let outcome = publish_then_delete(adapter, id, &listing, now, &mut state).await;
+    finish(adapter, id, state, outcome).await
 }
 
 fn flag(arguments: &[String], name: &str) -> bool {
