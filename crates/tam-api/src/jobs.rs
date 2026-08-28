@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_storage::{
-    payload_digest, EventRow, ItemCounts, ItemRow, JobReadRepo, JobRepo, LedgerCursor, NewJob,
+    intent_digest, EventRow, ItemCounts, ItemRow, JobReadRepo, JobRepo, LedgerCursor, NewJob,
     NewJobItem, StorageError,
 };
 use tam_types::{FailureCode, InventoryId, JobId, MappingId, OrgId, Timestamp, Uuid};
@@ -349,6 +349,12 @@ pub(crate) async fn create_job(
     }
 
     let now = (state.wall)();
+    let job = JobId(fresh_uuid());
+    // The sync endpoint enqueues creates only; a seller-facing publish or
+    // migrate lands with Phase 4's orchestration, which is where seller
+    // vocabulary lowers into an operation. A create's intent digest is the
+    // payload digest by delegation, so these keys are the ones this endpoint
+    // has always minted.
     let items: Vec<NewJobItem> = seeds
         .iter()
         .map(|seed| NewJobItem {
@@ -359,16 +365,13 @@ pub(crate) async fn create_job(
                 body.inventory,
                 seed.product,
                 INTENT_VERSION,
-                payload_digest(&seed.payload_hashes),
+                intent_digest(&ItemOperation::Create, job, &seed.payload_hashes),
             ),
-            // The sync endpoint enqueues creates only; a seller-facing
-            // publish or migrate lands with Phase 4's orchestration, which is
-            // where seller vocabulary lowers into an operation.
             operation: ItemOperation::Create,
         })
         .collect();
     let new = NewJob {
-        job: JobId(fresh_uuid()),
+        job,
         inventory: body.inventory,
         at: now,
     };

@@ -4,7 +4,8 @@
 //! projects. Everything here is a read; the write path stays in `jobs.rs`.
 
 use sqlx::PgPool;
-use tam_domain::{ItemOutcome, JobItemId};
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
+use tam_marketplace::RemoteListingId;
 use tam_types::{FailureCode, InventoryId, JobId, MappingId, OrgId, Timestamp, Uuid};
 
 use crate::codec::{
@@ -485,4 +486,153 @@ pub fn payload_digest(hashes: &[tam_types::ContentHash]) -> tam_types::ContentHa
         concatenated.extend_from_slice(&hash.0);
     }
     tam_pipeline::hash::content_hash(&concatenated)
+}
+
+/// Domain separator for a non-create intent, so no encoding here can ever be
+/// read as a concatenation of payload hashes.
+const NON_CREATE_INTENT_DOMAIN: &[u8] = b"tam.item.intent.v1\x00";
+
+/// The digest that identifies one item's intent.
+///
+/// A create is content-addressed: the same files in the same order name the
+/// same intent, which is what makes re-uploading unchanged content a no-op.
+/// Nothing else is. A revise carries no payload change at all -- a price fix
+/// and a title fix hash identically -- and a removal followed by a re-create
+/// reproduces the first create's digest, so under a content-addressed key the
+/// second of any such pair is refused by `job_item_idempotent` forever, since
+/// `job_item` rows are never deleted and the uniqueness is org-scoped.
+/// Those operations are therefore identified by the job that asked for them,
+/// which keeps duplicate protection within a job and drops it across jobs,
+/// where it was never wanted.
+///
+/// `Create` delegates to [`payload_digest`] rather than re-deriving it: two
+/// implementations of one digest would drift silently and re-key every
+/// in-flight create.
+#[must_use]
+pub fn intent_digest(
+    operation: &ItemOperation,
+    job: JobId,
+    hashes: &[tam_types::ContentHash],
+) -> tam_types::ContentHash {
+    let (tag, subject) = match operation {
+        ItemOperation::Create => return payload_digest(hashes),
+        ItemOperation::Revise { subject, .. } => (&b"revise"[..], subject),
+        ItemOperation::Remove { subject, .. } => (&b"remove"[..], subject),
+    };
+    let mut encoded = Vec::with_capacity(64);
+    encoded.extend_from_slice(NON_CREATE_INTENT_DOMAIN);
+    encoded.extend_from_slice(tag);
+    encoded.push(0);
+    encoded.extend_from_slice(&job.0 .0);
+    match subject {
+        RemoteListingId::Tes { url } => {
+            encoded.extend_from_slice(b"tes\x00");
+            encoded.extend_from_slice(url.as_bytes());
+        }
+        RemoteListingId::Tpt { product_id } => {
+            encoded.extend_from_slice(b"tpt\x00");
+            encoded.extend_from_slice(&product_id.to_be_bytes());
+        }
+        RemoteListingId::Etsy { listing_id } => {
+            encoded.extend_from_slice(b"etsy\x00");
+            encoded.extend_from_slice(&listing_id.to_be_bytes());
+        }
+    }
+    tam_pipeline::hash::content_hash(&encoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{intent_digest, payload_digest};
+    use tam_domain::ItemOperation;
+    use tam_marketplace::idempotency::derive_idempotency_key;
+    use tam_marketplace::{IdempotencyKey, LifecycleTransition, ListingState, RemoteListingId};
+    use tam_types::{ContentHash, InventoryId, JobId, OrgId, ProductId, Uuid};
+
+    const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
+    const PRODUCT: ProductId = ProductId(Uuid([0x01; 16]));
+    const JOB: JobId = JobId(Uuid([0x0B; 16]));
+    const OTHER_JOB: JobId = JobId(Uuid([0x0C; 16]));
+    const HASHES: [ContentHash; 2] = [ContentHash([0x51; 32]), ContentHash([0x52; 32])];
+
+    fn key(operation: &ItemOperation, job: JobId) -> IdempotencyKey {
+        derive_idempotency_key(
+            ORG,
+            InventoryId::TesGb,
+            PRODUCT,
+            1,
+            intent_digest(operation, job, &HASHES),
+        )
+    }
+
+    fn listing() -> RemoteListingId {
+        RemoteListingId::Tes {
+            url: "https://www.tes.com/teaching-resource/fractions-9001".to_owned(),
+        }
+    }
+
+    /// The golden vector. The four tests beside `derive_idempotency_key` pin
+    /// determinism and inequality and no bytes at all, so every one of them
+    /// would pass through a change to the canonical encoding that re-keys
+    /// every create in flight. This one would not.
+    #[test]
+    fn a_create_key_is_the_bytes_it_has_always_been() {
+        assert_eq!(
+            key(&ItemOperation::Create, JOB).0 .0,
+            [
+                0xD4, 0xE0, 0x6F, 0xE6, 0xAE, 0x48, 0x5F, 0xD0, 0xB7, 0xA2, 0xE2, 0x8C, 0xD2, 0x3C,
+                0xFE, 0x4A,
+            ],
+            "changing a create's key strands every in-flight create against job_item_idempotent"
+        );
+    }
+
+    #[test]
+    fn a_create_delegates_rather_than_re_deriving() {
+        assert_eq!(
+            intent_digest(&ItemOperation::Create, JOB, &HASHES),
+            payload_digest(&HASHES),
+            "two implementations of one digest would drift silently"
+        );
+        assert_eq!(
+            key(&ItemOperation::Create, JOB),
+            key(&ItemOperation::Create, OTHER_JOB),
+            "a create is content-addressed, so the job it was asked for cannot enter its key"
+        );
+    }
+
+    #[test]
+    fn every_non_create_intent_is_distinct_and_carries_its_job() {
+        let revise = ItemOperation::Revise {
+            subject: listing(),
+            transition: LifecycleTransition {
+                from: ListingState::Draft,
+                to: ListingState::Live,
+            },
+        };
+        let remove = ItemOperation::Remove {
+            subject: listing(),
+            state: ListingState::Live,
+        };
+        assert_ne!(
+            key(&revise, JOB),
+            key(&ItemOperation::Create, JOB),
+            "a re-create after a removal must not reproduce the first create's key"
+        );
+        assert_ne!(
+            key(&revise, JOB),
+            key(&remove, JOB),
+            "a revise and a removal of one listing are two different asks"
+        );
+        assert_ne!(
+            key(&revise, JOB),
+            key(&revise, OTHER_JOB),
+            "a second job may legitimately revise the same listing again"
+        );
+        assert_eq!(
+            key(&remove, JOB),
+            key(&remove, JOB),
+            "a requeued removal must recompute the same key or lose its identity"
+        );
+    }
 }
