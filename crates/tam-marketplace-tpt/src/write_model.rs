@@ -168,7 +168,17 @@ pub const THUMBS_VERBATIM: &str = "0";
 pub struct TptListing {
     pub title: String,
     /// HTML. The description editor posts markup, and the captured create
-    /// carried `<p>` tags and an editor comment.
+    /// carried `<p>` tags and an editor comment, so the canonical body is
+    /// posted verbatim.
+    ///
+    /// That holds for a TPT-native body, which is M7's whole scope. It does
+    /// not hold for a body canonicalised from a marketplace whose editor is
+    /// markdown — the sibling Tes adapter's is — where verbatim posting
+    /// renders the source text literally. Translating between body formats
+    /// belongs to the M6-deferred import-run generalisation, alongside the
+    /// grade crosswalk; it is deliberately not auto-detected here, because
+    /// guessing a body's format from its bytes is how a listing acquires
+    /// escaped markup nobody asked for.
     pub description_html: String,
     /// The flat slug namespace: grade, subject, audience, resource type and
     /// file format, undifferentiated, exactly as the read side returns them.
@@ -478,6 +488,26 @@ fn refuse(detail: String) -> AdapterError {
     }
 }
 
+/// The shape TPT issues a taxonomy-tag identifier in: lowercase ASCII letters,
+/// digits and hyphens, and never digits alone — `4th-grade`, `homeschool` and
+/// `pdf` across the read capture, against the numeric ids TPT uses for seller
+/// shelves.
+///
+/// This is a provenance test rather than a vocabulary. Grade paths are
+/// re-labelled to the target inventory without being crosswalked, so a Tes
+/// year group reaches this adapter still carrying its own identifier — `2` —
+/// and a tag posted under it is garbage in a live listing. Translating one
+/// marketplace's grades into another's is the M6-deferred import-run
+/// generalisation, and until it lands an identifier TPT cannot have issued is
+/// refused rather than guessed at.
+fn is_tpt_tag_slug(native: &str) -> bool {
+    !native.is_empty()
+        && native.bytes().any(|byte| !byte.is_ascii_digit())
+        && native
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 /// TPT's own wire shape, rendered here rather than in the engine that seeds
 /// the item. A taxonomy term whose native id parses as a number is a seller
 /// shelf — TPT addresses `categories` by numeric id — and one whose native id
@@ -529,6 +559,15 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
                 term.segments
             ))
         })?;
+        if !is_tpt_tag_slug(native) {
+            return Err(refuse(format!(
+                "the TPT grade term {:?} carries the native identifier {native:?}, which is not \
+                 the slug shape TPT issues its taxonomy tags in; a grade projected from another \
+                 marketplace keeps that marketplace's own identifier, and posting it here would \
+                 write it into the listing verbatim",
+                term.segments
+            )));
+        }
         grades.push(native.to_owned());
     }
     Ok(FieldSet {
@@ -946,6 +985,38 @@ mod tests {
         assert!(
             detail.0.contains("Uncrosswalked"),
             "the refusal names the term that could not be projected, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn a_grade_identifier_tpt_never_issued_is_refused_rather_than_posted_as_a_tag() {
+        let mut listing = projected(PriceIntent::Free);
+        // A Tes year group as `project_listing` hands it over: the grade path
+        // is re-labelled to the target inventory and its native id passes
+        // through uncrosswalked, so this is what actually arrives.
+        listing.grades.push(NativeTerm {
+            native_id: Some("2".to_owned()),
+            segments: vec!["Year 2".to_owned()],
+        });
+        let refused = project_fields(&listing);
+        let Err(AdapterError::Rejected { code, detail }) = refused else {
+            panic!("a foreign grade identifier must not reach the wire, got {refused:?}");
+        };
+        assert_eq!(code, FailureCode::UploadRejected);
+        assert!(
+            detail.0.contains("Year 2") && detail.0.contains("slug shape"),
+            "the refusal names the term and the provenance gap, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn a_tpt_issued_grade_slug_still_rides_the_flat_tag_namespace() {
+        let fields = project_fields(&projected(PriceIntent::Free)).expect("it projects");
+        let listing = listing_from_field_set(&fields).expect("it parses back");
+        assert!(
+            listing.taxonomy_tags.contains(&"4th-grade".to_owned()),
+            "the refusal is about provenance, not about grades, got {:?}",
+            listing.taxonomy_tags
         );
     }
 

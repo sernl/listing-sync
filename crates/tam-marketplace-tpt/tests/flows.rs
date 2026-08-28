@@ -2,6 +2,13 @@
 //! 2026-08-28 HAR captures: every request the flow issues must match the
 //! recording in order, and every test asserts the cassette is fully consumed,
 //! so a hop that silently vanished fails too.
+//!
+//! The catalogue fixture keeps the recorded envelope and nothing the seller
+//! owns. The store identity, product names, slugs, prices, sale counts, asset
+//! names and thumbnail urls are synthetic; the wire shape, the resource ids
+//! the analytics fixture shares, and the flat taxonomy vocabulary are the
+//! capture's own, because those are what the parser is being held to. The
+//! canaries in `write_flows.rs` hold that line by shape.
 
 use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
@@ -105,8 +112,9 @@ fn a_money_string_is_parsed_and_never_compared_as_text() {
         .collect();
     assert_eq!(
         minor,
-        vec![1040, 0, 1400],
-        "$10.40, $0.00 and $14.00 order correctly only once parsed"
+        vec![1200, 0, 850],
+        "$12.00, $0.00 and $8.50 order correctly only once parsed: as text $12.00 sorts below \
+         $8.50"
     );
     assert!(
         entries.iter().all(|entry| entry.price.symbol == "$"),

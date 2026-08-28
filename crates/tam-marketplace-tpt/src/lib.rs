@@ -9,14 +9,17 @@
 //! The write half is a plain form POST behind a cookie session, and the
 //! captures settle that it needs no browser: no captcha token, no bot-management
 //! token and no JavaScript-derived value appears on either the create or the
-//! edit. What it does need is out of band. A create is eleven hops — render
+//! edit. What it does need is out of band. A create is thirteen hops — render
 //! the form for its `SecurityComponent` token triple and its published AWS
-//! key id, reserve an S3 object, sign each S3 call through TPT's own signing
-//! oracle, store the bytes, then walk two async jobs that exchange the staged
-//! object for the two opaque handles the form consumes — before the
-//! forty-three-field multipart navigation that answers 302 with the new
-//! product id in its `Location`. Publishing is the forty-eight-field edit form
-//! with its status selector moved.
+//! key id, reserve an S3 object, then read TPT's clock and sign through its
+//! own oracle once per S3 call, store the bytes, and walk two async jobs that
+//! exchange the staged object for the two opaque handles the form consumes —
+//! before the forty-three-field multipart navigation that answers 302 with the
+//! new product id in its `Location`. The capture read the clock once for the
+//! whole upload; a multi-part upload outlives AWS's skew window, so this reads
+//! it per signed call and the count is two higher than the recording's.
+//! Publishing is the forty-eight-field edit form with its status selector
+//! moved.
 //!
 //! Three things are deliberately absent. A paid create is refused, because no
 //! paid create is captured and the form's own minimum price names no
@@ -53,35 +56,4 @@ pub use upload::{InstantPause, ProcessedHandle};
 pub use write_model::{AuthorshipDeclaration, StatusUser, TaxCode, TptListing};
 
 #[cfg(test)]
-mod guard {
-    /// The seller's payout configuration is reachable from the same session
-    /// this connector holds, and nothing this connector does needs it. The
-    /// scan is over this crate's own sources rather than over a list of
-    /// constants, so a query text, a url fragment or a field name added
-    /// anywhere in the crate trips it.
-    #[test]
-    fn no_endpoint_in_this_crate_addresses_the_sellers_money() {
-        const FORBIDDEN: [&str; 4] = ["payout", "hyperwallet", "bank", "SellerPayoutPreferences"];
-        const SOURCES: [(&str, &str); 9] = [
-            ("classify.rs", include_str!("classify.rs")),
-            ("endpoints.rs", include_str!("endpoints.rs")),
-            ("flows.rs", include_str!("flows.rs")),
-            ("form.rs", include_str!("form.rs")),
-            ("live.rs", include_str!("live.rs")),
-            ("read_model.rs", include_str!("read_model.rs")),
-            ("s3.rs", include_str!("s3.rs")),
-            ("session.rs", include_str!("session.rs")),
-            ("write_model.rs", include_str!("write_model.rs")),
-        ];
-        for (name, source) in SOURCES {
-            let lowered = source.to_lowercase();
-            for needle in FORBIDDEN {
-                assert!(
-                    !lowered.contains(&needle.to_lowercase()),
-                    "{name} names {needle:?}: this connector reads and writes products, and the \
-                     seller's money is not its business"
-                );
-            }
-        }
-    }
-}
+mod guard;

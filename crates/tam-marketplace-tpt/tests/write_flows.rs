@@ -5,7 +5,10 @@
 //! product forms, reduced to what the scrape reads. Every token in them is a
 //! placeholder of the captured shape — no real `_Token` hash, no real CSRF
 //! value, no real AWS access key id, no seller id and no asset handle is
-//! committed anywhere in this repository.
+//! committed anywhere in this repository. The two canaries at the foot of
+//! this file hold that claim by scanning for the shapes rather than for the
+//! values, which is what keeps the claim from being made in the same file
+//! that would break it.
 //!
 //! The remaining hops are built here from the endpoint builders rather than
 //! hand-authored as JSON, which is what makes the placeholder signatures
@@ -15,9 +18,14 @@
 //! Every negative fixture below is hand-authored and says so; no capture
 //! contains a refusal of any kind.
 
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use serde_json::Value;
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{
-    HttpRequest, HttpResponse, Method, RequestAuth, RequestBody, ResponseHeader,
+    HttpRequest, HttpResponse, Method, RequestAuth, RequestBody, ResponseHeader, Transport,
+    TransportError,
 };
 use tam_marketplace::{
     AdapterError, AmbiguityCause, ChallengeKind, FetchReason, FieldSet, FileContent, FileSource,
@@ -86,6 +94,39 @@ fn attested() -> AuthorshipDeclaration {
 fn adapter(cassette: Cassette) -> TptAdapter<CassetteTransport, OneFile, InstantPause> {
     TptAdapter::new(
         CassetteTransport::new(cassette),
+        OneFile(file()),
+        InstantPause,
+    )
+    .attesting(attested())
+}
+
+/// A transport that loses the response to one nominated hop and replays the
+/// cassette for every other. Hand-authored: every recorded hop answered, and
+/// which hop loses its answer is precisely what is under test.
+struct LosesHop {
+    inner: CassetteTransport,
+    lose_at: usize,
+    seen: AtomicUsize,
+}
+
+impl Transport for LosesHop {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        if self.seen.fetch_add(1, Ordering::SeqCst) == self.lose_at {
+            return Err(TransportError::AfterSend {
+                detail: "the response never arrived".to_owned(),
+            });
+        }
+        self.inner.send(request).await
+    }
+}
+
+fn losing(cassette: Cassette, lose_at: usize) -> TptAdapter<LosesHop, OneFile, InstantPause> {
+    TptAdapter::new(
+        LosesHop {
+            inner: CassetteTransport::new(cassette),
+            lose_at,
+            seen: AtomicUsize::new(0),
+        },
         OneFile(file()),
         InstantPause,
     )
@@ -162,23 +203,39 @@ fn edit_render() -> Interaction {
     form_page(include_str!("cassettes/edit_form_page.json"))
 }
 
+/// TPT's clock as each signed call reads it. The reads advance, which is the
+/// whole point of reading per call: one instant minted at the initiate is
+/// already skewed by the time a long upload reaches its last part, and AWS
+/// rejects a SigV2 signature outside its fifteen-minute window.
+fn amz_date(step: u32) -> String {
+    format!(
+        "Fri, 28 Aug 2026 05:57:{:02} GMT",
+        21_u32.saturating_add(step)
+    )
+}
+
 /// One signing round trip: the request the flow will build for this
 /// operation, and the placeholder signature the oracle answers with.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-fn sign(operation: &S3Operation, content_md5: Option<&str>) -> Interaction {
+fn sign(operation: &S3Operation, content_md5: Option<&str>, date: &str) -> Interaction {
     let ticket = ticket();
-    let signable = s3::string_to_sign(&ticket, operation, content_md5, "image/png", AMZ_DATE);
+    let signable = s3::string_to_sign(&ticket, operation, content_md5, "image/png", date);
     Interaction {
-        request: endpoints::sign_auth_request(&ticket, &signable, AMZ_DATE)
+        request: endpoints::sign_auth_request(&ticket, &signable, date)
             .expect("this operation is in scope for its own ticket"),
         response: text(200, SIGNATURE),
     }
 }
 
-fn s3_call(operation: &S3Operation, content_md5: Option<&str>, body: RequestBody) -> HttpRequest {
+fn s3_call(
+    operation: &S3Operation,
+    content_md5: Option<&str>,
+    body: RequestBody,
+    date: &str,
+) -> HttpRequest {
     let ticket = ticket();
     let key_id = s3::AwsKeyId::new(AWS_KEY_ID.to_owned());
     let signature = S3Signature::new(SIGNATURE.to_owned());
@@ -188,12 +245,35 @@ fn s3_call(operation: &S3Operation, content_md5: Option<&str>, body: RequestBody
             operation,
             key_id: &key_id,
             signature: &signature,
-            amz_date: AMZ_DATE,
+            amz_date: date,
             content_type: "image/png",
             content_md5,
         },
         body,
     )
+}
+
+/// The three hops one signed S3 call issues: the clock read, the signature
+/// over that instant, and the call carrying the same instant.
+fn signed_call(
+    step: u32,
+    operation: &S3Operation,
+    content_md5: Option<&str>,
+    body: RequestBody,
+    response: HttpResponse,
+) -> [Interaction; 3] {
+    let date = amz_date(step);
+    [
+        Interaction {
+            request: endpoints::time_request(NOW.0.saturating_add(i64::from(step))),
+            response: text(200, &date),
+        },
+        sign(operation, content_md5, &date),
+        Interaction {
+            request: s3_call(operation, content_md5, body, &date),
+            response,
+        },
+    ]
 }
 
 /// The whole out-of-band upload, from the key reservation to the two
@@ -204,39 +284,33 @@ fn s3_call(operation: &S3Operation, content_md5: Option<&str>, body: RequestBody
 )]
 fn staging_chain(part_size: usize) -> Vec<Interaction> {
     let payload = file().bytes;
-    let mut chain = vec![
-        Interaction {
-            request: endpoints::upload_file_request(&UploadReservation {
-                slot: UploadSlot::Product,
-                file_name: "fractions.png",
-                size: payload.len(),
-                last_modified_ms: NOW.0,
-                item_id: None,
-            }),
-            response: text(
-                200,
-                &format!(
-                    r#"{{"key":"{UPLOAD_HANDLE}","bucket":"{BUCKET}","path":"{OBJECT_PATH}"}}"#
-                ),
+    let mut chain = vec![Interaction {
+        request: endpoints::upload_file_request(&UploadReservation {
+            slot: UploadSlot::Product,
+            file_name: "fractions.png",
+            size: payload.len(),
+            last_modified_ms: NOW.0,
+            item_id: None,
+        }),
+        response: text(
+            200,
+            &format!(r#"{{"key":"{UPLOAD_HANDLE}","bucket":"{BUCKET}","path":"{OBJECT_PATH}"}}"#),
+        ),
+    }];
+    chain.extend(signed_call(
+        0,
+        &S3Operation::Initiate,
+        None,
+        RequestBody::Empty,
+        text(
+            200,
+            &format!(
+                "<?xml version=\"1.0\"?><InitiateMultipartUploadResult><Bucket>{BUCKET}\
+                 </Bucket><Key>{OBJECT_PATH}</Key><UploadId>{UPLOAD_ID}</UploadId>\
+                 </InitiateMultipartUploadResult>"
             ),
-        },
-        Interaction {
-            request: endpoints::time_request(NOW.0),
-            response: text(200, AMZ_DATE),
-        },
-        sign(&S3Operation::Initiate, None),
-        Interaction {
-            request: s3_call(&S3Operation::Initiate, None, RequestBody::Empty),
-            response: text(
-                200,
-                &format!(
-                    "<?xml version=\"1.0\"?><InitiateMultipartUploadResult><Bucket>{BUCKET}\
-                     </Bucket><Key>{OBJECT_PATH}</Key><UploadId>{UPLOAD_ID}</UploadId>\
-                     </InitiateMultipartUploadResult>"
-                ),
-            ),
-        },
-    ];
+        ),
+    ));
 
     let plan = s3::plan_parts(payload.len(), part_size).expect("the payload is plannable");
     let mut completed: Vec<(u32, String)> = Vec::new();
@@ -250,79 +324,84 @@ fn staging_chain(part_size: usize) -> Vec<Interaction> {
             upload_id: UPLOAD_ID.to_owned(),
         };
         let etag = format!("\"placeholderetag{:016}\"", part.number);
-        chain.push(sign(&operation, Some(&digest)));
-        chain.push(Interaction {
-            request: s3_call(
-                &operation,
-                Some(&digest),
-                RequestBody::Bytes(bytes.to_vec()),
-            ),
-            response: with_header(200, "", ResponseHeader::ETag, &etag),
-        });
+        chain.extend(signed_call(
+            part.number,
+            &operation,
+            Some(&digest),
+            RequestBody::Bytes(bytes.to_vec()),
+            with_header(200, "", ResponseHeader::ETag, &etag),
+        ));
         completed.push((part.number, etag));
     }
 
     let complete = S3Operation::Complete {
         upload_id: UPLOAD_ID.to_owned(),
     };
-    chain.push(sign(&complete, None));
-    chain.push(Interaction {
-        request: s3_call(
-            &complete,
-            None,
-            RequestBody::Bytes(s3::complete_multipart_body(&completed).into_bytes()),
-        ),
-        response: text(
+    let parts = u32::try_from(plan.len()).unwrap_or(u32::MAX);
+    chain.extend(signed_call(
+        parts.saturating_add(1),
+        &complete,
+        None,
+        RequestBody::Bytes(s3::complete_multipart_body(&completed).into_bytes()),
+        text(
             200,
             "<CompleteMultipartUploadResult><Location>s3</Location><ETag>\"e-1\"</ETag>\
              </CompleteMultipartUploadResult>",
         ),
-    });
+    ));
 
+    chain.extend(queue_chain());
+    chain
+}
+
+/// The two async jobs that exchange a staged object for the two handles the
+/// product form consumes: enqueue, poll to the terminal answer, twice.
+fn queue_chain() -> Vec<Interaction> {
     let staged = UploadHandle::new(UPLOAD_HANDLE.to_owned());
     let processed = ProcessedHandle::new(PROCESSED_HANDLE.to_owned());
-    chain.push(Interaction {
-        request: endpoints::process_file_request(
-            &staged,
-            None,
-            &cache_buster(key(), Hop::ProcessFile.ordinal()),
-        ),
-        response: with_header(
-            200,
-            r#"{"success":true,"error":""}"#,
-            ResponseHeader::QueueTrackingId,
+    vec![
+        Interaction {
+            request: endpoints::process_file_request(
+                &staged,
+                None,
+                &cache_buster(key(), Hop::ProcessFile.ordinal()),
+            ),
+            response: with_header(
+                200,
+                r#"{"success":true,"error":""}"#,
+                ResponseHeader::QueueTrackingId,
+                PROCESS_JOB,
+            ),
+        },
+        poll(
             PROCESS_JOB,
+            1,
+            0,
+            &format!(r#"{{"status":2,"data":{{"error":null,"key":"{PROCESSED_HANDLE}"}}}}"#),
         ),
-    });
-    chain.push(poll(
-        PROCESS_JOB,
-        1,
-        0,
-        &format!(r#"{{"status":2,"data":{{"error":null,"key":"{PROCESSED_HANDLE}"}}}}"#),
-    ));
-    chain.push(Interaction {
-        request: endpoints::generate_thumbs_request(
-            &processed,
-            None,
-            &cache_buster(key(), Hop::GenerateThumbs.ordinal()),
-        ),
-        response: with_header(
-            200,
-            r#"{"success":true}"#,
-            ResponseHeader::QueueTrackingId,
+        Interaction {
+            request: endpoints::generate_thumbs_request(
+                &processed,
+                None,
+                &cache_buster(key(), Hop::GenerateThumbs.ordinal()),
+            ),
+            response: with_header(
+                200,
+                r#"{"success":true}"#,
+                ResponseHeader::QueueTrackingId,
+                THUMBS_JOB,
+            ),
+        },
+        poll(THUMBS_JOB, 2, 0, r#"{"status":0,"data":[]}"#),
+        poll(
             THUMBS_JOB,
+            2,
+            1,
+            &format!(
+                r#"{{"status":2,"data":{{"thumbnails":[{{"original":"https://example.invalid/0.jpg"}}],"collection_key":"{COLLECTION_KEY}"}}}}"#
+            ),
         ),
-    });
-    chain.push(poll(THUMBS_JOB, 2, 0, r#"{"status":0,"data":[]}"#));
-    chain.push(poll(
-        THUMBS_JOB,
-        2,
-        1,
-        &format!(
-            r#"{{"status":2,"data":{{"thumbnails":[{{"original":"https://example.invalid/0.jpg"}}],"collection_key":"{COLLECTION_KEY}"}}}}"#
-        ),
-    ));
-    chain
+    ]
 }
 
 fn poll(job: &str, ordinal: u32, attempt: u32, body: &str) -> Interaction {
@@ -383,9 +462,9 @@ fn the_create_chain_walks_every_hop_and_lands_on_the_redirect_location() {
     let evidence = futures::executor::block_on(adapter.submit(org(), key(), fields(), NOW))
         .expect("the recorded create chain replays");
     assert_eq!(
-        hops, 15,
-        "the render, the reservation, the clock, three signed S3 calls each with its own \
-         signature, the two enqueues, three queue polls and the form post"
+        hops, 17,
+        "the render, the reservation, three signed S3 calls each reading the clock and taking \
+         its own signature, the two enqueues, three queue polls and the form post"
     );
     assert_eq!(
         evidence.landed,
@@ -459,6 +538,202 @@ fn a_payload_over_the_part_size_signs_and_puts_each_part_under_its_own_digest() 
         adapter.transport().remaining(),
         0,
         "every part's signature, PUT and ETag were consumed"
+    );
+}
+
+/// The create chain truncated at the first hop whose url carries `fragment`,
+/// with that hop's recorded answer replaced. Hand-authored throughout: every
+/// recorded hop answered 200, so no refusal shape comes off a capture.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+fn create_chain_answering(fragment: &str, response: HttpResponse) -> Cassette {
+    let mut interactions = vec![create_render()];
+    interactions.extend(staging_chain(usize::MAX));
+    let at = interactions
+        .iter()
+        .position(|hop| hop.request.url.contains(fragment))
+        .expect("the create chain issues that hop");
+    interactions.truncate(at.saturating_add(1));
+    if let Some(last) = interactions.last_mut() {
+        last.response = response;
+    }
+    Cassette { interactions }
+}
+
+#[test]
+fn every_signed_s3_call_reads_the_clock_so_a_long_upload_never_signs_a_stale_date() {
+    // No capture covers a multi-part upload: the one recorded file went as a
+    // single 224 KB part in seconds, which made one clock read for the whole
+    // upload and one per call indistinguishable. A product the form accepts
+    // up to four gibibytes of outlives SigV2's fifteen-minute skew window,
+    // and every part after that window is rejected after its bytes have gone.
+    let cassette = create_cassette(128, "/Product/test-17511712");
+    let clocks: Vec<&str> = cassette
+        .interactions
+        .iter()
+        .map(|hop| hop.request.url.as_str())
+        .filter(|url| url.contains("/uploads/time"))
+        .collect();
+    assert_eq!(
+        clocks.len(),
+        5,
+        "one clock read per signed call: the initiate, three parts and the completion, got \
+         {clocks:?}"
+    );
+    assert_eq!(
+        clocks.iter().collect::<BTreeSet<_>>().len(),
+        clocks.len(),
+        "two reads sharing a url share a cache entry, and a cached instant is the stale one, \
+         got {clocks:?}"
+    );
+    let stamps: Vec<&str> = cassette
+        .interactions
+        .iter()
+        .filter(|hop| hop.request.url.contains("/uploads/sign_auth"))
+        .filter_map(|hop| hop.request.url.split("&datetime=").nth(1))
+        .collect();
+    assert_eq!(
+        stamps.iter().collect::<BTreeSet<_>>().len(),
+        5,
+        "each signature is minted under the instant its own clock read returned, got {stamps:?}"
+    );
+    let adapter = adapter(cassette).with_part_size(128);
+    futures::executor::block_on(adapter.submit(org(), key(), fields(), NOW))
+        .expect("the three-part chain replays");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "and the flow issued every clock read the chain records"
+    );
+}
+
+#[test]
+fn a_lost_response_before_the_final_post_is_safe_to_retry_rather_than_a_halt() {
+    // The form render is a GET, the reservation and the S3 calls write only
+    // to the seller's own staging area, and neither creates a product. A
+    // response lost on one of them leaves at worst an orphaned staged object;
+    // calling it an ambiguity would halt an entire inventory over a timeout
+    // on a hop that created nothing.
+    for lose_at in [0_usize, 1, 4] {
+        let refused = futures::executor::block_on(
+            losing(
+                create_cassette(usize::MAX, "/Product/test-17511712"),
+                lose_at,
+            )
+            .submit(org(), key(), fields(), NOW),
+        );
+        assert!(
+            matches!(refused, Err(AdapterError::NotSent(_))),
+            "hop {lose_at} created nothing, so its lost answer is safe to retry, got {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn a_lost_response_on_the_final_post_stays_an_ambiguity() {
+    let cassette = create_cassette(usize::MAX, "/Product/test-17511712");
+    let last = cassette
+        .interactions
+        .len()
+        .checked_sub(1)
+        .expect("the chain ends with the form post");
+    let refused =
+        futures::executor::block_on(losing(cassette, last).submit(org(), key(), fields(), NOW));
+    assert_eq!(
+        refused,
+        Err(AdapterError::Ambiguous(AmbiguityCause::ResponseEventLost)),
+        "the final POST is the one hop that may have created the record it could not report"
+    );
+}
+
+#[test]
+fn a_session_that_lapses_on_the_clock_read_parks_rather_than_refusing_the_item() {
+    // Hand-authored. The token set ages across the upload — nearly three
+    // minutes in the capture — so a session expiring mid-upload is the
+    // ordinary shape, and a terminal rejection there discards an item that
+    // only needs re-auth.
+    let refused = futures::executor::block_on(
+        adapter(create_chain_answering("/uploads/time", text(401, ""))).submit(
+            org(),
+            key(),
+            fields(),
+            NOW,
+        ),
+    );
+    assert_eq!(
+        refused,
+        Err(AdapterError::SessionExpired),
+        "every sibling hop parks a 401 for re-auth, and the plain-text hops are no different"
+    );
+}
+
+#[test]
+fn a_rate_limited_signing_oracle_backs_off_rather_than_refusing_the_item() {
+    // Hand-authored. The oracle is asked once per signed S3 call, so a
+    // multi-part upload is exactly what would draw a 429 out of it.
+    let refused = futures::executor::block_on(
+        adapter(create_chain_answering("/uploads/sign_auth", text(429, ""))).submit(
+            org(),
+            key(),
+            fields(),
+            NOW,
+        ),
+    );
+    assert_eq!(
+        refused,
+        Err(AdapterError::RateLimited { retry_after: None }),
+        "a rate limit is a rate limit whichever hop reports it"
+    );
+}
+
+#[test]
+fn a_plain_text_hop_answering_markup_two_hundred_is_read_as_the_bounce_it_is() {
+    // Hand-authored. `/uploads/time` answers an RFC 1123 date and nothing
+    // else, so a page in its place was answered by the front door.
+    let refused = futures::executor::block_on(
+        adapter(create_chain_answering(
+            "/uploads/time",
+            text(200, "<html><body><h1>Sign In</h1></body></html>"),
+        ))
+        .submit(org(), key(), fields(), NOW),
+    );
+    assert_eq!(
+        refused,
+        Err(AdapterError::SessionExpired),
+        "a sign-in page answered 200 is not a clock reading, whatever the status says"
+    );
+}
+
+#[test]
+fn a_render_the_scrape_cannot_read_is_reported_as_drift_by_the_preflight() {
+    // Hand-authored. Only the drift report reaches the machine's drift path:
+    // the driver treats every other preflight error as a transient and
+    // abandons the run, so a render whose token input moved would be retried
+    // on the next schedule instead of halting the inventory for a look.
+    let mut render = create_render();
+    let body = render
+        .response
+        .text()
+        .replace("name=\"data[_Token][key]\"", "name=\"other\"");
+    render.response = HttpResponse::plain(200, body.into_bytes());
+    let refused = futures::executor::block_on(
+        adapter(Cassette {
+            interactions: vec![render],
+        })
+        .assert_form_schema(org(), FormId(Uuid([2; 16]))),
+    );
+    let Err(AdapterError::SchemaDrift(drift)) = refused else {
+        panic!("a render the scrape cannot read is drift, not a transient, got {refused:?}");
+    };
+    assert!(
+        drift
+            .removed
+            .iter()
+            .any(|entry| entry.contains("data[_Token][key]")),
+        "the report names the anchor that moved, got {:?}",
+        drift.removed
     );
 }
 
@@ -897,33 +1172,159 @@ fn a_signing_string_naming_another_object_never_becomes_a_request() {
     );
 }
 
+/// The synthetic store the read fixture carries. Declared here so the canary
+/// below can assert the fixture's store identity without ever holding the
+/// live one it replaced.
+const SYNTHETIC_STORE_ID: &str = "90000001";
+const SYNTHETIC_STORE_NAME: &str = "Sample Teaching Studio";
+const SYNTHETIC_STORE_URL: &str = "/store/sample-teaching-studio";
+
+/// Every `AKIA`-prefixed access key id the text carries: `AKIA` and sixteen
+/// uppercase alphanumerics. Scanned as a shape, because a canary that names
+/// the value it forbids commits exactly what it forbids.
+fn access_key_ids(body: &str) -> Vec<&str> {
+    body.match_indices("AKIA")
+        .filter_map(|(at, _)| body.get(at..at.saturating_add(20)))
+        .filter(|token| {
+            token
+                .bytes()
+                .skip(4)
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        })
+        .collect()
+}
+
+/// Every run of hexadecimal characters at least `least` long. The committed
+/// token placeholders are one character repeated; a live CakePHP `_Token`
+/// hash or CSRF value is not, and that difference is visible without this
+/// file holding either.
+fn hex_runs(body: &str, least: usize) -> Vec<String> {
+    let mut runs: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for character in body.chars() {
+        if character.is_ascii_hexdigit() {
+            current.push(character);
+            continue;
+        }
+        if current.chars().count() >= least {
+            runs.push(current.clone());
+        }
+        current.clear();
+    }
+    if current.chars().count() >= least {
+        runs.push(current);
+    }
+    runs
+}
+
+/// Every `Store` object a recorded response body carries, wherever it sits in
+/// the envelope.
+fn store_blocks(value: &Value) -> Vec<&Value> {
+    let mut found: Vec<&Value> = Vec::new();
+    let mut stack: Vec<&Value> = vec![value];
+    while let Some(node) = stack.pop() {
+        match *node {
+            Value::Object(ref map) => {
+                if map.get("__typename").and_then(Value::as_str) == Some("Store") {
+                    found.push(node);
+                }
+                stack.extend(map.values());
+            }
+            Value::Array(ref items) => stack.extend(items.iter()),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+    found
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+fn recorded_bodies(fixture: &str) -> Vec<String> {
+    let cassette: Cassette = serde_json::from_str(fixture).expect("a committed fixture parses");
+    cassette
+        .interactions
+        .into_iter()
+        .map(|hop| hop.response.text().into_owned())
+        .collect()
+}
+
+/// Every fixture this crate commits, read and write halves alike.
+const FIXTURES: [(&str, &str); 4] = [
+    (
+        "create_form_page.json",
+        include_str!("cassettes/create_form_page.json"),
+    ),
+    (
+        "edit_form_page.json",
+        include_str!("cassettes/edit_form_page.json"),
+    ),
+    (
+        "my_product_listings.json",
+        include_str!("cassettes/my_product_listings.json"),
+    ),
+    (
+        "all_time_stats.json",
+        include_str!("cassettes/all_time_stats.json"),
+    ),
+];
+
 #[test]
-fn no_committed_fixture_carries_a_live_token_or_identifier() {
-    const FIXTURES: [(&str, &str); 2] = [
-        (
-            "create_form_page.json",
-            include_str!("cassettes/create_form_page.json"),
-        ),
-        (
-            "edit_form_page.json",
-            include_str!("cassettes/edit_form_page.json"),
-        ),
-    ];
-    // The live values from the 2026-08-28 captures. None of them may appear
-    // in this repository, and the AWS key id in particular is a real IAM key
-    // identifier belonging to TPT.
-    const LIVE: [&str; 4] = [
-        "AKIAJA34TRRDFU7AB2DQ",
-        "21268787",
-        "188ccbafbf906aafd1059e452f9e3e1b7c32255d",
-        "live.digital.upload/de07-21268787",
-    ];
+fn no_committed_fixture_carries_a_live_token_or_key_id() {
     for (name, body) in FIXTURES {
-        for needle in LIVE {
+        for token in access_key_ids(body) {
+            assert_eq!(
+                token, AWS_KEY_ID,
+                "{name} carries an access key id that is not the placeholder; the captured one \
+                 is a real IAM key identifier belonging to TPT"
+            );
+        }
+        for run in hex_runs(body, 32) {
+            let first = run.chars().next();
             assert!(
-                !body.contains(needle),
-                "{name} carries {needle:?}, which is a live upstream value"
+                run.chars().all(|character| Some(character) == first),
+                "{name} carries a {}-character hex run that is not one character repeated, \
+                 which is the shape of a live token rather than of a placeholder (the value is \
+                 deliberately not printed)",
+                run.chars().count()
             );
         }
     }
+}
+
+#[test]
+fn no_committed_fixture_carries_a_live_store_identity() {
+    let mut seen = 0_usize;
+    for (name, fixture) in FIXTURES {
+        for body in recorded_bodies(fixture) {
+            let Ok(parsed) = serde_json::from_str::<Value>(&body) else {
+                continue;
+            };
+            for store in store_blocks(&parsed) {
+                seen = seen.saturating_add(1);
+                let field = |key: &str| store.get(key).and_then(Value::as_str).map(str::to_owned);
+                assert_eq!(
+                    field("id").as_deref(),
+                    Some(SYNTHETIC_STORE_ID),
+                    "{name} names a store this fixture did not synthesise"
+                );
+                assert_eq!(
+                    field("name").as_deref(),
+                    Some(SYNTHETIC_STORE_NAME),
+                    "{name} names a store this fixture did not synthesise"
+                );
+                assert_eq!(
+                    field("url").as_deref(),
+                    Some(SYNTHETIC_STORE_URL),
+                    "{name} names a store this fixture did not synthesise"
+                );
+            }
+        }
+    }
+    assert!(
+        seen > 0,
+        "the catalogue fixture carries a store on every row, and finding none means the walk \
+         stopped looking rather than that the fixtures are clean"
+    );
 }

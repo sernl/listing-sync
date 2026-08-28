@@ -3,7 +3,7 @@
 //!
 //! The read half is gated on the first-party-export capability, because an
 //! enumeration-shaped read is exactly that tier and nothing else justifies
-//! one. The write half is the eleven-hop create chain — form render, staged
+//! one. The write half is the thirteen-hop create chain — form render, staged
 //! S3 upload, two async jobs, then a multipart form navigation — followed by
 //! a publishing edit. Both halves classify every hop on its own answer; no
 //! hop trusts a status another hop produced.
@@ -25,8 +25,9 @@ use tam_types::{
 };
 
 use crate::classify::{
-    classify_form_page, classify_graphql_read, classify_queue_poll, classify_s3, classify_submit,
-    classify_transport, classify_xhr_json, part_etag, queue_job, SubmitLanding,
+    classify_form_page, classify_graphql_read, classify_pre_write_transport, classify_queue_poll,
+    classify_s3, classify_submit, classify_text_hop, classify_transport, classify_xhr_json,
+    part_etag, queue_job, SubmitLanding,
 };
 use crate::endpoints::{
     self, AllTimeMetric, FormTarget, ResolvedStatsQuery, SignedS3Call, UploadReservation,
@@ -134,7 +135,23 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         &self.transport
     }
 
+    /// Every hop before the final POST. A lost response here is reported as
+    /// safe to retry, because none of these hops can have created a product;
+    /// see [`classify_pre_write_transport`].
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, AdapterError> {
+        self.transport
+            .send(request)
+            .await
+            .map_err(classify_pre_write_transport)
+    }
+
+    /// The hops whose lost answer leaves the write state unknown: the final
+    /// product POST, the publishing edit's POST, and the reads a receipt is
+    /// settled from.
+    async fn send_ambiguous_on_loss(
+        &self,
+        request: HttpRequest,
+    ) -> Result<HttpResponse, AdapterError> {
         self.transport
             .send(request)
             .await
@@ -142,7 +159,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     }
 
     async fn read(&self, request: HttpRequest) -> Result<Value, AdapterError> {
-        let response = self.send(request).await?;
+        let response = self.send_ambiguous_on_loss(request).await?;
         classify_graphql_read(&response)
     }
 
@@ -308,24 +325,22 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         ))
     }
 
-    /// TPT's clock, in RFC 1123. Used verbatim as `x-amz-date` and inside
-    /// every `StringToSign`: AWS rejects a skewed signature, and the server
-    /// that mints the signature is the one whose clock decides.
-    async fn server_time(&self, now: Timestamp) -> Result<String, AdapterError> {
-        let response = self.send(endpoints::time_request(now.0)).await?;
-        if response.status != 200 {
-            return Err(refuse_upload(format!(
-                "the server clock read answered {}",
-                response.status
-            )));
-        }
-        let text = response.text().trim().to_owned();
-        if text.is_empty() {
-            return Err(refuse_upload(
-                "the server clock read answered an empty body".to_owned(),
-            ));
-        }
-        Ok(text)
+    /// TPT's clock, in RFC 1123. Used verbatim as `x-amz-date` and inside the
+    /// `StringToSign` of the one call it was read for: AWS rejects a skewed
+    /// signature, and the server that mints the signature is the one whose
+    /// clock decides.
+    ///
+    /// `requestTime` is the caller's own clock reading, which advances
+    /// between calls in the capture and is what keeps two reads from being
+    /// one cacheable URL. This connector holds a single clock reading per
+    /// attempt, so the step ordinal supplies the same distinctness.
+    async fn server_time(&self, now: Timestamp, step: u32) -> Result<String, AdapterError> {
+        let response = self
+            .send(endpoints::time_request(
+                now.0.saturating_add(i64::from(step)),
+            ))
+            .await?;
+        classify_text_hop(&response, "the server clock read")
     }
 
     /// One signature from TPT's oracle. The scope guard runs inside the
@@ -342,27 +357,44 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         let built = endpoints::sign_auth_request(request.ticket, &signable, request.amz_date)
             .map_err(|error| refuse_upload(error.to_string()))?;
         let response = self.send(built).await?;
-        if response.status != 200 {
-            return Err(refuse_upload(format!(
-                "the signing oracle answered {}",
-                response.status
-            )));
-        }
-        let signature = response.text().trim().to_owned();
-        if signature.is_empty() {
-            return Err(refuse_upload(
-                "the signing oracle answered an empty signature".to_owned(),
-            ));
-        }
-        Ok(S3Signature::new(signature))
+        classify_text_hop(&response, "the signing oracle").map(S3Signature::new)
     }
 
+    /// One signed S3 call: TPT's clock, a signature over that instant, then
+    /// the call carrying the same instant.
+    ///
+    /// The clock is read per call rather than once per upload. AWS rejects a
+    /// SigV2 signature whose `x-amz-date` sits outside a fifteen-minute skew
+    /// window, and a multi-part upload of a product the form accepts up to
+    /// four gibibytes of outlives that window; the captured upload was a
+    /// single 224 KB part, which made one instant and one per part
+    /// indistinguishable.
     async fn signed_s3(
         &self,
-        call: &SignedS3Call<'_>,
+        upload: &S3Upload<'_>,
+        step: &S3Step<'_>,
         body: RequestBody,
     ) -> Result<HttpResponse, AdapterError> {
-        self.send(endpoints::s3_request(call, body)).await
+        let amz_date = self.server_time(upload.now, step.ordinal).await?;
+        let signature = self
+            .signature(&SignRequest {
+                ticket: upload.ticket,
+                operation: step.operation.clone(),
+                content_md5: step.content_md5.map(str::to_owned),
+                content_type: upload.content_type,
+                amz_date: &amz_date,
+            })
+            .await?;
+        let call = SignedS3Call {
+            ticket: upload.ticket,
+            operation: step.operation,
+            key_id: upload.key_id,
+            signature: &signature,
+            amz_date: &amz_date,
+            content_type: upload.content_type,
+            content_md5: step.content_md5,
+        };
+        self.send(endpoints::s3_request(&call, body)).await
     }
 
     /// Initiate, then one signed PUT per part, then complete. Always all
@@ -381,18 +413,14 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         payload: &[u8],
     ) -> Result<(), AdapterError> {
         let initiate = S3Operation::Initiate;
-        let signature = self
-            .signature(&SignRequest {
-                ticket: upload.ticket,
-                operation: initiate.clone(),
-                content_md5: None,
-                content_type: upload.content_type,
-                amz_date: upload.amz_date,
-            })
-            .await?;
         let started = self
             .signed_s3(
-                &upload.call(&initiate, &signature, None),
+                upload,
+                &S3Step {
+                    operation: &initiate,
+                    content_md5: None,
+                    ordinal: INITIATE_STEP,
+                },
                 RequestBody::Empty,
             )
             .await?;
@@ -401,6 +429,8 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
 
         let plan = s3::plan_parts(payload.len(), upload.part_size)
             .map_err(|error| refuse_upload(error.to_string()))?;
+        let parts = u32::try_from(plan.len())
+            .map_err(|_| refuse_upload("the part plan outran a part number".to_owned()))?;
         let mut completed: Vec<(u32, String)> = Vec::with_capacity(plan.len());
         for part in plan {
             let bytes = part.slice(payload).ok_or_else(|| {
@@ -411,18 +441,14 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
                 part_number: part.number,
                 upload_id: upload_id.clone(),
             };
-            let signature = self
-                .signature(&SignRequest {
-                    ticket: upload.ticket,
-                    operation: operation.clone(),
-                    content_md5: Some(digest.clone()),
-                    content_type: upload.content_type,
-                    amz_date: upload.amz_date,
-                })
-                .await?;
             let response = self
                 .signed_s3(
-                    &upload.call(&operation, &signature, Some(&digest)),
+                    upload,
+                    &S3Step {
+                        operation: &operation,
+                        content_md5: Some(&digest),
+                        ordinal: part.number,
+                    },
                     RequestBody::Bytes(bytes.to_vec()),
                 )
                 .await?;
@@ -432,18 +458,14 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
 
         let operation = S3Operation::Complete { upload_id };
         let body = s3::complete_multipart_body(&completed);
-        let signature = self
-            .signature(&SignRequest {
-                ticket: upload.ticket,
-                operation: operation.clone(),
-                content_md5: None,
-                content_type: upload.content_type,
-                amz_date: upload.amz_date,
-            })
-            .await?;
         let finished = self
             .signed_s3(
-                &upload.call(&operation, &signature, None),
+                upload,
+                &S3Step {
+                    operation: &operation,
+                    content_md5: None,
+                    ordinal: complete_step(parts),
+                },
                 RequestBody::Bytes(body.into_bytes()),
             )
             .await?;
@@ -491,14 +513,13 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     ) -> Result<(ProcessedHandle, ThumbnailCollection), AdapterError> {
         let file = staging.file;
         let (ticket, staged) = self.reserve_upload(file, staging.now).await?;
-        let amz_date = self.server_time(staging.now).await?;
         self.s3_multipart(
             &S3Upload {
                 ticket: &ticket,
                 key_id: staging.page.aws_key_id(),
-                amz_date: &amz_date,
                 content_type: &file.content_type,
                 part_size: self.part_size,
+                now: staging.now,
             },
             &file.bytes,
         )
@@ -541,6 +562,28 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             }
         };
         Ok((processed, collection))
+    }
+
+    /// Lifts the form-page scrape's own drift verdict into the seam's drift
+    /// report. `classify_form_page` states the failure as
+    /// `FormSchemaDrift`; the report is what carries it to the drift path,
+    /// and the anchor the scrape named travels as the removed member because
+    /// a render that carries no anchor declares no field either.
+    fn preflight_drift(error: AdapterError, form: FormId, written: &[String]) -> AdapterError {
+        if let AdapterError::Rejected {
+            code: FailureCode::FormSchemaDrift,
+            ref detail,
+        } = error
+        {
+            return AdapterError::SchemaDrift(Box::new(SchemaDrift {
+                form,
+                expected: fingerprint(written),
+                observed: fingerprint(&[]),
+                added: Vec::new(),
+                removed: vec![detail.0.clone()],
+            }));
+        }
+        error
     }
 
     fn attestation(&self) -> Result<&AuthorshipDeclaration, AdapterError> {
@@ -600,7 +643,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             authorship,
         });
         let response = self
-            .send(endpoints::submit_form_request(target, body))
+            .send_ambiguous_on_loss(endpoints::submit_form_request(target, body))
             .await?;
         let landing = classify_submit(&response)?;
         if landing.product == product {
@@ -623,32 +666,31 @@ struct SignRequest<'a> {
     amz_date: &'a str,
 }
 
-/// The invariant part of one multipart upload.
+/// The invariant part of one multipart upload. The date is not among them:
+/// each signed call reads the clock for itself, so the upload carries only
+/// the attempt's own instant to derive each read's `requestTime` from.
 struct S3Upload<'a> {
     ticket: &'a UploadTicket,
     key_id: &'a AwsKeyId,
-    amz_date: &'a str,
     content_type: &'a str,
     part_size: usize,
+    now: Timestamp,
 }
 
-impl<'a> S3Upload<'a> {
-    fn call(
-        &self,
-        operation: &'a S3Operation,
-        signature: &'a S3Signature,
-        content_md5: Option<&'a str>,
-    ) -> SignedS3Call<'a> {
-        SignedS3Call {
-            ticket: self.ticket,
-            operation,
-            key_id: self.key_id,
-            signature,
-            amz_date: self.amz_date,
-            content_type: self.content_type,
-            content_md5,
-        }
-    }
+/// One signed S3 call within an upload, and the ordinal that keeps its clock
+/// read distinct from its siblings'.
+struct S3Step<'a> {
+    operation: &'a S3Operation,
+    content_md5: Option<&'a str>,
+    ordinal: u32,
+}
+
+/// The initiate leads, part `n` takes ordinal `n` (S3 numbers parts from one)
+/// and the completion follows the last part.
+const INITIATE_STEP: u32 = 0;
+
+const fn complete_step(parts: u32) -> u32 {
+    parts.saturating_add(1)
 }
 
 /// What one file's staging needs: the bytes, the render that published the
@@ -702,9 +744,17 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
         _org: OrgId,
         form: FormId,
     ) -> Result<FormSchemaFingerprint, AdapterError> {
-        let page = self.form_page(FormTarget::CreateDigital).await?;
-        let declared = page.tokens().unlocked_field_names();
         let written = write_model::written_field_paths();
+        // A scrape failure during the preflight is drift, and only the drift
+        // report reaches the machine's drift path: the driver routes every
+        // other preflight error as a transient and abandons the run, so a
+        // render that stopped carrying an anchor would be retried hourly
+        // instead of halting the inventory and capturing diagnostics.
+        let page = self
+            .form_page(FormTarget::CreateDigital)
+            .await
+            .map_err(|error| Self::preflight_drift(error, form, &written))?;
+        let declared = page.tokens().unlocked_field_names();
         let missing: Vec<String> = written
             .iter()
             .filter(|path| !declared.contains(path))
@@ -723,7 +773,7 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
         }
     }
 
-    /// The eleven-hop create, in the order the capture records it: render the
+    /// The create chain, in the order the capture records it: render the
     /// form, stage the file, then post the product.
     ///
     /// The token set ages across the upload, exactly as it did in the capture
@@ -761,7 +811,7 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
             authorship,
         });
         let response = self
-            .send(endpoints::submit_form_request(target, body))
+            .send_ambiguous_on_loss(endpoints::submit_form_request(target, body))
             .await?;
         let landing = classify_submit(&response)?;
         Ok(SubmitEvidence {

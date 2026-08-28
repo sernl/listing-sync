@@ -200,6 +200,19 @@ const SCAN_WINDOW: usize = 4096;
 /// The four manual-thumbnail slots the form declares.
 pub const THUMB_SLOTS: u8 = 4;
 
+/// One anchor name per slot, so a drift report names the slot that moved
+/// rather than the fact that a thumbnail did.
+const THUMB_ANCHORS: [&str; THUMB_SLOTS as usize] = [
+    "the thumb1 slot",
+    "the thumb2 slot",
+    "the thumb3 slot",
+    "the thumb4 slot",
+];
+
+/// The fallback anchor name, which a slot number inside `1..=THUMB_SLOTS`
+/// never reaches.
+const THUMB_ANCHOR: &str = "a thumbnail slot";
+
 /// Finds every occurrence of `needle`, refusing at the first sign that the
 /// page carries more than one.
 fn sole_occurrence(
@@ -349,21 +362,77 @@ fn json_unescape(raw: &str) -> String {
     out
 }
 
-/// One thumbnail slot's existing handle, if the render carries one. Absent is
-/// the normal case — a create render has no uploaded assets, and the product
-/// and preview slots carry no `key` member even on an edit — so this reports
-/// absence rather than failing.
-fn thumb_handle(html: &str, slot: u8) -> Option<ThumbHandle> {
-    let anchor = format!("\"name\":\"thumb{slot}\"");
-    let at = html.find(&anchor)?;
-    let raw = delimited(html, at, "\"key\":\"", '"', "a thumbnail handle").ok()?;
-    if raw.is_empty() {
-        return None;
+/// The slot's own JSON object, from its `"name":"thumbN"` member to the brace
+/// that closes it. Depth is counted outside string literals only, so a brace
+/// inside a filename cannot end the object early.
+///
+/// The bound is the whole point. The slots are siblings in one array and an
+/// empty slot carries no `key` member at all, so a search that ran past the
+/// closing brace would answer for slot one with slot four's handle — and the
+/// publishing edit would post one thumbnail's handle into another's slot.
+fn slot_object(html: &str, from: usize) -> Option<&str> {
+    let window_end = from.saturating_add(SCAN_WINDOW).min(html.len());
+    let window = html.get(from..window_end)?;
+    let mut depth: usize = 1;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, character) in window.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if in_string && character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            in_string = !in_string;
+        } else if !in_string && character == '{' {
+            depth = depth.saturating_add(1);
+        } else if !in_string && character == '}' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return window.get(..offset);
+            }
+        }
     }
-    Some(ThumbHandle {
+    None
+}
+
+/// An anchor whose absence is an ordinary shape rather than drift, keeping
+/// the module's refusal on a duplicate.
+fn optional(found: Result<usize, FormScrapeError>) -> Result<Option<usize>, FormScrapeError> {
+    match found {
+        Ok(at) => Ok(Some(at)),
+        Err(FormScrapeError::Missing { .. }) => Ok(None),
+        Err(error @ (FormScrapeError::Duplicated { .. } | FormScrapeError::NoValue { .. })) => {
+            Err(error)
+        }
+    }
+}
+
+/// One thumbnail slot's existing handle, if the render carries one. Absent is
+/// the normal case — a create render has no uploaded assets, and an edit slot
+/// the seller never filled carries no `key` member — so absence reads as
+/// `None`. Ambiguity does not: a slot rendered twice, or one carrying two
+/// keys, is the page changing shape and is refused like every other anchor.
+fn thumb_handle(
+    html: &str,
+    slot: u8,
+    anchor: &'static str,
+) -> Result<Option<ThumbHandle>, FormScrapeError> {
+    let needle = format!("\"name\":\"thumb{slot}\"");
+    let Some(at) = optional(sole_occurrence(html, &needle, anchor))? else {
+        return Ok(None);
+    };
+    let object = slot_object(html, at).ok_or(FormScrapeError::NoValue { anchor })?;
+    let Some(key_at) = optional(sole_occurrence(object, "\"key\":\"", anchor))? else {
+        return Ok(None);
+    };
+    let raw = delimited(object, key_at, "\"key\":\"", '"', anchor)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ThumbHandle {
         slot,
         key: json_unescape(&raw),
-    })
+    }))
 }
 
 /// Scrapes one form render. Everything the write needs and nothing it does
@@ -378,9 +447,16 @@ pub fn scrape_form_page(html: &str) -> Result<TptFormPage, FormScrapeError> {
     };
     let aws_at = sole_occurrence(html, AWS_ANCHOR, AWS_ANCHOR_NAME)?;
     let key_id = delimited(html, aws_at, "\"key\":\"", '"', AWS_ANCHOR_NAME)?;
-    let thumbs = (1..=THUMB_SLOTS)
-        .filter_map(|slot| thumb_handle(html, slot))
-        .collect();
+    let mut thumbs: Vec<ThumbHandle> = Vec::new();
+    for slot in 1..=THUMB_SLOTS {
+        let anchor = THUMB_ANCHORS
+            .get(usize::from(slot).saturating_sub(1))
+            .copied()
+            .unwrap_or(THUMB_ANCHOR);
+        if let Some(handle) = thumb_handle(html, slot, anchor)? {
+            thumbs.push(handle);
+        }
+    }
     Ok(TptFormPage {
         tokens,
         aws_key_id: AwsKeyId::new(key_id),
@@ -510,6 +586,54 @@ mod tests {
             page.thumbs().first().map(ThumbHandle::key),
             Some("aa/bb+cc1="),
             "the bootstrap escapes the slash, and an echoed handle must be the real one"
+        );
+    }
+
+    /// Hand-authored: the captured edit had all four slots filled, which is
+    /// exactly the shape that hid this. A draft this connector created posts
+    /// all four thumbs empty, so a partly-filled edit render is the ordinary
+    /// next state and not an exotic one.
+    #[test]
+    fn an_empty_thumbnail_slot_never_borrows_a_later_slots_handle() {
+        let mut html = create_render();
+        html.push_str(
+            "<script>var boot = {\"upload_digital\":[\
+             {\"name\":\"thumb1\",\"maxSize\":4194304},\
+             {\"name\":\"thumb2\",\"maxSize\":4194304},\
+             {\"name\":\"thumb3\",\"maxSize\":4194304},\
+             {\"name\":\"thumb4\",\"maxSize\":4194304,\
+             \"uploaded\":{\"key\":\"aa\\/bb+cc4=\"}}]};</script>",
+        );
+        let page = scrape_form_page(&html).expect("the render parses");
+        assert_eq!(
+            page.thumbs().len(),
+            1,
+            "three empty slots carry no handle, and borrowing one posts a stranger's \
+             thumbnail into the wrong slot, got {:?}",
+            page.thumbs()
+        );
+        assert_eq!(
+            page.thumbs().first().map(ThumbHandle::slot),
+            Some(4),
+            "the one handle belongs to the slot that rendered it"
+        );
+        assert_eq!(
+            page.thumbs().first().map(ThumbHandle::key),
+            Some("aa/bb+cc4="),
+            "and it is the key that slot's own object carried"
+        );
+    }
+
+    #[test]
+    fn an_empty_thumbnail_slot_never_borrows_a_key_from_outside_the_slot_array() {
+        let html = create_render()
+            + "<script>var boot = {\"upload_digital\":[{\"name\":\"thumb1\",\"maxSize\":4194304}]};\
+               var late = {\"session\":{\"key\":\"NOTATHUMBNAILHANDLE\"}};</script>";
+        let page = scrape_form_page(&html).expect("the render parses");
+        assert!(
+            page.thumbs().is_empty(),
+            "an unbounded scan would post whatever key followed the slot, got {:?}",
+            page.thumbs()
         );
     }
 

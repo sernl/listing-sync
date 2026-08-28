@@ -1,4 +1,4 @@
-//! The out-of-band upload: eleven hops between "here are some bytes" and
+//! The out-of-band upload: thirteen hops between "here are some bytes" and
 //! "here is the handle the product form accepts".
 //!
 //! Two opaque handles pass through it and they are not interchangeable.

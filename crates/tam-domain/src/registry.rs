@@ -450,7 +450,7 @@ const TPT_NATIVES: &[NativeField] = &[
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
     },
-    // The nine small-integer fields the two writes post. Each is a member of
+    // The eight small-integer fields the two writes post. Each is a member of
     // an enumeration the read side names in words — `statusUser: ACTIVE`,
     // `answerKey: INCLUDED`, `copyrightDeclaration: ORIGINAL_WORK`,
     // `teachingDuration: HOURS_1` — against an integer the form posts, and in

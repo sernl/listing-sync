@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 use tam_marketplace::transport::{HttpResponse, ResponseHeader, TransportError};
-use tam_marketplace::{AdapterError, AmbiguityCause, ChallengeKind};
+use tam_marketplace::{AdapterError, AmbiguityCause, ChallengeKind, ConnectFailure};
 use tam_types::{FailureCode, FailureDetail};
 
 use crate::form::{scrape_form_page, TptFormPage};
@@ -21,7 +21,16 @@ fn looks_like_signin(body: &str) -> bool {
     body.contains("<html") && (body.contains("sign-in") || body.contains("Sign In"))
 }
 
-/// Maps a transport failure onto the seam vocabulary. `AfterSend` is the
+fn harness(detail: &str) -> AdapterError {
+    AdapterError::Rejected {
+        code: FailureCode::Other,
+        detail: FailureDetail(format!("cassette divergence: {detail}")),
+    }
+}
+
+/// Maps a transport failure onto the seam vocabulary for a hop whose answer,
+/// if lost, leaves the write state unknown: the final product POST, and the
+/// reads whose answer a receipt depends on. `AfterSend` is the
 /// response-event-lost ambiguity by definition; `Harness` occurs only under
 /// the cassette transport and surfaces as a rejection so a diverging test
 /// fails loudly rather than reading as a marketplace condition.
@@ -32,10 +41,30 @@ pub fn classify_transport(error: TransportError) -> AdapterError {
         TransportError::AfterSend { .. } => {
             AdapterError::Ambiguous(AmbiguityCause::ResponseEventLost)
         }
-        TransportError::Harness { detail } => AdapterError::Rejected {
-            code: FailureCode::Other,
-            detail: FailureDetail(format!("cassette divergence: {detail}")),
-        },
+        TransportError::Harness { detail } => harness(&detail),
+    }
+}
+
+/// The same mapping for every hop before the final POST.
+///
+/// None of those hops can have created a product: the form render is a GET,
+/// the reservation and the S3 calls put bytes in the seller's own staging
+/// area, and the two queue jobs transform an object already there. A lost
+/// response therefore leaves nothing that needs reconciling, at worst an
+/// orphaned staged object TPT's own lifecycle collects, so it is reported as
+/// safe to retry. Calling it an ambiguity would halt an entire inventory over
+/// a timeout on a hop that wrote nothing, which is the failure this split
+/// exists to prevent.
+///
+/// `ConnectFailure` carries no lost-response member and the seam's closed
+/// vocabulary is not this adapter's to widen; `NoRouteToHost` is the
+/// catch-all both live transports already use.
+#[must_use]
+pub fn classify_pre_write_transport(error: TransportError) -> AdapterError {
+    match error {
+        TransportError::NotSent(cause) => AdapterError::NotSent(cause),
+        TransportError::AfterSend { .. } => AdapterError::NotSent(ConnectFailure::NoRouteToHost),
+        TransportError::Harness { detail } => harness(&detail),
     }
 }
 
@@ -165,6 +194,63 @@ pub fn classify_xhr_json(response: &HttpResponse) -> Result<Value, AdapterError>
         _ => Err(AdapterError::Rejected {
             code: FailureCode::UploadRejected,
             detail: detail(response.status, &text),
+        }),
+    }
+}
+
+/// One of the two plain-text upload hops: TPT's clock and its signing oracle.
+///
+/// Both answer a bare string rather than JSON, so [`classify_xhr_json`] does
+/// not fit them — but the conditions in front of them are their siblings'
+/// conditions, and collapsing every non-200 into a rejection terminally
+/// refuses an item over a session that lapsed mid-upload or a rate limit on a
+/// signing oracle that is asked once per S3 call. The status routing is
+/// [`classify_form_page`]'s, because these hops sit behind the same
+/// Cloudflare-fronted origin.
+///
+/// A 200 is checked for markup as well: these hops answer plain text, so a
+/// sign-in page or a challenge answered 200 is a bounce wearing a success.
+pub fn classify_text_hop(response: &HttpResponse, what: &str) -> Result<String, AdapterError> {
+    let text = response.text();
+    match response.status {
+        200 => {
+            if looks_like_challenge(&text) {
+                return Err(AdapterError::Challenge(
+                    ChallengeKind::JavaScriptInterstitial,
+                ));
+            }
+            if looks_like_signin(&text) {
+                return Err(AdapterError::SessionExpired);
+            }
+            let value = text.trim().to_owned();
+            if value.is_empty() {
+                return Err(AdapterError::Rejected {
+                    code: FailureCode::UploadRejected,
+                    detail: FailureDetail(format!("{what} answered an empty body")),
+                });
+            }
+            if value.contains("<html") {
+                return Err(AdapterError::Rejected {
+                    code: FailureCode::UploadRejected,
+                    detail: FailureDetail(format!(
+                        "{what} answered markup where the wire carries plain text: {}",
+                        detail(response.status, &text).0
+                    )),
+                });
+            }
+            Ok(value)
+        }
+        401 | 403 if looks_like_challenge(&text) => Err(AdapterError::Challenge(
+            ChallengeKind::JavaScriptInterstitial,
+        )),
+        401 | 403 => Err(AdapterError::SessionExpired),
+        429 => Err(AdapterError::RateLimited { retry_after: None }),
+        503 => Err(AdapterError::Challenge(
+            ChallengeKind::JavaScriptInterstitial,
+        )),
+        _ => Err(AdapterError::Rejected {
+            code: FailureCode::UploadRejected,
+            detail: FailureDetail(format!("{what}: {}", detail(response.status, &text).0)),
         }),
     }
 }
