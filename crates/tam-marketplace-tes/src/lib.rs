@@ -18,6 +18,6 @@ pub mod schema;
 pub mod session;
 
 pub use endpoints::{CatalogueEntry, DraftId};
-pub use flows::{ListingState, NotATesInventory, TesAdapter};
+pub use flows::{route_name, NotATesInventory, TesAdapter};
 pub use live::{GatewayTransport, ReqwestTransport};
 pub use session::{SessionError, TesSession};

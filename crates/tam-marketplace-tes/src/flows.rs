@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use tam_marketplace::transport::Transport;
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
-    FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator,
+    FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, ListingState,
     MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle, RemoteListingId,
     SubmitEvidence,
 };
@@ -42,42 +42,35 @@ pub struct TesAdapter<T, F> {
     file_source: F,
 }
 
-/// Which of Tes's two listing states a resource is in, and therefore which
-/// pair of routes addresses it. Every write knows the state it produced, so
-/// this travels from the caller rather than being recovered from a read; the
-/// routes are asymmetric and each answers the other's resource with a status
-/// that reads like success.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListingState {
-    Draft,
-    Published,
+/// The read that witnesses whether this state's resource is still there.
+///
+/// A free function rather than an inherent method: [`ListingState`] is the
+/// seam's type, and an inherent impl on it here is E0116.
+fn read_request(state: ListingState, id: DraftId) -> tam_marketplace::transport::HttpRequest {
+    match state {
+        ListingState::Draft => endpoints::read_draft_request(id),
+        ListingState::Live => endpoints::read_resource_request(id),
+    }
 }
 
-impl ListingState {
-    /// The read that witnesses whether this state's resource is still there.
-    fn read_request(self, id: DraftId) -> tam_marketplace::transport::HttpRequest {
-        match self {
-            Self::Draft => endpoints::read_draft_request(id),
-            Self::Published => endpoints::read_resource_request(id),
-        }
+/// The delete that removes it. `DELETE .../{id}/draft` removes only the
+/// draft overlay and `DELETE .../{id}` 404s for a draft-only resource, so
+/// neither stands in for the other.
+fn delete_request(state: ListingState, id: DraftId) -> tam_marketplace::transport::HttpRequest {
+    match state {
+        ListingState::Draft => endpoints::delete_draft_request(id),
+        ListingState::Live => endpoints::delete_resource_request(id),
     }
+}
 
-    /// The delete that removes it. `DELETE .../{id}/draft` removes only the
-    /// draft overlay and `DELETE .../{id}` 404s for a draft-only resource, so
-    /// neither stands in for the other.
-    fn delete_request(self, id: DraftId) -> tam_marketplace::transport::HttpRequest {
-        match self {
-            Self::Draft => endpoints::delete_draft_request(id),
-            Self::Published => endpoints::delete_resource_request(id),
-        }
-    }
-
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Draft => "draft",
-            Self::Published => "published resource",
-        }
+/// What Tes's own routes call the thing this state addresses. Error-message
+/// text, so it stays in Tes's vocabulary rather than moving with the variant
+/// name.
+#[must_use]
+pub const fn route_name(state: ListingState) -> &'static str {
+    match state {
+        ListingState::Draft => "draft",
+        ListingState::Live => "published resource",
     }
 }
 
@@ -246,9 +239,9 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// success, which is why the verdict is the follow-up read on the stated
     /// state's own route and never the delete's own status.
     pub async fn delete(&self, id: DraftId, state: ListingState) -> Result<(), AdapterError> {
-        self.send(state.delete_request(id)).await?;
-        let after = self.send(state.read_request(id)).await?;
-        gone(after.status, state.name())
+        self.send(delete_request(state, id)).await?;
+        let after = self.send(read_request(state, id)).await?;
+        gone(after.status, route_name(state))
     }
 
     /// Deletes a never-published draft. `DELETE /resources/{id}` 404s for a
@@ -265,7 +258,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// the dashboard catalogue kept listing a resource this route had already
     /// stopped serving, so the catalogue cannot witness a deletion.
     pub async fn delete_published(&self, id: DraftId) -> Result<(), AdapterError> {
-        self.delete(id, ListingState::Published).await
+        self.delete(id, ListingState::Live).await
     }
 
     /// Whether the route a state lives at still answers for this id — the one
@@ -274,10 +267,10 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     ///
     /// Each route answers only for its own state, so this is not a way to
     /// discover which state a listing is in: a published resource 404s here
-    /// under [`ListingState::Published`] for the seconds after its publish,
+    /// under [`ListingState::Live`] for the seconds after its publish,
     /// and a draft 404s under it forever.
     pub async fn is_present(&self, id: DraftId, state: ListingState) -> Result<bool, AdapterError> {
-        let read = self.send(state.read_request(id)).await?;
+        let read = self.send(read_request(state, id)).await?;
         if read.status == 404 {
             return Ok(false);
         }
@@ -304,7 +297,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             ListingState::Draft
         } else {
             classify_read(&probe)?;
-            ListingState::Published
+            ListingState::Live
         };
         self.delete(id, state).await
     }
@@ -566,7 +559,36 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         observed_at: Timestamp,
     ) -> Result<ObservedListing, AdapterError> {
         let id = Self::draft_id_from_locator(&locator)?;
-        let state = self.resource_state(id).await?;
+        let subject = match &locator {
+            ListingLocator::Durable(durable) => durable.clone(),
+            ListingLocator::Marker { .. } => RemoteListingId::Tes {
+                url: format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0),
+            },
+        };
+        let state = match self.resource_state(id).await {
+            Ok(state) => state,
+            // Neither route answered, which is a fact about the listing and
+            // not a failure of the read: `resource_state` reads `/{id}/draft`
+            // first and falls through to `/resources/{id}`, so its 404 means
+            // both are silent — the same union the live runner proves a
+            // deletion with. The catch is local to this method on purpose.
+            // `resource_state`'s four other callers — `publish`, which needs
+            // the JSON to evaluate its published test, `assert_form_schema`,
+            // which reads a 404 as the probe draft having vanished, `submit`,
+            // which reads one as an unreadable create, and `fetch_for_import`
+            // — all still need the 404 to stay an error.
+            Err(AdapterError::Rejected {
+                code: FailureCode::PreconditionElementAbsent,
+                ..
+            }) => {
+                return Ok(ObservedListing {
+                    id: subject,
+                    fields: vec![],
+                    lifecycle: RemoteLifecycle::Absent,
+                })
+            }
+            Err(error) => return Err(error),
+        };
         let mut fields = Vec::new();
         if let Some(title) = state.get("title").and_then(Value::as_str) {
             fields.push((FieldKey::Title, title.to_owned()));
@@ -585,14 +607,8 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
             // publication instant is the marketplace's own.
             RemoteLifecycle::Live { since: observed_at }
         };
-        let id = match locator {
-            ListingLocator::Durable(durable) => durable,
-            ListingLocator::Marker { .. } => RemoteListingId::Tes {
-                url: format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0),
-            },
-        };
         Ok(ObservedListing {
-            id,
+            id: subject,
             fields,
             lifecycle,
         })

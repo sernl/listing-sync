@@ -8,13 +8,13 @@ use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{FilePart, HttpResponse};
 use tam_marketplace::{
     AdapterError, AgeSpan, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource,
-    FileSourceError, FormId, ListingLocator, MarketplaceAdapter, NativeTerm, ProjectedListing,
-    RemoteLifecycle, RemoteListingId, WriteAttemptId,
+    FileSourceError, FormId, ListingLocator, ListingState, MarketplaceAdapter, NativeTerm,
+    ProjectedListing, RemoteLifecycle, RemoteListingId, WriteAttemptId,
 };
 use tam_marketplace_tes::endpoints::{
     self, CatalogueEntry, DraftId, FreeLicence, TesListing, TesPrice, TesPricing,
 };
-use tam_marketplace_tes::{schema, ListingState, TesAdapter};
+use tam_marketplace_tes::{schema, TesAdapter};
 use tam_types::{
     Currency, FailureCode, FieldKey, FileId, InventoryId, Money, OrgId, PriceIntent, Timestamp,
     Uuid,
@@ -618,7 +618,7 @@ fn a_stated_delete_takes_its_states_route_without_probing_for_it() {
         ),
         (
             "a published resource",
-            ListingState::Published,
+            ListingState::Live,
             endpoints::delete_resource_request(DRAFT),
             endpoints::read_resource_request(DRAFT),
         ),
@@ -669,7 +669,7 @@ fn a_published_delete_is_stated_even_while_the_resource_route_still_404s() {
         ],
     };
     let adapter = adapter(cassette, vec![]);
-    futures::executor::block_on(adapter.delete(DRAFT, ListingState::Published))
+    futures::executor::block_on(adapter.delete(DRAFT, ListingState::Live))
         .expect("a freshly published resource deletes on the route it was published to");
     assert_eq!(
         adapter.transport().remaining(),
@@ -697,14 +697,14 @@ fn presence_is_read_on_the_route_the_state_lives_at() {
         ),
         (
             "a published resource that is still there",
-            ListingState::Published,
+            ListingState::Live,
             endpoints::read_resource_request(DRAFT),
             ok(&draft_state(9001, false)),
             true,
         ),
         (
             "a published resource that is gone",
-            ListingState::Published,
+            ListingState::Live,
             endpoints::read_resource_request(DRAFT),
             status(404),
             false,
@@ -943,6 +943,93 @@ fn read_back_is_gated_and_maps_the_lifecycle() {
             .iter()
             .any(|(key, value)| *key == FieldKey::Title && value == "Fractions pack"),
         "the observed fields carry the title for the diff"
+    );
+}
+
+/// The union predicate: `resource_state` reads the draft route and falls
+/// through to the resource route, so a 404 on both means neither answers.
+/// Under the old behaviour that pair propagated `Rejected
+/// { PreconditionElementAbsent }`, which the machine lists as inapplicable in
+/// `AwaitingReadBack` and which therefore errored the whole run.
+#[test]
+fn a_resource_that_is_not_there_reads_back_absent() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: status(404),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(404),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let subject = RemoteListingId::Tes {
+        url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+    };
+    let observed = futures::executor::block_on(adapter.read_back(
+        ORG,
+        ListingLocator::Durable(subject.clone()),
+        FetchReason::VerifyAttempt {
+            attempt: WriteAttemptId(Uuid([0x61; 16])),
+        },
+        Timestamp(1_756_000_000_000),
+    ))
+    .expect("a listing that is not there is an observation, not a read failure");
+    assert_eq!(
+        observed.lifecycle,
+        RemoteLifecycle::Absent,
+        "both routes silent is the absence the live runner proves a deletion with"
+    );
+    assert_eq!(
+        observed.id, subject,
+        "the observation names the listing that was asked about"
+    );
+    assert!(
+        observed.fields.is_empty(),
+        "an absent listing carries no field values to diff"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "both routes were read; a single-route probe would leave one unspent"
+    );
+}
+
+/// The four other `resource_state` callers still read a 404 as an error, so
+/// the catch cannot have widened past `read_back`.
+#[test]
+fn a_publish_whose_state_read_404s_is_still_an_error() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::publish_request(DRAFT, &sample_listing()),
+                response: status(200),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: status(404),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(404),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.publish(DRAFT, &sample_listing()));
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: tam_types::FailureCode::PreconditionElementAbsent,
+                ..
+            })
+        ),
+        "a publish that cannot read its own resource back must not be told the \
+         resource is legitimately absent, got {refused:?}"
     );
 }
 

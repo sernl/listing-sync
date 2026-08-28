@@ -311,6 +311,16 @@ pub enum RemoteLifecycle {
     },
 }
 
+/// Which side of the draft line a listing sits on: the two states both
+/// platforms distinguish on the *write* path. Narrower than
+/// [`RemoteLifecycleKind`], which is the *observation* vocabulary and carries
+/// moderation states no write can address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingState {
+    Draft,
+    Live,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaDrift {
     pub form: FormId,

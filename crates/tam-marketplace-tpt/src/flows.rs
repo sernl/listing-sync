@@ -896,13 +896,21 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
                 code: FailureCode::VerificationMismatch,
                 detail: FailureDetail(error.to_string()),
             })?;
-        let entry = page
-            .entries
-            .into_iter()
-            .find(|entry| entry.id == product)
-            .ok_or(AdapterError::Ambiguous(
-                AmbiguityCause::ReadBackIndeterminate,
-            ))?;
+        // A catalogue page that parsed and does not carry the product is an
+        // observation that the product is not there, not an indeterminate
+        // read: `MyProductListings` is the only witness TPT offers, and the
+        // walk that produced this page answered for the seller's whole
+        // catalogue. Answering `Ambiguous` here halted the tenant's inventory
+        // on the read-back that immediately follows every create.
+        let Some(entry) = page.entries.into_iter().find(|entry| entry.id == product) else {
+            return Ok(ObservedListing {
+                id: RemoteListingId::Tpt {
+                    product_id: product.0,
+                },
+                fields: vec![],
+                lifecycle: RemoteLifecycle::Absent,
+            });
+        };
         let taxonomy = serde_json::json!({
             "tags": entry.taxonomy_tags,
             "categories": entry

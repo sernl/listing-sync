@@ -1129,6 +1129,58 @@ fn a_read_back_addresses_one_product_and_reports_what_the_wire_said() {
     );
 }
 
+/// `MyProductListings` is the only witness TPT offers, and its read lags a
+/// write by up to twenty seconds. Answering `Ambiguous` for a page that
+/// simply does not carry the product halted the tenant's inventory on the
+/// read-back that immediately follows every create.
+#[test]
+fn a_product_absent_from_the_catalogue_reads_back_absent() {
+    let product = ProductId(PRODUCT_ID);
+    let body = serde_json::json!({"data": {"seller": {"resources": {
+        "results": [],
+        "pageInfo": {"totalResultsCount": 0, "currentPage": 1, "totalPageCount": 1},
+    }}}});
+    let cassette = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::product_by_id_request(product),
+            response: text(200, &body.to_string()),
+        }],
+    };
+    let adapter = adapter(cassette);
+    let observed = futures::executor::block_on(adapter.read_back(
+        org(),
+        ListingLocator::Durable(RemoteListingId::Tpt {
+            product_id: PRODUCT_ID,
+        }),
+        FetchReason::VerifyAttempt {
+            attempt: WriteAttemptId(Uuid([6; 16])),
+        },
+        Timestamp(1_787_896_700_000),
+    ))
+    .expect("a product the catalogue does not carry is an observation, not an ambiguity");
+    assert_eq!(
+        observed.lifecycle,
+        RemoteLifecycle::Absent,
+        "a page that parsed and named no such product says the product is not there"
+    );
+    assert_eq!(
+        observed.id,
+        RemoteListingId::Tpt {
+            product_id: PRODUCT_ID
+        },
+        "the observation names the product that was asked about"
+    );
+    assert!(
+        observed.fields.is_empty(),
+        "an absent product carries no field values to diff"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "one product, one request, absent or not"
+    );
+}
+
 #[test]
 fn a_read_back_under_the_probe_capability_is_refused() {
     let adapter = adapter(Cassette {

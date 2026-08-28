@@ -29,12 +29,13 @@ use std::io::Read as _;
 
 use tam_marketplace::{
     AdapterError, FetchReason, FileContent, FileSource, FileSourceError, FormId, ListingLocator,
-    MarketplaceAdapter as _, ObservedListing, RemoteLifecycle, RemoteListingId, WriteAttemptId,
+    ListingState, MarketplaceAdapter as _, ObservedListing, RemoteLifecycle, RemoteListingId,
+    WriteAttemptId,
 };
 use tam_marketplace_tes::endpoints::{
     self, DraftId, FreeLicence, TesListing, TesPrice, TesPricing, ZZ_TITLE_PREFIX,
 };
-use tam_marketplace_tes::{ListingState, ReqwestTransport, TesAdapter, TesSession};
+use tam_marketplace_tes::{route_name, ReqwestTransport, TesAdapter, TesSession};
 use tam_types::{FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
 
 /// Neither identifier reaches Tes. The org scopes nothing here because this
@@ -267,7 +268,7 @@ async fn still_answering(
     adapter: &Adapter,
     id: DraftId,
 ) -> Result<Option<ListingState>, AdapterError> {
-    for state in [ListingState::Published, ListingState::Draft] {
+    for state in [ListingState::Live, ListingState::Draft] {
         if adapter.is_present(id, state).await? {
             return Ok(Some(state));
         }
@@ -288,7 +289,7 @@ async fn confirm_gone(adapter: &Adapter, id: DraftId) -> Result<(), Failure> {
                 return Ok(());
             }
             Ok(Some(state)) => {
-                last = format!("{} still answers on its {} route", id.0, state.name());
+                last = format!("{} still answers on its {} route", id.0, route_name(state));
             }
             Err(error) => last = describe(&error),
         }
@@ -312,12 +313,12 @@ async fn delete_and_confirm(
     if let Err(error) = adapter.delete(id, state).await {
         println!(
             "  the {} delete of {} is unproven so far ({}); re-reading",
-            state.name(),
+            route_name(state),
             id.0,
             describe(&error)
         );
     } else {
-        println!("  deleted the {} {}", state.name(), id.0);
+        println!("  deleted the {} {}", route_name(state), id.0);
     }
     confirm_gone(adapter, id).await
 }
@@ -335,18 +336,18 @@ async fn delete_and_confirm(
 /// listing reports a clean 404 having removed nothing, so the proof is the
 /// read on both routes afterwards.
 async fn sweep(adapter: &Adapter, id: DraftId, state: ListingState) -> Result<(), Failure> {
-    for attempt in [ListingState::Published, ListingState::Draft] {
+    for attempt in [ListingState::Live, ListingState::Draft] {
         if let Err(error) = adapter.delete(id, attempt).await {
             println!(
                 "  the {} delete answered {}",
-                attempt.name(),
+                route_name(attempt),
                 describe(&error)
             );
         }
     }
     println!(
         "  swept both routes for what this run left as a {}",
-        state.name()
+        route_name(state)
     );
     confirm_gone(adapter, id).await
 }
@@ -515,7 +516,7 @@ async fn publish_and_verify(
     now: Timestamp,
     state: &mut ListingState,
 ) -> Result<(), Failure> {
-    *state = ListingState::Published;
+    *state = ListingState::Live;
     adapter
         .publish(id, listing)
         .await
@@ -571,7 +572,7 @@ async fn publish_then_delete(
         "  deleting {} through DELETE /api/v2/resources/{{id}}",
         id.0
     );
-    delete_and_confirm(adapter, id, ListingState::Published).await
+    delete_and_confirm(adapter, id, ListingState::Live).await
 }
 
 async fn run_delete_published(
