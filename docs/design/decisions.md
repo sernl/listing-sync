@@ -173,3 +173,20 @@ The founder observed on their own account that the New Zealand upload flow shows
 This supersedes the earlier deferral in "Currency observation and charge postponement, 2026-08-28", where the same observation was recorded but the gate deliberately left closed pending a priced-draft read; the founder has now decided the observation is sufficient to fix the currency.
 The measurement is from one GB account, so the re-open trigger is a non-GBP seller whose NZ inventory prices in another currency; the gate is a founder code decision either way.
 The gate's block path is unchanged for the still-unverified seller-scoped inventories (Etsy, Tpt), and a test pins that a priced listing into a seller-scoped inventory still refuses.
+
+## The post-M1 sequence, reordered 2026-08-28
+
+The founder ordered the post-M1 work as M6 first, then M7, then M2, ahead of M3, M4 and M5.
+M6 is reframed from drift reconciliation alone to the cross-platform mapping core: the binding write, the per-inventory field registry, and the connector contract, with drift verification following on top of bindings rather than preceding them.
+M2 is widened to include an operations dashboard: the analytics view over our own ledger data plus product operations such as delete and modify.
+No marketplace exposes listing views through an API, so the dashboard's first tier is our own ledger, with platform-native sales metrics added only where an API exposes them.
+This supersedes the milestone tail ordering in `milestones.md`; the milestone table itself is left as written and this entry is the record of the reordering.
+The active plan for the first leg is `plans/2026-08-28-m6-mapping-core.md`.
+
+## The TPT connector, unblocked 2026-08-28
+
+The founder directed that the TPT connector proceed session-style like the Tes connector, without waiting for written permission from TPT.
+This supersedes the milestone document's precondition that the connector not be built absent written permission.
+The kill gate stands unchanged: any written objection from TPT or IXL kills the connector.
+The consent model is seller delegation in the shape of TPT's own VA-login programme, where a seller grants store access deliberately, and the connector acts only on the seller's own listings under the first-party capability tier.
+The four M7 measurements from the milestone prose — session longevity, bot-management posture, the real mandatory-field set, and the undocumented bounds — still open the milestone.
