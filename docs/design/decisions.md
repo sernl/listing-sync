@@ -233,3 +233,58 @@ Both new fields serialise under `skip_serializing_if`, so every committed casset
 `ReqwestTransport` put the cookie jar in reqwest's `default_headers`, which apply to every host a client reaches, so the Tes upload's multipart POST to `*.s3.amazonaws.com` sent the seller's full Tes session to Amazon on every file.
 The transport is now two clients: a session client holding the jar, and a bare client carrying nothing but a user agent, chosen by what a request declares about its own authentication.
 A host assertion refuses the mismatches outright — a session-authenticated request to the bucket, or a signed one to the marketplace origin, is `NotSent` and never leaves — so the leak cannot return by a flow building the wrong request value.
+
+## The lifecycle seam, the sever, and the interim TPT custody, settled 2026-08-29
+
+M8 Phase 3 lifts the write seam from create-only to the full lifecycle, and the decisions below are the ones a reviewer should not have to re-derive from the diff.
+
+Publishing is not a third trait method.
+`MarketplaceAdapter` gains exactly two — `revise` and `remove` — and a publish is `revise(.., to: Live)`, which makes the four-cell transition table the whole publish capability rather than a capability beside it.
+The transition travels whole, `from` and `to` together, because both marketplaces' state routes lag the write that produced them (Tes measured 2026-08-29, TPT 2026-08-28), so a probe run soon after a write reads a live listing as a draft; a caller that just wrote always knows what it wrote.
+Every cell posts and classifies and none of them verifies, because only the driver holds a rate budget to poll with — which meant splitting Tes's self-verifying `publish` and `delete` into their unverified halves, leaving the inherent methods and their inline reads exactly as the live runners use them.
+
+The machine asserts form schema on `Create` only.
+On Tes that is close to free: `assert_form_schema` is write-bearing — it creates a probe draft, writes it, reads it and deletes it on the seller's real store — so asserting on every revise would multiply probe drafts by the size of a bulk revise, and `tam-canary` already fingerprints the same `set_metadata` surface a `Draft → Draft` revise posts, on a schedule.
+On TPT it is not free, and Phase 3 accepts the gap rather than papering over it: the canary loops over the two Tes inventories and never TPT, and both adapters' `assert_form_schema` probe the *create* form, so `FormTarget::EditDigital` is fingerprinted by nothing, anywhere.
+The mitigating fact is that every TPT revise re-scrapes the edit render at write time and classifies a drifted form as a loud rejection — a scrape failure or a `SubmitNoConfirmation` bounce — so drift cannot silently misfire; what is missing is early warning, not detection.
+The recommended follow-up is to extend `tam-canary` to TPT with an edit-render probe, a single read-only GET needing a probe-subject strategy and the TPT session, alongside the existing Tes loop; it is founder-gated and not built in Phase 3.
+Reversing the decision for TPT alone was considered and refused, because it would make the machine's preflight branch a function of the adapter rather than of the operation.
+
+The item stores its transition and the listing it means to act on.
+The transition is stored rather than derived because no column records which side of the draft line a listing sits on: `mapping.lifecycle_state` ranges over seven values, is written at insert and never again, and `mapping.publish_mode` is a sync policy about whether to publish at all.
+The subject is stored as the enqueuer's assertion while the mapping's binding stays the authority, and the engine refuses an item whose stored subject diverges from it — which is what makes a rebind between enqueue and lease detectable rather than a silent retarget onto another listing.
+With both ends stored, `publish` carries no information the columns do not, so the stored operation set is three — `create`, `revise`, `remove` — isomorphic to the domain's `ItemOperation`; a seller-facing publish action lowers to `revise { to: Live }` at the API boundary in Phase 4.
+
+A committed removal severs the binding rather than binding to what it removed, with `sever_cause = 'removed_by_seller'`, and this is the first sever the engine writes.
+The cause is the seller's because the seller's own job asked for it; the other two members name the marketplace and a failed verification.
+The sever is coupled to a change on the create path: the bind's prior-state fence now admits `'severed'` and `prepare_item`'s `Create` gate admits `Binding::Severed`, because `mapping_one_per_inventory` is unpredicated and forces a re-create to reuse the same row — without both, a severed mapping could be taken down and never put back, and the migrate story the sever exists for would not work end to end.
+What authorises the sever is `write_attempt_one_in_flight` rather than the attempt's `lease_epoch`, which is written and compared from the same `LeaseRef` and cannot mismatch within a run; the remaining exposure is a stalled worker whose lease was stolen severing anyway, and Phase 3 makes that visible with a `SeveredAfterSteal` bind anomaly rather than adding fencing that would change the create path too.
+
+The idempotency key stops being purely content-addressed for non-creates.
+A create still hashes its payload files and its key is byte-identical to the one it minted before, by delegation rather than by arithmetic that would have to be re-checked.
+A revise carries no payload change at all — a price fix and a title fix hash identically — and a removal followed by a re-create reproduces the first create's digest, so under the old key the second of any such pair was refused by `job_item_idempotent` permanently, `job_item` rows never being deleted.
+Revises and removals are therefore identified by the job that asked for them, which keeps duplicate protection within a job and deliberately drops it across jobs, where it was never wanted: a seller may legitimately ask twice, and a content-addressed key cannot express that.
+
+TPT credential custody in Phase 3 is a founder-exported cookie jar read from configuration, and that is interim.
+`TAM_TPT_COOKIE_JAR` and `TAM_TPT_AUTHORSHIP` are read once at the worker's process boundary; a TPT item still cannot lease without a `linked` TPT `connection` row, so the vault row functions as the queue gate and `gate_connection` still stops TPT items, while the credential actually sent never came from the vault.
+This means the worker process holds a seller credential in plaintext on disk, which is precisely the invariant the broker exists to prevent, and it is a deviation from the M7 entry's broker-established jar rather than an implementation of it.
+Three answers were considered.
+Keep the file jar, which is what Phase 3 ships and what this entry exists to stop calcifying.
+Give the broker a hand-me-the-cookie-header operation for direct-transport marketplaces, which deletes the no-secret-to-worker invariant outright rather than extending it, and is not recommended.
+Give the broker a TPT gateway with its own allow-list and let only the bucket hops leave the worker directly, which preserves the invariant whole: the S3 leg does not need proxying, because those hops already declare `RequestAuth::S3SigV2`, the live transport's host assertion already refuses a session-authenticated request to the bucket and a signed one to the marketplace origin, and every marketplace-origin hop in the create chain is session-authenticated.
+Option three is the recommended production answer and is out of Phase 3's scope.
+The authorship attestation is configuration for the same interim reason; the durable answer is two columns on `connection` written by the broker's link step, in M2.
+
+`OUTBOUND_REQUESTS_PER_MINUTE_MAX` bounds effects per connection per minute, not requests, and always has: one submit issues a create, a metadata write, a three-step upload per file and a state read, and consumes one grant for all of it.
+The verification poll now consumes one grant per `read_back` call, which narrows the gap on the verify path and leaves it wide on `submit` and `assert_form_schema`, the expensive ones.
+Moving consumption into the transport seam is the only place the constant can be made a true request ceiling; it re-tunes every existing flow against a bound they have never been measured against, so it is deferred and founder-gated, and the constant is not renamed in Phase 3 because that is founder-gated too.
+
+The verification poll must fit inside the lease, and the inequality `submit_worst_case + tries × interval < LEASE_TTL_SECS` is asserted and documented rather than made true by raising a limit.
+On today's numbers it holds for the measured TPT create — roughly 180s against a 300s lease, with 22s of poll on top — and fails at that platform's theoretical worst case, where two queue-job polls alone can spend 360s.
+The failure is stall-biased: the attempt stays in flight and no duplicate listing is ever created.
+Raising `LEASE_TTL_SECS` is a one-line founder decision that removes the worst case at the cost of widening the window a dead worker's item is stuck in; renewing the lease across long effects is the durable fix and goes on the M2 list.
+Neither is implemented in Phase 3.
+
+`sha2` is hoisted to `[workspace.dependencies]` and TPT's write evidence now carries a `response_body_digest` on every cell, including the pre-existing `submit`.
+The digest is the write-evidence contract, TPT is the adapter most likely to produce ambiguous write evidence — a scraped form and bounce semantics — and an asymmetry where only one adapter answers the contract erodes it.
+No new crate enters the closure: `sha2` was already a direct dependency of `tam-marketplace-tes`.
