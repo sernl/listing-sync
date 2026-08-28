@@ -20,12 +20,25 @@
 //! That split is interim and its production answer is founder-gated; see
 //! `docs/design/decisions.md`.
 //!
+//! A process-global credential speaks for exactly one seller, and the lease
+//! scan does not: `LeaseRepo::acquire` reads across organisations under
+//! BYPASSRLS, so a second tenant's Tpt items would otherwise be driven
+//! against whichever account the configured jar holds — writing one
+//! seller's listings into another's store, and reading `Absent` from the
+//! wrong catalogue, which severs a mapping whose listing is still live.
+//! `TAM_TPT_ORG` names the organisation the jar belongs to, and every Tpt
+//! item from any other organisation is refused with its lease left to
+//! expire. Lifting the pin means per-organisation custody, which is the
+//! founder-gated question rather than a configuration change.
+//!
 //! Usage: tam-worker <engine-database-url> <worker-name> <broker-socket> \
 //!            <kek-path> <store-root> [poll-ms]
 //!
-//! Environment: `TAM_TPT_COOKIE_JAR` is a Netscape cookie jar path and
-//! `TAM_TPT_AUTHORSHIP` is `name|epoch_millis`. Both are optional; without
-//! either, Tpt items are refused and their leases left to expire.
+//! Environment: `TAM_TPT_COOKIE_JAR` is a Netscape cookie jar path,
+//! `TAM_TPT_AUTHORSHIP` is `name|epoch_millis`, and `TAM_TPT_ORG` is the
+//! hyphenated id of the organisation the jar belongs to. The three are
+//! required together; without any one of them, Tpt items are refused and
+//! their leases left to expire.
 
 #![forbid(unsafe_code)]
 
@@ -46,7 +59,7 @@ use tam_storage::{
     BlobRepo, HaltRepo, JobRepo, LeaseRepo, LeasedItem, PipelineFileSource, RateBudgetRepo,
     WriteAttemptRepo,
 };
-use tam_types::{Marketplace, Timestamp};
+use tam_types::{Marketplace, OrgId, Timestamp};
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_POLL_MS: u64 = 5_000;
@@ -119,12 +132,25 @@ impl OncePerPass {
 /// and a missing one refuses with `UploadRejected`, which the machine settles
 /// `Failed`. Refusing the item up front leaves the lease to expire instead,
 /// which is the stall bias.
+///
+/// `org` is the third half: the jar is one seller's, and the lease scan is
+/// cross-tenant, so the organisation it belongs to has to be stated for the
+/// worker to know which items it may drive with it.
 struct TptCredential {
+    org: OrgId,
     session: TptSession,
     authorship: AuthorshipDeclaration,
 }
 
-/// The jar and the attestation, or nothing.
+impl TptCredential {
+    /// Whether a leased item's organisation is the one this jar belongs to.
+    /// Any other would be driven against the wrong seller's account.
+    fn speaks_for(&self, org: OrgId) -> bool {
+        self.org == org
+    }
+}
+
+/// The jar, the attestation and the organisation they belong to, or nothing.
 ///
 /// `AuthorshipDeclaration::attested` is the only constructor and it names the
 /// seller and the instant they attested; minting the instant from this
@@ -159,10 +185,27 @@ fn load_tpt_credential() -> Option<TptCredential> {
         eprintln!("tam-worker: TAM_TPT_AUTHORSHIP is not \"name|epoch_millis\", Tpt items refused");
         return None;
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the worker is the configuration boundary: the organisation the Tpt jar belongs to enters the process here and nowhere else"
+    )]
+    let raw_org = std::env::var("TAM_TPT_ORG").ok()?;
+    let Some(org) = parse_org(&raw_org) else {
+        eprintln!("tam-worker: TAM_TPT_ORG is not a hyphenated organisation id, Tpt items refused");
+        return None;
+    };
     Some(TptCredential {
+        org,
         session,
         authorship,
     })
+}
+
+/// The organisation a process-global jar speaks for. Unset is not a default
+/// of "all of them": `load_tpt_credential` returns nothing without it, so an
+/// unpinned worker drives no Tpt items at all.
+fn parse_org(raw: &str) -> Option<OrgId> {
+    tam_types::Uuid::parse_hyphenated(raw.trim()).map(OrgId)
 }
 
 fn parse_authorship(raw: &str) -> Option<AuthorshipDeclaration> {
@@ -190,6 +233,7 @@ struct Pump {
     cancel: CancellationToken,
     unadapted_said: OncePerPass,
     tpt_unconfigured_said: OncePerPass,
+    tpt_foreign_org_said: OncePerPass,
 }
 
 /// What one run needs beyond its adapter. A struct because `drive` would
@@ -334,12 +378,28 @@ impl Pump {
         let Some(credential) = self.tpt.as_ref() else {
             if self.tpt_unconfigured_said.first() {
                 eprintln!(
-                    "tam-worker {worker}: no Tpt cookie jar or authorship attestation \
-                     configured, Tpt leases left to expire"
+                    "tam-worker {worker}: no Tpt cookie jar, authorship attestation or \
+                     organisation configured, Tpt leases left to expire"
                 );
             }
             return None;
         };
+        // The credential is this process's, the lease scan is every
+        // tenant's. Driving another organisation's item with it would write
+        // that seller's listing into this one's store, and a removal would
+        // read absence from the wrong catalogue and sever a mapping whose
+        // listing is still live.
+        if !credential.speaks_for(item.org) {
+            if self.tpt_foreign_org_said.first() {
+                eprintln!(
+                    "tam-worker {worker}: the Tpt credential is pinned to organisation {}, \
+                     so items belonging to any other are refused and their leases left to \
+                     expire",
+                    credential.org.0.to_hyphenated()
+                );
+            }
+            return None;
+        }
         let transport = match ReqwestTransport::new(&credential.session) {
             Ok(transport) => transport,
             Err(error) => {
@@ -468,6 +528,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cancel: cancel.clone(),
         unadapted_said: OncePerPass::new(),
         tpt_unconfigured_said: OncePerPass::new(),
+        tpt_foreign_org_said: OncePerPass::new(),
     };
 
     tokio::pin!(ctrl_c);
@@ -481,6 +542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         pump.unadapted_said.reset();
         pump.tpt_unconfigured_said.reset();
+        pump.tpt_foreign_org_said.reset();
         let now = WallClock.now();
         let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
         match leases.expire_and_steal(now, attempts_max).await {
@@ -524,8 +586,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_authorship, OncePerPass};
-    use tam_types::Timestamp;
+    use super::{parse_authorship, parse_org, OncePerPass, TptCredential};
+    use tam_marketplace_tpt::{AuthorshipDeclaration, TptSession};
+    use tam_types::{OrgId, Timestamp, Uuid};
+
+    const PINNED: OrgId = OrgId(Uuid([0xAA; 16]));
+    const OTHER: OrgId = OrgId(Uuid([0xBB; 16]));
+
+    fn credential(org: OrgId) -> TptCredential {
+        let jar = ".teacherspayteachers.com\tTRUE\t/\tTRUE\t0\tcsrfToken\tdeadbeef\n";
+        TptCredential {
+            org,
+            session: TptSession::from_netscape_jar(jar).expect("the fixture jar parses"),
+            authorship: AuthorshipDeclaration::attested(
+                "A. Seller".to_owned(),
+                Timestamp(1_724_889_600_000),
+            ),
+        }
+    }
+
+    /// The lease scan is cross-tenant and the jar is one seller's, so the
+    /// organisation is what decides whether an item may be driven at all.
+    /// Without this the second tenant to link a Tpt connection has its
+    /// listings written into the first tenant's store.
+    #[test]
+    fn a_tpt_credential_speaks_only_for_the_organisation_it_is_pinned_to() {
+        let credential = credential(PINNED);
+        assert!(
+            credential.speaks_for(PINNED),
+            "the organisation the jar belongs to is admitted"
+        );
+        assert!(
+            !credential.speaks_for(OTHER),
+            "any other organisation is refused; driving its item would write one seller's \
+             listing into another's account, and a removal would read absence from the \
+             wrong catalogue and sever a mapping whose listing is still live"
+        );
+    }
+
+    #[test]
+    fn an_organisation_pin_is_a_hyphenated_id_or_nothing() {
+        assert_eq!(
+            parse_org("  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa  "),
+            Some(PINNED),
+            "the configured form parses, surrounding whitespace included"
+        );
+        for raw in ["", "not-an-id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "*"] {
+            assert_eq!(
+                parse_org(raw),
+                None,
+                "refusing every Tpt item is the honest answer to {raw:?}; an unparseable \
+                 pin must never widen into 'any organisation'"
+            );
+        }
+    }
 
     #[test]
     fn an_attestation_names_the_seller_and_the_instant_they_attested() {
