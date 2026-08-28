@@ -749,6 +749,15 @@ impl SyncMachine {
                 }),
                 vec![],
             ),
+            // A capability no capture settles: the adapter had nothing to
+            // send, so the item is skipped rather than recorded as a
+            // marketplace refusal of a submit that never happened.
+            Input::SubmitResult(Err(AdapterError::Uncaptured { .. })) => self.advance(
+                SyncState::Terminal(Outcome::Skipped {
+                    code: FailureCode::Other,
+                }),
+                vec![],
+            ),
             Input::SubmitResult(Err(AdapterError::NotSent(_))) => {
                 let effects = vec![Effect::RecordIntent {
                     intent_hash: self.intent_hash,
@@ -839,7 +848,8 @@ impl SyncMachine {
                 | AdapterError::SessionExpired
                 | AdapterError::SchemaDrift(_)
                 | AdapterError::RateLimited { .. }
-                | AdapterError::NotSent(_),
+                | AdapterError::NotSent(_)
+                | AdapterError::Uncaptured { .. },
             ))
             | Input::ChallengeCleared
             | Input::ParkExpired

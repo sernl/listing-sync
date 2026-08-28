@@ -1,0 +1,20 @@
+[package]
+name    = "tam-marketplace-tpt"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json",
+] }
+serde_json = "1"
+tam-marketplace = { path = "../tam-marketplace" }
+tam-types = { path = "../tam-types" }
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+
+[lints]
+workspace = true

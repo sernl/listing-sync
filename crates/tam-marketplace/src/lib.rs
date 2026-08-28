@@ -353,6 +353,13 @@ pub enum AdapterError {
     },
     /// The request provably never left. The only class that is safe to retry.
     NotSent(ConnectFailure),
+    /// A capability the adapter does not have because no capture settles it.
+    /// Distinct from `Rejected`: the marketplace refused nothing, there was
+    /// nothing to send. The TPT file download and TPT import canonicalisation
+    /// are today's members, both on the M7 plan's deferred list.
+    Uncaptured {
+        capability: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

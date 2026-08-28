@@ -2337,6 +2337,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-marketplace-tpt"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "reqwest",
+ "serde_json",
+ "tam-marketplace",
+ "tam-types",
+]
+
+[[package]]
 name = "tam-mint-session"
 version = "0.0.0"
 dependencies = [

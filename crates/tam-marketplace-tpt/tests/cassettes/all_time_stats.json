@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "Post",
+        "url": "https://www.teacherspayteachers.com/gateway/graphql?opname=ResourceTotalsAllTime",
+        "body": {
+          "Json": {
+            "operationName": "ResourceTotalsAllTime",
+            "variables": {
+              "resourceIds": [
+                11039236,
+                11050756,
+                12854516
+              ]
+            },
+            "extensions": {},
+            "query": "query ResourceTotalsAllTime($resourceIds: [ID]) {\n  totals: storeResourceTotalsAllTimeStats(\n    metricName: SALES_COUNT\n    filters: {resourceIds: $resourceIds}\n  ) {\n    edges {\n      cursor\n      node {\n        resourceId\n        totalValue\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}\n"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": "{\"data\":{\"totals\":{\"__typename\":\"StoreResourceStatsConnection\",\"edges\":[{\"cursor\":\"cmFuazox\",\"node\":{\"resourceId\":\"11039236\",\"totalValue\":2,\"__typename\":\"StoreResourceStats\"},\"__typename\":\"StoreResourceStatsEdge\"},{\"cursor\":\"cmFuazoy\",\"node\":{\"resourceId\":\"11050756\",\"totalValue\":3,\"__typename\":\"StoreResourceStats\"},\"__typename\":\"StoreResourceStatsEdge\"},{\"cursor\":\"cmFuazoz\",\"node\":{\"resourceId\":\"12854516\",\"totalValue\":0,\"__typename\":\"StoreResourceStats\"},\"__typename\":\"StoreResourceStatsEdge\"}]}}}"
+      }
+    }
+  ]
+}

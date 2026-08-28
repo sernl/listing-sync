@@ -320,20 +320,139 @@ const ETSY_NATIVES: &[NativeField] = &[
     },
 ];
 
-/// Sparse until the M7 first contact measures it. The sampled 80-character
-/// title cap is real but its counting unit is unverified — the 352-title
-/// sample contained no astral-plane characters — so no cap is declared, and
-/// no native field has been observed on the wire yet.
+/// Populated from the six 2026-08-28 HAR captures of the founder's own TPT
+/// seller account, analysed for the M7 connector. Everything here is a read
+/// the captures contain or a constant the create form hands its own client;
+/// no product write is captured, so nothing about the write's mandatory-field
+/// set is declared.
 const TPT: InventoryRegistry = InventoryRegistry {
     inventory: InventoryId::Tpt,
-    canonical: CanonicalFields::UNRECORDED,
-    natives: &[],
+    canonical: CanonicalFields {
+        // The sampled 80-character title cap is real but unproven: 80 is the
+        // longest of 352 observed titles, not a refusal anyone has measured,
+        // and the counting unit is unverified either way. No cap is declared.
+        title: FieldSpec::UNRECORDED,
+        description: FieldSpec {
+            // `description_max_length: 45000` from the `var cfg` bootstrap the
+            // create page at /My-Products/New/Digital-Next hands its own
+            // client. Recorded in UTF-16 code units because a browser-side
+            // validator counts `String.length`; the server's own enforcement
+            // is untested, so this is the client's cap, not a measured one.
+            cap: Some(LengthCap {
+                limit: 45_000,
+                unit: LengthUnit::Utf16CodeUnits,
+            }),
+            required: false,
+        },
+        // The same bootstrap carries `min_price: 0.95` with no currency: the
+        // store observed is New Zealand-based, every money field renders with
+        // a bare `$`, and nothing states which dollar. A minimum has no home
+        // in `LengthCap` and inventing an axis for one field would be worse
+        // than recording it here until the write path needs to enforce it.
+        price: FieldSpec::UNRECORDED,
+        taxonomy: FieldSpec::UNRECORDED,
+        // TPT has no grades field. Grades arrive inside the flat
+        // `taxonomyTags` slug array alongside subjects, resource types and
+        // file formats; the create form offers a separate 14-value grade
+        // selector, whose relationship to those tags is uncaptured.
+        grades: FieldSpec::UNRECORDED,
+        // The create form caps each upload slot separately — 4 GiB for the
+        // product, 30 MiB for the preview, 4 MiB for each of four thumbnails,
+        // 1 GiB for the video preview, and that last one moves with the
+        // per-account `double_video_file_size_limit` variant. One cap for the
+        // whole set would name none of them.
+        files: FieldSpec::UNRECORDED,
+    },
+    natives: TPT_NATIVES,
 };
+
+const TPT_NATIVES: &[NativeField] = &[
+    // One flat namespace: the nine slugs observed across 154 products span
+    // grades (4th-grade), audience (homeschool), subject (math), resource type
+    // (unit-plans) and file format (pdf) without distinguishing them. Nine
+    // slugs from one store is a sample, not a vocabulary, and TPT's own
+    // platform tag set is uncaptured. The create form's posted-field
+    // whitelist names a `TaxonomyTags` field, so the write very likely sets
+    // these, but no captured write does, so the read is all that is declared.
+    NativeField {
+        name: "taxonomyTags",
+        direction: FieldDirection::ReadOnly,
+        required: false,
+        vocabulary: NativeVocabulary::Unmeasured,
+    },
+    // Seller-owned shelves, so there is no platform-wide vocabulary to hold:
+    // the members are whatever this seller created. The product read names
+    // them `categories` with numeric ids and the gateway names the same
+    // entities `customCategories` with the ids stringified.
+    NativeField {
+        name: "categories",
+        direction: FieldDirection::ReadOnly,
+        required: false,
+        vocabulary: NativeVocabulary::Numeric,
+    },
+    // `TaxCodesQuery` on /graph/graphql returned the complete five-row
+    // `taxData` set: id 1 DA051011 digital audio, 2 DB031013 digital books,
+    // 3 DI010200 digital images, 4 DV010200 videos, 5 DO010000 other digital
+    // goods. The create form posts `data[ItemTaxCode][tax_code_id]`, and no
+    // capture shows whether that field carries the id or the code, so the
+    // write must settle which of the two it sends before it sends one.
+    NativeField {
+        name: "taxCode",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::Closed(&[
+            "DA051011", "DB031013", "DI010200", "DV010200", "DO010000",
+        ]),
+    },
+    // The `ResourceType` enum, recovered whole from the statistics page
+    // bundle. Only DIGITAL_PRODUCT occurs across this seller's 154 products.
+    NativeField {
+        name: "itemType",
+        direction: FieldDirection::ReadOnly,
+        required: false,
+        vocabulary: NativeVocabulary::Closed(&[
+            "DIGITAL_PRODUCT",
+            "BUNDLE",
+            "ONLINE_RESOURCE",
+            "VIDEO",
+        ]),
+    },
+    // Every one of the 154 products read ACTIVE, on `status`, `statusAdmin`
+    // and `statusCopyright` alike, so one store's steady state is all that is
+    // on file. The seller filter offers ACTIVE, INACTIVE and FEATURED, but a
+    // filter vocabulary is a different upstream enum from a product's status.
+    NativeField {
+        name: "status",
+        direction: FieldDirection::ReadOnly,
+        required: false,
+        vocabulary: NativeVocabulary::Unmeasured,
+    },
+    // PDF and ZIP across 154 products, always equal to `filePreview.format`.
+    // Two values from one store is a sample of what this seller uploads.
+    NativeField {
+        name: "kind",
+        direction: FieldDirection::ReadOnly,
+        required: false,
+        vocabulary: NativeVocabulary::Unmeasured,
+    },
+    // `EducationStandardsQuery` returned 166 jurisdiction roots — Common Core,
+    // NGSS, TEKS and the rest — but the form field takes a standard id from
+    // within a jurisdiction, and neither those ids nor the jurisdiction-to-id
+    // mapping is captured. The set is closed upstream and its members are not
+    // held here, which is exactly what an unlisted value being refused means.
+    NativeField {
+        name: "ItemsCommonCoreStandard.common_core_standard_id",
+        direction: FieldDirection::Written,
+        required: false,
+        vocabulary: NativeVocabulary::ClosedUncaptured,
+    },
+];
 
 #[cfg(test)]
 mod tests {
     use super::{
-        registry, truncate, FieldSpec, LengthCap, NativeVocabulary, TES_GB, TES_NATIVES, TPT,
+        registry, truncate, FieldDirection, FieldSpec, LengthCap, NativeVocabulary, TES_GB,
+        TES_NATIVES, TPT,
     };
     use tam_types::{FieldKey, InventoryId, LengthUnit};
 
@@ -383,13 +502,76 @@ mod tests {
     }
 
     #[test]
-    fn tpt_declares_nothing_until_first_contact_measures_it() {
+    fn the_tpt_title_cap_stays_undeclared_because_eighty_is_a_sample() {
         assert_eq!(
-            TPT.canonical,
-            super::CanonicalFields::UNRECORDED,
-            "the sampled 80-character cap has an unverified unit, so nothing is declared"
+            TPT.canonical.title.cap, None,
+            "the longest observed title is not a refusal anyone measured"
         );
-        assert!(TPT.natives.is_empty(), "no TPT native is on the wire yet");
+    }
+
+    #[test]
+    fn the_tpt_description_cap_is_the_one_the_create_form_hands_its_client() {
+        assert_eq!(
+            TPT.canonical.description.cap,
+            Some(cap(45_000, LengthUnit::Utf16CodeUnits)),
+            "45000 comes from the create page's own cfg bootstrap, counted as a JS validator does"
+        );
+    }
+
+    #[test]
+    fn no_tpt_field_is_declared_required_because_no_write_is_captured() {
+        for key in [
+            FieldKey::Title,
+            FieldKey::Description,
+            FieldKey::Price,
+            FieldKey::Taxonomy,
+            FieldKey::Grades,
+            FieldKey::Files,
+        ] {
+            assert!(
+                !TPT.canonical.get(key).required,
+                "no capture contains a TPT product write, so {key:?} records no refusal"
+            );
+        }
+        for native in TPT.natives {
+            assert!(
+                !native.required,
+                "{} likewise records no refusal, only a wire name",
+                native.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_tpt_tax_code_vocabulary_is_the_five_taxdata_rows() {
+        let tax = TPT
+            .natives
+            .iter()
+            .find(|native| native.name == "taxCode")
+            .map(|native| native.vocabulary);
+        let Some(NativeVocabulary::Closed(values)) = tax else {
+            panic!("TaxCodesQuery returned a complete set, got {tax:?}");
+        };
+        assert_eq!(values.len(), 5, "taxData carried exactly five rows");
+        assert_eq!(
+            values.first(),
+            Some(&"DA051011"),
+            "recorded in the order the query returned them"
+        );
+    }
+
+    #[test]
+    fn the_tpt_taxonomy_is_one_flat_read_only_namespace() {
+        let tags = TPT
+            .natives
+            .iter()
+            .find(|native| native.name == "taxonomyTags");
+        assert_eq!(
+            tags.map(|native| (native.direction, native.vocabulary)),
+            Some((FieldDirection::ReadOnly, NativeVocabulary::Unmeasured)),
+            "tags come back on read; whether a write sets them is uncaptured, and nine slugs \
+             from one store is a sample rather than a vocabulary"
+        );
     }
 
     #[test]
