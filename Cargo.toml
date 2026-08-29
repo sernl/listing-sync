@@ -13,6 +13,13 @@ members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/
 [workspace.dependencies]
 sha2 = "0.10"
 
+# The Markdown-to-HTML renderer the Tes-to-TPT body carriage runs through,
+# pinned here for the reason above: one Markdown body must render to one HTML
+# body on every path that renders it, and a per-crate version is how two paths
+# stop agreeing without anyone editing either. `default-features = false`
+# drops `getopts`, which exists for the crate's own command-line binary.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
 [workspace.lints.rust]
 unsafe_code                = "forbid"
 rust_2018_idioms           = { level = "deny", priority = -1 }

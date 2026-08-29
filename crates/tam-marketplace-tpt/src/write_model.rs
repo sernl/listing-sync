@@ -15,6 +15,7 @@
 //! `{"free": bool, ...}`, `Taxonomy` is JSON `{"tags": [..], "categories": [..]}`
 //! and `Grades` is JSON `{"tags": [..]}`.
 
+use pulldown_cmark::{html::push_html, Options, Parser};
 use serde_json::{json, Value};
 use tam_marketplace::{AdapterError, FieldSet, ProjectedListing};
 use tam_types::{
@@ -351,14 +352,12 @@ pub struct TptListing {
     /// carried `<p>` tags and an editor comment, so the canonical body is
     /// posted verbatim.
     ///
-    /// That holds for a TPT-native body, which is M7's whole scope. It does
-    /// not hold for a body canonicalised from a marketplace whose editor is
-    /// markdown — the sibling Tes adapter's is — where verbatim posting
-    /// renders the source text literally. Translating between body formats
-    /// belongs to the M6-deferred import-run generalisation, alongside the
-    /// grade crosswalk; it is deliberately not auto-detected here, because
-    /// guessing a body's format from its bytes is how a listing acquires
-    /// escaped markup nobody asked for.
+    /// A body canonicalised from a marketplace whose editor is markdown — the
+    /// sibling Tes adapter's is — reaches this field already rendered, by
+    /// `project_fields` and on the declared format rather than on a reading
+    /// of the bytes. Guessing a body's format from its bytes is how a listing
+    /// acquires escaped markup nobody asked for, so the declaration travels
+    /// and nothing here sniffs.
     pub description_html: String,
     /// The flat slug namespace: grade, subject, audience, resource type and
     /// file format, undifferentiated, exactly as the read side returns them.
@@ -708,6 +707,43 @@ fn is_tpt_tag_slug(native: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+/// The extensions the Markdown rendering runs under: CommonMark, plus the two
+/// GFM constructs whose absence changes a body rather than leaving it alone —
+/// a pipe table would reach TPT as literal pipes, a `~~cut~~` as literal
+/// tildes.
+///
+/// The rest of what pulldown-cmark offers stays off, smart punctuation most
+/// deliberately: it rewrites the seller's own quotes and dashes into other
+/// characters, which edits the copy rather than rendering it. Task lists are
+/// off because their rendering is an `<input>` element and what TPT's
+/// rich-text field does with one is unmeasured; without the extension the
+/// brackets survive as text, which is legible either way.
+const MARKDOWN_EXTENSIONS: Options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
+
+/// The body as TPT's description field takes it, which is HTML in every case.
+///
+/// An HTML body crosses byte-identical: TPT is the format's home and there is
+/// nothing to do to it. A Markdown body is rendered under
+/// [`MARKDOWN_EXTENSIONS`]. The rendering is a pure function of the bytes and
+/// that constant, so the same body projects to the same HTML on every run,
+/// which is what lets a projection be compared against a previous one.
+///
+/// Raw HTML inside a Markdown body passes through as written, because
+/// CommonMark says it is HTML and the target field is an HTML field. Nothing
+/// here sanitises: the body is the seller's own copy travelling from one of
+/// their listings to another, and this adapter is not the boundary that would
+/// decide what to strip from it.
+fn body_as_html(body: &str, format: CopyFormat) -> String {
+    match format {
+        CopyFormat::Html => body.to_owned(),
+        CopyFormat::Markdown => {
+            let mut rendered = String::new();
+            push_html(&mut rendered, Parser::new_ext(body, MARKDOWN_EXTENSIONS));
+            rendered
+        }
+    }
+}
+
 /// TPT's own wire shape, rendered here rather than in the engine that seeds
 /// the item. A taxonomy term whose native id parses as a number is a seller
 /// shelf — TPT addresses `categories` by numeric id — and one whose native id
@@ -723,21 +759,19 @@ fn is_tpt_tag_slug(native: &str) -> bool {
 /// both shelves and tags by identifiers it issued, and there is nothing to
 /// send in place of one.
 ///
-/// So is a body in the other format. TPT stores and returns its description
-/// as HTML, so Markdown posted here renders its `**bold**` and its `#`
-/// headings literally on the seller's live listing. Until the converter
-/// decision lands, a cross-format sync refuses rather than corrupts, which is
-/// what the declaration exists to make possible.
+/// A body in the other format is not refused; it is rendered. TPT stores and
+/// returns its description as HTML, so a Tes-sourced Markdown body posted
+/// verbatim would show its `**bold**` and its `#` headings as themselves on
+/// the seller's live listing, which [`body_as_html`] is here to prevent. The
+/// declaration is what makes the rendering possible at all: the bytes never
+/// say which of the two formats they are, and sniffing them is how a listing
+/// acquires escaped markup nobody asked for.
+///
+/// The match on the format is total, so no arm is left over to refuse in. A
+/// third body format would fail to compile at that match rather than reach a
+/// runtime rejection, which is where deciding how to render it belongs.
 pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
-    if listing.body_format != CopyFormat::Html {
-        return Err(refuse(format!(
-            "TPT stores and returns its description as {:?} and this listing declares {:?}; \
-             the body is refused rather than converted, because posting one format's bytes \
-             into the other's field renders the markup literally",
-            CopyFormat::Html,
-            listing.body_format,
-        )));
-    }
+    let body = body_as_html(&listing.body, listing.body_format);
     let price = match listing.price {
         PriceIntent::Free => json!({ "free": true }),
         // TPT's own wire carries an amount and no denomination, so an amount
@@ -807,13 +841,13 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
         grades.push(native.to_owned());
     }
     Ok(FieldSet {
-        // TPT's own wire is HTML and the projection above refuses anything
-        // else, so the declaration the seam carries is a fact of this
+        // TPT's own wire is HTML and the projection above renders anything
+        // else into it, so the declaration the seam carries is a fact of this
         // marketplace rather than of one listing.
         body_format: Some(CopyFormat::Html),
         entries: vec![
             (FieldKey::Title, listing.title.clone()),
-            (FieldKey::Description, listing.body.clone()),
+            (FieldKey::Description, body),
             (FieldKey::Price, price.to_string()),
             (
                 FieldKey::Taxonomy,
@@ -908,7 +942,7 @@ pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterEr
 #[cfg(test)]
 mod tests {
     use super::{
-        create_fields, dotted_path, edit_fields, listing_from_field_set, project_fields,
+        create_fields, dotted_path, edit_fields, entry, listing_from_field_set, project_fields,
         written_field_paths, AuthorshipDeclaration, CreateSubmission, EditSubmission, ListingPrice,
         PaidPrice, PriceError, StatusUser, TaxCode, TptListing, MIN_PRICE_MINOR_UNITS,
     };
@@ -1272,26 +1306,124 @@ mod tests {
         }
     }
 
-    /// O.16. TPT stores and returns its description as HTML, so a Markdown
-    /// body posted here renders its markup literally on the seller's live
-    /// listing. F3's settled interim is that the declaration refuses rather
-    /// than converting, and the refusal names both formats so the seller is
-    /// told what the mismatch was.
+    fn described(body: &str, format: CopyFormat) -> String {
+        let fields = project_fields(&ProjectedListing {
+            body: body.to_owned(),
+            body_format: format,
+            ..projected(PriceIntent::Free)
+        })
+        .expect("a body in either declared format projects");
+        entry(&fields, FieldKey::Description)
+            .expect("the projection carries a description")
+            .to_owned()
+    }
+
+    /// O.16, settled the other way. TPT stores and returns its description as
+    /// HTML and a Tes body is Markdown, so the projection renders rather than
+    /// leaving the seller's `**bold**` to be read as itself on a live
+    /// listing.
     #[test]
-    fn a_markdown_body_is_refused_rather_than_posted_into_the_html_field() {
-        let refused = project_fields(&ProjectedListing {
-            body: "**bold** and a # heading".to_owned(),
+    fn a_markdown_body_is_rendered_into_the_html_field() {
+        let html = described(
+            "## Fractions\n\n**bold** text\n\n- one\n- two\n",
+            CopyFormat::Markdown,
+        );
+        assert!(
+            html.contains("<h2>Fractions</h2>"),
+            "a heading renders as a heading element, got {html}"
+        );
+        assert!(
+            html.contains("<strong>bold</strong>"),
+            "emphasis renders as markup, got {html}"
+        );
+        assert!(
+            html.contains("<ul>") && html.contains("<li>one</li>"),
+            "a list renders as a list, got {html}"
+        );
+        assert!(
+            !html.contains("**") && !html.contains("## "),
+            "no source syntax survives to be read literally, got {html}"
+        );
+    }
+
+    /// The declaration decides, and TPT is HTML's home: a body already in the
+    /// target format reaches the field as the bytes it arrived as, with no
+    /// parse-and-reserialise round trip in the way.
+    #[test]
+    fn an_html_body_crosses_byte_identical() {
+        let source = "<p>ten worksheets</p>\n<!-- editor -->";
+        assert_eq!(
+            described(source, CopyFormat::Html),
+            source,
+            "an HTML body is passed through rather than re-rendered"
+        );
+    }
+
+    /// The rendering is a pure function of the bytes and `MARKDOWN_EXTENSIONS`.
+    /// A projection that varied per run could not be compared against the
+    /// previous one, which is what tells a sync there is nothing to write.
+    #[test]
+    fn the_rendering_is_deterministic() {
+        let source = "# One\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n~~cut~~ and `code`\n";
+        assert_eq!(
+            described(source, CopyFormat::Markdown),
+            described(source, CopyFormat::Markdown),
+            "the same body renders to the same bytes"
+        );
+    }
+
+    /// The extension set is the choice this conversion turns on, so it is
+    /// pinned by behaviour rather than by reading the constant back. Tables
+    /// and strikethrough are on because their absence changes a body;
+    /// smart punctuation is off because its presence edits one.
+    #[test]
+    fn the_extension_set_renders_gfm_and_leaves_the_sellers_punctuation_alone() {
+        let table = described("| a | b |\n|---|---|\n| 1 | 2 |\n", CopyFormat::Markdown);
+        assert!(
+            table.contains("<table>") && table.contains("<td>1</td>"),
+            "a pipe table renders as a table rather than as literal pipes, got {table}"
+        );
+        let struck = described("~~cut~~\n", CopyFormat::Markdown);
+        assert!(
+            struck.contains("<del>cut</del>"),
+            "strikethrough renders as markup rather than as literal tildes, got {struck}"
+        );
+        let punctuation = described("She said \"no\" -- twice...\n", CopyFormat::Markdown);
+        assert!(
+            punctuation.contains("She said \"no\" -- twice..."),
+            "the seller's own quotes, dashes and dots survive as the characters they typed, \
+             got {punctuation}"
+        );
+        assert!(
+            !punctuation.contains('\u{201c}')
+                && !punctuation.contains('\u{2014}')
+                && !punctuation.contains('\u{2026}'),
+            "smart punctuation is off, so no curly quote, em dash or ellipsis is substituted \
+             in, got {punctuation}"
+        );
+    }
+
+    /// The rendered body is a projected body, so the projection's own parser
+    /// reads it back as the description TPT would be posted.
+    #[test]
+    fn a_rendered_body_reaches_the_submission_the_parser_builds() {
+        let fields = project_fields(&ProjectedListing {
+            body: "**bold**\n".to_owned(),
             body_format: CopyFormat::Markdown,
             ..projected(PriceIntent::Free)
         })
-        .expect_err("no converter is configured, so the cross-format body is refused");
-        let AdapterError::Rejected { detail, .. } = refused else {
-            panic!("a body the target cannot take is a rejection, got {refused:?}");
-        };
-        assert!(
-            detail.0.contains("Html") && detail.0.contains("Markdown"),
-            "the refusal names both formats, got {}",
-            detail.0
+        .expect("a Markdown body projects");
+        let listing =
+            listing_from_field_set(&fields).expect("the submit parses its own projection");
+        assert_eq!(
+            listing.description_html,
+            entry(&fields, FieldKey::Description).expect("the projection carries a description"),
+            "the submission carries the rendered body and not the Markdown source"
+        );
+        assert_eq!(
+            fields.body_format,
+            Some(CopyFormat::Html),
+            "the projected body declares the format TPT stores, whatever the source declared"
         );
     }
 

@@ -366,3 +366,18 @@ Two things are deliberately not invented.
 An off-origin redirect is refused rather than followed: no capture carries a signed hop, and the transport refuses a session request to any host but the origin, which is the rule that keeps the seller's cookies on the marketplace.
 And the refusal for the gate is its own condition rather than `SessionExpired`, because the same jar that meets it authenticates everything else, so re-authenticating is the wrong remedy to send an operator after.
 
+## The body carriage: pass-through one way, rendered the other, 2026-08-29
+
+The founder approved `pulldown-cmark` as the workspace's Markdown-to-HTML renderer, which is the one dependency this decision adds.
+
+The two directions are not symmetric, because the two marketplaces are not.
+Tes takes either format and posts the matching `descriptionRawType`, which the 2026-08-29 live probe established against a real draft, so a TPT-sourced HTML body crosses to Tes as itself and no HTML-to-Markdown converter is needed anywhere in this system.
+TPT stores and returns its description as HTML alone, so a Tes-sourced Markdown body is rendered at `project_fields` before it reaches the wire, and the interim that refused such a body rather than corrupting it is superseded.
+The rendering runs on the declared format and never on a reading of the bytes; sniffing is what the declaration exists to prevent.
+
+The extension set is CommonMark plus tables and strikethrough, and deliberately nothing else.
+Those two are on because their absence changes a body: a pipe table would reach TPT as literal pipes.
+Smart punctuation is off because its presence edits one, rewriting the seller's own quotes and dashes into other characters, which is not a rendering of their copy but a change to it.
+Task lists are off because their rendering is an `<input>` element and what TPT's rich-text field does with one is unmeasured.
+The renderer is pinned in `[workspace.dependencies]` for the reason `sha2` is, so that one Markdown body renders to one HTML body on every path that renders it.
+

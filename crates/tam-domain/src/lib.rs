@@ -351,7 +351,8 @@ pub struct ListingProjection {
     pub title: String,
     pub body: String,
     /// The declared format of `body`, carried across the seam so an adapter
-    /// whose platform takes the other one refuses rather than converting.
+    /// whose platform takes the other one renders on a declaration rather
+    /// than on a reading of the bytes.
     pub body_format: CopyFormat,
     pub price: PriceIntent,
     pub taxonomy: Vec<VocabularyPath>,

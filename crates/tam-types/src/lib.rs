@@ -373,9 +373,11 @@ pub struct ListingCopy {
 /// How a listing body is written. Declared rather than sniffed: guessing a
 /// body's format from its bytes is how a listing acquires escaped markup
 /// nobody asked for, which `write_model.rs` already ruled out on the TPT
-/// side. A projection whose source and target disagree refuses rather than
-/// converting, so a mismatch is a named refusal and never a silent
-/// corruption.
+/// side. A projection whose source and target disagree renders on this
+/// declaration — Tes takes either format and posts the matching
+/// `descriptionRawType`, TPT takes HTML and the projection renders Markdown
+/// into it — so the carriage is a decision about a declared format and never
+/// a guess at an undeclared one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CopyFormat {
     Markdown,

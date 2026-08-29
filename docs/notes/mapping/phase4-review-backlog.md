@@ -81,6 +81,7 @@ Slice two's `settle_if_complete` takes the same lock earlier in its transaction,
 *The drain report still does not count refusals, so the new refusing paths are invisible in the recorded job* — should-fix, `crates/tam-import/src/main.rs:192`.
 `DrainTotals` has no refusal field, so a run in which every row refused records as indistinguishable from a run with no rows.
 Deferred post-battery: the battery reads its refusals from the process's own stderr, and slice one's body-format refusals made this more visible rather than less.
+The Tes-to-TPT half of those is now a rendering rather than a refusal, which removes one refusing path without touching the finding.
 
 ## Deferred: tests and documentation
 

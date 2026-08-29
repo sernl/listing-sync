@@ -84,6 +84,16 @@ The backfill is `markdown` because every product on file was imported from
 Tes, whose draft body posts `descriptionRawType: "md"`; the first HTML body
 arrives with the TPT import and declares itself.
 
+Both directions of the carriage are now closed, and asymmetrically, because
+the marketplaces are. Tes takes either format and posts the matching
+`descriptionRawType`, established against a live draft on 2026-08-29, so a
+TPT-sourced HTML body crosses as itself. TPT takes HTML alone, so a
+Tes-sourced Markdown body is rendered at `project_fields` by
+`pulldown-cmark`, the one dependency that direction needs and the one the
+founder approved for it. The interim that refused a cross-format body rather
+than corrupting it is superseded; `decisions.md` carries the extension set
+the rendering runs under and why each choice is where it is.
+
 ## Two smaller departures, recorded so they are not read as drift
 
 `AxisKey` is not introduced. Its stated ground was that `tam-domain` depends on
