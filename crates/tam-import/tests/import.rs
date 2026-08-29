@@ -36,7 +36,7 @@ fn draft_body_licensed(resource: i64, licence: &str, price: serde_json::Value) -
         "id": resource,
         "title": "Fractions practice",
         "descriptionRaw": "A worksheet.",
-        "descriptionRawType": "markdown",
+        "descriptionRawType": "md",
         "licence": licence,
         "categories": [{ "id": 1_000_454 }, { "id": 1_000_732 }],
         "ageRanges": [2],
