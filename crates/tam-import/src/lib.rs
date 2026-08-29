@@ -697,12 +697,13 @@ where
 /// where the seven-row table now lives; what remains here is resolving a
 /// stated amount against the inventory's currency rule.
 ///
-/// A seller-scoped inventory renders a bare symbol — TPT's captured product
-/// shows `$` on a New Zealand store — and reading that as USD would put an
-/// unmeasured currency inside `Money`, where it is indistinguishable from a
-/// measured one and the parity and price-floor guards compare across the
-/// wrong denomination. `CurrencyUnknown` is the designed answer and the
-/// variant's own doc says a probe removes it, not a guess.
+/// A seller-scoped inventory renders a bare symbol, and reading that as USD
+/// would put an unmeasured currency inside `Money`, where it is
+/// indistinguishable from a measured one and the parity and price-floor
+/// guards compare across the wrong denomination. `CurrencyUnknown` is the
+/// designed answer and the variant's own doc says a probe removes it, not a
+/// guess -- which is what happened to TPT, whose rule the founder settled in
+/// the seller account rather than by reading its dollar sign.
 fn resolve_price(source: InventoryId, price: &ImportedPrice) -> Result<PriceIntent, ImportError> {
     let ImportedPrice::Paid {
         minor_units,
@@ -851,16 +852,35 @@ mod tests {
 
     #[test]
     fn a_seller_scoped_inventory_refuses_rather_than_reading_a_symbol_as_a_currency() {
-        // The captured TPT product renders a bare `$` on a New Zealand store.
         // A symbol-to-currency rule would put an unmeasured currency inside
         // Money, where it is indistinguishable from a measured one and the
         // parity and price-floor guards then compare across the wrong
         // denomination.
-        let refused = resolve_price(InventoryId::Tpt, &paid(495, "$"));
+        let refused = resolve_price(InventoryId::Etsy, &paid(495, "$"));
         assert!(
-            matches!(refused, Err(ImportError::CurrencyUnknown { inventory }) if inventory == InventoryId::Tpt),
+            matches!(refused, Err(ImportError::CurrencyUnknown { inventory }) if inventory == InventoryId::Etsy),
             "a seller-scoped currency is unmeasured, and the variant's own doc says a probe \
              removes it rather than a guess"
+        );
+    }
+
+    /// The probe that removed the variant for TPT: the founder confirmed in
+    /// their own seller account on 2026-08-29 that the marketplace sells in
+    /// USD and offers nothing else.
+    #[test]
+    fn the_tpt_inventory_denominates_from_the_currency_the_founder_confirmed() {
+        assert_eq!(
+            resolve_price(InventoryId::Tpt, &paid(495, "USD")).ok(),
+            Money::new(495, Currency::Usd).ok().map(PriceIntent::Paid),
+            "TPT sells in one currency, so the price is denominated rather than blocked"
+        );
+        assert!(
+            matches!(
+                resolve_price(InventoryId::Tpt, &paid(495, "GBP")),
+                Err(ImportError::Price(_))
+            ),
+            "and a pound amount is refused rather than redenominated, because the wire \
+             carries a bare number and would sell it as that many dollars"
         );
     }
 

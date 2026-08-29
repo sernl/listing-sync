@@ -152,8 +152,8 @@ pub enum CurrencyRule {
     /// returned USD offers, so currency follows the inventory rather than the
     /// viewer. The GB-cookie case specifically has not been tested.
     Fixed(Currency),
-    /// Set by the seller at shop level. Unverified for Etsy and TPT; must be
-    /// established before either connector is built.
+    /// Set by the seller at shop level. Unverified for Etsy; must be
+    /// established before that connector is built.
     SellerScoped,
     /// Not yet probed. `ProjectionBlocked::CurrencyUnknown` is the designed
     /// consumer: a projection into an unmeasured inventory blocks rather than
@@ -191,7 +191,16 @@ impl InventoryId {
                 reason = "the GBP value coincides with TesGb today, but the NZ rule is a re-openable founder observation rather than the definitional GB fact, so the arms stay distinct to carry their own provenance"
             )]
             Self::TesNz => CurrencyRule::Fixed(Currency::Gbp),
-            Self::Etsy | Self::Tpt => CurrencyRule::SellerScoped,
+            // Confirmed by the founder in their own TPT seller account on
+            // 2026-08-29: the marketplace sells in USD and offers no other
+            // currency to select. The read's bare `$` is therefore a fact of
+            // how TPT renders money and not evidence of which currency it is.
+            #[expect(
+                clippy::match_same_arms,
+                reason = "the USD value coincides with TesUs, but this is a founder observation of one marketplace's pricing rather than that inventory's definitional fact, so the arms stay distinct to carry their own provenance"
+            )]
+            Self::Tpt => CurrencyRule::Fixed(Currency::Usd),
+            Self::Etsy => CurrencyRule::SellerScoped,
         }
     }
 }

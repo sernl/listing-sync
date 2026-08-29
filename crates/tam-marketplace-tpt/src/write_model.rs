@@ -17,7 +17,10 @@
 
 use serde_json::{json, Value};
 use tam_marketplace::{AdapterError, FieldSet, ProjectedListing};
-use tam_types::{CopyFormat, FailureCode, FailureDetail, FieldKey, PriceIntent, Timestamp};
+use tam_types::{
+    CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, InventoryId, PriceIntent,
+    Timestamp,
+};
 
 use crate::form::{ThumbHandle, TptFormTokens};
 use crate::upload::ProcessedHandle;
@@ -737,14 +740,35 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
     }
     let price = match listing.price {
         PriceIntent::Free => json!({ "free": true }),
-        // The currency travels so a mismatch is visible to whatever compares
-        // projections; TPT's own wire carries an amount and no denomination,
-        // and `listing_from_field_set` reads only the amount back.
-        PriceIntent::Paid(money) => json!({
-            "free": false,
-            "minorUnits": money.minor_units(),
-            "currency": format!("{:?}", money.currency()),
-        }),
+        // TPT's own wire carries an amount and no denomination, so an amount
+        // in another currency would be posted as dollars and sold at
+        // whatever that number happens to be. The inventory fixes USD, and a
+        // price stated in anything else is the seller's to restate rather
+        // than this adapter's to convert.
+        PriceIntent::Paid(money) => {
+            let CurrencyRule::Fixed(currency) = InventoryId::Tpt.currency_rule() else {
+                return Err(refuse(
+                    "a paid TPT listing needs a fixed currency and the inventory declares none"
+                        .to_owned(),
+                ));
+            };
+            if money.currency() != currency {
+                return Err(refuse(format!(
+                    "TPT sells in {} and this listing is priced in {}; the wire carries a bare \
+                     amount, so posting it would sell the resource at that number of dollars",
+                    currency.code(),
+                    money.currency().code(),
+                )));
+            }
+            // The currency still travels, so a mismatch stays visible to
+            // whatever compares projections; `listing_from_field_set` reads
+            // only the amount back.
+            json!({
+                "free": false,
+                "minorUnits": money.minor_units(),
+                "currency": format!("{:?}", money.currency()),
+            })
+        }
     };
     let mut tags: Vec<String> = Vec::new();
     let mut categories: Vec<String> = Vec::new();
@@ -1288,6 +1312,24 @@ mod tests {
             "a numeric native id is a seller shelf, which is the only thing TPT numbers"
         );
         assert_eq!(fields.files.len(), 1, "the file list crosses untouched");
+    }
+
+    /// G-O6, settled: TPT sells in USD and offers the seller no other
+    /// currency. Its wire carries a bare amount, so a pound price posted here
+    /// would sell the resource at that many dollars; the seller restates the
+    /// target price rather than this adapter inventing an exchange rate.
+    #[test]
+    fn a_price_in_another_currency_than_the_one_tpt_sells_in_is_refused() {
+        let money = Money::new(300, Currency::Gbp).expect("a positive amount is money");
+        let refused = project_fields(&projected(PriceIntent::Paid(money)));
+        let Err(AdapterError::Rejected { detail, .. }) = refused else {
+            panic!("a price TPT cannot denominate is a rejection, got {refused:?}");
+        };
+        assert!(
+            detail.0.contains("USD") && detail.0.contains("GBP"),
+            "the refusal names both currencies, got {}",
+            detail.0
+        );
     }
 
     #[test]

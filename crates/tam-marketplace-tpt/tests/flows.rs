@@ -478,10 +478,10 @@ fn the_import_read_yields_the_product_whole_and_states_what_it_did_not_carry() {
         listing.price,
         ImportedPrice::Paid {
             minor_units: 300,
-            denomination: "$".to_owned(),
+            denomination: "USD".to_owned(),
         },
-        "the symbol travels as the wire wrote it; the store is New Zealand-based and reading \
-         a bare dollar as USD would put an unmeasured currency inside Money"
+        "TPT sells in USD and offers no other currency, so the denomination is the \
+         inventory's rule rather than a reading of the dollar sign beside the amount"
     );
     assert_eq!(
         listing.rights, None,

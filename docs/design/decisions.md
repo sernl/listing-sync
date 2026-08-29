@@ -332,3 +332,15 @@ Three things implementation found that the plan had wrong, recorded so they are 
 Narrowing `projection_edge`'s primary key would have forbidden the very relation the grade axis needs — one band covers eight year groups — so the single-valued rule is a partial unique index excluding narrower edges, which delivers the stated purpose exactly and over-delivers nothing.
 Two CHECKs govern `job_item.operation`, not one, and widening only the shape constraint admits a value the value list still refuses.
 A grade path the relation does not recognise is now carried out as unrecognised rather than relabelled into the target vocabulary and posted, which means a product whose grades were never seeded publishes with no grades until the seeder has run: the one place the fix trades a wrong value for an absent one.
+
+## The TPT currency, fixed to USD by the founder, 2026-08-29
+
+The founder checked their own TPT seller account and confirmed the marketplace sells in USD and offers no other currency to select.
+`InventoryId::Tpt` moves from `CurrencyRule::SellerScoped` to `CurrencyRule::Fixed(Currency::Usd)`, which supersedes the Tpt half of "The NZ currency, fixed to GBP by observation, 2026-08-28"; Etsy stays seller-scoped and unverified.
+This settles G-O6 and unblocks paid TES-to-TPT sync, which the projection's currency gate had been blocking as `CurrencyUnknown`.
+
+Two refusals stand in place of a conversion.
+A TPT read whose amount is rendered with anything but a dollar sign is refused rather than redenominated, because the rule and the wire would then disagree and picking one is not a resolution.
+A projection into TPT carrying a price in another currency is refused at `project_fields`, exactly as the Tes adapter refuses a dollar price into its GB inventory: TPT's wire carries a bare amount, so a pound price would sell the resource at that many dollars.
+A seller converting a GBP listing states the target USD price through the pricing election; no exchange rate is invented anywhere in this system.
+

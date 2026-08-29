@@ -47,9 +47,11 @@ pub const STATS_ALIAS: &str = "totals";
 
 /// A money field as TPT renders it: the symbol exactly as the wire wrote it,
 /// and the amount in hundredths. The currency is deliberately not resolved to
-/// a [`tam_types::Currency`] — the captured store is New Zealand-based, the
-/// symbol is a bare `$`, and the create form's minimum price carries no
-/// currency either, so naming one here would be a guess.
+/// a [`tam_types::Currency`] here — the wire renders a bare `$` and the
+/// create form's minimum price carries no currency at all, so this parse has
+/// nothing to resolve from. Which currency that dollar is denominates from
+/// the inventory's own rule at the adapter boundary, where the founder's
+/// 2026-08-29 account check settled it as USD.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TptPrice {
     pub symbol: String,

@@ -23,8 +23,8 @@ use tam_marketplace::{
     RemovalPlan, RevisePlan, SchemaDrift, SubmitEvidence,
 };
 use tam_types::{
-    ContentHash, CopyFormat, FailureCode, FailureDetail, FieldKey, FileId, ImportedPrice,
-    ImportedTerm, InventoryId, OrgId, Timestamp,
+    ContentHash, CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, FileId,
+    ImportedPrice, ImportedTerm, InventoryId, OrgId, Timestamp,
 };
 
 use crate::classify::{
@@ -78,6 +78,44 @@ fn not_first_party(what: &str) -> AdapterError {
             "a {what} is justified only by the first-party-export capability"
         )),
     }
+}
+
+/// The symbol TPT renders every amount with, and the only one it renders:
+/// the marketplace sells in one currency.
+const DOLLAR: &str = "$";
+
+/// A paid price, denominated from the inventory's own rule rather than from
+/// the symbol beside it.
+///
+/// TPT sells in USD and offers the seller no other currency, confirmed in the
+/// account on 2026-08-29, so the denomination is a fact of the marketplace.
+/// The symbol is still read: a non-dollar symbol on a dollar-only marketplace
+/// contradicts what that rule asserts, and naming the contradiction is worth
+/// more than redenominating around it.
+fn imported_price(price: &read_model::TptPrice) -> Result<ImportedPrice, AdapterError> {
+    if price.symbol != DOLLAR {
+        return Err(AdapterError::Rejected {
+            code: FailureCode::VerificationMismatch,
+            detail: FailureDetail(format!(
+                "TPT prices in USD and rendered this amount with {:?}; the currency rule and \
+                 the wire disagree, which is not something to resolve by picking one",
+                price.symbol
+            )),
+        });
+    }
+    let CurrencyRule::Fixed(currency) = InventoryId::Tpt.currency_rule() else {
+        return Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(
+                "a paid TPT product needs a fixed currency and the inventory declares none"
+                    .to_owned(),
+            ),
+        });
+    };
+    Ok(ImportedPrice::Paid {
+        minor_units: price.minor_units,
+        denomination: currency.code().to_owned(),
+    })
 }
 
 fn refuse_upload(detail: String) -> AdapterError {
@@ -790,10 +828,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             price: if product.is_free {
                 ImportedPrice::Free
             } else {
-                ImportedPrice::Paid {
-                    minor_units: product.price.minor_units,
-                    denomination: product.price.symbol,
-                }
+                imported_price(&product.price)?
             },
             state: product
                 .status
