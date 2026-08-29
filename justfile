@@ -27,7 +27,7 @@ check:
 purity:
     #!/usr/bin/env sh
     set -eu
-    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain --prefix none)"
+    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy --prefix none)"
     if printf '%s\n' "$tree" | grep -E '^(tokio|tokio-util|reqwest|sqlx) v'; then
         echo 'purity violation: a banned dependency reached the pure core' >&2
         exit 1

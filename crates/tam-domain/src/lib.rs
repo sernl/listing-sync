@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod equivalence;
 pub mod registry;
 
 use tam_marketplace::{

@@ -6,8 +6,12 @@
 //! the `Exact` relation only, because inverting a `Broader` edge would restore
 //! the distinction the edge dropped.
 
+use tam_domain::equivalence::{
+    AxisOutcome, Election, ElectionTrigger, Loss, PricingBranch, VocabularyGap,
+};
+use tam_domain::registry::{registry, AxisBinding, Cardinality};
 use tam_domain::{EdgeKind, ProjectionEdge, TermProjection, VocabularyId, VocabularyPath};
-use tam_types::CanonicalTermId;
+use tam_types::{CanonicalTermId, InventoryId, ProductId};
 
 /// A term whose projection has no correct answer, carrying the projection so
 /// the caller can raise a reconciliation item naming which of the two it was.
@@ -113,6 +117,120 @@ pub fn project_terms(
     outcome
 }
 
+/// One axis's projection, as the caller states it. Bundled because the arity
+/// would otherwise exceed the workspace argument limit.
+///
+/// The binding is a parameter rather than a lookup through
+/// `registry(inventory)`, deliberately: every populated cardinality on the
+/// five real inventories is `One` or `Many { cap: None }`, so a cap overflow
+/// has no fixture anywhere, and injecting the binding is what makes the
+/// no-truncation invariant testable at all.
+#[derive(Debug, Clone, Copy)]
+pub struct AxisRequest<'a> {
+    pub product: ProductId,
+    pub inventory: InventoryId,
+    pub binding: AxisBinding,
+    pub terms: &'a [CanonicalTermId],
+    /// Which side of the free/paid gate the product sits on. A `Supply`
+    /// question is unanswerable without it, because the branch decides which
+    /// values the target will even accept.
+    pub pricing: PricingBranch,
+}
+
+/// Projects one whole axis into one target inventory, naming a gap, an
+/// election, a loss and an unrecognised value apart.
+///
+/// `project_terms` is the term-level primitive underneath and stays exactly as
+/// it was; what this adds is the axis-level facts a term never carries — the
+/// target's cardinality, its requiredness, and the product the question is
+/// about.
+#[must_use]
+pub fn project_axis(
+    request: AxisRequest<'_>,
+    edges: &[ProjectionEdge],
+    no_counterparts: &[(CanonicalTermId, VocabularyId)],
+) -> AxisOutcome {
+    let target = VocabularyId(request.inventory, request.binding.axis);
+    let terms = project_terms(request.terms, target, edges, no_counterparts);
+
+    let mut outcome = AxisOutcome {
+        resolved: terms.included,
+        loss: terms.loss.iter().filter_map(broadening).collect(),
+        omitted: terms.omitted,
+        ..AxisOutcome::default()
+    };
+    for blocked in terms.blocked {
+        outcome.gaps.push(VocabularyGap {
+            term: blocked.term,
+            target,
+            projection: blocked.projection,
+        });
+    }
+
+    let raise = |trigger| Election {
+        product: request.product,
+        inventory: request.inventory,
+        axis: request.binding.axis,
+        trigger,
+    };
+    if let Some(trigger) =
+        elect_over_cardinality(request.binding.cardinality, &mut outcome.resolved)
+    {
+        outcome.elections.push(raise(trigger));
+    } else if requires_a_value(&request) && request.terms.is_empty() {
+        outcome.elections.push(raise(ElectionTrigger::Supply {
+            pricing: request.pricing,
+        }));
+    }
+    outcome
+}
+
+/// Requiredness is read off the `NativeField` the binding names rather than
+/// restated on the binding, so the two declarations cannot disagree. An axis
+/// bound to a field the registry does not hold is not required, which the
+/// registry's own test forbids from arising.
+fn requires_a_value(request: &AxisRequest<'_>) -> bool {
+    registry(request.inventory)
+        .native(request.binding.native)
+        .is_some_and(|native| native.required)
+}
+
+/// Cap overflow is a decision, never a truncation. The resolved set is taken
+/// whole into the election, so no partially-narrowed set exists anywhere for
+/// a caller to publish by accident.
+fn elect_over_cardinality(
+    cardinality: Cardinality,
+    resolved: &mut Vec<VocabularyPath>,
+) -> Option<ElectionTrigger> {
+    match cardinality {
+        Cardinality::One if resolved.len() > 1 => Some(ElectionTrigger::ElectOne {
+            from: core::mem::take(resolved),
+        }),
+        Cardinality::Many { cap: Some(cap) } if resolved.len() > cap.limit => {
+            Some(ElectionTrigger::OverCap {
+                cap: cap.limit,
+                from: core::mem::take(resolved),
+            })
+        }
+        Cardinality::One | Cardinality::Many { .. } => None,
+    }
+}
+
+/// `project_terms` carries its loss as the `TermProjection` that produced it;
+/// an axis outcome carries it as a `Loss`, which is the form the seller sees
+/// and the mapping records.
+fn broadening(projection: &TermProjection) -> Option<Loss> {
+    match projection {
+        TermProjection::Broadened { to, dropped } => Some(Loss::Broadened {
+            to: to.clone(),
+            dropped: dropped.clone(),
+        }),
+        TermProjection::Exact { .. }
+        | TermProjection::Ambiguous { .. }
+        | TermProjection::Absent => None,
+    }
+}
+
 /// The inbound direction: the reverse of the `Exact` relation, matching on
 /// vocabulary and segments because the segments are the path's identity and a
 /// marketplace need not expose a native id.
@@ -212,11 +330,15 @@ pub fn ingest_by_native_id(
 
 #[cfg(test)]
 mod tests {
-    use super::{ingest, project, project_terms, BlockedTerm};
+    use super::{ingest, project, project_axis, project_terms, AxisRequest, BlockedTerm};
+    use tam_domain::equivalence::{
+        AxisOutcome, ElectionTrigger, Loss, PricingBranch, VocabularyGap,
+    };
+    use tam_domain::registry::{AxisBinding, Cardinality, CountCap, Delegation};
     use tam_domain::{
         Decider, EdgeKind, ProjectionEdge, TermKind, TermProjection, VocabularyId, VocabularyPath,
     };
-    use tam_types::{CanonicalTermId, InventoryId, Timestamp, Uuid};
+    use tam_types::{CanonicalTermId, InventoryId, ProductId, Timestamp, Uuid};
 
     const TERM: CanonicalTermId = CanonicalTermId(Uuid([0x01; 16]));
     const OTHER: CanonicalTermId = CanonicalTermId(Uuid([0x02; 16]));
@@ -324,6 +446,221 @@ mod tests {
             project(TERM, TARGET, &edges),
             TermProjection::Exact { to: path("Maths") },
             "a broader edge duplicating the exact target is degenerate"
+        );
+    }
+
+    const PRODUCT: ProductId = ProductId(Uuid([0x0f; 16]));
+
+    fn binding(cardinality: Cardinality) -> AxisBinding {
+        AxisBinding {
+            axis: TermKind::Subject,
+            native: "categories",
+            cardinality,
+            delegation: Delegation::ByOptIn,
+        }
+    }
+
+    fn request(terms: &[CanonicalTermId], cardinality: Cardinality) -> AxisRequest<'_> {
+        AxisRequest {
+            product: PRODUCT,
+            inventory: InventoryId::TesNz,
+            binding: binding(cardinality),
+            terms,
+            pricing: PricingBranch::Free,
+        }
+    }
+
+    const MANY: Cardinality = Cardinality::Many { cap: None };
+
+    #[test]
+    fn every_source_term_lands_in_exactly_one_bucket() {
+        // The trichotomy's totality, enumerated rather than sampled: these
+        // are every shape `project` can return for one term, plus the
+        // no-counterpart branch, which is the only thing that turns an
+        // `Absent` into an omission.
+        let cases: [(&str, Vec<ProjectionEdge>, bool); 5] = [
+            (
+                "exact",
+                vec![edge(TERM, path("Maths"), EdgeKind::Exact)],
+                false,
+            ),
+            (
+                "broadened",
+                vec![edge(TERM, path("Maths"), EdgeKind::Broader)],
+                false,
+            ),
+            (
+                "ambiguous",
+                vec![
+                    edge(TERM, path("Maths"), EdgeKind::Broader),
+                    edge(TERM, path("Science"), EdgeKind::Broader),
+                ],
+                false,
+            ),
+            ("absent", vec![], false),
+            ("omitted", vec![], true),
+        ];
+        for (name, edges, recorded) in cases {
+            let no_counterparts: Vec<(CanonicalTermId, VocabularyId)> = if recorded {
+                vec![(TERM, TARGET)]
+            } else {
+                vec![]
+            };
+            let outcome = project_axis(request(&[TERM], MANY), &edges, &no_counterparts);
+            let landed = usize::from(!outcome.resolved.is_empty())
+                + outcome.gaps.len()
+                + outcome.omitted.len();
+            assert_eq!(
+                landed, 1,
+                "{name}: one source term is accounted for exactly once, and never twice \
+                 or not at all"
+            );
+            assert!(
+                outcome.unrecognised.is_empty(),
+                "{name}: a canonical term id is by construction recognised; the bucket is \
+                 for source paths the relation has never seen"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broadening_is_disclosed_and_does_not_block() {
+        let edges = [edge(TERM, path("Maths"), EdgeKind::Broader)];
+        let outcome = project_axis(request(&[TERM], MANY), &edges, &[]);
+        assert_eq!(
+            outcome.loss,
+            vec![Loss::Broadened {
+                to: path("Maths"),
+                dropped: vec![TERM],
+            }],
+            "the broadening survives as a loss the seller sees"
+        );
+        assert!(
+            outcome.is_publishable(),
+            "a loss is disclosed, not decided, so it never holds up a publish"
+        );
+    }
+
+    #[test]
+    fn a_gap_names_which_of_the_two_unanswerable_shapes_it_was() {
+        let ambiguous = [
+            edge(TERM, path("Maths"), EdgeKind::Broader),
+            edge(TERM, path("Science"), EdgeKind::Broader),
+        ];
+        let outcome = project_axis(request(&[TERM], MANY), &ambiguous, &[]);
+        assert_eq!(
+            outcome.gaps,
+            vec![VocabularyGap {
+                term: TERM,
+                target: TARGET,
+                projection: TermProjection::Ambiguous {
+                    candidates: vec![path("Maths"), path("Science")],
+                },
+            }],
+            "two competing edges are a defect in the relation, and the queue item says so"
+        );
+        assert!(
+            !outcome.is_publishable(),
+            "a gap blocks, which is what makes the queue a gate rather than a report"
+        );
+    }
+
+    #[test]
+    fn a_target_taking_one_elects_rather_than_picking() {
+        let edges = [
+            edge(TERM, path("Maths"), EdgeKind::Exact),
+            edge(OTHER, path("Science"), EdgeKind::Exact),
+        ];
+        let outcome = project_axis(request(&[TERM, OTHER], Cardinality::One), &edges, &[]);
+        assert_eq!(
+            outcome.elections.len(),
+            1,
+            "one election for the axis, not one per value"
+        );
+        assert_eq!(
+            outcome.elections[0].trigger,
+            ElectionTrigger::ElectOne {
+                from: vec![path("Maths"), path("Science")],
+            },
+            "the whole resolved set is the candidate list"
+        );
+    }
+
+    #[test]
+    fn an_over_cap_set_is_never_left_partially_truncated() {
+        let edges = [
+            edge(TERM, path("Maths"), EdgeKind::Exact),
+            edge(OTHER, path("Science"), EdgeKind::Exact),
+        ];
+        let cardinality = Cardinality::Many {
+            cap: Some(CountCap { limit: 1 }),
+        };
+        let outcome = project_axis(request(&[TERM, OTHER], cardinality), &edges, &[]);
+        assert_eq!(
+            outcome.elections[0].trigger,
+            ElectionTrigger::OverCap {
+                cap: 1,
+                from: vec![path("Maths"), path("Science")],
+            },
+            "which to keep is the seller's, and the cap is stated in the question"
+        );
+        assert!(
+            outcome.resolved.is_empty(),
+            "a truncated set is exactly what a caller must not be able to publish by \
+             accident, so none exists"
+        );
+    }
+
+    #[test]
+    fn a_set_within_its_cardinality_raises_nothing() {
+        let edges = [edge(TERM, path("Maths"), EdgeKind::Exact)];
+        for cardinality in [
+            Cardinality::One,
+            MANY,
+            Cardinality::Many {
+                cap: Some(CountCap { limit: 1 }),
+            },
+        ] {
+            let outcome = project_axis(request(&[TERM], cardinality), &edges, &[]);
+            assert_eq!(
+                outcome,
+                AxisOutcome {
+                    resolved: vec![path("Maths")],
+                    ..AxisOutcome::default()
+                },
+                "a set the target accepts is carried whole under {cardinality:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_required_axis_the_source_never_carried_asks_for_a_value() {
+        let mut supply = request(&[], Cardinality::One);
+        supply.binding.axis = TermKind::Licence;
+        supply.binding.native = "licence";
+        let outcome = project_axis(supply, &[], &[]);
+        assert_eq!(
+            outcome.elections.len(),
+            1,
+            "Tes refuses a create without a licence and nothing stated one"
+        );
+        assert_eq!(
+            outcome.elections[0].trigger,
+            ElectionTrigger::Supply {
+                pricing: PricingBranch::Free,
+            },
+            "the pricing branch is carried because the API gates the write on it"
+        );
+    }
+
+    #[test]
+    fn an_optional_axis_the_source_never_carried_asks_nothing() {
+        let outcome = project_axis(request(&[], MANY), &[], &[]);
+        assert_eq!(
+            outcome,
+            AxisOutcome::default(),
+            "an empty set on a field that records no refusal is a listing without \
+             categories, not a question"
         );
     }
 
