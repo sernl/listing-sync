@@ -132,6 +132,16 @@ pub fn router(state: AppState) -> Router {
             "/{version}/reconciliation/stats",
             get(resources::queue_stats),
         )
+        .route("/{version}/elections/items", get(resources::list_decisions))
+        .route(
+            "/{version}/elections/items/{item}/answer",
+            post(resources::answer_decision),
+        )
+        .route(
+            "/{version}/elections/items/{item}/withdraw",
+            post(resources::withdraw_decision),
+        )
+        .route("/{version}/elections/rules", post(resources::upsert_rule))
         .route("/{version}/mappings", get(resources::list_mappings))
         .route("/{version}/status", get(resources::status))
         .route("/{version}/openapi.json", get(openapi::serve_document))

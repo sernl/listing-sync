@@ -8,8 +8,9 @@
 
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
 use tam_api::{APIErrorCode, APIErrorKind};
+use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_storage::ItemStateKind;
-use tam_types::{FailureCode, InventoryId, JobEventPayload, Marketplace};
+use tam_types::{FailureCode, InventoryId, JobEventPayload, Marketplace, TermKind};
 
 fn union<T, F: Fn(&T) -> String>(name: &str, values: &[T], render: F) -> String {
     let members: Vec<String> = values.iter().map(render).collect();
@@ -46,6 +47,21 @@ fn main() {
         &[JobPhase::Active, JobPhase::Settled],
         serde_name,
     ));
+    out.push('\n');
+    out.push_str(&union("TermKind", &TermKind::ALL, serde_name));
+    out.push('\n');
+    // Emitted from `as_str` rather than from serde, because these two live in
+    // tam-domain, which carries no serde dependency and does not acquire one
+    // to shorten a generator.
+    out.push_str(&union(
+        "ElectionTriggerKind",
+        &ElectionTriggerKind::ALL,
+        |kind| format!("\"{}\"", kind.as_str()),
+    ));
+    out.push('\n');
+    out.push_str(&union("LossKind", &LossKind::ALL, |kind| {
+        format!("\"{}\"", kind.as_str())
+    }));
     out.push('\n');
     out.push_str(&union(
         "JobEventKind",

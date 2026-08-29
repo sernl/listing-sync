@@ -8,8 +8,15 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tam_domain::equivalence::{
+    resolution_for, ElectionAnswer, ElectionRule, ElectionRuleError, ElectionTriggerKind, Mode,
+    NewElectionRule,
+};
+use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
-use tam_storage::{ConnectionRepo, DrainStats, LedgerCursor, ProductRepo, TaxonomyRepo};
+use tam_storage::{
+    ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, ProductRepo, TaxonomyRepo,
+};
 use tam_types::{
     CanonicalTermId, ConnectionId, InventoryId, MappingId, Marketplace, OrgId, PriceIntent,
     ProductId, ScanOutcome, Timestamp, Uuid,
@@ -424,6 +431,22 @@ pub struct ResolveBody {
     pub segments: Vec<String>,
     #[serde(default)]
     pub native_id: Option<String>,
+    /// `exact` or `broader`, defaulting to `exact` so the existing clients do
+    /// not move.
+    ///
+    /// It has to be stated because `projection_edge` is global: the first
+    /// seller to answer an uncovered grade would otherwise write an `Exact`
+    /// that becomes every tenant's equivalence, and
+    /// `projection_edge_exact_reverse` then locks the correct term out of that
+    /// path forever. `narrower` is refused: a narrower target invents a
+    /// distinction the source does not carry, and the projection would never
+    /// read the edge anyway.
+    #[serde(default = "default_edge_kind")]
+    pub kind: String,
+}
+
+fn default_edge_kind() -> String {
+    "exact".to_owned()
 }
 
 pub(crate) async fn resolve_item(
@@ -435,6 +458,17 @@ pub(crate) async fn resolve_item(
     if body.segments.is_empty() {
         return Err(validation("an edge needs at least one path segment"));
     }
+    let kind = match body.kind.as_str() {
+        "exact" => EdgeKind::Exact,
+        "broader" => EdgeKind::Broader,
+        "narrower" => {
+            return Err(validation(
+                "a narrower edge invents a distinction the source does not carry, so the \
+                 projection never reads one; record the broader direction instead",
+            ))
+        }
+        other => return Err(validation(&format!("unknown edge kind {other}"))),
+    };
     let item_id = parse_id(&item)?;
     let repo = TaxonomyRepo::new(state.pool.clone());
     let open = repo
@@ -452,7 +486,7 @@ pub(crate) async fn resolve_item(
             segments: body.segments,
             native_id: body.native_id,
         },
-        kind: EdgeKind::Exact,
+        kind,
         decided_by: Decider::Human {
             user: context.user,
             org: context.org,
@@ -617,4 +651,250 @@ pub(crate) async fn status(State(state): State<AppState>) -> Result<Json<StatusV
             })
             .collect(),
     }))
+}
+
+// --------------------------------------------------------------- elections
+
+/// What the decision surface renders, assembled per read rather than fetched.
+///
+/// The durable question carries no candidate list and no suggestion: a stored
+/// list is a snapshot that goes stale the moment a vocabulary is re-polled,
+/// and computing the suggestion at exactly one place — here — is what makes
+/// "we compute a best fit only where the seller asked us to" a property of one
+/// function instead of a convention scattered across writers.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DecisionView {
+    pub id: Uuid,
+    pub product: ProductId,
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub trigger: String,
+    pub trigger_key: Option<String>,
+    pub raised_at: Timestamp,
+    /// `seller_decides` or `best_fit`. A legal axis is always the former,
+    /// whatever the tenant has opted into elsewhere.
+    pub resolution: String,
+    /// The target vocabulary's own members, read out of the relation now.
+    pub candidates: Vec<PathView>,
+    /// The value pre-selected as a suggestion, where one exists. Never an
+    /// answer: an election resolves only on explicit confirmation.
+    pub suggested: Option<PathView>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DecisionsView {
+    pub items: Vec<DecisionView>,
+}
+
+pub(crate) async fn list_decisions(
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<DecisionsView>, APIError> {
+    let repo = ElectionRepo::new(state.pool.clone());
+    let taxonomy = TaxonomyRepo::new(state.pool.clone());
+    let open = repo
+        .open_items(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let mut items = Vec::with_capacity(open.len());
+    for item in open {
+        let vocabulary = VocabularyId(item.inventory, item.axis);
+        let candidates: Vec<PathView> = taxonomy
+            .edges_into(vocabulary)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Exact)
+            .map(|edge| path_view(&edge.to))
+            .collect();
+        // The registry decides the mode, and `Never` wins over any opt-in.
+        // The tenant opt-in is not modelled yet, so every axis reads as
+        // seller-decides today and the licence axis will read that way even
+        // once it is.
+        let binding = registry(item.inventory).axis(item.axis);
+        let mode = binding.map_or(Mode::SellerDecides, |binding| {
+            resolution_for(binding, false)
+        });
+        items.push(DecisionView {
+            id: item.id,
+            product: item.product,
+            inventory: item.inventory,
+            axis: item.axis,
+            trigger: item.trigger_kind.as_str().to_owned(),
+            trigger_key: item.trigger_key,
+            raised_at: item.raised_at,
+            resolution: match mode {
+                Mode::SellerDecides => "seller_decides".to_owned(),
+                Mode::BestFit => "best_fit".to_owned(),
+            },
+            suggested: None,
+            candidates,
+        });
+    }
+    Ok(Json(DecisionsView { items }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnswerBody {
+    /// One path per answered value: one for a supply or a primary pick,
+    /// several for a band the seller narrows to more than one year group.
+    pub answers: Vec<AnswerPath>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnswerPath {
+    pub segments: Vec<String>,
+    #[serde(default)]
+    pub native_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnswerAck {
+    /// How many parked items the answer released, in the same transaction
+    /// that recorded it.
+    pub revived: u64,
+}
+
+pub(crate) async fn answer_decision(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, item)): Path<(String, String)>,
+    Json(body): Json<AnswerBody>,
+) -> Result<Json<AnswerAck>, APIError> {
+    if body.answers.is_empty() {
+        return Err(validation("an answered election names at least one value"));
+    }
+    let item_id = parse_id(&item)?;
+    let repo = ElectionRepo::new(state.pool.clone());
+    let open = repo
+        .open_items(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let target = open
+        .into_iter()
+        .find(|candidate| candidate.id == item_id)
+        .ok_or_else(|| missing("no such open election"))?;
+    let vocabulary = VocabularyId(target.inventory, target.axis);
+    let paths: Vec<VocabularyPath> = body
+        .answers
+        .into_iter()
+        .map(|answer| VocabularyPath {
+            vocabulary,
+            segments: answer.segments,
+            native_id: answer.native_id,
+        })
+        .collect();
+    if paths.iter().any(|path| path.segments.is_empty()) {
+        return Err(validation(
+            "an answered value needs at least one path segment",
+        ));
+    }
+    let report = repo
+        .answer(context.org, item_id, &paths, (state.wall)())
+        .await
+        .map_err(|error| conflict_or_fault(&state, &error))?;
+    Ok(Json(AnswerAck {
+        revived: report.revived,
+    }))
+}
+
+pub(crate) async fn withdraw_decision(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, item)): Path<(String, String)>,
+) -> Result<StatusCode, APIError> {
+    let item_id = parse_id(&item)?;
+    ElectionRepo::new(state.pool.clone())
+        .withdraw(context.org, item_id, (state.wall)())
+        .await
+        .map_err(|error| conflict_or_fault(&state, &error))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RuleBody {
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub trigger: String,
+    #[serde(default)]
+    pub trigger_key: Option<String>,
+    /// `value`, `ordering` or `delegate`. A legal axis refuses `delegate` at
+    /// both layers: here through `ElectionRule::new`, and again at the row.
+    pub answer_kind: String,
+    #[serde(default)]
+    pub answers: Vec<AnswerPath>,
+}
+
+pub(crate) async fn upsert_rule(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Json(body): Json<RuleBody>,
+) -> Result<StatusCode, APIError> {
+    let trigger = ElectionTriggerKind::ALL
+        .into_iter()
+        .find(|kind| kind.as_str() == body.trigger)
+        .ok_or_else(|| validation("unknown election trigger"))?;
+    let vocabulary = VocabularyId(body.inventory, body.axis);
+    let paths: Vec<VocabularyPath> = body
+        .answers
+        .into_iter()
+        .map(|answer| VocabularyPath {
+            vocabulary,
+            segments: answer.segments,
+            native_id: answer.native_id,
+        })
+        .collect();
+    let answer = match body.answer_kind.as_str() {
+        "value" => {
+            let [path] = paths.as_slice() else {
+                return Err(validation("a value rule names exactly one path"));
+            };
+            ElectionAnswer::Value { path: path.clone() }
+        }
+        "ordering" if !paths.is_empty() => ElectionAnswer::Ordering { prefer: paths },
+        "ordering" => return Err(validation("an ordering rule names at least one path")),
+        "delegate" => ElectionAnswer::Delegate,
+        other => return Err(validation(&format!("unknown answer kind {other}"))),
+    };
+    let rule = ElectionRule::new(NewElectionRule {
+        org: context.org,
+        inventory: body.inventory,
+        axis: body.axis,
+        trigger_kind: trigger,
+        trigger_key: body.trigger_key,
+        answer,
+        decided_by: Decider::Human {
+            user: context.user,
+            org: context.org,
+        },
+        decided_at: (state.wall)(),
+    })
+    .map_err(|error| match error {
+        ElectionRuleError::NotDelegable(_) => validation(
+            "this axis is the seller's own: choosing a rights grant is issuing one, \
+             so no opt-in delegates it to a computation",
+        ),
+        ElectionRuleError::UnboundAxis => {
+            validation("this inventory declares no such equivalence axis")
+        }
+    })?;
+    ElectionRepo::new(state.pool.clone())
+        .upsert_rule(&rule)
+        .await
+        .map_err(|error| conflict_or_fault(&state, &error))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A storage refusal the seller caused, told apart from one they did not. The
+/// repo states an unanswerable item as `Inconsistent`, which is a conflict
+/// rather than a fault.
+fn conflict_or_fault(state: &AppState, error: &tam_storage::StorageError) -> APIError {
+    if let tam_storage::StorageError::Inconsistent { reason } = error {
+        APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new(reason).kind(APIErrorKind::Validation),
+        )
+    } else {
+        storage_fault(state, error)
+    }
 }

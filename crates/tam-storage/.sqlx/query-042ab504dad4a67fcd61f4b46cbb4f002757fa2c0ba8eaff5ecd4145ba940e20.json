@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inventory, axis, trigger_kind, trigger_key, answer_kind, answer, decided_by, decided_source, decided_user, decided_org, decided_at FROM election_rule WHERE org_id = $1 ORDER BY inventory, axis, trigger_kind, trigger_key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "axis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "trigger_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "trigger_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "answer_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "answer",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "decided_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "decided_source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "decided_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "decided_org",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "042ab504dad4a67fcd61f4b46cbb4f002757fa2c0ba8eaff5ecd4145ba940e20"
+}

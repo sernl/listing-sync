@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE election_item SET state = 'answered', answer = $3, resolved_at = $4 WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "327fd6e79fd9852659a0dd696c8bfcbe5915831f1c20d90e4cbc5d13a7ade4cd"
+}

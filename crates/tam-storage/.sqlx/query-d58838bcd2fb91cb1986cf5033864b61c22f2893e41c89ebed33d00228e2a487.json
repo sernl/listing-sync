@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO election_rule (org_id, inventory, axis, trigger_kind, trigger_key, answer_kind, answer, decided_by, decided_source, decided_user, decided_org, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (org_id, inventory, axis, trigger_kind, trigger_key) DO UPDATE SET answer_kind = EXCLUDED.answer_kind, answer = EXCLUDED.answer, decided_by = EXCLUDED.decided_by, decided_source = EXCLUDED.decided_source, decided_user = EXCLUDED.decided_user, decided_org = EXCLUDED.decided_org, decided_at = EXCLUDED.decided_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d58838bcd2fb91cb1986cf5033864b61c22f2893e41c89ebed33d00228e2a487"
+}

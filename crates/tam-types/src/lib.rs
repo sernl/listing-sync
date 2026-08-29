@@ -415,7 +415,8 @@ pub enum ImportedPrice {
 /// the adapter seam names one too: an imported term crosses in
 /// `tam-marketplace`, and `tam-domain` depends on that crate rather than the
 /// reverse, so the shared axis label has to sit in the crate both depend on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TermKind {
     Subject,
     Topic,
@@ -425,6 +426,18 @@ pub enum TermKind {
     /// them in one respect the registry carries rather than this enum: no
     /// opt-in delegates it to a computation.
     Licence,
+}
+
+impl TermKind {
+    /// Every axis, so the client vocabulary is generated from the enum rather
+    /// than transcribed beside it.
+    pub const ALL: [Self; 5] = [
+        Self::Subject,
+        Self::Topic,
+        Self::ResourceType,
+        Self::Phase,
+        Self::Licence,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

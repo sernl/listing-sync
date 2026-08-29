@@ -69,6 +69,25 @@ export type JobPhase =
   | "active"
   | "settled";
 
+export type TermKind =
+  | "subject"
+  | "topic"
+  | "resource_type"
+  | "phase"
+  | "licence";
+
+export type ElectionTriggerKind =
+  | "supply"
+  | "elect_one"
+  | "over_cap"
+  | "narrow";
+
+export type LossKind =
+  | "broadened"
+  | "no_target_field"
+  | "collapsed"
+  | "elected";
+
 export type JobEventKind =
   | "JobQueued"
   | "JobStarted"

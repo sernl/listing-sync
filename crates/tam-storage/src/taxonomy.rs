@@ -18,7 +18,7 @@ use crate::codec::{
     inventory_to_db, term_kind_from_db, term_kind_to_db, timestamp_from_db, timestamp_to_db,
     uuid_from_db, uuid_to_db,
 };
-use crate::jobs::map_unique;
+use crate::jobs::{map_unique, revive_by_gap};
 use crate::{pin_org, StorageError};
 
 pub struct TaxonomyRepo {
@@ -350,12 +350,20 @@ impl TaxonomyRepo {
     /// still be open. A second Exact claim on an already-claimed target path
     /// is rejected by the reverse-uniqueness index, surfaced as
     /// `Inconsistent` rather than resolved at read time.
+    ///
+    /// The items the answer unblocks are requeued in the same transaction,
+    /// keyed on the gate rather than on a mapping: the queue deduplicates per
+    /// gap, so one answer releases every item parked behind it, and a
+    /// five-hundred-item bulk behind one queue row would otherwise revive one
+    /// and leave four hundred and ninety-nine for the park expiry. Returns how
+    /// many were released, because a revive that releases nothing is the shape
+    /// a silently-unpinned update takes.
     pub async fn resolve_with_edge(
         &self,
         org: OrgId,
         item: Uuid,
         edge: &ProjectionEdge,
-    ) -> Result<(), StorageError> {
+    ) -> Result<u64, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
@@ -413,8 +421,9 @@ impl TaxonomyRepo {
         )
         .execute(&mut *tx)
         .await?;
+        let revived = revive_by_gap(&mut tx, org, "reconciliation", edge.decided_at).await?;
         tx.commit().await?;
-        Ok(())
+        Ok(revived)
     }
 
     /// Resolution by recording that the term genuinely has no counterpart:
@@ -425,7 +434,7 @@ impl TaxonomyRepo {
         item: Uuid,
         decided_by: &Decider,
         at: Timestamp,
-    ) -> Result<(), StorageError> {
+    ) -> Result<u64, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
@@ -466,8 +475,9 @@ impl TaxonomyRepo {
         )
         .execute(&mut *tx)
         .await?;
+        let revived = revive_by_gap(&mut tx, org, "reconciliation", at).await?;
         tx.commit().await?;
-        Ok(())
+        Ok(revived)
     }
 
     /// The queue counts the drain kill-gate reads per tenant.

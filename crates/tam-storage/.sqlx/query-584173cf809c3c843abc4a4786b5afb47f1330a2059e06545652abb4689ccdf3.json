@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, product_id, inventory, axis, trigger_kind, trigger_key, raised_by, raised_at FROM election_item WHERE org_id = $1 AND state = 'open' ORDER BY raised_at, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "axis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "trigger_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "trigger_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "raised_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "raised_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "584173cf809c3c843abc4a4786b5afb47f1330a2059e06545652abb4689ccdf3"
+}

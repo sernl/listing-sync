@@ -37,6 +37,8 @@ pub use mapping::{MappingHead, MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{SessionIdentity, SessionRepo, SessionToken};
+pub mod elections;
+pub use elections::{AnswerReport, ElectionRepo, OpenElection};
 pub use taxonomy::{
     DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo,
 };

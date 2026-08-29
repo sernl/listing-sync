@@ -136,7 +136,14 @@ impl ElectionTrigger {
     pub fn key(&self) -> Option<String> {
         match self {
             Self::Supply { pricing } => Some(pricing.as_str().to_owned()),
-            Self::Narrow { from, .. } => from.native_id.clone(),
+            // Total, because the key is a database column tied to the trigger
+            // kind by a CHECK: a narrow question stored keyless would be a
+            // standing answer to every band rather than to this one.
+            Self::Narrow { from, .. } => Some(
+                from.native_id
+                    .clone()
+                    .unwrap_or_else(|| from.segments.join("/")),
+            ),
             Self::ElectOne { .. } | Self::OverCap { .. } => None,
         }
     }
