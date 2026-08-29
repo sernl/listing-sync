@@ -6,8 +6,10 @@
 //!
 //! Every derivation's edges pass `check_native_ids` before any of them is
 //! written. A native identifier the target marketplace did not issue is a
-//! wrong tag on a live listing, and this is the last point at which it can be
-//! caught over the whole relation rather than one cross-listing at a time.
+//! wrong tag on a live listing, and this is the last point at which the whole
+//! relation can be checked at once rather than one cross-listing at a time.
+//! It is not the only path that authors an edge: the reconciliation queue's
+//! resolution writes one from the API, and runs the same check on it there.
 //!
 //! Usage: tam-taxonomy-seed <db-url> <gb.json> <nz.json> <tpt-vocab.json> <tes-vocab.json>
 //!

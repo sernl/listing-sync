@@ -5,8 +5,19 @@
 //! marketplace issued from one another marketplace did — the wire carries the
 //! string and nothing else. The adapter refuses what it can recognise as
 //! foreign, one listing at a time and after the seller has already asked for
-//! the cross-listing; this is the same test run once, over the whole relation,
-//! before a single edge is written.
+//! the cross-listing; this is the same test, run where the edge is authored
+//! rather than where it is spent.
+//!
+//! Two paths author one. The operator seeder derives the relation from the
+//! committed captures and writes it in bulk, so it checks every edge before
+//! any of them becomes durable. The reconciliation queue's own resolution
+//! writes one edge at a time from what a human named through the API, and its
+//! answer shape makes the native id optional, so it checks the single edge it
+//! is about to write. Both call `check_native_ids`, which is why it is total
+//! over a slice rather than shaped for either caller: an edge that reaches
+//! `projection_edge` unchecked is global — the table carries no organisation
+//! — and permanent, because the uniqueness indexes refuse a corrected row and
+//! nothing deletes one.
 //!
 //! Only TPT's tag namespace is checked here, because it is the only target
 //! whose identifiers have a recognisable shape: Tes addresses everything it
@@ -48,6 +59,27 @@ pub struct ForeignNativeId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignNativeIds(pub Vec<ForeignNativeId>);
 
+impl core::fmt::Display for ForeignNativeId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let VocabularyId(inventory, kind) = self.target;
+        let term = self.term.0.to_hyphenated();
+        match &self.native_id {
+            Some(native) => write!(
+                f,
+                "the edge from term {term} into ({inventory:?}, {kind:?}) carries the \
+                 identifier {native:?}, which is not the slug shape TPT issues its taxonomy \
+                 tags in",
+            ),
+            None => write!(
+                f,
+                "the edge from term {term} into ({inventory:?}, {kind:?}) carries no \
+                 identifier at all, and TPT addresses its taxonomy tags by identifiers it \
+                 issued",
+            ),
+        }
+    }
+}
+
 impl core::fmt::Display for ForeignNativeIds {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(
@@ -56,21 +88,7 @@ impl core::fmt::Display for ForeignNativeIds {
             self.0.len()
         )?;
         for edge in &self.0 {
-            let VocabularyId(inventory, kind) = edge.target;
-            match &edge.native_id {
-                Some(native) => writeln!(
-                    f,
-                    "  term {} into ({inventory:?}, {kind:?}) carries {native:?}, which is not \
-                     the slug shape TPT issues its taxonomy tags in",
-                    edge.term.0.to_hyphenated()
-                )?,
-                None => writeln!(
-                    f,
-                    "  term {} into ({inventory:?}, {kind:?}) carries no identifier at all, and \
-                     TPT addresses its taxonomy tags by identifiers it issued",
-                    edge.term.0.to_hyphenated()
-                )?,
-            }
+            writeln!(f, "  {edge}")?;
         }
         Ok(())
     }

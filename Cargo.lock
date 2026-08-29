@@ -2255,6 +2255,7 @@ dependencies = [
  "tam-domain",
  "tam-marketplace",
  "tam-storage",
+ "tam-taxonomy",
  "tam-types",
  "tokio",
  "tower",

@@ -476,3 +476,116 @@ async fn the_decision_surface_shows_the_loss_recorded_against_the_mapping(pool: 
     );
     assert_eq!(loss.detail["value"]["native_id"], "CC-BY");
 }
+
+/// M3. The reconciliation queue's own resolution is the only production path
+/// that authors a TPT taxonomy edge, and the answer shape makes the native id
+/// optional: the shipped client sends none, so an ordinary resolution of a
+/// TPT tag-axis item used to write an edge addressed by nothing at all.
+/// `projection_edge` carries no organisation and both uniqueness indexes
+/// refuse a corrected row, so that edge is global and permanent, and every
+/// tenant's TPT cross-listing of the term then refuses at the write model
+/// with nobody having been told. The refusal moves to the moment of writing.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_tpt_tag_axis_resolution_without_an_identifier_is_refused_rather_than_written(
+    pool: PgPool,
+) {
+    provision(&pool).await;
+    let taxonomy = TaxonomyRepo::new(pool.clone());
+    taxonomy
+        .seed(
+            &[CanonicalTerm {
+                id: TERM,
+                kind: TermKind::Topic,
+                parent: None,
+                label: "Fractions".to_owned(),
+            }],
+            &[],
+        )
+        .await
+        .expect("the term seeds");
+    taxonomy
+        .raise(
+            ORG,
+            RaiseScope {
+                mapping: MAPPING,
+                target: InventoryId::Tpt,
+                at: Timestamp(2_000),
+            },
+            &[(TERM, TermKind::Topic)],
+        )
+        .await
+        .expect("the gap raises");
+
+    let (status, body) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        "/v1/reconciliation/items",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let queue: QueueView = parse(&body);
+    let item = queue.items.first().expect("the TPT gap is in the queue");
+    let path = format!(
+        "/v1/reconciliation/items/{}/resolve",
+        item.id.to_hyphenated()
+    );
+
+    let (status, body) = call(
+        pool.clone(),
+        Config::default(),
+        Method::POST,
+        &path,
+        Some(serde_json::json!({ "segments": ["Math", "Fractions"] })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "an edge TPT cannot answer to is the request's defect, not the server's"
+    );
+    let error: APIError = parse(&body);
+    let entry = error.errors.first().expect("the refusal names itself");
+    assert_eq!(entry.kind, Some(tam_api::APIErrorKind::Validation));
+    assert!(
+        entry.message.contains("Tpt")
+            && entry.message.contains("Topic")
+            && entry.message.contains(&TERM.0.to_hyphenated())
+            && entry.message.contains("no identifier at all"),
+        "the seller is told the axis, the term and what is missing: {}",
+        entry.message
+    );
+    assert!(
+        taxonomy
+            .edges_into(VocabularyId(InventoryId::Tpt, TermKind::Topic))
+            .await
+            .expect("the edges load")
+            .is_empty(),
+        "and nothing durable was written, because the row could never be corrected"
+    );
+
+    // The same item, addressed: the guard is about provenance, not about
+    // resolving TPT items at all.
+    let (status, _body) = call(
+        pool.clone(),
+        Config::default(),
+        Method::POST,
+        &path,
+        Some(serde_json::json!({
+            "segments": ["Math", "Fractions"],
+            "native_id": "fractions"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "a TPT slug resolves");
+    let edges = taxonomy
+        .edges_into(VocabularyId(InventoryId::Tpt, TermKind::Topic))
+        .await
+        .expect("the edges load");
+    assert_eq!(
+        edges.first().and_then(|edge| edge.to.native_id.as_deref()),
+        Some("fractions"),
+        "the slug TPT issues is what the edge carries"
+    );
+}

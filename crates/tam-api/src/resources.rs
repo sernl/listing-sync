@@ -18,6 +18,7 @@ use tam_storage::{
     ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, MappingRepo, NewAnswer, OpenElection,
     ProductRepo, TaxonomyRepo,
 };
+use tam_taxonomy::check_native_ids;
 use tam_types::{
     CanonicalTermId, ConnectionId, InventoryId, MappingId, Marketplace, OrgId, PriceIntent,
     ProductId, ScanOutcome, Timestamp, Uuid,
@@ -494,6 +495,23 @@ pub(crate) async fn resolve_item(
         },
         decided_at: (state.wall)(),
     };
+    // The edge is durable, global and permanent: `projection_edge` carries no
+    // organisation, both uniqueness indexes refuse a corrected row, and
+    // nothing deletes one. The answer shape makes the native id optional and
+    // the shipped client sends none, so without this the ordinary resolution
+    // of a TPT tag-axis item writes the exact unaddressed edge every tenant's
+    // cross-listing then refuses at the write model, silently and for good.
+    // The seeder runs the same check over the relation it derives.
+    if let Err(foreign) = check_native_ids(std::slice::from_ref(&edge)) {
+        return Err(validation(
+            &foreign
+                .0
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
+    }
     repo.resolve_with_edge(context.org, item_id, &edge)
         .await
         .map_err(|error| {
