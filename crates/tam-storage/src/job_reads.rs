@@ -272,9 +272,13 @@ impl JobReadRepo {
         &self,
         org: OrgId,
         job: JobId,
-        cursor: Option<LedgerCursor>,
-        limit: i64,
+        page: ItemsPageParams,
     ) -> Result<Vec<ItemRow>, StorageError> {
+        let ItemsPageParams {
+            cursor,
+            limit,
+            outcome,
+        } = page;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let (cursor_at, cursor_id) = match cursor {
@@ -290,12 +294,14 @@ impl JobReadRepo {
              FROM job_item \
              WHERE org_id = $1 AND job_id = $2 \
                AND ($3::timestamptz IS NULL OR (created_at, id) > ($3, $4)) \
+               AND ($6::text IS NULL OR outcome = $6) \
              ORDER BY created_at, id LIMIT $5",
             uuid_to_db(org.0),
             uuid_to_db(job.0),
             cursor_at,
             cursor_id,
             limit,
+            outcome,
         )
         .fetch_all(&mut *tx)
         .await?;
@@ -422,6 +428,18 @@ impl JobReadRepo {
     }
 }
 
+/// One page of a job's items, plus the outcome the caller wants to see.
+///
+/// The filter is a `WHERE` clause and not a client-side one: a seller paging
+/// five hundred rows to find the four that failed is what the ledger's own
+/// report is for.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ItemsPageParams {
+    pub cursor: Option<LedgerCursor>,
+    pub limit: i64,
+    pub outcome: Option<String>,
+}
+
 /// What a sync-starting request needs per mapping: the product it projects
 /// and the ordered payload hashes whose digest content-addresses the item's
 /// idempotency key. Only mappings of the requested inventory return; the
@@ -437,6 +455,20 @@ pub struct MappingSeed {
     /// ordinary re-sync of unchanged content stays the no-op it was built to
     /// be.
     pub sever_generation: i32,
+    /// What the mapping's binding and lifecycle read, as stored. The API
+    /// lowers a seller's stated intent against them and reads no marketplace
+    /// to do it; without these it could not evaluate a single row of the
+    /// lowering table and would default every mapping to the create row,
+    /// minting a second listing for one that is already bound.
+    ///
+    /// The stored spellings rather than the decoded values, because lowering
+    /// is a table over exactly these two columns and hydrating a whole
+    /// mapping per seed would be a join per row for two strings.
+    pub binding_state: String,
+    pub lifecycle_state: String,
+    /// The listing a bound mapping names, which a revise must address. `None`
+    /// for every other binding, where there is nothing to address yet.
+    pub subject: Option<RemoteListingId>,
 }
 
 impl JobReadRepo {
@@ -450,7 +482,9 @@ impl JobReadRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
-            "SELECT m.id AS mapping_id, m.product_id, m.sever_generation, f.hash \
+            "SELECT m.id AS mapping_id, m.product_id, m.sever_generation, \
+                    m.binding_state, m.lifecycle_state, \
+                    m.remote_id_kind, m.remote_url, m.remote_numeric_id, f.hash \
              FROM mapping m \
              JOIN product_file f \
                ON f.org_id = m.org_id AND f.product_id = m.product_id \
@@ -475,6 +509,16 @@ impl JobReadRepo {
                     product: tam_types::ProductId(uuid_from_db(row.product_id)),
                     payload_hashes: vec![hash],
                     sever_generation: row.sever_generation,
+                    binding_state: row.binding_state.clone(),
+                    lifecycle_state: row.lifecycle_state.clone(),
+                    subject: match row.remote_id_kind.as_deref() {
+                        Some(kind) => Some(crate::mapping::remote_id_from_db(
+                            kind,
+                            row.remote_url.clone(),
+                            row.remote_numeric_id,
+                        )?),
+                        None => None,
+                    },
                 }),
             }
         }

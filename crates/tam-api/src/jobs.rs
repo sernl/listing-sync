@@ -11,9 +11,11 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::idempotency::derive_idempotency_key;
+use tam_marketplace::{LifecycleTransition, ListingState, RemoteListingId};
 use tam_storage::{
-    intent_digest, EventRow, ItemCounts, ItemRow, JobReadRepo, JobRepo, LedgerCursor, NewJob,
-    NewJobItem, StorageError,
+    intent_digest, Disposition, EventRow, ItemCounts, ItemRow, ItemsPageParams, JobReadRepo,
+    JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest, StorageError,
+    SyncIntent, SyncRequestRepo,
 };
 use tam_types::{FailureCode, InventoryId, JobId, MappingId, OrgId, Timestamp, Uuid};
 
@@ -66,11 +68,16 @@ pub fn decode_cursor(raw: &str) -> Option<LedgerCursor> {
 pub struct PageParams {
     pub cursor: Option<String>,
     pub limit: Option<i64>,
+    /// Which outcome to show. A five-hundred-item bulk with four failures is
+    /// the case this exists for: paging the other four hundred and ninety-six
+    /// to find them is not a serious alternative.
+    pub outcome: Option<String>,
 }
 
 struct Page {
     cursor: Option<LedgerCursor>,
     limit: i64,
+    outcome: Option<String>,
 }
 
 fn parse_page(params: &PageParams) -> Result<Page, APIError> {
@@ -85,7 +92,22 @@ fn parse_page(params: &PageParams) -> Result<Page, APIError> {
         .limit
         .unwrap_or(PAGE_LIMIT_DEFAULT)
         .clamp(1, PAGE_LIMIT_MAX);
-    Ok(Page { cursor, limit })
+    let outcome = match params.outcome.as_deref() {
+        None => None,
+        Some(raw) => Some(
+            ALL_OUTCOMES
+                .into_iter()
+                .map(outcome_str)
+                .find(|name| *name == raw)
+                .map(str::to_owned)
+                .ok_or_else(|| validation("that is not an outcome an item can settle on"))?,
+        ),
+    };
+    Ok(Page {
+        cursor,
+        limit,
+        outcome,
+    })
 }
 
 fn validation(message: &str) -> APIError {
@@ -147,6 +169,15 @@ impl<S: Send + Sync> FromRequestParts<S> for RequestKey {
 pub struct CreateJobBody {
     pub inventory: InventoryId,
     pub mappings: Vec<MappingId>,
+    /// Where the seller wants the listing to end up. Absent keeps the
+    /// endpoint's original meaning, which is a create.
+    ///
+    /// Not `mapping.publish_mode`, which is a standing sync policy about
+    /// whether to publish at all and is explicitly not a record of where a
+    /// listing landed. The stated intent goes into the item's operation and
+    /// nowhere else.
+    #[serde(default)]
+    pub intent: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -317,6 +348,257 @@ fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
     state.internal(&error.to_string())
 }
 
+/// The one enqueue for sync, migrate and bulk. Bulk is not a separate verb;
+/// it is this with more than one resource, which is why there is no third
+/// endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncRequestBody {
+    pub source: InventoryId,
+    pub target: InventoryId,
+    /// `sync` leaves the source listing alone; `migrate` removes it once the
+    /// target is bound.
+    #[serde(default)]
+    pub disposition: Option<String>,
+    #[serde(default)]
+    pub intent: Option<String>,
+    /// How the seller addresses each listing on the source, in their order.
+    pub resources: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncRequestAck {
+    pub request: Uuid,
+}
+
+/// Writes the request and returns. It performs no marketplace read: this
+/// process holds no session, and the broker lease belongs to the drain.
+pub(crate) async fn create_sync_request(
+    State(state): State<AppState>,
+    context: OrgContext,
+    key: RequestKey,
+    Json(body): Json<SyncRequestBody>,
+) -> Result<Response, APIError> {
+    if body.resources.is_empty() {
+        return Err(validation("a sync names at least one resource"));
+    }
+    if body.source == body.target {
+        return Err(validation("a sync's source and target are two inventories"));
+    }
+    let disposition = match body.disposition.as_deref() {
+        None | Some("sync") => Disposition::Sync,
+        Some("migrate") => Disposition::Migrate,
+        Some(_) => return Err(validation("disposition is \"sync\" or \"migrate\"")),
+    };
+    let intent = match parse_intent(body.intent.as_deref())? {
+        Intent::Draft => SyncIntent::Draft,
+        Intent::Live => SyncIntent::Live,
+    };
+    let new = NewSyncRequest {
+        // The idempotency key is the request's identity, so a retried submit
+        // is the same request rather than a second one.
+        id: key.0,
+        source: body.source,
+        target: body.target,
+        disposition,
+        intent,
+        requested_at: (state.wall)(),
+        locators: body.resources,
+    };
+    let repo = SyncRequestRepo::new(state.pool.clone());
+    if let Some(existing) = repo
+        .get(context.org, key.0)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(SyncRequestAck {
+                request: existing.id,
+            }),
+        )
+            .into_response());
+    }
+    repo.create(context.org, &new)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SyncRequestAck { request: key.0 }),
+    )
+        .into_response())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncRequestView {
+    pub request: Uuid,
+    pub source: InventoryId,
+    pub target: InventoryId,
+    pub disposition: String,
+    pub intent: String,
+    pub state: String,
+    pub failure_detail: Option<String>,
+    /// The jobs this request produced, once it has them. A migrate names
+    /// both, because a job carries one inventory and the create and the
+    /// removal are on two.
+    pub create_job: Option<Uuid>,
+    pub remove_job: Option<Uuid>,
+    pub resources: Vec<SyncResourceView>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncResourceView {
+    pub ordinal: i32,
+    pub locator: String,
+    pub state: String,
+    pub failure_detail: Option<String>,
+}
+
+/// What the client polls between asking for a sync and the ledger having
+/// something to show them.
+pub(crate) async fn sync_request_view(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, request)): Path<(String, String)>,
+) -> Result<Json<SyncRequestView>, APIError> {
+    let request = parse_id(&request)?;
+    let record = SyncRequestRepo::new(state.pool.clone())
+        .get(context.org, request)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such sync request"))?;
+    Ok(Json(SyncRequestView {
+        request: record.id,
+        source: record.source,
+        target: record.target,
+        disposition: record.disposition.as_str().to_owned(),
+        intent: record.intent.as_str().to_owned(),
+        state: record.state,
+        failure_detail: record.failure_detail,
+        create_job: record.create_job,
+        remove_job: record.remove_job,
+        resources: record
+            .resources
+            .into_iter()
+            .map(|row| SyncResourceView {
+                ordinal: row.ordinal,
+                locator: row.locator,
+                state: row.state,
+                failure_detail: row.failure_detail,
+            })
+            .collect(),
+    }))
+}
+
+/// What the seller asked the listing to end up as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Intent {
+    Draft,
+    Live,
+}
+
+fn parse_intent(raw: Option<&str>) -> Result<Intent, APIError> {
+    match raw {
+        None | Some("draft") => Ok(Intent::Draft),
+        Some("live") => Ok(Intent::Live),
+        Some(_) => Err(validation("intent is \"draft\" or \"live\"")),
+    }
+}
+
+/// The lowering table: a seller's stated intent plus the mapping's own
+/// binding and lifecycle, into the items that realise it.
+///
+/// Every row is decided from two stored columns and the target's captured
+/// capabilities. Nothing here reads a marketplace, and nothing guesses: a
+/// lifecycle the bind never wrote is refused rather than assumed, because the
+/// API would otherwise have to assert a `from` it does not know.
+fn lower(
+    intent: Intent,
+    inventory: InventoryId,
+    seed: &MappingSeed,
+) -> Result<Vec<ItemOperation>, APIError> {
+    let to = match intent {
+        Intent::Draft => ListingState::Draft,
+        Intent::Live => ListingState::Live,
+    };
+    match seed.binding_state.as_str() {
+        // Nothing exists yet, so live is two writes: both adapters create a
+        // draft, and the publish names whatever the create bound.
+        "unbound" | "severed" => Ok(match intent {
+            Intent::Draft => vec![ItemOperation::Create],
+            Intent::Live => vec![ItemOperation::Create, ItemOperation::Publish { to }],
+        }),
+        "bound" => {
+            let from = match seed.lifecycle_state.as_str() {
+                "draft" => ListingState::Draft,
+                "live" => ListingState::Live,
+                // Every mapping written before the bind recorded a lifecycle
+                // reads 'absent', and the moderation states no write
+                // addresses say nothing either. Refused with the remedy
+                // named rather than lowered against a guess.
+                _ => {
+                    return Err(validation(
+                        "this listing's state is unknown; verify it first",
+                    ))
+                }
+            };
+            // Tes implements only the two transitions out of draft. Without
+            // this the seller gets a 202, then an item that settles skipped
+            // with a code that says nothing about why -- on three of five
+            // inventories. TPT serves all four.
+            if let Some(capability) = uncaptured_transition(inventory, from, to) {
+                return Err(validation(&format!(
+                    "{inventory:?} has no captured {capability}, so this edit cannot be \
+                     attempted yet"
+                )));
+            }
+            Ok(vec![ItemOperation::Revise {
+                subject: subject_of(seed)?,
+                transition: LifecycleTransition { from, to },
+            }])
+        }
+        // A create in flight, or one whose outcome nobody knows. Either way
+        // there is no binding to lower against and enqueuing a second write
+        // would be a write on the strength of a guess.
+        _ => Err(validation(
+            "this mapping has a create in flight; wait for it to settle",
+        )),
+    }
+}
+
+/// The subject a bound mapping's revise addresses. `mapping_seeds` carries
+/// the binding's spelling and not its id, so the id is read where the row
+/// already has to be hydrated -- and a bound row without one is a corrupt
+/// row rather than a seller error.
+fn subject_of(seed: &MappingSeed) -> Result<RemoteListingId, APIError> {
+    seed.subject
+        .clone()
+        .ok_or_else(|| validation("this mapping reads bound but names no listing; verify it first"))
+}
+
+/// Which transition this inventory has no capture for, if any. A registry
+/// lookup rather than a new concept: the adapters already refuse these with
+/// the capability named, and refusing at the API means the seller is told
+/// before an item is enqueued rather than after it settles.
+const fn uncaptured_transition(
+    inventory: InventoryId,
+    from: ListingState,
+    to: ListingState,
+) -> Option<&'static str> {
+    match (inventory, from, to) {
+        (
+            InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz,
+            ListingState::Live,
+            ListingState::Live,
+        ) => Some("tes.edit_published"),
+        (
+            InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz,
+            ListingState::Live,
+            ListingState::Draft,
+        ) => Some("tes.unpublish"),
+        _ => None,
+    }
+}
+
 pub(crate) async fn create_job(
     State(state): State<AppState>,
     context: OrgContext,
@@ -350,32 +632,32 @@ pub(crate) async fn create_job(
 
     let now = (state.wall)();
     let job = JobId(fresh_uuid());
-    // The sync endpoint enqueues creates only; a seller-facing publish or
-    // migrate lands with Phase 4's orchestration, which is where seller
-    // vocabulary lowers into an operation. A create's intent digest is the
-    // payload digest by delegation, so these keys are the ones this endpoint
-    // has always minted.
-    let items: Vec<NewJobItem> = seeds
-        .iter()
-        .map(|seed| NewJobItem {
-            item: JobItemId(fresh_uuid()),
-            mapping: seed.mapping,
-            idempotency_key: derive_idempotency_key(
-                context.org,
-                body.inventory,
-                seed.product,
-                INTENT_VERSION,
-                intent_digest(
-                    &ItemOperation::Create,
-                    job,
-                    &seed.payload_hashes,
-                    seed.sever_generation,
+    let intent = parse_intent(body.intent.as_deref())?;
+    // The seller states draft-or-live per platform and the API lowers it
+    // against the mapping's own binding, reading no marketplace to do it.
+    let mut items: Vec<NewJobItem> = Vec::new();
+    for seed in &seeds {
+        for operation in lower(intent, body.inventory, seed)? {
+            items.push(NewJobItem {
+                item: JobItemId(fresh_uuid()),
+                mapping: seed.mapping,
+                idempotency_key: derive_idempotency_key(
+                    context.org,
+                    body.inventory,
+                    seed.product,
+                    INTENT_VERSION,
+                    intent_digest(&operation, job, &seed.payload_hashes, seed.sever_generation),
                 ),
-            ),
-            operation: ItemOperation::Create,
-            requires_bound_on: None,
-        })
-        .collect();
+                // A publish must not run before the create it publishes has
+                // bound. FIFO within the job usually gets that right and does
+                // not when the create parks on an election and the publish
+                // leases first.
+                requires_bound_on: matches!(operation, ItemOperation::Publish { .. })
+                    .then_some(body.inventory),
+                operation,
+            });
+        }
+    }
     let new = NewJob {
         job,
         inventory: body.inventory,
@@ -502,7 +784,15 @@ pub(crate) async fn job_items(
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such job"))?;
     let rows = reads
-        .items_page(context.org, job, page.cursor, page.limit)
+        .items_page(
+            context.org,
+            job,
+            ItemsPageParams {
+                cursor: page.cursor,
+                limit: page.limit,
+                outcome: page.outcome,
+            },
+        )
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     let next_cursor = (i64::try_from(rows.len()).unwrap_or(i64::MAX) == page.limit)
@@ -530,7 +820,15 @@ pub(crate) async fn item_detail(
     let item = JobItemId(parse_id(&item)?);
     let reads = JobReadRepo::new(state.pool.clone());
     let rows = reads
-        .items_page(context.org, job, None, i64::from(i32::MAX))
+        .items_page(
+            context.org,
+            job,
+            ItemsPageParams {
+                cursor: None,
+                limit: i64::from(i32::MAX),
+                outcome: None,
+            },
+        )
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     let row = rows

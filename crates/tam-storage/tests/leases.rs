@@ -738,7 +738,15 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
         .expect("the succeeded item settles");
 
     let rows = JobReadRepo::new(app.clone())
-        .items_page(tenant.org, job, None, 10)
+        .items_page(
+            tenant.org,
+            job,
+            tam_storage::ItemsPageParams {
+                cursor: None,
+                limit: 10,
+                outcome: None,
+            },
+        )
         .await
         .expect("the item page reads");
     let failed = rows

@@ -208,6 +208,182 @@ fn create_body() -> serde_json::Value {
 const KEY_1: &str = "11111111-1111-4111-8111-111111111111";
 const KEY_2: &str = "22222222-2222-4222-8222-222222222222";
 
+/// The one enqueue for sync, migrate and bulk. It writes the request and
+/// returns: no marketplace is read here, because this process holds no
+/// session and the broker lease belongs to the drain.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_sync_request_is_accepted_written_and_polled_back(pool: PgPool) {
+    provision(&pool).await;
+    let body = serde_json::json!({
+        "source": "TesGb",
+        "target": "TesNz",
+        "disposition": "migrate",
+        "intent": "live",
+        "resources": ["13549794", "13549795"],
+    });
+    let accepted = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED);
+
+    let replay = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(body),
+    )
+    .await;
+    assert_eq!(
+        replay.status,
+        StatusCode::OK,
+        "the idempotency key is the request's identity, so a retried submit is the same request"
+    );
+
+    let view = call(
+        pool,
+        Method::GET,
+        &format!("/v1/sync/{KEY_1}"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(view.status, StatusCode::OK);
+    let record: serde_json::Value = view.json();
+    assert_eq!(record["disposition"], "migrate");
+    assert_eq!(record["state"], "pending");
+    assert_eq!(
+        record["resources"].as_array().map(Vec::len),
+        Some(2),
+        "the seller's own list, in the order they gave it"
+    );
+    assert!(
+        record["create_job"].is_null() && record["remove_job"].is_null(),
+        "no job exists until the drain has read the source"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_sync_between_one_inventory_and_itself_is_refused(pool: PgPool) {
+    provision(&pool).await;
+    let response = call(
+        pool,
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(serde_json::json!({
+            "source": "TesNz",
+            "target": "TesNz",
+            "resources": ["13549794"],
+        })),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Publish-to-both is this endpoint's headline flow, and from an unbound
+/// mapping it is genuinely two writes: both adapters create a draft, so the
+/// publish names whatever the create bound.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_live_intent_on_an_unbound_mapping_lowers_to_a_create_and_a_publish(pool: PgPool) {
+    provision(&pool).await;
+    let mut body = create_body();
+    body["intent"] = serde_json::json!("live");
+    let response = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(body),
+    )
+    .await;
+    assert_eq!(
+        response.status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    let created: CreatedJobBody = response.json();
+
+    let items = call(
+        pool,
+        Method::GET,
+        &format!("/v1/jobs/{}/items", created.job.0.to_hyphenated()),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    let page: serde_json::Value = items.json();
+    let rows = page["items"].as_array().expect("the page carries items");
+    assert_eq!(
+        rows.len(),
+        4,
+        "two mappings, each lowering to a create and the publish that follows it"
+    );
+}
+
+/// A stated intent lowers against what the mapping actually is, and a
+/// lifecycle the bind never wrote is refused rather than assumed. Every
+/// mapping written before the bind recorded one reads absent, so this is the
+/// common case for anything older than Phase 3 -- and the API would otherwise
+/// have to assert a lower end of the transition it does not know.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_intent_against_an_unverifiable_lifecycle_is_refused_rather_than_guessed(pool: PgPool) {
+    provision(&pool).await;
+    // `mapping` carries FORCE ROW LEVEL SECURITY, so an unpinned update
+    // matches nothing and reports it as a row count of zero rather than an
+    // error. The pin and the update share one transaction because the pin is
+    // transaction-local.
+    let mut tx = pool.begin().await.expect("the fixture opens a transaction");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the fixture pins the tenant");
+    let bound = sqlx::query(
+        "UPDATE mapping SET binding_state = 'bound', remote_id_kind = 'tes', \
+         remote_url = 'https://www.tes.com/teaching-resource/x-' || id::text, \
+         first_seen_at = now(), \
+         lifecycle_state = 'absent', lifecycle_since = NULL, lifecycle_reason = NULL, \
+         verify_state = 'clean', verified_at = now(), verify_stale_since = NULL \
+         WHERE org_id = $1",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture binds the mappings");
+    assert!(
+        bound.rows_affected() > 0,
+        "an unpinned update would silently match nothing and the test would pass wrongly"
+    );
+    tx.commit().await.expect("the fixture commits");
+    let response = call(
+        pool,
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(
+        response.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a bound mapping whose lifecycle nobody observed cannot be lowered against"
+    );
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_retry_and_the_double_click_are_the_same_job(pool: PgPool) {
     provision(&pool).await;

@@ -102,6 +102,8 @@ pub fn router(state: AppState) -> Router {
             "/{version}/jobs",
             post(jobs::create_job).get(jobs::list_jobs),
         )
+        .route("/{version}/sync", post(jobs::create_sync_request))
+        .route("/{version}/sync/{request}", get(jobs::sync_request_view))
         .route("/{version}/jobs/{job}", get(jobs::job_view))
         .route("/{version}/jobs/{job}/items", get(jobs::job_items))
         .route("/{version}/jobs/{job}/items/{item}", get(jobs::item_detail))

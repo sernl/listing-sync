@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 26] = [
+pub const ROUTES: [Route; 28] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -70,6 +70,16 @@ pub const ROUTES: [Route; 26] = [
         summary: "List jobs, newest first, by opaque keyset cursor",
     },
     Route {
+        method: "post",
+        path: "/{version}/sync",
+        summary: "Enqueue a sync, a migration or a bulk; one endpoint, one per resource",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/sync/{request}",
+        summary: "A sync request's state, its per-resource states, and the jobs it produced",
+    },
+    Route {
         method: "get",
         path: "/{version}/jobs/{job}",
         summary: "The job roll-up: raw item counts, never a scalar verdict",
@@ -77,7 +87,7 @@ pub const ROUTES: [Route; 26] = [
     Route {
         method: "get",
         path: "/{version}/jobs/{job}/items",
-        summary: "Page the job's items by opaque keyset cursor",
+        summary: "Page the job's items by opaque keyset cursor, filtered by outcome",
     },
     Route {
         method: "get",

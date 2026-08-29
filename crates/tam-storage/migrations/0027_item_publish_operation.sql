@@ -17,6 +17,16 @@
 -- The CHECK is rewritten rather than extended because its ELSE arm is false:
 -- a new operation value is inadmissible until the CASE names it.
 
+-- Two CHECKs govern the operation column, not one: this names the admissible
+-- values and the one below states what each requires of the other columns.
+-- Widening only the second admits a value the first still refuses, which
+-- fails at enqueue as a constraint violation -- a 500 for an ordinary seller
+-- action, which is the shape this whole variant exists to remove.
+ALTER TABLE job_item DROP CONSTRAINT job_item_operation;
+ALTER TABLE job_item ADD CONSTRAINT job_item_operation CHECK (
+    operation IN ('create', 'publish', 'revise', 'remove')
+);
+
 ALTER TABLE job_item DROP CONSTRAINT job_item_operation_total;
 ALTER TABLE job_item ADD CONSTRAINT job_item_operation_total CHECK (
     CASE operation

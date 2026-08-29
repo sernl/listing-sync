@@ -23,8 +23,8 @@ pub mod taxonomy;
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use connections::{ConnectionRepo, ConnectionRow};
 pub use job_reads::{
-    intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, JobListRow,
-    JobReadRepo, JobSnapshot, LedgerCursor, MappingSeed,
+    intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
+    JobListRow, JobReadRepo, JobSnapshot, LedgerCursor, MappingSeed,
 };
 pub use jobs::{
     append_event, revive_by_gap, revive_on, settle_if_complete, AttemptIntent, AttemptRef,
