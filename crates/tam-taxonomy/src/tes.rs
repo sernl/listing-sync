@@ -421,6 +421,7 @@ const fn kind_rank(kind: TermKind) -> u8 {
         TermKind::Topic => 1,
         TermKind::ResourceType => 2,
         TermKind::Phase => 3,
+        TermKind::Licence => 4,
     }
 }
 

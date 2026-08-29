@@ -162,6 +162,7 @@ const fn term_kind_str(kind: TermKind) -> &'static str {
         TermKind::Topic => "topic",
         TermKind::ResourceType => "resource_type",
         TermKind::Phase => "phase",
+        TermKind::Licence => "licence",
     }
 }
 

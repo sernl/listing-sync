@@ -354,6 +354,26 @@ pub enum FieldKey {
     Files,
 }
 
+/// How many values one canonical field takes. A fact of the canonical model
+/// rather than of any inventory, which is why it hangs off `FieldKey` here
+/// and not off the per-inventory registry, where `Cardinality` records what
+/// one platform's own wire field accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arity {
+    One,
+    Many,
+}
+
+impl FieldKey {
+    #[must_use]
+    pub const fn cardinality(self) -> Arity {
+        match self {
+            Self::Title | Self::Description | Self::Price => Arity::One,
+            Self::Taxonomy | Self::Grades | Self::Files => Arity::Many,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldMismatch {
     pub field: FieldKey,

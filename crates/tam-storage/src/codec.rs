@@ -459,6 +459,7 @@ pub(crate) const fn term_kind_to_db(kind: tam_domain::TermKind) -> &'static str 
         tam_domain::TermKind::Topic => "topic",
         tam_domain::TermKind::ResourceType => "resource_type",
         tam_domain::TermKind::Phase => "phase",
+        tam_domain::TermKind::Licence => "licence",
     }
 }
 
@@ -468,6 +469,7 @@ pub(crate) fn term_kind_from_db(raw: &str) -> Result<tam_domain::TermKind, Stora
         "topic" => Ok(tam_domain::TermKind::Topic),
         "resource_type" => Ok(tam_domain::TermKind::ResourceType),
         "phase" => Ok(tam_domain::TermKind::Phase),
+        "licence" => Ok(tam_domain::TermKind::Licence),
         other => Err(StorageError::CorruptRow {
             reason: format!("unknown term kind {other:?}"),
         }),

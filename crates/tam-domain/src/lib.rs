@@ -33,6 +33,10 @@ pub enum TermKind {
     Topic,
     ResourceType,
     Phase,
+    /// A rights grant. An axis like the others in the relation and unlike
+    /// them in one respect the registry carries rather than this enum: no
+    /// opt-in delegates it to a computation.
+    Licence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
