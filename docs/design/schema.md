@@ -367,6 +367,7 @@ The engine may raise an item and read a rule; it may never settle an item or aut
 
 `sync_request` and `sync_request_resource` hold a sync's read leg, which is not a ledger item because the item pump is deliberately adapter-free and a job carries one inventory.
 The resource row carries the product and mapping its canonicalisation produced, written in the same transaction that marks it done, because the import is not internally atomic and mints a fresh product id on every pass — so without the breadcrumb a redrained request inserts a duplicate no unique index refuses.
+It carries the source listing's identifier and the lifecycle the read observed beside them, in the same three-column rendering of a `RemoteListingId` the binding uses, because a migrate's removal item names both: a breadcrumb that recorded only that the work was done let a resumed drain skip the resource and lose its removal, silently, behind a request marked enqueued.
 Neither table carries an engine grant: the drain runs under the tenant's own role, which has forced row-level security.
 
 `job_item.requires_bound_on` names an inventory whose binding this item waits on, and `mapping.sever_generation` counts how many times a mapping's listing has been severed.

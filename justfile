@@ -113,7 +113,7 @@ db-verify:
 # the API driven in-process over per-test databases, and the engine driven
 # end to end against a fake marketplace
 db-test: db-wait db-verify
-    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests -p tam-engine --features tam-engine/pg-tests
+    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:

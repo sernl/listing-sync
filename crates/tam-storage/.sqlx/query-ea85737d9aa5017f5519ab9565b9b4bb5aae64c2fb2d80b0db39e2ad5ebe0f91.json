@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT ordinal, locator, state, product_id, mapping_id, failure_detail FROM sync_request_resource WHERE org_id = $1 AND request_id = $2 ORDER BY ordinal",
+  "query": "SELECT ordinal, locator, state, product_id, mapping_id, source_kind, source_url, source_numeric_id, source_state, failure_detail FROM sync_request_resource WHERE org_id = $1 AND request_id = $2 ORDER BY ordinal",
   "describe": {
     "columns": [
       {
@@ -30,6 +30,26 @@
       },
       {
         "ordinal": 5,
+        "name": "source_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "source_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "source_numeric_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "source_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
         "name": "failure_detail",
         "type_info": "Text"
       }
@@ -46,8 +66,12 @@
       false,
       true,
       true,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "fe1fd9031fa71bafe21d0e840d6aa7e83ec0695038e4ac8e66103c57c20e3290"
+  "hash": "ea85737d9aa5017f5519ab9565b9b4bb5aae64c2fb2d80b0db39e2ad5ebe0f91"
 }

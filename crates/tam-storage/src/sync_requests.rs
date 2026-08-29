@@ -14,12 +14,14 @@
 //! that no unique index refuses.
 
 use sqlx::PgPool;
+use tam_marketplace::{ListingState, RemoteListingId};
 use tam_types::{InventoryId, MappingId, OrgId, ProductId, Timestamp, Uuid};
 
 use crate::codec::{
-    inventory_from_db, inventory_to_db, timestamp_from_db, timestamp_to_db, uuid_from_db,
-    uuid_to_db,
+    inventory_from_db, inventory_to_db, listing_state_from_db, listing_state_to_db,
+    timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db, RemoteIdColumns,
 };
+use crate::mapping::remote_id_from_db;
 use crate::{pin_org, StorageError};
 
 pub struct SyncRequestRepo {
@@ -99,27 +101,40 @@ pub struct SyncResourceRecord {
     pub state: String,
     pub product: Option<ProductId>,
     pub mapping: Option<MappingId>,
+    /// What the read observed about the source listing, recorded so a redrain
+    /// can rebuild this resource's removal item instead of dropping it.
+    pub source: Option<RemoteListingId>,
+    pub source_state: Option<ListingState>,
     pub failure_detail: Option<String>,
 }
 
 impl SyncResourceRecord {
-    /// What the drain skips. A resource that already names a product and a
-    /// mapping was canonicalised by an earlier pass, and running it again
-    /// would mint a second product the catalogue has no way to refuse.
+    /// What the drain skips. A resource that already names a product, a
+    /// mapping and the listing it was read from was canonicalised by an
+    /// earlier pass, and running it again would mint a second product the
+    /// catalogue has no way to refuse.
     #[must_use]
     pub const fn is_canonicalised(&self) -> bool {
-        self.product.is_some() && self.mapping.is_some()
+        self.product.is_some() && self.mapping.is_some() && self.source.is_some()
     }
 }
 
-/// One resource's outcome, bundled because the four values are meaningless
-/// apart: the breadcrumb is the whole row or it is not a breadcrumb.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One resource's outcome, bundled because the values are meaningless apart:
+/// the breadcrumb is the whole row or it is not a breadcrumb.
+///
+/// The source listing and its observed lifecycle are here for the same reason
+/// the product and the mapping are. A migrate's removal item names the listing
+/// it takes down and the state it takes it down from, both from the read that
+/// already happened; a breadcrumb that omitted them would let a resumed pass
+/// skip the work and lose its output.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Canonicalised {
     pub request: Uuid,
     pub ordinal: i32,
     pub product: ProductId,
     pub mapping: MappingId,
+    pub source: RemoteListingId,
+    pub source_state: Option<ListingState>,
 }
 
 /// The jobs one request produced. A migrate names both; a sync names the
@@ -203,7 +218,8 @@ impl SyncRequestRepo {
             return Ok(None);
         };
         let rows = sqlx::query!(
-            "SELECT ordinal, locator, state, product_id, mapping_id, failure_detail \
+            "SELECT ordinal, locator, state, product_id, mapping_id, \
+                    source_kind, source_url, source_numeric_id, source_state, failure_detail \
              FROM sync_request_resource WHERE org_id = $1 AND request_id = $2 ORDER BY ordinal",
             uuid_to_db(org.0),
             uuid_to_db(request),
@@ -225,15 +241,28 @@ impl SyncRequestRepo {
             requested_at: timestamp_from_db(head.requested_at),
             resources: rows
                 .into_iter()
-                .map(|row| SyncResourceRecord {
-                    ordinal: row.ordinal,
-                    locator: row.locator,
-                    state: row.state,
-                    product: row.product_id.map(|id| ProductId(uuid_from_db(id))),
-                    mapping: row.mapping_id.map(|id| MappingId(uuid_from_db(id))),
-                    failure_detail: row.failure_detail,
+                .map(|row| {
+                    Ok(SyncResourceRecord {
+                        ordinal: row.ordinal,
+                        locator: row.locator,
+                        state: row.state,
+                        product: row.product_id.map(|id| ProductId(uuid_from_db(id))),
+                        mapping: row.mapping_id.map(|id| MappingId(uuid_from_db(id))),
+                        source: row
+                            .source_kind
+                            .map(|kind| {
+                                remote_id_from_db(&kind, row.source_url, row.source_numeric_id)
+                            })
+                            .transpose()?,
+                        source_state: row
+                            .source_state
+                            .as_deref()
+                            .map(listing_state_from_db)
+                            .transpose()?,
+                        failure_detail: row.failure_detail,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, StorageError>>()?,
         }))
     }
 
@@ -291,18 +320,27 @@ impl SyncRequestRepo {
             ordinal,
             product,
             mapping,
-        } = *done;
+            source,
+            source_state,
+        } = done;
+        let columns = RemoteIdColumns::encode(source)?;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let affected = sqlx::query!(
             "UPDATE sync_request_resource \
-             SET state = 'canonicalised', product_id = $4, mapping_id = $5, failure_detail = NULL \
+             SET state = 'canonicalised', product_id = $4, mapping_id = $5, \
+                 source_kind = $6, source_url = $7, source_numeric_id = $8, \
+                 source_state = $9, failure_detail = NULL \
              WHERE org_id = $1 AND request_id = $2 AND ordinal = $3",
             uuid_to_db(org.0),
-            uuid_to_db(request),
+            uuid_to_db(*request),
             ordinal,
             uuid_to_db(product.0),
             uuid_to_db(mapping.0),
+            columns.kind,
+            columns.url,
+            columns.numeric_id,
+            source_state.map(listing_state_to_db),
         )
         .execute(&mut *tx)
         .await?

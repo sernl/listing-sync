@@ -8,6 +8,7 @@
 mod common;
 
 use sqlx::PgPool;
+use tam_marketplace::{ListingState, RemoteListingId};
 use tam_storage::{
     job_request_key, Canonicalised, Disposition, Enqueued, NewSyncRequest, SyncIntent,
     SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
@@ -83,6 +84,10 @@ async fn a_canonicalised_resource_names_what_it_produced_and_is_skipped_on_a_red
             ordinal: 0,
             product: ProductId(Uuid([0x01; 16])),
             mapping: MappingId(Uuid([0x31; 16])),
+            source: RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/fixture-101".to_owned(),
+            },
+            source_state: Some(ListingState::Live),
         },
     )
     .await
@@ -101,6 +106,20 @@ async fn a_canonicalised_resource_names_what_it_produced_and_is_skipped_on_a_red
         after.resources[0].product,
         Some(ProductId(Uuid([0x01; 16]))),
         "and names the product it produced rather than only that it finished"
+    );
+    assert_eq!(
+        (
+            after.resources[0].source.clone(),
+            after.resources[0].source_state
+        ),
+        (
+            Some(RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/fixture-101".to_owned(),
+            }),
+            Some(ListingState::Live)
+        ),
+        "and what the read observed about the source, which is what a redrain needs to \
+         rebuild this resource's removal item rather than drop it"
     );
     assert!(
         !after.resources[1].is_canonicalised(),

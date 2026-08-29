@@ -24,7 +24,8 @@ use tam_marketplace::{
 };
 use tam_storage::{
     job_request_key, Canonicalised, Disposition, Enqueued, JobReadRepo, JobRepo, MappingRepo,
-    NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
+    NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, SyncResourceRecord,
+    CREATE_LEG, REMOVE_LEG,
 };
 use tam_types::{InventoryId, JobId, MappingId, OrgId, Uuid};
 
@@ -100,12 +101,20 @@ where
         remove_job: None,
     };
     let mut mappings = Vec::new();
+    // Every canonicalised resource of the request, not this pass's alone. A
+    // resource an earlier pass finished is skipped here and its removal item
+    // still has to be minted, so it is rehydrated from its own breadcrumb --
+    // which is why the breadcrumb records what the read observed about the
+    // source and not only that the work is done.
     let mut canonicalised: Vec<Canonicalisation> = Vec::new();
     for resource in &record.resources {
         if resource.is_canonicalised() {
             report.skipped += 1;
             if let Some(mapping) = resource.mapping {
                 mappings.push(mapping);
+            }
+            if let Some(done) = rehydrate(resource) {
+                canonicalised.push(done);
             }
             continue;
         }
@@ -119,6 +128,8 @@ where
                             ordinal: resource.ordinal,
                             product: row.product,
                             mapping: row.mapping,
+                            source: row.source.clone(),
+                            source_state: row.source_state,
                         },
                     )
                     .await?;
@@ -173,6 +184,22 @@ where
         )
         .await?;
     Ok(report)
+}
+
+/// A resource an earlier pass canonicalised, read back off its breadcrumb.
+///
+/// `is_canonicalised` already requires the source identifier, so the fields
+/// are present whenever the branch is taken; the option is unwrapped rather
+/// than asserted because a row that somehow lost one is a row whose removal
+/// item cannot be built, and dropping it silently is the defect this whole
+/// change exists to remove -- `enqueue_removal` refuses the short list.
+fn rehydrate(resource: &SyncResourceRecord) -> Option<Canonicalisation> {
+    Some(Canonicalisation {
+        product: resource.product?,
+        mapping: resource.mapping?,
+        source: resource.source.clone()?,
+        source_state: resource.source_state,
+    })
 }
 
 /// One resource's canonicalisation, including what the read observed about
@@ -290,6 +317,13 @@ where
 ///
 /// A source whose read carried no state is refused rather than removed: a
 /// removal must never post a lifecycle nobody has observed.
+///
+/// An empty leg is refused for the same reason and is louder: a removal job
+/// with no items is created without complaint, reads back as settled because
+/// zero settled of zero is complete, and lets `record_enqueued` mark the
+/// request done naming a job that will never remove anything. The migrate
+/// would degrade into a plain sync and say nothing, which is exactly what the
+/// request key was split in two to prevent.
 async fn enqueue_removal<A>(
     run: &ImportRun<'_, A>,
     record: &SyncRequestRecord,
@@ -298,6 +332,13 @@ async fn enqueue_removal<A>(
 where
     A: FirstPartyExport,
 {
+    if canonicalised.is_empty() {
+        return Err(DrainError::Locator(
+            "a migrate's removal leg carries no resources, so the source listings would \
+             survive a request recorded as enqueued"
+                .to_owned(),
+        ));
+    }
     let mappings = MappingRepo::new(run.pool.clone());
     let mut items = Vec::new();
     let job = JobId(fresh_uuid());
