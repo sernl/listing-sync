@@ -370,5 +370,9 @@ The resource row carries the product and mapping its canonicalisation produced, 
 It carries the source listing's identifier and the lifecycle the read observed beside them, in the same three-column rendering of a `RemoteListingId` the binding uses, because a migrate's removal item names both: a breadcrumb that recorded only that the work was done let a resumed drain skip the resource and lose its removal, silently, behind a request marked enqueued.
 Neither table carries an engine grant: the drain runs under the tenant's own role, which has forced row-level security.
 
+`sync_request.intent` and `mapping.publish_mode` are orthogonal and stay so.
+`publish_mode` is the mapping's standing policy about whether this system writes to that marketplace at all; the seller's per-request intent travels as the item's own `ItemOperation`, which is why a live intent lowers to a create and a publish rather than to a flag.
+A `DryRun` mapping under a live-intent job is therefore not a contradiction — it is a seller who asked for a live listing on an inventory they have not yet armed for writing.
+
 `job_item.requires_bound_on` names an inventory whose binding this item waits on, and `mapping.sever_generation` counts how many times a mapping's listing has been severed.
 The first is what keeps a migrate's removal from running before its counterpart exists; the second enters a create's intent digest so a migrate-back is a fresh idempotency key while an ordinary re-sync of unchanged content stays the no-op the content-addressed key was built for.

@@ -319,8 +319,10 @@ The gate also has a terminal arm, because a parked item is invisible to every ex
 The read leg of a sync runs as `tam_app` in its own process.
 It has forced row-level security, so it pins one organisation per request and cannot read two tenants' rows in one statement — a stronger tenancy posture than the item pump's cross-tenant scan.
 The alternative was granting the engine authorship of the catalogue, which is what the grant enumeration exists to prevent.
-The consequence is that Phase 4 adds no engine grant on any catalogue table and `sync_request` needs none at all; the only new engine grants in the milestone mirror the existing reconciliation one exactly.
-The cost is named rather than hidden: this process is the second holder of the TPT cookie jar, and it applies the same one-tenant pin the worker does.
+The consequence is that Phase 4 adds no engine *write* grant on any catalogue table, and `sync_request` takes no engine grant at all: `native_residue` takes the same SELECT the rest of the product aggregate already has under 0016.
+Of the milestone's two new engine write grants, `election_item` and `mapping_loss` both mirror the existing reconciliation one exactly, and `election_rule` is deliberately SELECT only — a standing rule is the seller's to write.
+The cost is named rather than hidden: this process becomes the second holder of the TPT cookie jar, applying the same one-tenant pin the worker does, when the TPT seller-download capture lands.
+Until then it holds no credential at all — only Tes has a captured source read, so `POST /{v}/sync` refuses any other source and the drain records a terminal failure for one written before that refusal existed, rather than leasing a gateway for a request it can never serve.
 
 A publish is its own operation because the pair is otherwise unconstructible.
 Both adapters create a draft, so reaching live from nothing is two writes, and the second cannot name its subject when the seller asks for it — the create binds that id minutes later.

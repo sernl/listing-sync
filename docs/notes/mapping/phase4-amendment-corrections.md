@@ -140,6 +140,8 @@ sequence as landed and as the remaining commits should continue it:
 | `0025` | `sync_request`, `sync_request_resource` | 16 |
 | `0026` | the counterpart gate and `sever_generation` | 17 |
 | `0027` | the publish operation | 18 |
+| `0028` | the canonicalisation breadcrumb's source identifier | review fix |
+| `0029` | `job_event_one_settled_per_job` | review fix |
 
 `rls_matrix.rs`'s `TENANT_TABLES` stands at 26 after commit 14 and reaches 28
 at commit 16.
@@ -153,3 +155,18 @@ and it means a product whose grades were never seeded publishes with no grades
 until the seeder has run. `unrecognised` does not block, by design, so nothing
 parks; the fact travels in `ProjectionBlocked::Blocked` and belongs in the job
 report. It is the one place the fix trades a wrong value for an absent one.
+
+## Commit 15's live run is deferred, not done
+
+Commit 15's lane names a live self-cleaning run under the Phase 1/2 runner
+conventions, and the commit changes what every Tes create and publish posts in
+the `licence` field and removes `mainType` from the body. No live run was made
+against it. The change is recorded here as unverified against the live API and
+joins the pre-Phase-5 capture list beside the four captures the decisions file
+already names: the D2 licence value and the D3 `mainType` absence are proven
+against the cassettes and against the documented field semantics, and not
+against a response from Tes.
+
+The 16+ wire values from P.1 are in the same position and for the same reason,
+which is why the two travel together: the supervised capture that answers what
+the wire writes for a 16+-only listing is the run that would verify these.
