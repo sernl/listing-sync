@@ -384,6 +384,16 @@ pub(crate) async fn create_sync_request(
     if body.source == body.target {
         return Err(validation("a sync's source and target are two inventories"));
     }
+    // The same registry `lower` refuses an uncaptured transition through, and
+    // the same one the drain refuses on. Refusing here means the seller is
+    // told at submit rather than by a request that sits `pending` forever
+    // while the drain re-leases a gateway for it every poll.
+    if let Some(capability) = tam_storage::uncaptured_source(body.source) {
+        return Err(validation(&format!(
+            "{:?} has no captured {capability}, so it cannot be a sync's source yet",
+            body.source
+        )));
+    }
     let disposition = match body.disposition.as_deref() {
         None | Some("sync") => Disposition::Sync,
         Some("migrate") => Disposition::Migrate,

@@ -15,17 +15,19 @@
 //! Tes source reads need no credential: they ride the broker's gateway, and
 //! the lease names its purpose so this process's session and the item pump's
 //! coexist on the one connection a tenant has rather than cancelling each
-//! other. TPT source reads do need one, because TPT rides a direct transport
-//! and skips the broker entirely, so this process is the second holder of the
-//! fleet's highest-value credential -- and it applies the same one-tenant pin
-//! `tam-worker` does.
+//! other.
+//!
+//! Tes is also the only source this process serves. `download_resource_bundle`
+//! is uncaptured on every other adapter, so a request naming one is refused
+//! terminally here rather than driven: an unservable request left `pending` is
+//! re-picked every poll, takes a broker lease each pass, and -- because the
+//! scan is `ORDER BY requested_at LIMIT` per tenant -- is permanently among
+//! that tenant's oldest rows, so enough of them starve the tenant's servable
+//! requests too. `uncaptured_source` is the same registry `POST /{v}/sync`
+//! refuses through, so the two ends name one gate.
 //!
 //! Usage: tam-sync-worker <app-database-url> <broker-socket> <kek-path> \
 //!            <store-root> [poll-ms]
-//!
-//! Environment: `TAM_TPT_COOKIE_JAR`, `TAM_TPT_AUTHORSHIP` and `TAM_TPT_ORG`,
-//! required together for TPT-as-source. Without them a TPT source request is
-//! refused before any read rather than driven against the wrong account.
 
 #![forbid(unsafe_code)]
 
@@ -35,7 +37,7 @@ use tam_engine::broker_client::{request_lease, LeasePurpose};
 use tam_import::{ImportRun, NoImportFiles};
 use tam_marketplace_tes::{GatewayTransport, TesAdapter};
 use tam_secrets::Kek;
-use tam_storage::{ConnectionRepo, SyncRequestRepo};
+use tam_storage::{uncaptured_source, ConnectionRepo, SyncRequestRepo};
 use tam_sync_worker::{drain_request, pending_work, reason_for};
 use tam_types::{ConnectionId, InventoryId, Marketplace, OrgId, Timestamp, Uuid};
 
@@ -45,58 +47,6 @@ use tam_types::{ConnectionId, InventoryId, Marketplace, OrgId, Timestamp, Uuid};
 const REQUESTS_PER_TENANT_PER_PASS: i64 = 8;
 
 const DEFAULT_POLL_MS: u64 = 5_000;
-
-/// The organisation a configured TPT jar speaks for, or nothing.
-///
-/// The jar is process-global and the request scan is every tenant's, so a TPT
-/// source read for any other organisation would be driven against the wrong
-/// seller's account -- reading one seller's catalogue into another's product.
-/// Refused before the read rather than after it.
-struct TptPin {
-    org: OrgId,
-}
-
-impl TptPin {
-    fn speaks_for(&self, org: OrgId) -> bool {
-        self.org == org
-    }
-}
-
-fn load_tpt_pin() -> Option<TptPin> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the worker is the configuration boundary: the organisation the Tpt jar belongs to enters the process here and nowhere else"
-    )]
-    let raw_org = std::env::var("TAM_TPT_ORG").ok()?;
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the worker is the configuration boundary: the Tpt cookie jar path enters the process here and nowhere else"
-    )]
-    let jar_path = std::env::var("TAM_TPT_COOKIE_JAR").ok()?;
-    let mut jar = String::new();
-    if let Err(error) =
-        std::fs::File::open(&jar_path).and_then(|mut file| file.read_to_string(&mut jar).map(drop))
-    {
-        eprintln!(
-            "tam-sync-worker: TAM_TPT_COOKIE_JAR is unreadable, Tpt sources refused: {error}"
-        );
-        return None;
-    }
-    parse_org(&raw_org).map(|org| TptPin { org })
-}
-
-fn parse_org(raw: &str) -> Option<OrgId> {
-    let hex: String = raw.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
-    let mut bytes = [0u8; 16];
-    for (index, slot) in bytes.iter_mut().enumerate() {
-        let start = index * 2;
-        *slot = u8::from_str_radix(hex.get(start..start + 2)?, 16).ok()?;
-    }
-    Some(OrgId(Uuid(bytes)))
-}
 
 /// The tenant's linked connection for one marketplace, read through the repo
 /// that pins.
@@ -137,7 +87,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = sqlx::PgPool::connect(database_url).await?;
     let requests = SyncRequestRepo::new(pool.clone());
     let connections = ConnectionRepo::new(pool.clone());
-    let tpt = load_tpt_pin();
 
     loop {
         let work = pending_work(&requests, REQUESTS_PER_TENANT_PER_PASS).await?;
@@ -146,17 +95,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Some(record) = requests.get(org, request).await? else {
                     continue;
                 };
-                if record.source.marketplace() == Marketplace::Tpt
-                    && !tpt.as_ref().is_some_and(|pin| pin.speaks_for(org))
-                {
-                    // Refused before any read, for the same reason the item
-                    // pump refuses a foreign Tpt item: a process-global jar
-                    // speaks for one seller and this request is another's.
+                if let Some(capability) = uncaptured_source(record.source) {
+                    // Terminally, and before the lease. The alternative is not
+                    // a slower drain but a request with no terminal state at
+                    // all: `pending` re-picks it every poll, each pass opens
+                    // the seller's secret and spawns a gateway the next pass
+                    // supersedes, and the row sits at the head of its tenant's
+                    // window for good.
                     requests
                         .record_failure(
                             org,
                             request,
-                            "this process holds no Tpt credential for that organisation",
+                            &format!(
+                                "this source has no captured {capability}, so the drain \
+                                 cannot read it"
+                            ),
                             now(),
                         )
                         .await?;
