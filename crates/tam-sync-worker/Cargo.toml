@@ -11,7 +11,6 @@ tam-engine = { path = "../tam-engine" }
 tam-import = { path = "../tam-import" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-marketplace-tes = { path = "../tam-marketplace-tes" }
-tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
 tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
