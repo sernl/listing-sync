@@ -15,7 +15,7 @@ use tam_domain::equivalence::{
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
-    ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, ProductRepo, TaxonomyRepo,
+    ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, MappingRepo, ProductRepo, TaxonomyRepo,
 };
 use tam_types::{
     CanonicalTermId, ConnectionId, InventoryId, MappingId, Marketplace, OrgId, PriceIntent,
@@ -679,6 +679,18 @@ pub struct DecisionView {
     /// The value pre-selected as a suggestion, where one exists. Never an
     /// answer: an election resolves only on explicit confirmation.
     pub suggested: Option<PathView>,
+    /// What this listing loses on this target whatever the seller picks, so a
+    /// Tes-to-TPT licence drop is visible at the moment of decision rather
+    /// than after publish.
+    pub losses: Vec<LossView>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LossView {
+    pub kind: String,
+    pub axis: Option<TermKind>,
+    pub detail: serde_json::Value,
+    pub recorded_at: Timestamp,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -692,6 +704,7 @@ pub(crate) async fn list_decisions(
 ) -> Result<Json<DecisionsView>, APIError> {
     let repo = ElectionRepo::new(state.pool.clone());
     let taxonomy = TaxonomyRepo::new(state.pool.clone());
+    let mappings = MappingRepo::new(state.pool.clone());
     let open = repo
         .open_items(context.org)
         .await
@@ -715,6 +728,24 @@ pub(crate) async fn list_decisions(
         let mode = binding.map_or(Mode::SellerDecides, |binding| {
             resolution_for(binding, false)
         });
+        // The losses of the mapping that raised the question. An election
+        // authored on the create form names no mapping and so names no losses
+        // yet, which is honest: nothing has been projected.
+        let losses = match item.raised_by {
+            Some(mapping) => mappings
+                .losses(context.org, mapping)
+                .await
+                .map_err(|error| storage_fault(&state, &error))?
+                .into_iter()
+                .map(|loss| LossView {
+                    kind: loss.kind.as_str().to_owned(),
+                    axis: loss.axis,
+                    detail: loss.detail,
+                    recorded_at: loss.recorded_at,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         items.push(DecisionView {
             id: item.id,
             product: item.product,
@@ -729,6 +760,7 @@ pub(crate) async fn list_decisions(
             },
             suggested: None,
             candidates,
+            losses,
         });
     }
     Ok(Json(DecisionsView { items }))

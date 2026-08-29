@@ -6,8 +6,10 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use tam_domain::equivalence::{Loss, LossKind};
 use tam_domain::{
-    Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, SeverCause, Verification,
+    Binding, Decider, FieldPolicies, FieldPolicy, Mapping, PublishMode, SeverCause, TermKind,
+    Verification, VocabularyPath,
 };
 use tam_marketplace::{CorrelationMarker, RemoteLifecycle, RemoteListingId};
 use tam_types::{
@@ -16,9 +18,9 @@ use tam_types::{
 };
 
 use crate::codec::{
-    inventory_from_db, inventory_to_db, marketplace_to_db, price_from_db, timestamp_from_db,
-    timestamp_to_db, uuid_from_db, uuid_to_db, PriceColumns, RemoteIdColumns, PRICE_KIND_FREE,
-    PRICE_KIND_PAID,
+    inventory_from_db, inventory_to_db, marketplace_to_db, price_from_db, term_kind_from_db,
+    term_kind_to_db, timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db, PriceColumns,
+    RemoteIdColumns, PRICE_KIND_FREE, PRICE_KIND_PAID,
 };
 use crate::{pin_org, StorageError};
 
@@ -936,5 +938,162 @@ impl MappingRepo {
                 })
             })
             .collect()
+    }
+}
+
+/// The mapping, attempt and instant one batch of losses is recorded under;
+/// the losses themselves vary per value and travel separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LossScope {
+    pub org: OrgId,
+    pub mapping: MappingId,
+    pub attempt: AttemptId,
+    pub at: Timestamp,
+}
+
+/// One recorded loss as it reads back: what kind it was, which axis it names
+/// where it names one, and the variant's own payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedLoss {
+    pub attempt: AttemptId,
+    pub kind: LossKind,
+    pub axis: Option<TermKind>,
+    pub detail: serde_json::Value,
+    pub recorded_at: Timestamp,
+}
+
+impl MappingRepo {
+    /// Records what one projection attempt could not carry.
+    ///
+    /// Insert-only and keyed on the attempt, which is what buys the engine's
+    /// no-delete rule: a re-projection writes a new attempt's rows rather than
+    /// replacing the previous ones, so every attempt's losses stay queryable
+    /// and no delete grant is ever needed.
+    pub async fn record_losses(
+        &self,
+        scope: LossScope,
+        losses: &[Loss],
+    ) -> Result<u64, StorageError> {
+        let LossScope {
+            org,
+            mapping,
+            attempt,
+            at,
+        } = scope;
+        if losses.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let mut written = 0;
+        for (position, loss) in losses.iter().enumerate() {
+            let position = i32::try_from(position).map_err(|_| StorageError::Inconsistent {
+                reason: "a projection cannot lose more values than an int can count".to_owned(),
+            })?;
+            written += sqlx::query!(
+                "INSERT INTO mapping_loss \
+                 (org_id, mapping_id, attempt, position, kind, axis, detail, recorded_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                uuid_to_db(org.0),
+                uuid_to_db(mapping.0),
+                uuid_to_db(attempt.0),
+                position,
+                loss.kind().as_str(),
+                loss_axis(loss).map(term_kind_to_db),
+                loss_detail(loss),
+                timestamp_to_db(at)?,
+            )
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        }
+        tx.commit().await?;
+        Ok(written)
+    }
+
+    /// What one mapping has lost, newest attempt first, so a decision surface
+    /// can show the seller what this listing gives up whatever they pick.
+    pub async fn losses(
+        &self,
+        org: OrgId,
+        mapping: MappingId,
+    ) -> Result<Vec<RecordedLoss>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT attempt, kind, axis, detail, recorded_at FROM mapping_loss \
+             WHERE org_id = $1 AND mapping_id = $2 \
+             ORDER BY recorded_at DESC, attempt, position",
+            uuid_to_db(org.0),
+            uuid_to_db(mapping.0),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(RecordedLoss {
+                    attempt: AttemptId(uuid_from_db(row.attempt)),
+                    kind: loss_kind_from_db(&row.kind)?,
+                    axis: row.axis.as_deref().map(term_kind_from_db).transpose()?,
+                    detail: row.detail,
+                    recorded_at: timestamp_from_db(row.recorded_at),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Only a no-target-field loss names an axis; the others are about values
+/// within an axis the target does bind.
+const fn loss_axis(loss: &Loss) -> Option<TermKind> {
+    match loss {
+        Loss::NoTargetField { axis, .. } => Some(*axis),
+        Loss::Broadened { .. } | Loss::Collapsed { .. } | Loss::Elected { .. } => None,
+    }
+}
+
+fn path_json(path: &VocabularyPath) -> serde_json::Value {
+    serde_json::json!({ "segments": path.segments, "native_id": path.native_id })
+}
+
+fn loss_detail(loss: &Loss) -> serde_json::Value {
+    match loss {
+        Loss::Broadened { to, dropped } => serde_json::json!({
+            "to": path_json(to),
+            "dropped": dropped.iter().map(|term| hex_uuid(term.0)).collect::<Vec<_>>(),
+        }),
+        Loss::NoTargetField { value, .. } => serde_json::json!({ "value": path_json(value) }),
+        Loss::Collapsed { to, from } => serde_json::json!({
+            "to": path_json(to),
+            "from": from.iter().map(path_json).collect::<Vec<_>>(),
+        }),
+        Loss::Elected { kept, dropped, by } => serde_json::json!({
+            "kept": kept.iter().map(path_json).collect::<Vec<_>>(),
+            "dropped": dropped.iter().map(path_json).collect::<Vec<_>>(),
+            "by": match by {
+                Decider::Imported { source } => serde_json::json!({ "imported": source }),
+                Decider::Human { user, org } => serde_json::json!({
+                    "user": hex_uuid(user.0),
+                    "org": hex_uuid(org.0),
+                }),
+            },
+        }),
+    }
+}
+
+fn hex_uuid(id: tam_types::Uuid) -> String {
+    uuid::Uuid::from_bytes(id.0).to_string()
+}
+
+fn loss_kind_from_db(raw: &str) -> Result<LossKind, StorageError> {
+    match raw {
+        "broadened" => Ok(LossKind::Broadened),
+        "no_target_field" => Ok(LossKind::NoTargetField),
+        "collapsed" => Ok(LossKind::Collapsed),
+        "elected" => Ok(LossKind::Elected),
+        other => Err(StorageError::Inconsistent {
+            reason: format!("unknown loss kind {other}"),
+        }),
     }
 }

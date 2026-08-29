@@ -33,7 +33,7 @@ pub use jobs::{
     LeaseRepo, LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage,
     OutboxRepo, RateBudgetRepo, WriteAttemptRepo, REVIVABLE_GATES,
 };
-pub use mapping::{MappingHead, MappingRecord, MappingRepo};
+pub use mapping::{LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{SessionIdentity, SessionRepo, SessionToken};

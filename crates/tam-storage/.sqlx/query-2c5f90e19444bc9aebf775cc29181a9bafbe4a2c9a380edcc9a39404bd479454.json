@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT attempt, kind, axis, detail, recorded_at FROM mapping_loss WHERE org_id = $1 AND mapping_id = $2 ORDER BY recorded_at DESC, attempt, position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "attempt",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "axis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "detail",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2c5f90e19444bc9aebf775cc29181a9bafbe4a2c9a380edcc9a39404bd479454"
+}

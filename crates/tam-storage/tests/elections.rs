@@ -9,15 +9,18 @@ mod common;
 use sqlx::PgPool;
 use tam_domain::equivalence::{
     Election, ElectionAnswer, ElectionRule, ElectionRuleError, ElectionTrigger,
-    ElectionTriggerKind, NewElectionRule, PricingBranch,
+    ElectionTriggerKind, Loss, LossKind, NewElectionRule, PricingBranch,
 };
 use tam_domain::{
     Binding, Decider, FieldPolicies, FieldPolicy, Mapping, PublishMode, TermKind, VocabularyId,
     VocabularyPath,
 };
 use tam_marketplace::RemoteLifecycle;
-use tam_storage::{ElectionRepo, MappingRepo, ProductRepo, StorageError};
-use tam_types::{InventoryId, MappingId, OrgId, PriceIntent, PriceRule, Timestamp, Uuid};
+use tam_storage::{ElectionRepo, LossScope, MappingRepo, ProductRepo, StorageError};
+use tam_types::{
+    AttemptId, CanonicalTermId, InventoryId, MappingId, OrgId, PriceIntent, PriceRule, Timestamp,
+    Uuid,
+};
 
 use common::{minimal_product, seed_org_a, ORG_A};
 
@@ -321,4 +324,67 @@ async fn the_engine_may_raise_a_question_and_may_never_answer_one(app: PgPool) {
         authored.is_err(),
         "and never states a standing policy on the seller's behalf"
     );
+}
+
+/// A loss is append-only as a fence rather than as a convention, and survives
+/// the mapping it was recorded against.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_loss_is_recorded_per_attempt_and_the_api_role_cannot_erase_it(app: PgPool) {
+    let mapping = fixture(&app).await;
+    let repo = MappingRepo::new(app.clone());
+    let scope = LossScope {
+        org: ORG_A,
+        mapping,
+        attempt: AttemptId(Uuid([0x7A; 16])),
+        at: T0,
+    };
+    let losses = [
+        Loss::NoTargetField {
+            axis: TermKind::Licence,
+            value: licence("CC-BY-ND"),
+        },
+        Loss::Broadened {
+            to: licence("CC-BY"),
+            dropped: vec![CanonicalTermId(Uuid([0x11; 16]))],
+        },
+    ];
+    assert_eq!(
+        repo.record_losses(scope, &losses)
+            .await
+            .expect("the losses record"),
+        2
+    );
+
+    let again = LossScope {
+        attempt: AttemptId(Uuid([0x7B; 16])),
+        ..scope
+    };
+    repo.record_losses(again, &losses[..1])
+        .await
+        .expect("a second attempt records its own");
+    let read = repo.losses(ORG_A, mapping).await.expect("the losses read");
+    assert_eq!(
+        read.len(),
+        3,
+        "a re-projection writes a new attempt's rows rather than replacing the old ones, \
+         which is what buys the engine's no-delete rule"
+    );
+    assert_eq!(read[0].kind, LossKind::NoTargetField);
+    assert_eq!(read[0].axis, Some(TermKind::Licence));
+    assert_eq!(
+        read[0].detail["value"]["native_id"],
+        serde_json::json!("CC-BY-ND"),
+        "the seller sees which grant the target had nowhere to put"
+    );
+
+    for statement in [
+        "UPDATE mapping_loss SET kind = 'collapsed'",
+        "DELETE FROM mapping_loss",
+    ] {
+        assert!(
+            sqlx::query(statement).execute(&app).await.is_err(),
+            "tam_app owns every table, so append-only is a revoke and not a comment: \
+             {statement}"
+        );
+    }
 }
