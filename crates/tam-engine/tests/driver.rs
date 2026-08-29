@@ -17,16 +17,17 @@ use tam_engine::driver::{
 use tam_engine::seed::verify_policy;
 use tam_marketplace::FetchReason;
 use tam_marketplace::{
-    AdapterError, AmbiguityCause, CreateStrategy, FieldSet, FormId, FormSchemaFingerprint,
-    IdempotencyKey, InstantPause, ListingLocator, MarketplaceAdapter, ObservedListing,
-    ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
+    AdapterError, AmbiguityCause, ChallengeKind, CreateStrategy, FieldSet, FormId,
+    FormSchemaFingerprint, IdempotencyKey, InstantPause, ListingLocator, MarketplaceAdapter,
+    ObservedListing, ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan,
+    SubmitEvidence,
 };
 use tam_storage::{
     HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
     WriteAttemptRepo,
 };
 use tam_types::{
-    Actor, ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId,
+    Actor, ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId, Stamp,
     SystemComponent, Timestamp, Uuid,
 };
 use tokio_util::sync::CancellationToken;
@@ -293,8 +294,10 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
             &NewJob {
                 job: JobId(Uuid([0x06; 16])),
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[NewJobItem {
                 item: tam_domain::JobItemId(Uuid([0x07; 16])),
@@ -854,4 +857,225 @@ async fn an_item_out_of_attempt_budget_still_settles_on_the_connection(app: PgPo
         connection, "needs_reauth",
         "and the gate goes up, or the tenant's next item spends its budget the same way"
     );
+}
+
+/// F9's second half. Cloudflare answering our address rather than our
+/// credential used to reach the seller as "disconnected — re-link": the
+/// machine parked the item and raised the gate for every challenge class, and
+/// the driver gated on the effect's presence rather than on its cause. A
+/// re-link clears nothing here, so the remedy printed was the wrong one.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_marketplace_challenge_settles_blocked_and_leaves_the_connection_linked(app: PgPool) {
+    let adapter = ScriptedAdapter::answering(Err(AdapterError::Challenge(
+        ChallengeKind::JavaScriptInterstitial,
+    )));
+    let engine = engine_pool(&app).await;
+    let mapping = seed(&app, &engine).await;
+    enqueue_sibling(&engine, mapping).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let verdict = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        T0,
+    )
+    .await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Blocked),
+        "a challenge nobody can hand us the answer to settles the item rather than \
+         parking it on a gate no producer ever clears"
+    );
+
+    let settled: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT state, outcome, failure_code, failure_detail FROM job_item \
+         WHERE id = $1",
+    )
+    .bind(uuid::Uuid::from_bytes([0x07; 16]))
+    .fetch_one(&engine)
+    .await
+    .expect("the item row reads");
+    assert_eq!(
+        (
+            settled.0.as_str(),
+            settled.1.as_deref(),
+            settled.2.as_deref()
+        ),
+        ("settled", Some("blocked"), Some("ChallengePresented")),
+        "the code names the condition rather than borrowing the session's"
+    );
+    let detail = settled.3.expect("a blocked item states why");
+    assert!(
+        !detail.contains("re-link") && detail.contains("ours to do"),
+        "the seller is told whose problem this is, and it is not theirs: {detail}"
+    );
+
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "linked",
+        "the credential was never in question, so the status page must keep saying so"
+    );
+    let sibling = leases
+        .acquire("driver-test", Timestamp(T0.0 + 1_000), LEASE_SECONDS)
+        .await
+        .expect("the scan runs")
+        .expect("the sibling leases");
+    assert_eq!(
+        sibling.item.0 .0, [0x09; 16],
+        "and the tenant's other work keeps moving, because nothing was gated"
+    );
+}
+
+/// The other side of the same branch, unchanged and asserted so it stays that
+/// way: a lapsed session is the seller's to fix, so it still parks on the
+/// reauth gate and still flips the connection.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_expired_session_still_parks_and_gates_the_connection(app: PgPool) {
+    let adapter = ScriptedAdapter::answering(Err(AdapterError::SessionExpired));
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let verdict = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        T0,
+    )
+    .await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Parked,
+        "a re-link is a thing the seller can actually do, so the item waits for it"
+    );
+    let parked: (String, Option<String>) =
+        sqlx::query_as("SELECT state, blocked_on FROM job_item LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the item row reads");
+    assert_eq!(
+        (parked.0.as_str(), parked.1.as_deref()),
+        ("parked_live", Some(tam_storage::REAUTH_REQUIRED)),
+        "parked on the gate the re-link arm of revive_expired reads back"
+    );
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "needs_reauth",
+        "and the gate goes up: every sibling would spend a lease learning the same thing"
+    );
+}
+
+/// The preflight half. `AdapterError::Challenge` reaches the driver from the
+/// preflight's read steps, where `classify_read` splits a 401 or a 403 on
+/// Cloudflare's own markers, so the distinction here is data rather than
+/// invention. The write steps cannot carry it — `classify_write` maps 401,
+/// 403 and 429 to `Ambiguous` on purpose — and
+/// `a_preflight_that_stays_indeterminate_stops_wedging_the_queue` pins that
+/// arm still gating, which is the behaviour the streak bound shipped with.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_preflight_challenge_settles_blocked_without_gating(app: PgPool) {
+    let adapter =
+        ScriptedAdapter::answering(Ok(landed_evidence())).with_preflight_script(vec![Err(
+            AdapterError::Challenge(ChallengeKind::JavaScriptInterstitial),
+        )]);
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let mut at = T0;
+    let mut verdicts = Vec::new();
+    for lease in 0..PREFLIGHT_FAILURES_MAX {
+        if lease > 0 {
+            at = requeue(&leases, at).await;
+        }
+        verdicts.push(
+            drive(
+                &engine,
+                &leases,
+                &adapter,
+                CreateStrategy::HaltOnAmbiguity,
+                at,
+            )
+            .await,
+        );
+    }
+    let last = verdicts.last().expect("the loop ran at least once");
+    assert_eq!(
+        last,
+        &RunVerdict::Settled(ItemOutcome::Blocked),
+        "the streak bound still ends the run; what the error class decides is what the \
+         ending says"
+    );
+
+    let settled: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT failure_code, failure_detail FROM job_item LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the item row reads");
+    assert_eq!(
+        settled.0.as_deref(),
+        Some("ChallengePresented"),
+        "a challenge the preflight could name is not a session expiry"
+    );
+    let detail = settled.1.expect("a blocked item states why");
+    assert!(
+        !detail.contains("re-link"),
+        "and the seller is not sent to fix a credential that works: {detail}"
+    );
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(connection, "linked", "nothing was gated");
+    // Scoped to the topic rather than the table: the item was the job's last,
+    // so `settle_if_complete` queues the job's own `email.job_settled`, which
+    // is the seller being told their job finished and not a re-link prompt.
+    let prompted: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM outbox_message WHERE topic = 'email.parked_job'")
+            .fetch_one(&engine)
+            .await
+            .expect("the outbox reads");
+    assert_eq!(
+        prompted, 0,
+        "and nobody is emailed a re-link prompt for work that is ours to retry"
+    );
+}
+
+/// A second item for the same tenant, so a test can ask whether the queue kept
+/// moving. Its own job, because `enqueue` writes a job and its items together.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn enqueue_sibling(engine: &PgPool, mapping: MappingId) {
+    JobRepo::new(engine.clone())
+        .enqueue(
+            ORG,
+            &NewJob {
+                job: JobId(Uuid([0x0B; 16])),
+                inventory: InventoryId::TesGb,
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+            &[NewJobItem {
+                item: tam_domain::JobItemId(Uuid([0x09; 16])),
+                mapping,
+                idempotency_key: IdempotencyKey(Uuid([0x0A; 16])),
+                operation: tam_domain::ItemOperation::Create,
+                requires_bound_on: None,
+            }],
+        )
+        .await
+        .expect("the sibling job enqueues");
 }

@@ -16,7 +16,7 @@ use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
     Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId,
-    SystemComponent, Timestamp, Uuid,
+    Stamp, SystemComponent, Timestamp, Uuid,
 };
 
 use crate::codec::{
@@ -43,8 +43,7 @@ pub(crate) const fn item_outcome_to_db(outcome: ItemOutcome) -> &'static str {
 pub struct NewAttempt<'a> {
     pub mapping: MappingId,
     pub intent: &'a AttemptIntent,
-    pub at: Timestamp,
-    pub actor: Actor,
+    pub stamp: Stamp,
 }
 
 /// The job-level half of an enqueue, grouped so call sites read as one
@@ -53,11 +52,10 @@ pub struct NewAttempt<'a> {
 pub struct NewJob {
     pub job: JobId,
     pub inventory: InventoryId,
-    pub at: Timestamp,
-    /// Who queued it. Job-level like the rest of this struct: a job has one
-    /// author, and carrying it here rather than beside it keeps a caller from
-    /// describing one job and attributing another.
-    pub actor: Actor,
+    /// When it was queued and who queued it. Job-level like the rest of this
+    /// struct: a job has one author, and carrying it here rather than beside
+    /// it keeps a caller from describing one job and attributing another.
+    pub stamp: Stamp,
 }
 
 /// Which organisation, item and epoch a fenced write speaks for.
@@ -144,9 +142,9 @@ impl JobRepo {
         let NewJob {
             job,
             inventory,
-            at,
-            actor,
+            stamp,
         } = *new;
+        let Stamp { at, actor } = stamp;
         let org_db = uuid_to_db(org.0);
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
@@ -179,8 +177,7 @@ impl JobRepo {
                 item: None,
             },
             &JobEventPayload::JobQueued { items: item_count },
-            at,
-            actor,
+            stamp,
         )
         .await?;
         tx.commit().await?;
@@ -196,12 +193,11 @@ impl JobRepo {
         &self,
         scope: &EventScope,
         payload: &JobEventPayload,
-        at: Timestamp,
-        actor: Actor,
+        stamp: Stamp,
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
         crate::pin_org(&mut tx, scope.org).await?;
-        append_event(&mut tx, scope, payload, at, actor).await?;
+        append_event(&mut tx, scope, payload, stamp).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -397,9 +393,9 @@ pub async fn append_event(
     tx: &mut Transaction<'_, Postgres>,
     scope: &EventScope,
     payload: &JobEventPayload,
-    at: Timestamp,
-    actor: Actor,
+    stamp: Stamp,
 ) -> Result<(), StorageError> {
+    let Stamp { at, actor } = stamp;
     let EventScope { org, job, item } = *scope;
     let org_db = uuid_to_db(org.0);
     let seq = allocate_org_seq(tx, org).await?;
@@ -628,10 +624,9 @@ async fn record_resumptions(
                 item: Some(item),
             },
             &JobEventPayload::ItemResumed,
-            at,
             // The revive sweep is the engine's own timer firing; no request
             // and no seller is behind an item resuming.
-            Actor::System(SystemComponent::Engine),
+            Stamp::system(SystemComponent::Engine, at),
         )
         .await?;
     }
@@ -1269,14 +1264,13 @@ impl LeaseRepo {
                     org,
                     connection: tam_types::ConnectionId(uuid_from_db(row.id)),
                     event: tam_types::ConnectionEvent::NeedsReauth,
-                    // The gate is the engine classifying a failure as an
-                    // authentication problem; no seller asked for it.
-                    actor: Actor::System(SystemComponent::Engine),
                     // The inventory, not the marketplace: the connection is
                     // per-marketplace, so which of its inventories failed is
                     // the part the row does not already carry.
                     detail: Some(inventory_to_db(inventory)),
-                    at,
+                    // The gate is the engine classifying a failure as an
+                    // authentication problem; no seller asked for it.
+                    stamp: Stamp::system(SystemComponent::Engine, at),
                 },
             )
             .await?;
@@ -1456,9 +1450,9 @@ impl WriteAttemptRepo {
         let NewAttempt {
             mapping,
             intent,
-            at,
-            actor,
+            stamp,
         } = *new;
+        let Stamp { at, actor } = stamp;
         let AttemptIntent { body, hash } = intent;
         let attempt = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
         let inserted = sqlx::query!(
@@ -2164,9 +2158,9 @@ impl JobRepo {
         let NewJob {
             job,
             inventory,
-            at,
-            actor,
+            stamp,
         } = *new;
+        let Stamp { at, actor } = stamp;
         let org_db = uuid_to_db(org.0);
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
@@ -2219,8 +2213,7 @@ impl JobRepo {
                 item: None,
             },
             &JobEventPayload::JobQueued { items: item_count },
-            at,
-            actor,
+            stamp,
         )
         .await?;
         tx.commit().await?;

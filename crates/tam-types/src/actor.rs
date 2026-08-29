@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::UserId;
+use crate::{Timestamp, UserId};
 
 /// A part of this system acting on its own schedule rather than on a
 /// seller's request. Named individually because "not a person" is not an
@@ -80,6 +80,30 @@ impl Actor {
     }
 }
 
+/// Who did this, and when. The two halves of an audit record's provenance,
+/// travelling as one value.
+///
+/// They are paired rather than adjacent because every row that carries one
+/// carries the other, and a signature taking them separately is one where an
+/// instant and an author can be supplied from different events without
+/// anything noticing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stamp {
+    pub at: Timestamp,
+    pub actor: Actor,
+}
+
+impl Stamp {
+    /// A stamp for an unattended write by one component.
+    #[must_use]
+    pub const fn system(component: SystemComponent, at: Timestamp) -> Self {
+        Self {
+            at,
+            actor: Actor::System(component),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Actor, SystemComponent};
@@ -108,6 +132,15 @@ mod tests {
     /// `pre-attribution` is migration 0033's backfill marker for rows written
     /// before attribution existed. No live component may collide with it, or
     /// a genuine gap in the trail becomes indistinguishable from a write.
+    #[test]
+    fn a_system_stamp_carries_both_halves() {
+        use super::Stamp;
+        use crate::Timestamp;
+        let stamp = Stamp::system(SystemComponent::Engine, Timestamp(7));
+        assert_eq!(stamp.at, Timestamp(7));
+        assert_eq!(stamp.actor.id(), "engine");
+    }
+
     #[test]
     fn no_component_collides_with_the_backfill_marker() {
         for component in SystemComponent::ALL {

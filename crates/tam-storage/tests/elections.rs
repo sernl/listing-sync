@@ -23,7 +23,7 @@ use tam_storage::{
 };
 use tam_types::{
     Actor, AttemptId, CanonicalTermId, InventoryId, JobId, MappingId, OrgId, PriceIntent,
-    PriceRule, SystemComponent, Timestamp, Uuid,
+    PriceRule, Stamp, SystemComponent, Timestamp, Uuid,
 };
 
 use common::{minimal_product, seed_org_a, ORG_A};
@@ -425,8 +425,10 @@ async fn item_in(app: &PgPool, mapping: MappingId, state: &str, gate: Option<&st
             &NewJob {
                 job: JOB,
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[NewJobItem {
                 item: ITEM,

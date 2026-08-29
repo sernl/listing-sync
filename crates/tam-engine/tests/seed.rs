@@ -26,7 +26,7 @@ use tam_storage::{ElectionRepo, LeaseRepo, LeasedItem, MappingRepo, ProductRepo,
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole,
     InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule,
-    ProductFile, ProductId, ScanOutcome, SystemComponent, Timestamp, Title, UserId, Uuid,
+    ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, UserId, Uuid,
 };
 
 /// The rendering reads no files, so the source is a refusal.
@@ -1170,8 +1170,10 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
             &tam_storage::NewJob {
                 job,
                 inventory: InventoryId::TesNz,
-                at: NOW,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: NOW,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &items,
         )
@@ -1218,8 +1220,10 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
                     body: serde_json::json!({}),
                     hash: vec![0x01],
                 },
-                at: NOW,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: NOW,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
         )
         .await
@@ -1346,8 +1350,10 @@ async fn provision_refusing_queue(app: &PgPool, engine: &PgPool) {
             &tam_storage::NewJob {
                 job: REFUSING_JOB,
                 inventory: InventoryId::TesNz,
-                at: NOW,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: NOW,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[
                 tam_storage::NewJobItem {

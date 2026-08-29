@@ -16,7 +16,7 @@ use tam_storage::{HaltRepo, JobRepo, MappingRepo, NewJob, NewJobItem, ProductRep
 use tam_types::{
     Actor, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
     MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    SystemComponent, Timestamp, Title, Uuid,
+    Stamp, SystemComponent, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -48,7 +48,7 @@ async fn engine_pool(app: &PgPool) -> PgPool {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str]) {
+async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_code: Option<&str>) {
     let product = ProductId(Uuid([0x01; 16]));
     let mapping = MappingId(Uuid([0x02; 16]));
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
@@ -138,8 +138,10 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str]) {
             &NewJob {
                 job: JobId(Uuid([0x06; 16])),
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &items,
         )
@@ -148,13 +150,14 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str]) {
 
     for (byte, outcome) in plan {
         sqlx::query(
-            "UPDATE job_item SET state = 'settled', outcome = $1, \
+            "UPDATE job_item SET state = 'settled', outcome = $1, failure_code = $4, \
                  settled_at = to_timestamp($2::bigint / 1000.0) \
              WHERE id = $3",
         )
         .bind(outcome)
         .bind(T0.0)
         .bind(uuid::Uuid::from_bytes([byte; 16]))
+        .bind(failure_code)
         .execute(engine)
         .await
         .expect("the item settles");
@@ -169,7 +172,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str]) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_window_of_blocked_settlements_trips_the_breaker(app: PgPool) {
     let engine = engine_pool(&app).await;
-    seed_window(&app, &engine, &["blocked"; 6]).await;
+    seed_window(&app, &engine, &["blocked"; 6], None).await;
     let report = run_breaker(
         &JobRepo::new(engine.clone()),
         &HaltRepo::new(engine.clone()),
@@ -217,7 +220,7 @@ async fn one_blocked_settlement_among_healthy_ones_does_not(app: PgPool) {
         i64::try_from(outcomes.len()).unwrap_or(i64::MAX) > BREAKER_MIN_SAMPLE,
         "the window has to clear the sample floor or this proves nothing"
     );
-    seed_window(&app, &engine, &outcomes).await;
+    seed_window(&app, &engine, &outcomes, None).await;
     let report = run_breaker(
         &JobRepo::new(engine.clone()),
         &HaltRepo::new(engine.clone()),
@@ -235,4 +238,41 @@ async fn one_blocked_settlement_among_healthy_ones_does_not(app: PgPool) {
         .await
         .expect("the halt table reads");
     assert_eq!(halted, 0, "nothing halted");
+}
+
+/// The fleet remedy an egress block actually gets. A Cloudflare rule keyed on
+/// our address answers every tenant identically, and none of them can clear
+/// it — so each settles one item `blocked` on `ChallengePresented` and stops.
+/// Gating their connections would ask every seller to re-link a credential
+/// that works; halting the inventory is the answer that matches the cause, and
+/// this is the arithmetic that reaches it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_window_of_challenge_blocked_settlements_trips_the_breaker(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    seed_window(&app, &engine, &["blocked"; 6], Some("ChallengePresented")).await;
+    let report = run_breaker(
+        &JobRepo::new(engine.clone()),
+        &HaltRepo::new(engine.clone()),
+        T0,
+    )
+    .await
+    .expect("the breaker runs");
+    assert_eq!(
+        report.tripped,
+        vec!["TesGb".to_owned()],
+        "the breaker reads the outcome, so a challenge-coded block reaches it exactly as \
+         any other adverse settlement does"
+    );
+    let coded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM job_item WHERE outcome = 'blocked' \
+           AND failure_code = 'ChallengePresented'",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the item rows read");
+    assert_eq!(
+        coded, 6,
+        "and the rows carry the challenge code, so narrowing the breaker's filter by \
+         failure_code later would have to break this test to do it"
+    );
 }

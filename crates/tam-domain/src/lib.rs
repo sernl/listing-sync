@@ -948,10 +948,10 @@ impl SyncMachine {
                 vec![],
             ),
             Input::SubmitResult(Err(AdapterError::Challenge(challenge))) => {
-                self.park(attempt, challenge, now)
+                self.challenged(attempt, challenge, now)
             }
             Input::SubmitResult(Err(AdapterError::SessionExpired)) => {
-                self.park(attempt, ChallengeKind::ReauthRequired, now)
+                self.challenged(attempt, ChallengeKind::ReauthRequired, now)
             }
             Input::SubmitResult(Err(AdapterError::SchemaDrift(drift))) => {
                 let effects = vec![
@@ -1298,13 +1298,41 @@ impl SyncMachine {
         self.advance(SyncState::Terminal(ambiguous(attempt, cause)), effects)
     }
 
-    fn park(
+    /// A challenge stands between this write and the marketplace. Which one
+    /// decides everything that follows, because the two classes clear by
+    /// different events and only one of them is the seller's to clear.
+    ///
+    /// `ReauthRequired` is the seller's: the cookie jar has lapsed, a re-link
+    /// fixes it, and until then every sibling item would spend a lease
+    /// discovering the same thing. So the item parks on that gate, the
+    /// connection is gated behind it, and the seller is told. `revive_expired`
+    /// releases the park when the re-link lands.
+    ///
+    /// Everything else is the marketplace's edge: an interstitial, a captcha
+    /// or a firewall rule, arriving because of where the request came from
+    /// rather than who it came from. No credential clears it and no seller
+    /// action helps, so gating their connection would print "re-link" over a
+    /// condition a re-link cannot touch. The item settles `Blocked` instead —
+    /// terminal, ungated, and visible to the fleet breaker, which is the
+    /// remedy that fits: one tenant losing an item is a bad minute, and every
+    /// tenant losing one is an egress block the fleet halt should catch.
+    ///
+    /// Settling rather than parking is also the only reachable answer.
+    /// `Input::ChallengeCleared` and `Input::ParkExpired` have no producer
+    /// outside this crate's tests, and a non-reauth park writes a `blocked_on`
+    /// that is in neither `REVIVABLE_GATES` nor the re-link arm — so such a
+    /// park is never revived, never settled, and its job reads active
+    /// forever. The landing judgement is unchanged: a challenge still means
+    /// the write did not land, exactly as the park arm always claimed.
+    fn challenged(
         self,
         attempt: WriteAttemptId,
         challenge: ChallengeKind,
         now: LogicalInstant,
     ) -> Result<Transition, MachineError> {
-        let reauth = matches!(challenge, ChallengeKind::ReauthRequired);
+        if !matches!(challenge, ChallengeKind::ReauthRequired) {
+            return self.advance(SyncState::Terminal(Outcome::Blocked { challenge }), vec![]);
+        }
         let effects = vec![
             Effect::ParkItem {
                 item: self.item,
@@ -1313,19 +1341,11 @@ impl SyncMachine {
             },
             Effect::RequeueBehindGate {
                 connection: self.connection,
-                cause: if reauth {
-                    BlockCause::Reauth
-                } else {
-                    BlockCause::Challenge
-                },
+                cause: BlockCause::Reauth,
             },
             Effect::Notify {
                 org: self.org,
-                event: if reauth {
-                    SellerEvent::ReauthRequired
-                } else {
-                    SellerEvent::ItemParked
-                },
+                event: SellerEvent::ReauthRequired,
             },
         ];
         self.advance(
@@ -2051,8 +2071,13 @@ mod machine_tests {
         );
     }
 
+    /// This row used to park on the challenge and gate the connection behind
+    /// it. Both were wrong for a condition the seller does not hold: the gate
+    /// prints "disconnected — re-link" over a marketplace edge that no
+    /// credential clears, and the park had no producer for either input that
+    /// ends it, so the item sat `parked_live` and its job read active forever.
     #[test]
-    fn row_intent_recorded_submit_challenge_parks() {
+    fn row_intent_recorded_submit_challenge_settles_blocked_without_gating() {
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
@@ -2068,27 +2093,16 @@ mod machine_tests {
         .expect("a submit result applies in IntentRecorded");
         assert_eq!(
             transition.next.state,
-            SyncState::Parked {
-                attempt: Some(attempt()),
+            SyncState::Terminal(Outcome::Blocked {
                 challenge: ChallengeKind::Captcha,
-            },
-            "a park holds the attempt it was interrupted mid-flight for"
+            }),
+            "a challenge nobody can hand us the answer to is terminal, not a wait"
         );
         assert_eq!(
             transition.effects,
-            EffectList(vec![
-                Effect::ParkItem {
-                    item: item(),
-                    challenge: ChallengeKind::Captcha,
-                    expires: LogicalInstant(now().0 + PARK_TTL_MS),
-                },
-                Effect::RequeueBehindGate {
-                    connection: connection(),
-                    cause: BlockCause::Challenge,
-                },
-                notify(SellerEvent::ItemParked),
-            ]),
-            "the park, the gate and the notification, in the order the table lists them"
+            EffectList(vec![]),
+            "nothing is gated and nobody is emailed: the retry is ours, and the fleet \
+             breaker is what notices when every tenant settles this way at once"
         );
     }
 

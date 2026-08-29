@@ -27,7 +27,7 @@ use tam_storage::{
     JobRepo, LoweringRefusal, MappingRepo, NewJob, NewJobItem, StorageError, SyncIntent,
     SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
 };
-use tam_types::{Actor, InventoryId, JobId, MappingId, OrgId, SystemComponent, Uuid};
+use tam_types::{Actor, InventoryId, JobId, MappingId, OrgId, Stamp, SystemComponent, Uuid};
 
 /// What one request's drain produced, so a caller reports it rather than
 /// reading it back out of the row it just wrote.
@@ -315,8 +315,10 @@ where
             &NewJob {
                 job,
                 inventory: record.target,
-                at: run.now,
-                actor: Actor::System(SystemComponent::Worker),
+                stamp: Stamp {
+                    at: run.now,
+                    actor: Actor::System(SystemComponent::Worker),
+                },
             },
             &items,
             // Cron-driven. sync_request carries no requester column, so the
@@ -432,8 +434,10 @@ where
             &NewJob {
                 job,
                 inventory: record.source,
-                at: run.now,
-                actor: Actor::System(SystemComponent::Worker),
+                stamp: Stamp {
+                    at: run.now,
+                    actor: Actor::System(SystemComponent::Worker),
+                },
             },
             &items,
             // Cron-driven. sync_request carries no requester column, so the

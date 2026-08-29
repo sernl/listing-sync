@@ -12,9 +12,9 @@ use tam_domain::{
 };
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
-    AdapterError, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator, ListingState,
-    MarketplaceAdapter, ObservedListing, Outcome, Pause, RemoteLifecycle, RemoteListingId,
-    RemovalPlan, RevisePlan, WriteAttemptId,
+    AdapterError, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator,
+    ListingState, MarketplaceAdapter, ObservedListing, Outcome, Pause, RemoteLifecycle,
+    RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_storage::{
     append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
@@ -22,8 +22,8 @@ use tam_storage::{
     NewAttempt, NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
-    Actor, BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant,
-    OrgId, SystemComponent, Timestamp, Uuid,
+    BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId,
+    Stamp, SystemComponent, Timestamp, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -202,6 +202,36 @@ pub(crate) fn intent_as_json(operation: &ItemOperation, fields: &FieldSet) -> se
     }
 }
 
+/// How a blocking condition reads to the seller, split by whose it is.
+///
+/// A lapsed session is theirs and a re-link fixes it. Everything else is the
+/// marketplace's edge answering our address rather than our credential, which
+/// no re-link touches — so the copy says what is true, that the retry is ours
+/// to do. Reporting the second as `SessionExpired` is how a connections page
+/// ends up telling a seller to re-link over an egress block.
+fn challenge_verdict(challenge: ChallengeKind) -> (FailureCode, tam_types::FailureDetail) {
+    match challenge {
+        ChallengeKind::ReauthRequired => (
+            FailureCode::SessionExpired,
+            tam_types::FailureDetail(
+                "this marketplace connection needs re-linking: the session it holds has \
+                 lapsed"
+                    .to_owned(),
+            ),
+        ),
+        ChallengeKind::Captcha
+        | ChallengeKind::JavaScriptInterstitial
+        | ChallengeKind::EmailedOneTimePassword => (
+            FailureCode::ChallengePresented,
+            tam_types::FailureDetail(
+                "the marketplace is challenging our requests; retrying is ours to do, not \
+                 yours"
+                    .to_owned(),
+            ),
+        ),
+    }
+}
+
 fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
     let (item_outcome, failure_code, failure_detail) = match outcome {
         Outcome::Committed { .. } => (ItemOutcome::Succeeded, None, None),
@@ -210,7 +240,10 @@ fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
             (ItemOutcome::Failed, Some(*code), Some(detail.clone()))
         }
         Outcome::Ambiguous { .. } => (ItemOutcome::Ambiguous, None, None),
-        Outcome::Blocked { .. } => (ItemOutcome::Blocked, None, None),
+        Outcome::Blocked { challenge } => {
+            let (code, detail) = challenge_verdict(*challenge);
+            (ItemOutcome::Blocked, Some(code), Some(detail))
+        }
         Outcome::Skipped { code } => (ItemOutcome::Skipped, Some(*code), None),
     };
     ItemVerdict {
@@ -535,10 +568,9 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                                     body: intent_as_json(&operation, &next.fields),
                                     hash: intent_hash.0.to_vec(),
                                 },
-                                at: now,
                                 // The driver opens its own attempt rows; the
                                 // seller's part ended when the job was queued.
-                                actor: Actor::System(SystemComponent::Engine),
+                                stamp: Stamp::system(SystemComponent::Engine, now),
                             },
                         )
                         .await;
@@ -752,9 +784,20 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                     connection: _,
                     cause,
                 } => {
-                    ctx.leases
-                        .gate_connection(org, lease.inventory, now)
-                        .await?;
+                    // The gate is `Reauth`'s alone. It flips the connection to
+                    // `needs_reauth`, which the lease scan reads as "hold this
+                    // tenant's whole marketplace" and the status page reads as
+                    // "disconnected — re-link": the right answer for a lapsed
+                    // session and the wrong one for every other cause here,
+                    // none of which a re-link clears. The machine no longer
+                    // raises this effect for a challenge; gating on the cause
+                    // rather than on the effect's presence is what keeps that
+                    // true if it ever does again.
+                    if matches!(cause, BlockCause::Reauth) {
+                        ctx.leases
+                            .gate_connection(org, lease.inventory, now)
+                            .await?;
+                    }
                     record_event(
                         ctx,
                         lease,
@@ -957,21 +1000,28 @@ async fn rate_refused_before_the_write(
 /// either way, so settling early with the outcome that names it is the honest
 /// answer rather than a guess.
 ///
-/// Gate first, settle second. The gate is what stops this tenant's remaining
-/// items each repeating the whole streak against the same dead credential;
-/// settling alone would clear one item and hand the wedge to the next. The
-/// item settles `Blocked` rather than `Failed` because nothing was refused —
-/// no write was ever attempted — and `SessionExpired` beside a sentence the
-/// seller can act on is what the report renders. `Blocked` is also what the
-/// fleet breaker counts, so a marketplace-wide preflight outage reaches it.
+/// The item settles `Blocked` rather than `Failed` either way, because
+/// nothing was refused — no write was ever attempted — and `Blocked` is what
+/// the fleet breaker counts, so a marketplace-wide preflight outage reaches
+/// it. What the error class decides is the other half: whose condition this
+/// is. [`preflight_challenge`] says how far the error can be trusted to
+/// answer that, and it is not all the way.
 ///
-/// Blaming the connection can be wrong: a marketplace having a bad hour fails
-/// the preflight indeterminately too, and its seller is then asked to re-link
-/// a credential that was never broken. The arithmetic arm widens that a
+/// A lapsed session is the seller's, so the connection is gated first and
+/// settled second — the gate is what stops this tenant's remaining items each
+/// repeating the whole streak against the same dead credential, and settling
+/// alone would clear one item and hand the wedge to the next. A challenge is
+/// the marketplace's edge, so nothing is gated at all: printing "re-link" over
+/// an egress block sends the seller to fix a credential that works, and the
+/// remedy that fits is the breaker noticing every tenant settling the same way.
+///
+/// Blaming the connection can still be wrong where the error cannot say —
+/// a marketplace having a bad hour fails the preflight indeterminately, and
+/// indeterminate reads as reauth here. The arithmetic arm widens that a
 /// little, because an item at its last attempt is gated on a shorter streak.
-/// It stays the cheap error of the two. Re-linking costs one seller one
-/// minute and the gate lifts; the alternative spends every item in the queue
-/// on the same dead leases and settles them all `failed`/`Other`.
+/// It stays the cheap error of the two: re-linking costs one seller one minute
+/// and the gate lifts, where the alternative spends every item in the queue on
+/// the same dead leases and settles them all `failed`/`Other`.
 async fn preflight_failed(
     ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     lease: &LeasedItem,
@@ -990,30 +1040,35 @@ async fn preflight_failed(
             reason: format!("preflight failed transiently: {error:?}"),
         });
     }
-    ctx.leases
-        .gate_connection(lease.org, lease.inventory, at)
-        .await?;
+    let challenge = preflight_challenge(error);
+    let cause = if matches!(challenge, ChallengeKind::ReauthRequired) {
+        BlockCause::Reauth
+    } else {
+        BlockCause::Challenge
+    };
+    if matches!(cause, BlockCause::Reauth) {
+        ctx.leases
+            .gate_connection(lease.org, lease.inventory, at)
+            .await?;
+    }
     record_event(
         ctx,
         lease,
         &JobEventPayload::ItemBlocked {
-            cause: block_cause_name(BlockCause::Reauth).to_owned(),
+            cause: block_cause_name(cause).to_owned(),
         },
         at,
     )
     .await?;
+    let (code, detail) = challenge_verdict(challenge);
     let verdict = ItemVerdict {
         outcome: ItemOutcome::Blocked,
-        failure_code: Some(FailureCode::SessionExpired),
-        // The streak is deliberately not quoted here. It reads 1 or 2 when
-        // the attempt budget is what ended the run, so a sentence built on it
-        // would tell the seller a number that is about our own bookkeeping.
-        // `job_item.preflight_failures` holds the count for whoever needs it.
-        failure_detail: Some(tam_types::FailureDetail(
-            "this marketplace connection needs re-linking: the checks made before writing \
-             could not be completed"
-                .to_owned(),
-        )),
+        failure_code: Some(code),
+        // The streak is deliberately not quoted in the detail. It reads 1 or 2
+        // when the attempt budget is what ended the run, so a sentence built
+        // on it would tell the seller a number that is about our own
+        // bookkeeping. `job_item.preflight_failures` holds the count.
+        failure_detail: Some(detail),
     };
     ctx.leases.settle(&lease_ref, &verdict, at).await?;
     record_event(
@@ -1025,8 +1080,41 @@ async fn preflight_failed(
         at,
     )
     .await?;
-    notify(ctx, lease.org, lease, SellerEvent::ReauthRequired, at).await?;
+    if matches!(cause, BlockCause::Reauth) {
+        notify(ctx, lease.org, lease, SellerEvent::ReauthRequired, at).await?;
+    }
     Ok(RunVerdict::Settled(ItemOutcome::Blocked))
+}
+
+/// Which class of condition ended the preflight, as far as the error can say.
+///
+/// `Challenge` and `SessionExpired` are the adapter having decided, and both
+/// reach here: the Tes preflight's read steps run `classify_read`, which
+/// splits a 401 or a 403 on Cloudflare's own markers into one or the other.
+///
+/// Everything else answers `ReauthRequired`, and that is a floor rather than a
+/// judgement. The preflight's first two steps are writes, and `classify_write`
+/// maps 401, 403 and 429 to `Ambiguous(ReadBackIndeterminate)` on purpose —
+/// the write may have landed before the refusal, and that asymmetry is the
+/// whole reason there are two classifiers. So an edge block on the create step
+/// arrives byte-identical to a lapsed session on the create step. The data
+/// does not carry the distinction and this must not invent one; the arm keeps
+/// the behaviour the streak bound shipped with, which is right for the
+/// condition it was written against and wrong for an egress block that only
+/// ever fails on a write. Splitting it means giving the write classifier a
+/// marker check of its own, which is a change to what an ambiguous write means
+/// and is not this function's to make.
+const fn preflight_challenge(error: &AdapterError) -> ChallengeKind {
+    match error {
+        AdapterError::Challenge(kind) => *kind,
+        AdapterError::SessionExpired
+        | AdapterError::Ambiguous(_)
+        | AdapterError::Rejected { .. }
+        | AdapterError::SchemaDrift(_)
+        | AdapterError::RateLimited { .. }
+        | AdapterError::NotSent(_)
+        | AdapterError::Uncaptured { .. } => ChallengeKind::ReauthRequired,
+    }
 }
 
 /// What an unfinished attempt names. A revise or a removal addressed a
@@ -1149,8 +1237,7 @@ async fn record_event(
             item: Some(lease.item),
         },
         payload,
-        at,
-        Actor::System(SystemComponent::Engine),
+        Stamp::system(SystemComponent::Engine, at),
     )
     .await?;
     tx.commit().await?;

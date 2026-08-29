@@ -17,7 +17,7 @@ use tam_storage::{
     JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest, StorageError,
     SyncIntent, SyncRequestRepo,
 };
-use tam_types::{Actor, FailureCode, InventoryId, JobId, MappingId, OrgId, Timestamp, Uuid};
+use tam_types::{Actor, FailureCode, InventoryId, JobId, MappingId, OrgId, Stamp, Timestamp, Uuid};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
@@ -582,11 +582,13 @@ pub(crate) async fn create_job(
     let new = NewJob {
         job,
         inventory: body.inventory,
-        at: now,
         // The one write path with a seller genuinely behind it: the session
         // extractor already resolved who, and the repository boundary
         // discarded it until now.
-        actor: Actor::Person(context.user),
+        stamp: Stamp {
+            at: now,
+            actor: Actor::Person(context.user),
+        },
     };
     let created = JobRepo::new(state.pool.clone())
         .create_with_request_key(context.org, key.0, &new, &items)

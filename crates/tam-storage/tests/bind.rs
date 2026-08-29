@@ -21,7 +21,7 @@ use tam_storage::{
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
     JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, ScanOutcome, SystemComponent, Timestamp, Title, Uuid,
+    ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -177,8 +177,10 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
             &NewJob {
                 job: JOB,
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[NewJobItem {
                 item: ITEM,
@@ -225,8 +227,10 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
             &NewJob {
                 job: RIVAL_JOB,
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[NewJobItem {
                 item: RIVAL_ITEM,
@@ -262,8 +266,7 @@ async fn settle_attempt(
                     body: serde_json::json!({}),
                     hash: vec![0x01],
                 },
-                at,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp::system(SystemComponent::Engine, at),
             },
         )
         .await?;
@@ -919,8 +922,10 @@ async fn park_a_waiting_publish(
             &NewJob {
                 job,
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[NewJobItem {
                 item,

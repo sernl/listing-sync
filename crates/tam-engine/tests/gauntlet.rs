@@ -39,7 +39,7 @@ use tam_storage::{
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
     JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, ScanOutcome, SystemComponent, Timestamp, Title, UserId, Uuid,
+    ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, UserId, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -634,8 +634,10 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
             &NewJob {
                 job: JOB,
                 inventory: InventoryId::TesNz,
-                at: NOW,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: NOW,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[NewJobItem {
                 item: tam_domain::JobItemId(Uuid([0x41; 16])),

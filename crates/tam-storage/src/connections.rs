@@ -11,8 +11,8 @@
 use sqlx::PgPool;
 use sqlx::{Postgres, Transaction};
 use tam_types::{
-    connection_status, Actor, ConnectionEvent, ConnectionHealth, ConnectionId, ConnectionState,
-    ConnectionStatus, Marketplace, OrgId, Timestamp,
+    connection_status, ConnectionEvent, ConnectionHealth, ConnectionId, ConnectionState,
+    ConnectionStatus, Marketplace, OrgId, Stamp, Timestamp,
 };
 
 use crate::codec::{timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db};
@@ -102,9 +102,8 @@ pub struct ConnectionEventRecord<'a> {
     pub org: OrgId,
     pub connection: ConnectionId,
     pub event: ConnectionEvent,
-    pub actor: Actor,
     pub detail: Option<&'a str>,
-    pub at: Timestamp,
+    pub stamp: Stamp,
 }
 
 /// Appends one row to the connection lifecycle audit, inside a caller's
@@ -123,10 +122,10 @@ pub async fn record_connection_event(
         uuid_to_db(record.org.0),
         uuid_to_db(record.connection.0),
         record.event.as_str(),
-        record.actor.kind(),
-        record.actor.id(),
+        record.stamp.actor.kind(),
+        record.stamp.actor.id(),
         record.detail,
-        timestamp_to_db(record.at)?,
+        timestamp_to_db(record.stamp.at)?,
     )
     .execute(&mut **tx)
     .await?;

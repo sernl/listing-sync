@@ -32,7 +32,7 @@ use tam_taxonomy::TES_MAIN_AGE_RANGES;
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CurrencyRule, FileId, FileKind, FileRole, ImportedPrice,
     ImportedTerm, InventoryId, JobEventPayload, JobId, ListingCopy, MappingId, Money, OrgId,
-    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, SystemComponent, TermKind,
+    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, TermKind,
     Timestamp, Title, Uuid,
 };
 
@@ -222,8 +222,10 @@ pub async fn record_drain_report<A: FirstPartyExport>(
         &NewJob {
             job,
             inventory: run.source,
-            at: run.now,
-            actor: Actor::System(SystemComponent::Import),
+            stamp: Stamp {
+                at: run.now,
+                actor: Actor::System(SystemComponent::Import),
+            },
         },
         &[],
         // The import command runs unattended against an export; nothing in
@@ -246,8 +248,7 @@ pub async fn record_drain_report<A: FirstPartyExport>(
             items_new: wire(totals.items_new),
             items_already_open: wire(totals.items_already_open),
         },
-        run.now,
-        Actor::System(SystemComponent::Import),
+        Stamp::system(SystemComponent::Import, run.now),
     )
     .await?;
     Ok(job)

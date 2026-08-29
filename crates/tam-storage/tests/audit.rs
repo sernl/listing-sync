@@ -9,7 +9,7 @@
 use sqlx::PgPool;
 use tam_storage::{ConnectionAudit, ConnectionEventRecord, StorageError};
 use tam_types::{
-    Actor, ConnectionEvent, ConnectionId, OrgId, SystemComponent, Timestamp, UserId, Uuid,
+    Actor, ConnectionEvent, ConnectionId, OrgId, Stamp, SystemComponent, Timestamp, UserId, Uuid,
 };
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -88,9 +88,11 @@ async fn the_lifecycle_audit_records_both_halves_of_the_actor(pool: PgPool) {
             org: ORG_A,
             connection: CONNECTION,
             event: ConnectionEvent::Linked,
-            actor: Actor::Person(USER),
             detail: Some("tes"),
-            at: T0,
+            stamp: Stamp {
+                at: T0,
+                actor: Actor::Person(USER),
+            },
         })
         .await
         .expect("a seller-driven link records");
@@ -99,9 +101,11 @@ async fn the_lifecycle_audit_records_both_halves_of_the_actor(pool: PgPool) {
             org: ORG_A,
             connection: CONNECTION,
             event: ConnectionEvent::NeedsReauth,
-            actor: Actor::System(SystemComponent::Engine),
             detail: None,
-            at: Timestamp(T0.0 + 1),
+            stamp: Stamp {
+                at: Timestamp(T0.0 + 1),
+                actor: Actor::System(SystemComponent::Engine),
+            },
         })
         .await
         .expect("an engine gate records");
@@ -141,9 +145,11 @@ async fn the_lifecycle_audit_cannot_be_rewritten_or_erased(pool: PgPool) {
             org: ORG_A,
             connection: CONNECTION,
             event: ConnectionEvent::Revoked,
-            actor: Actor::System(SystemComponent::Broker),
             detail: None,
-            at: T0,
+            stamp: Stamp {
+                at: T0,
+                actor: Actor::System(SystemComponent::Broker),
+            },
         })
         .await
         .expect("the application role may append");

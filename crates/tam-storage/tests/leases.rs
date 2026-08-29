@@ -24,8 +24,8 @@ use tam_storage::{
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
     FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet,
-    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, SystemComponent, Timestamp, Title,
-    Uuid,
+    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp,
+    Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -206,8 +206,10 @@ async fn enqueue_operation(
             &NewJob {
                 job: JobId(Uuid([job_seed; 16])),
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             std::slice::from_ref(&new_item),
         )
@@ -499,8 +501,10 @@ async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
             &NewJob {
                 job,
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[first, second],
         )
@@ -777,8 +781,10 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
             &NewJob {
                 job,
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[first_item, second_item],
         )
@@ -865,8 +871,10 @@ async fn a_reused_idempotency_key_is_named(app: PgPool) {
             &NewJob {
                 job: JobId(Uuid([0x14; 16])),
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             std::slice::from_ref(&duplicate),
         )
@@ -1083,8 +1091,10 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
             &NewJob {
                 job: JobId(Uuid([0x15; 16])),
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             std::slice::from_ref(&new_item),
         )
@@ -1157,8 +1167,10 @@ async fn the_completeness_count_holds_the_organisation_event_lock(app: PgPool) {
             &NewJob {
                 job,
                 inventory: InventoryId::TesGb,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             &[first, second],
         )
@@ -1300,6 +1312,17 @@ async fn relink(engine: &PgPool, org: OrgId, marketplace: &str) {
     );
 }
 
+/// One fixture enqueue: which listing, seeded how, onto which inventory, doing
+/// what. Grouped because the cross-marketplace tests vary all of them together.
+#[derive(Debug, Clone)]
+struct EnqueueOnto {
+    mapping: MappingId,
+    job_seed: u8,
+    item_seed: u8,
+    inventory: InventoryId,
+    operation: ItemOperation,
+}
+
 /// Enqueues onto a stated inventory, which `enqueue_operation` cannot: it
 /// fixes `InventoryId::TesGb`, and the marketplace the job carries is what
 /// the re-link arm joins the connection on.
@@ -1307,22 +1330,14 @@ async fn relink(engine: &PgPool, org: OrgId, marketplace: &str) {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each parameter is an axis a call site varies independently, and the \
-              cross-marketplace tests vary all of them; the pairing worth enforcing \
-              is mapping-to-inventory, and a struct for that belongs on `Tenant` \
-              beside the mapping it already carries rather than on this signature"
-)]
-async fn enqueue_on(
-    engine: &PgPool,
-    tenant: &Tenant,
-    mapping: MappingId,
-    job_seed: u8,
-    item_seed: u8,
-    inventory: InventoryId,
-    operation: ItemOperation,
-) -> JobItemId {
+async fn enqueue_on(engine: &PgPool, tenant: &Tenant, onto: &EnqueueOnto) -> JobItemId {
+    let EnqueueOnto {
+        mapping,
+        job_seed,
+        item_seed,
+        inventory,
+        operation,
+    } = onto.clone();
     let mut new_item = item(item_seed);
     new_item.mapping = mapping;
     new_item.operation = operation;
@@ -1332,8 +1347,10 @@ async fn enqueue_on(
             &NewJob {
                 job: JobId(Uuid([job_seed; 16])),
                 inventory,
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
             std::slice::from_ref(&new_item),
         )
@@ -1368,8 +1385,10 @@ async fn park_mid_submit(engine: &PgPool, worker: &str, mapping: MappingId) -> J
             &NewAttempt {
                 mapping,
                 intent: &intent(),
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
         )
         .await
@@ -1433,21 +1452,25 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
     let tes_item = enqueue_on(
         &engine,
         &tenant,
-        tenant.mapping,
-        0x71,
-        0x72,
-        InventoryId::TesGb,
-        revision.clone(),
+        &EnqueueOnto {
+            mapping: tenant.mapping,
+            job_seed: 0x71,
+            item_seed: 0x72,
+            inventory: InventoryId::TesGb,
+            operation: revision.clone(),
+        },
     )
     .await;
     let tpt_item = enqueue_on(
         &engine,
         &tenant,
-        tpt_mapping,
-        0x73,
-        0x74,
-        InventoryId::Tpt,
-        revision,
+        &EnqueueOnto {
+            mapping: tpt_mapping,
+            job_seed: 0x73,
+            item_seed: 0x74,
+            inventory: InventoryId::Tpt,
+            operation: revision,
+        },
     )
     .await;
 
@@ -1517,8 +1540,10 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
             &NewAttempt {
                 mapping: tenant.mapping,
                 intent: &intent(),
-                at: T0,
-                actor: Actor::System(SystemComponent::Engine),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
             },
         )
         .await
@@ -1558,11 +1583,13 @@ async fn a_relinked_create_stays_parked_behind_its_own_duplicate_fence(app: PgPo
     let created = enqueue_on(
         &engine,
         &tenant,
-        tenant.mapping,
-        0x81,
-        0x82,
-        InventoryId::TesGb,
-        ItemOperation::Create,
+        &EnqueueOnto {
+            mapping: tenant.mapping,
+            job_seed: 0x81,
+            item_seed: 0x82,
+            inventory: InventoryId::TesGb,
+            operation: ItemOperation::Create,
+        },
     )
     .await;
 

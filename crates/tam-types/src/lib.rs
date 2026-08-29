@@ -12,7 +12,7 @@ pub mod actor;
 pub mod connection;
 pub mod natives;
 
-pub use actor::{Actor, SystemComponent};
+pub use actor::{Actor, Stamp, SystemComponent};
 pub use connection::{
     connection_status, ConnectionEvent, ConnectionHealth, ConnectionState, ConnectionStatus,
     VERIFICATION_FRESHNESS_MS,
