@@ -1,0 +1,25 @@
+{
+ "interactions": [
+  {
+   "request": {
+    "method": "Post",
+    "url": "https://www.teacherspayteachers.com/graph/graphql?opname=UploadPageProductQuery",
+    "body": {
+     "Json": {
+      "operationName": "UploadPageProductQuery",
+      "variables": {
+       "id": "13042099",
+       "useResourceCatalog": true
+      },
+      "extensions": {},
+      "query": "query UploadPageProductQuery($id: ID!, $useResourceCatalog: Boolean) {\n  products(ids: [$id], useResourceCatalog: $useResourceCatalog) {\n    name\n    copyrightInfringement {\n      name\n      __typename\n    }\n    description\n    isFree\n    price\n    discountprice\n    licenseprice\n    teachingDuration\n    answerKey\n    statusUser\n    status\n    filePreview {\n      pageCount\n      previewUrl\n      __typename\n    }\n    copyrightDeclaration\n    itemType\n    commonCoreStandards {\n      name\n      id: sphinxId\n      parentIds\n      __typename\n    }\n    taxonomyTags {\n      id\n      __typename\n    }\n    categories {\n      id\n      name\n      __typename\n    }\n    localization {\n      countryId\n      countryIdFlag\n      country {\n        name\n        __typename\n      }\n      __typename\n    }\n    audience\n    audienceText\n    videoType\n    videoTypeText\n    taxCode {\n      id\n      __typename\n    }\n    author {\n      id\n      __typename\n    }\n    __typename\n  }\n}\n"
+     }
+    }
+   },
+   "response": {
+    "status": 200,
+    "body": "{\"data\":{\"products\":[{\"__typename\":\"Product\",\"answerKey\":\"INCLUDED\",\"audience\":null,\"audienceText\":null,\"author\":{\"__typename\":\"Store\",\"id\":\"900000001\"},\"categories\":[{\"__typename\":\"Category\",\"id\":1368989,\"name\":\"Sample Shelf A\"},{\"__typename\":\"Category\",\"id\":1368990,\"name\":\"Sample Shelf B\"}],\"commonCoreStandards\":[],\"copyrightDeclaration\":\"ORIGINAL_WORK\",\"copyrightInfringement\":null,\"description\":\"<p><em>Sample Unit - Level 1</em></p><p></p><p><strong>A differentiated statistics unit.</strong></p><p>Student notes, three levelled practice pages, a puzzle page and a full answer key, with a teacher guide for how to use them.</p>\",\"discountprice\":\"$0.00\",\"filePreview\":{\"__typename\":\"FilePreview\",\"pageCount\":\"6\",\"previewUrl\":\"/Preview/Sample-Unit-Stem-And-Leaf-Plots-13042099?fn=sample.pdf\"},\"isFree\":false,\"itemType\":\"DIGITAL_PRODUCT\",\"licenseprice\":\"$2.70\",\"localization\":{\"__typename\":\"ProductLocalization\",\"country\":{\"__typename\":\"Country\",\"name\":\"New Zealand\"},\"countryId\":\"153\",\"countryIdFlag\":true},\"name\":\"Sample Unit: Stem and Leaf Plots (Differentiated)\",\"price\":\"$3.00\",\"statusUser\":\"ACTIVE\",\"taxCode\":{\"__typename\":\"TaxCode\",\"id\":\"2\"},\"taxonomyTags\":[{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"4th-grade\"},{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"5th-grade\"},{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"6th-grade\"},{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"homeschool\"},{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"homeschool-curricula\"},{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"math\"},{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"unit-plans\"},{\"__typename\":\"ResourceTaxonomyTag\",\"id\":\"worksheets\"}],\"teachingDuration\":\"HOURS_1\",\"videoType\":null,\"videoTypeText\":null}]}}"
+   }
+  }
+ ]
+}

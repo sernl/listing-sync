@@ -49,10 +49,13 @@ pub use classify::SubmitLanding;
 pub use endpoints::{
     AllTimeMetric, FormTarget, MetricResolution, ResolvedMetric, ResolvedStatsQuery, StatsWindow,
 };
-pub use flows::TptAdapter;
+pub use flows::{listing_state_from_status, TptAdapter};
 pub use form::{TptFormPage, TptFormTokens};
 pub use live::ReqwestTransport;
-pub use read_model::{ProductId, ResourceStat, TptCatalogueEntry, TptCategory, TptPrice};
+pub use read_model::{
+    parse_upload_page_product, ProductId, ResourceStat, TptCatalogueEntry, TptCategory, TptPrice,
+    UploadPageProduct,
+};
 pub use s3::{UploadTicket, PART_SIZE};
 pub use session::{SessionError, TptSession};
 pub use upload::{InstantPause, ProcessedHandle};

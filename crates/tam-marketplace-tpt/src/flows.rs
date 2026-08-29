@@ -23,7 +23,8 @@ use tam_marketplace::{
     RemovalPlan, RevisePlan, SchemaDrift, SubmitEvidence,
 };
 use tam_types::{
-    ContentHash, FailureCode, FailureDetail, FieldKey, FileId, InventoryId, OrgId, Timestamp,
+    ContentHash, CopyFormat, FailureCode, FailureDetail, FieldKey, FileId, ImportedPrice,
+    ImportedTerm, InventoryId, OrgId, Timestamp,
 };
 
 use crate::classify::{
@@ -51,14 +52,14 @@ use crate::write_model::{
 /// this cap only bounds a walk whose end never arrives.
 pub const CATALOGUE_PAGE_MAX: u32 = 200;
 
-/// The capability names the deferred methods report. Both are deferred by the
-/// M7 plan's "Deferred, with owners" list: no capture contains a TPT file
-/// download, and `ImportedListing` is Tes-shaped — licence tokens, GBP, age
-/// ranges — where TPT's model is flat taxonomy tags with no licence, so
-/// canonicalising TPT waits on the M6 import-run generalisation.
+/// The capability the one remaining deferred method reports: no capture
+/// contains a TPT file download, so the read has nothing to reproduce.
+///
+/// `fetch_for_import` was deferred beside it because `ImportedListing` was
+/// Tes-shaped — licence tokens, GBP, age ranges — where TPT's model is flat
+/// taxonomy tags with no licence. The generalised shape landed, so the read
+/// is implemented rather than deferred.
 pub const BUNDLE_DOWNLOAD: &str = "tpt.download_resource_bundle";
-/// See [`BUNDLE_DOWNLOAD`].
-pub const IMPORT_CANONICALISATION: &str = "tpt.fetch_for_import";
 
 /// The single TPT inventory, per the design's canonical inventory table.
 pub struct TptAdapter<T, F, P> {
@@ -726,6 +727,99 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     }
 }
 
+impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
+    /// The first-party import read: the seller's own product whole, through
+    /// the query the edit form itself issues. Refuses any reason but
+    /// `FirstPartyExport`, because this is the tier-one capability.
+    ///
+    /// Every value travels untagged. TPT's 358 facets are one flat namespace
+    /// where a grade, a subject, a resource type and an audience are the same
+    /// kind of thing, and which axis a slug answers is a fact of the seeded
+    /// relation rather than of the array it came out of; tagging here would
+    /// assert an axis binding this adapter cannot know.
+    ///
+    /// `rights` is `None`, and that is the measured fact rather than a gap:
+    /// the eight HAR captures and the vocabulary poll between them reached
+    /// every field either write posts and every field the read returns, and
+    /// none of them is a licence. The registry records the same absence.
+    pub async fn fetch_for_import(
+        &self,
+        reason: &FetchReason,
+        id: ProductId,
+    ) -> Result<ImportedListing, AdapterError> {
+        if !matches!(reason, FetchReason::FirstPartyExport { .. }) {
+            return Err(not_first_party("first-party import read"));
+        }
+        let response = self
+            .send(endpoints::upload_page_product_request(id))
+            .await?;
+        let body = classify_graphql_read(&response)?;
+        let product = read_model::parse_upload_page_product(&body, id).map_err(|error| {
+            AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(error.to_string()),
+            }
+        })?;
+
+        let term = |slug: &str| ImportedTerm {
+            inventory: InventoryId::Tpt,
+            kind: None,
+            segments: vec![slug.to_owned()],
+            native_id: Some(slug.to_owned()),
+        };
+        let mut native: Vec<ImportedTerm> =
+            product.taxonomy_tags.iter().map(|tag| term(tag)).collect();
+        for shelf in &product.categories {
+            native.push(ImportedTerm {
+                inventory: InventoryId::Tpt,
+                kind: None,
+                segments: vec![shelf.name.clone()],
+                native_id: Some(shelf.id.clone()),
+            });
+        }
+
+        Ok(ImportedListing {
+            remote: id.remote(),
+            title: product.name,
+            body: product.description,
+            // TPT stores and returns the body as HTML, which is what makes a
+            // TES-to-TPT sync a format question rather than a copy.
+            body_format: CopyFormat::Html,
+            native,
+            rights: None,
+            price: if product.is_free {
+                ImportedPrice::Free
+            } else {
+                ImportedPrice::Paid {
+                    minor_units: product.price.minor_units,
+                    denomination: product.price.symbol,
+                }
+            },
+            state: product
+                .status
+                .as_deref()
+                .and_then(listing_state_from_status),
+        })
+    }
+}
+
+/// The draft line as TPT's own `status` states it, and `None` for anything
+/// else.
+///
+/// Deliberately stricter than `read_back`, whose lenient else-arm reads an
+/// unknown status as Draft. That leniency is right for a comparison and wrong
+/// here: a read-back that guesses Draft is a comparison, while a removal that
+/// guesses Draft posts a delete to the wrong route. Two values are on file
+/// across 908 observations, and a third would be a state nobody has seen.
+#[must_use]
+pub const fn listing_state_from_status(status: &str) -> Option<ListingState> {
+    match status.as_bytes() {
+        b"ACTIVE" => Some(ListingState::Live),
+        b"NOT_ACTIVE" => Some(ListingState::Draft),
+        _ => None,
+    }
+}
+
 /// The write-evidence body digest, over the raw response bytes. Every
 /// evidence-producing cell states one: an empty body digests to a stable
 /// value, which is a fact, where `None` would say the adapter could not state
@@ -1096,11 +1190,9 @@ impl<T: Transport, F: FileSource, P: Pause> FirstPartyExport for TptAdapter<T, F
 
     fn fetch_for_import(
         &self,
-        _reason: &FetchReason,
-        _id: ProductId,
+        reason: &FetchReason,
+        id: ProductId,
     ) -> impl core::future::Future<Output = Result<ImportedListing, AdapterError>> + Send {
-        core::future::ready(Err(AdapterError::Uncaptured {
-            capability: IMPORT_CANONICALISATION,
-        }))
+        Self::fetch_for_import(self, reason, id)
     }
 }

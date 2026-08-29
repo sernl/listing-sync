@@ -286,6 +286,67 @@ fn parse_product(row: &Value) -> Result<TptCatalogueEntry, ShapeError> {
     })
 }
 
+/// One product as the edit form's own read yields it. Wider than a catalogue
+/// row on the fields canonicalisation needs — the description above all — and
+/// narrower on the ones only reconciliation does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadPageProduct {
+    pub id: ProductId,
+    pub name: String,
+    /// TPT stores and returns the body as HTML. Declared rather than sniffed:
+    /// `write_model`'s `description_html` already records that guessing a
+    /// body's format from its bytes is how a listing acquires escaped markup
+    /// nobody asked for.
+    pub description: String,
+    pub is_free: bool,
+    pub price: TptPrice,
+    /// The draft line as the wire states it, or `None` where the read did not
+    /// carry it. The captures on file predate the `status` selection, so
+    /// `None` is their honest answer rather than a defaulted `ACTIVE`.
+    pub status: Option<String>,
+    /// One flat namespace: grade, subject, resource type, audience and file
+    /// format all arrive as undifferentiated slugs here, and which axis a
+    /// slug answers is a fact of the seeded relation rather than of this
+    /// array.
+    pub taxonomy_tags: Vec<String>,
+    /// Seller-owned shelves rather than a platform vocabulary.
+    pub categories: Vec<TptCategory>,
+    pub item_type: Option<String>,
+    pub copyright_declaration: Option<String>,
+}
+
+/// Parses the edit form's own product read. The id is not in the response —
+/// the query addresses one product by id and the row carries no `id` field —
+/// so the caller's own id is threaded through rather than invented.
+pub fn parse_upload_page_product(
+    body: &Value,
+    id: ProductId,
+) -> Result<UploadPageProduct, ShapeError> {
+    let row = body
+        .pointer("/data/products/0")
+        .ok_or_else(|| ShapeError(format!("no product row for {id}")))?;
+    let is_free = row.get("isFree").and_then(Value::as_bool).unwrap_or(false);
+    let price = row
+        .get("price")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ShapeError(format!("product {id} carries no price string")))
+        .and_then(|display| {
+            parse_display_price(display).map_err(|error| ShapeError(error.to_string()))
+        })?;
+    Ok(UploadPageProduct {
+        id,
+        name: optional_str(row, "name").unwrap_or_default(),
+        description: optional_str(row, "description").unwrap_or_default(),
+        is_free,
+        price,
+        status: optional_str(row, "status"),
+        taxonomy_tags: slug_list(row, "taxonomyTags"),
+        categories: categories(row),
+        item_type: optional_str(row, "itemType"),
+        copyright_declaration: optional_str(row, "copyrightDeclaration"),
+    })
+}
+
 fn count(page_info: &Value, field: &str) -> Result<u64, ShapeError> {
     page_info
         .get(field)

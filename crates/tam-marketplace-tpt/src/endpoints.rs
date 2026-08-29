@@ -202,6 +202,104 @@ fragment MyResourceFields on Product {
 }
 ";
 
+/// The seller's own product whole, verbatim from the `UploadPageProductQuery`
+/// POST the edit form issues (`tpt-capture-edit-live-product.har`, entry 51),
+/// with one word added.
+///
+/// `status` is selected beside `statusUser` because that is the field the
+/// draft line is actually read off. `statusUser` is observed once in the
+/// whole capture set, with one value; a `Product`-shaped `status` is observed
+/// 908 times with two, and `read_back` already derives the lifecycle from it.
+/// Deriving a removal's lifecycle from `statusUser` would ship an unvalidated
+/// Draft arm into the one operation that deletes the seller's listing.
+///
+/// Adding the field is safe and needs no upstream registration: `status` is a
+/// field on the same `Product` type that `MyResourceFields` already selects,
+/// the query text is ours rather than a persisted-query hash, and the crate
+/// carries no operation allowlist.
+///
+/// The catalogue query is not an alternative for this read: it carries no
+/// `description`, and the description is the field canonicalisation exists
+/// for.
+pub const UPLOAD_PAGE_PRODUCT_QUERY: &str = r"query UploadPageProductQuery($id: ID!, $useResourceCatalog: Boolean) {
+  products(ids: [$id], useResourceCatalog: $useResourceCatalog) {
+    name
+    copyrightInfringement {
+      name
+      __typename
+    }
+    description
+    isFree
+    price
+    discountprice
+    licenseprice
+    teachingDuration
+    answerKey
+    statusUser
+    status
+    filePreview {
+      pageCount
+      previewUrl
+      __typename
+    }
+    copyrightDeclaration
+    itemType
+    commonCoreStandards {
+      name
+      id: sphinxId
+      parentIds
+      __typename
+    }
+    taxonomyTags {
+      id
+      __typename
+    }
+    categories {
+      id
+      name
+      __typename
+    }
+    localization {
+      countryId
+      countryIdFlag
+      country {
+        name
+        __typename
+      }
+      __typename
+    }
+    audience
+    audienceText
+    videoType
+    videoTypeText
+    taxCode {
+      id
+      __typename
+    }
+    author {
+      id
+      __typename
+    }
+    __typename
+  }
+}
+";
+
+/// The edit form's own read of one product. `useResourceCatalog` is the value
+/// the capture carries.
+#[must_use]
+pub fn upload_page_product_request(id: ProductId) -> HttpRequest {
+    graphql(
+        Service::Graph,
+        "UploadPageProductQuery",
+        UPLOAD_PAGE_PRODUCT_QUERY,
+        &json!({
+            "id": id.0.to_string(),
+            "useResourceCatalog": true,
+        }),
+    )
+}
+
 /// The page size the TPT client itself hard-codes.
 pub const CATALOGUE_PAGE_LIMIT: u32 = 100;
 

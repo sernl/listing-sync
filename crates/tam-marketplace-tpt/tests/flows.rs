@@ -16,14 +16,15 @@ use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::HttpResponse;
 use tam_marketplace::{
-    AdapterError, FetchReason, FileContent, FileSource, FileSourceError, FirstPartyExport,
+    AdapterError, CanaryGrant, FetchReason, FileContent, FileSource, FileSourceError,
+    FirstPartyExport, ListingState, RemoteListingId,
 };
 use tam_marketplace_tpt::endpoints::{
     self, AllTimeMetric, MetricResolution, ResolvedMetric, ResolvedStatsQuery, StatsWindow,
 };
 use tam_marketplace_tpt::read_model::ProductId;
-use tam_marketplace_tpt::{InstantPause, TptAdapter};
-use tam_types::{FailureCode, FileId, InventoryId};
+use tam_marketplace_tpt::{listing_state_from_status, InstantPause, TptAdapter};
+use tam_types::{CopyFormat, FailureCode, FileId, ImportedPrice, InventoryId, Timestamp};
 
 /// The one reason that justifies an enumeration-shaped read.
 fn export() -> FetchReason {
@@ -402,7 +403,7 @@ fn a_statistics_read_without_the_export_capability_is_refused() {
 }
 
 #[test]
-fn the_two_deferred_capabilities_report_themselves_as_uncaptured() {
+fn the_one_deferred_capability_reports_itself_as_uncaptured() {
     let adapter = adapter(
         Cassette {
             interactions: vec![],
@@ -420,18 +421,6 @@ fn the_two_deferred_capabilities_report_themselves_as_uncaptured() {
             capability: tam_marketplace_tpt::flows::BUNDLE_DOWNLOAD,
         }),
         "no capture contains a TPT download, and an absent capability is not a refusal"
-    );
-    let import = futures::executor::block_on(FirstPartyExport::fetch_for_import(
-        &adapter,
-        &export(),
-        ProductId(12_854_712),
-    ));
-    assert_eq!(
-        import,
-        Err(AdapterError::Uncaptured {
-            capability: tam_marketplace_tpt::flows::IMPORT_CANONICALISATION,
-        }),
-        "canonicalisation waits on the import-run generalisation, and says so"
     );
     assert_eq!(
         adapter.transport().remaining(),
@@ -452,5 +441,146 @@ fn the_adapter_names_the_one_tpt_inventory() {
         adapter.inventory(),
         InventoryId::Tpt,
         "one crate, one inventory, per the design's crate table"
+    );
+}
+
+#[test]
+fn the_import_read_yields_the_product_whole_and_states_what_it_did_not_carry() {
+    let cassette: Cassette =
+        serde_json::from_str(include_str!("cassettes/upload_page_product.json"))
+            .expect("the committed UploadPageProductQuery fixture parses");
+    let adapter = adapter(cassette, 1);
+    let listing = futures::executor::block_on(TptAdapter::fetch_for_import(
+        &adapter,
+        &export(),
+        ProductId(13_042_099),
+    ))
+    .expect("the recorded read canonicalises");
+
+    assert_eq!(
+        listing.remote,
+        RemoteListingId::Tpt {
+            product_id: 13_042_099
+        },
+        "the id is the caller's, because the response row carries none"
+    );
+    assert!(
+        listing.body.starts_with("<p>"),
+        "TPT stores and returns the body as HTML, which the catalogue read does not carry at all"
+    );
+    assert_eq!(
+        listing.body_format,
+        CopyFormat::Html,
+        "declared rather than sniffed: guessing a body's format from its bytes is how a \
+         listing acquires escaped markup nobody asked for"
+    );
+    assert_eq!(
+        listing.price,
+        ImportedPrice::Paid {
+            minor_units: 300,
+            denomination: "$".to_owned(),
+        },
+        "the symbol travels as the wire wrote it; the store is New Zealand-based and reading \
+         a bare dollar as USD would put an unmeasured currency inside Money"
+    );
+    assert_eq!(
+        listing.rights, None,
+        "TPT binds no licence field anywhere on its wire, which is the measured absence the \
+         registry records rather than a gap in this read"
+    );
+    assert_eq!(
+        listing.state, None,
+        "the fixture is the capture's own selection set, which predates the status field, so \
+         the honest answer is that the read did not carry it -- and a migrate's removal \
+         refuses on None rather than deleting against a lifecycle nobody observed"
+    );
+}
+
+#[test]
+fn every_imported_value_travels_untagged_because_the_axis_is_the_relations_fact() {
+    let cassette: Cassette =
+        serde_json::from_str(include_str!("cassettes/upload_page_product.json"))
+            .expect("the committed UploadPageProductQuery fixture parses");
+    let listing = futures::executor::block_on(TptAdapter::fetch_for_import(
+        &adapter(cassette, 1),
+        &export(),
+        ProductId(13_042_099),
+    ))
+    .expect("the recorded read canonicalises");
+
+    assert!(
+        listing.native.iter().all(|term| term.kind.is_none()),
+        "a grade, a subject, a resource type and an audience are the same kind of thing in \
+         TPT's flat namespace, and tagging one here would assert an axis binding this \
+         adapter cannot know"
+    );
+    assert_eq!(
+        listing
+            .native
+            .iter()
+            .filter_map(|term| term.native_id.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "4th-grade".to_owned(),
+            "5th-grade".to_owned(),
+            "6th-grade".to_owned(),
+            "homeschool".to_owned(),
+            "homeschool-curricula".to_owned(),
+            "math".to_owned(),
+            "unit-plans".to_owned(),
+            "worksheets".to_owned(),
+            "1368989".to_owned(),
+            "1368990".to_owned(),
+        ],
+        "the eight facet slugs the capture carried, then the seller's own two shelves"
+    );
+}
+
+#[test]
+fn the_draft_line_is_read_off_status_and_refuses_a_value_nobody_has_observed() {
+    // 908 observations across three captures carry two values. read_back's
+    // lenient else-arm reads anything else as Draft, which is right for a
+    // comparison and wrong here: a removal that guesses Draft posts a delete
+    // to the wrong route.
+    assert_eq!(
+        listing_state_from_status("ACTIVE"),
+        Some(ListingState::Live)
+    );
+    assert_eq!(
+        listing_state_from_status("NOT_ACTIVE"),
+        Some(ListingState::Draft)
+    );
+    assert_eq!(
+        listing_state_from_status("PENDING"),
+        None,
+        "a third value would be a state nobody has seen, and a migrate refuses on it"
+    );
+}
+
+#[test]
+fn an_import_read_is_refused_without_the_first_party_export_capability() {
+    let cassette: Cassette =
+        serde_json::from_str(include_str!("cassettes/upload_page_product.json"))
+            .expect("the committed UploadPageProductQuery fixture parses");
+    let adapter = adapter(cassette, 1);
+    let refused = futures::executor::block_on(TptAdapter::fetch_for_import(
+        &adapter,
+        &FetchReason::StructuralProbe {
+            grant: CanaryGrant {
+                inventory: InventoryId::Tpt,
+                decided_at: Timestamp(0),
+            },
+        },
+        ProductId(13_042_099),
+    ));
+    assert!(
+        refused.is_err(),
+        "an enumeration-shaped read of the seller's own data is the tier-one capability and \
+         nothing else justifies one"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        1,
+        "the refusal precedes the request rather than following it"
     );
 }
