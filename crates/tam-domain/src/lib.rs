@@ -384,6 +384,12 @@ pub enum ProjectionBlocked {
         gaps: Vec<VocabularyGap>,
         elections: Vec<Election>,
         unrecognised: Vec<VocabularyPath>,
+        /// What the projection had already measured it could not carry when it
+        /// blocked. A loss never blocks, so it would be tempting to drop it
+        /// here -- but the decision surface exists to show the seller what
+        /// this listing gives up *while they decide*, and the moment they
+        /// decide is exactly the moment the projection is blocked.
+        loss: Vec<Loss>,
     },
     CurrencyUnknown {
         inventory: InventoryId,

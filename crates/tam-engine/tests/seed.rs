@@ -928,3 +928,76 @@ async fn an_answer_applied_to_the_future_settles_the_next_product_without_asking
         "five hundred listings must not ask the same question five hundred times"
     );
 }
+
+/// The founder's direction as an assertion: a Tes-to-TPT licence drop is a
+/// surfaced loss and never a silent one.
+///
+/// TPT was measured to hold no licence field anywhere on its wire, so no edge
+/// could ever answer a question about one and no question is raised. What the
+/// seller gets instead is the record the decision surface reads, written by
+/// the same projection that dropped the value.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_licence_dropped_into_tpt_is_recorded_against_the_mapping_that_dropped_it(pool: PgPool) {
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
+    let product = ProductId(Uuid([0x03; 16]));
+    let mut declared = canonical_product(product, 0x25);
+    declared.rights = tam_domain::RightsDeclaration::Declared {
+        source: licence_path(InventoryId::TesGb, "CC-BY"),
+    };
+    ProductRepo::new(pool.clone())
+        .insert(ORG, &declared, NOW)
+        .await
+        .expect("the declared product inserts");
+    let mapping = MappingId(Uuid([0x33; 16]));
+    MappingRepo::new(pool.clone())
+        .insert(
+            ORG,
+            &tam_domain::Mapping {
+                inventory: InventoryId::Tpt,
+                ..mapping_of(
+                    mapping,
+                    product,
+                    tam_domain::Binding::Unbound,
+                    tam_marketplace::RemoteLifecycle::Absent,
+                )
+            },
+            0,
+            NOW,
+        )
+        .await
+        .expect("the TPT mapping inserts");
+    let mut leased = lease();
+    leased.item = tam_domain::JobItemId(Uuid([0x44; 16]));
+    leased.mapping = mapping;
+    leased.inventory = InventoryId::Tpt;
+    prepare_item(&pool, &leased, NOW)
+        .await
+        .expect("the preparation runs");
+
+    let losses = MappingRepo::new(pool.clone())
+        .losses(ORG, mapping)
+        .await
+        .expect("the decision surface reads the mapping's losses");
+    let [loss] = losses.as_slice() else {
+        panic!("one loss, got {losses:?}");
+    };
+    assert_eq!(
+        (loss.kind, loss.axis),
+        (
+            tam_domain::equivalence::LossKind::NoTargetField,
+            Some(TermKind::Licence)
+        ),
+        "the Creative Commons grant does not reach TPT, and this row is what makes the \
+         drop disclosed rather than silent"
+    );
+    assert_eq!(loss.detail["value"]["native_id"], "CC-BY");
+    assert!(
+        ElectionRepo::new(pool.clone())
+            .open_items(ORG)
+            .await
+            .expect("the queue reads")
+            .iter()
+            .all(|item| item.axis != TermKind::Licence || item.product != product),
+        "a measured absence is disclosed, never asked: no edge could answer it"
+    );
+}

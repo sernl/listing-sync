@@ -210,6 +210,22 @@ pub fn project_listing(
         gaps.extend(outcome.gaps);
         elections.extend(outcome.elections);
     }
+    // What the target was measured to have no field for, disclosed rather
+    // than dropped. `routed_axes` iterates the axes the target *binds*, so an
+    // axis it declares absent is never visited and its value simply vanishes:
+    // that is the Tes-to-TPT licence drop. TPT holds no licence field anywhere
+    // on its wire, so no edge could ever exist and no queue item could ever be
+    // answered -- which leaves disclosure as the only honest outcome, and is
+    // the whole difference between a measured absence and the unmeasured one
+    // Etsy has, which still blocks.
+    for absent in registry(ctx.inventory).absent_axes {
+        for value in carried_in(product, absent.0) {
+            loss.push(Loss::NoTargetField {
+                axis: absent.0,
+                value,
+            });
+        }
+    }
     // A term the catalogue does not classify cannot be projected and cannot
     // be silently dropped: it blocks as its own queue item under the subject
     // vocabulary, which is the fail-closed reading of an impossible input.
@@ -227,6 +243,7 @@ pub fn project_listing(
             gaps,
             elections,
             unrecognised,
+            loss,
         });
     }
 
@@ -271,6 +288,22 @@ pub fn project_listing(
     })
 }
 
+/// The source's own paths for one axis, which is what a `NoTargetField` loss
+/// names.
+///
+/// Only the two axes a product declares by path can produce one. The three it
+/// declares by canonical id carry no source path at all, and no inventory
+/// declares one of those absent -- pinned by this module's own test, because
+/// the day one does, the loss it needs is the term's label and this is the
+/// function that would have to grow a catalogue lookup to say it.
+fn carried_in(product: &CanonicalProduct, axis: TermKind) -> Vec<VocabularyPath> {
+    match axis {
+        TermKind::Licence => rights_source(product).cloned().into_iter().collect(),
+        TermKind::Phase => product.grades.raw.clone(),
+        TermKind::Subject | TermKind::Topic | TermKind::ResourceType => Vec::new(),
+    }
+}
+
 fn capped(text: &str, spec: &FieldSpec) -> String {
     spec.cap
         .map_or_else(|| text.to_owned(), |cap| truncate(text, cap))
@@ -280,11 +313,12 @@ fn capped(text: &str, spec: &FieldSpec) -> String {
 mod tests {
     use super::{project_listing, ListingContext};
     use tam_domain::equivalence::{
-        ElectionAnswer, ElectionRule, ElectionTrigger, ElectionTriggerKind, PricingBranch,
+        ElectionAnswer, ElectionRule, ElectionTrigger, ElectionTriggerKind, Loss, PricingBranch,
     };
+    use tam_domain::registry::registry;
     use tam_domain::{
-        CanonicalTerm, Decider, EdgeKind, ProjectionBlocked, ProjectionEdge, TermKind,
-        VocabularyId, VocabularyPath,
+        CanonicalTerm, Decider, EdgeKind, ProjectionBlocked, ProjectionEdge, RightsDeclaration,
+        TermKind, VocabularyId, VocabularyPath,
     };
     use tam_types::{
         CanonicalTermId, ContentHash, CopyFormat, Currency, FileId, FileKind, FileRole,
@@ -787,5 +821,123 @@ mod tests {
             matches!(blocked, Err(ProjectionBlocked::Blocked { .. })),
             "several gates would fire; the enum's first names the block: {blocked:?}"
         );
+    }
+
+    fn licence(inventory: InventoryId, token: &str) -> VocabularyPath {
+        VocabularyPath {
+            vocabulary: VocabularyId(inventory, TermKind::Licence),
+            segments: vec![token.to_owned()],
+            native_id: Some(token.to_owned()),
+        }
+    }
+
+    /// 5.6. TPT holds no licence field anywhere on its wire, so a licence
+    /// projected into it can never be a question — no edge could ever answer
+    /// one — and must not be a silent drop either. It is a disclosed loss,
+    /// which is the whole distinction between the absence TPT was measured to
+    /// have and the unmeasured one Etsy has, which still blocks.
+    #[test]
+    fn a_licence_into_a_target_measured_to_have_no_field_is_a_disclosed_loss() {
+        let catalogue = terms();
+        let tpt_edge = ProjectionEdge {
+            from: TERM,
+            to: VocabularyPath {
+                vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Subject),
+                segments: vec!["math".to_owned()],
+                native_id: Some("math".to_owned()),
+            },
+            kind: EdgeKind::Exact,
+            decided_by: Decider::Imported {
+                source: "test".to_owned(),
+            },
+            decided_at: NOW,
+        };
+        let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        source.grades.raw = vec![];
+        source.rights = RightsDeclaration::Declared {
+            source: licence(InventoryId::TesGb, "CC-BY"),
+        };
+        let projection = project_listing(
+            &source,
+            &ListingContext {
+                org: ORG,
+                mapping: MAPPING,
+                inventory: InventoryId::Tpt,
+                now: NOW,
+                terms: &catalogue,
+                edges: core::slice::from_ref(&tpt_edge),
+                no_counterparts: &[],
+                rules: &[],
+                settled: &[],
+            },
+        )
+        .expect("a measured absence discloses; it never blocks");
+        assert_eq!(
+            projection.loss,
+            vec![Loss::NoTargetField {
+                axis: TermKind::Licence,
+                value: licence(InventoryId::TesGb, "CC-BY"),
+            }],
+            "the seller's Creative Commons grant does not reach TPT, and the record of \
+             that is what makes the drop disclosed rather than silent"
+        );
+        assert!(
+            projection
+                .natives
+                .iter()
+                .all(|(axis, _)| *axis != TermKind::Licence),
+            "nothing was carried onto a field the target does not have"
+        );
+    }
+
+    /// The counterpart, and the reason the two are one commit: an axis a
+    /// target merely declares no binding for is unmeasured, so its value is a
+    /// question rather than a loss.
+    #[test]
+    fn an_unmeasured_absence_is_not_a_loss() {
+        let catalogue = terms();
+        let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        source.grades.raw = vec![];
+        source.rights = RightsDeclaration::Declared {
+            source: licence(InventoryId::TesGb, "CC-BY"),
+        };
+        let projection = project_listing(
+            &source,
+            &ListingContext {
+                org: ORG,
+                mapping: MAPPING,
+                inventory: InventoryId::Etsy,
+                now: NOW,
+                terms: &catalogue,
+                edges: &[],
+                no_counterparts: &[],
+                rules: &[],
+                settled: &[],
+            },
+        )
+        .expect("Etsy binds no equivalence axis at all, so nothing gates on one");
+        assert!(
+            projection.loss.is_empty(),
+            "Etsy records no measured absence, so claiming the licence was dropped would \
+             assert something the capture never established"
+        );
+    }
+
+    /// The fence behind `carried_in`: only two axes arrive as the source's own
+    /// paths, so a measured absence declared on one of the other three would
+    /// disclose nothing at all.
+    #[test]
+    fn every_measured_absence_is_an_axis_the_projection_can_name_a_value_for() {
+        for inventory in InventoryId::ALL {
+            for absent in registry(inventory).absent_axes {
+                assert!(
+                    matches!(absent.0, TermKind::Licence | TermKind::Phase),
+                    "{inventory:?} records {:?} absent, and a product declares that axis \
+                     by canonical id rather than by a source path, so the loss would name \
+                     no value",
+                    absent.0
+                );
+            }
+        }
     }
 }

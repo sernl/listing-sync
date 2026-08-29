@@ -12,19 +12,23 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::resources::{
-    ConnectionsView, ProductView, ProductsPage, QueueView, RevokedView, StatsView,
+    ConnectionsView, DecisionsView, ProductView, ProductsPage, QueueView, RevokedView, StatsView,
 };
 use tam_api::{router, APIError, APIErrorCode, AppState, Config, SESSION_COOKIE};
+use tam_domain::equivalence::{Election, ElectionTrigger, Loss, PricingBranch};
 use tam_domain::{
     Binding, CanonicalTerm, EdgeKind, FieldPolicies, FieldPolicy, Mapping, PublishMode, TermKind,
-    VocabularyId,
+    VocabularyId, VocabularyPath,
 };
 use tam_marketplace::RemoteLifecycle;
-use tam_storage::{MappingRepo, ProductRepo, RaiseScope, SessionRepo, SessionToken, TaxonomyRepo};
+use tam_storage::{
+    ElectionRepo, LossScope, MappingRepo, ProductRepo, RaiseScope, SessionRepo, SessionToken,
+    TaxonomyRepo,
+};
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, ListingCopy,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, UserId, Uuid,
+    AttemptId, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
+    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    ScanOutcome, Timestamp, Title, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -399,4 +403,76 @@ async fn the_drain_workflow_runs_entirely_through_the_api(pool: PgPool) {
         (1, EdgeKind::Exact),
         "the resolution wrote the durable edge the next product finds waiting"
     );
+}
+
+/// The decision surface exists to show the seller what this listing gives up
+/// whatever they pick, and until the projection recorded a loss its `losses`
+/// column read a table nothing wrote. This drives the whole route: a raised
+/// question, a recorded loss, and both read back off the surface.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_decision_surface_shows_the_loss_recorded_against_the_mapping(pool: PgPool) {
+    provision(&pool).await;
+    let grant = VocabularyPath {
+        vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+        segments: vec!["CC-BY".to_owned()],
+        native_id: Some("CC-BY".to_owned()),
+    };
+    ElectionRepo::new(pool.clone())
+        .raise(
+            ORG,
+            MAPPING,
+            &[Election {
+                product: PRODUCT,
+                inventory: InventoryId::TesNz,
+                axis: TermKind::Licence,
+                trigger: ElectionTrigger::Supply {
+                    pricing: PricingBranch::Free,
+                },
+            }],
+            NOW,
+        )
+        .await
+        .expect("the question raises");
+    MappingRepo::new(pool.clone())
+        .record_losses(
+            LossScope {
+                org: ORG,
+                mapping: MAPPING,
+                attempt: AttemptId(Uuid([0x7A; 16])),
+                at: NOW,
+            },
+            &[Loss::NoTargetField {
+                axis: TermKind::Licence,
+                value: grant,
+            }],
+        )
+        .await
+        .expect("the loss records");
+
+    let (status, body) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        "/v1/elections/items",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: DecisionsView = parse(&body);
+    let [decision] = view.items.as_slice() else {
+        panic!("one open question, got {:?}", view.items);
+    };
+    assert_eq!(
+        decision.resolution, "seller_decides",
+        "choosing a rights grant is issuing one, so no opt-in delegates it"
+    );
+    let [loss] = decision.losses.as_slice() else {
+        panic!("one loss, got {:?}", decision.losses);
+    };
+    assert_eq!(
+        (loss.kind.as_str(), loss.axis),
+        ("no_target_field", Some(TermKind::Licence)),
+        "the seller sees the licence drop at the moment they decide rather than after publish"
+    );
+    assert_eq!(loss.detail["value"]["native_id"], "CC-BY");
 }

@@ -23,11 +23,11 @@ use tam_marketplace::{
     RemoteLifecycleKind,
 };
 use tam_storage::{
-    ElectionRepo, LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError,
-    TaxonomyRepo,
+    ElectionRepo, LeasedItem, LossScope, MappingRepo, ProductRepo, RaiseReport, RaiseScope,
+    StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
-use tam_types::{InventoryId, OrgId, Timestamp};
+use tam_types::{AttemptId, InventoryId, OrgId, Timestamp, Uuid};
 
 use crate::driver::{intent_as_json, EngineError, MachineSeed, VerifyPolicy};
 
@@ -346,12 +346,22 @@ pub async fn prepare_item(
             settled: &settled,
         },
     ) {
-        Ok(projection) => projection,
+        Ok(projection) => {
+            record_losses(pool, lease, &projection.loss, now).await?;
+            projection
+        }
         Err(ProjectionBlocked::Blocked {
             gaps,
             elections: raised_elections,
+            loss,
             ..
         }) => {
+            // Before the raise, so the decision surface the raise populates
+            // already carries what this listing gives up whatever the seller
+            // picks. A loss never blocks; recording it only on the path that
+            // did not block would show the seller nothing at the one moment
+            // the disclosure is for.
+            record_losses(pool, lease, &loss, now).await?;
             // Gaps first, because they drain: the answer is a durable edge
             // every later product finds waiting, so raising them is progress
             // even when an election blocks the same item. An election is this
@@ -427,6 +437,43 @@ pub async fn prepare_item(
                 .collect(),
         }),
     })
+}
+
+/// What one projection could not carry, recorded against the mapping that
+/// carried it under the engine's own INSERT grant.
+///
+/// The attempt is minted here rather than taken from the write attempt, which
+/// does not exist yet: `prepare_item` runs before the driver opens one, and a
+/// blocked projection never opens one at all. The table is append-only and
+/// keyed on the attempt precisely so a re-projection writes its own rows
+/// rather than replacing the last pass's, which is what buys the no-delete
+/// rule, and a fresh id per projection is that rule stated at the writer.
+async fn record_losses(
+    pool: &PgPool,
+    lease: &LeasedItem,
+    losses: &[tam_domain::equivalence::Loss],
+    now: Timestamp,
+) -> Result<(), EngineError> {
+    if losses.is_empty() {
+        return Ok(());
+    }
+    MappingRepo::new(pool.clone())
+        .record_losses(
+            LossScope {
+                org: lease.org,
+                mapping: lease.mapping,
+                attempt: AttemptId(fresh_uuid()),
+                at: now,
+            },
+            losses,
+        )
+        .await?;
+    Ok(())
+}
+
+/// Row identity for the loss record, minted at the engine boundary.
+fn fresh_uuid() -> Uuid {
+    Uuid(*uuid::Uuid::new_v4().as_bytes())
 }
 
 fn native_term(path: &VocabularyPath) -> NativeTerm {

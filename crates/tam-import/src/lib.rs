@@ -600,17 +600,24 @@ where
         },
     );
     let (projectable, blocked_by, raised) = match outcome {
-        Ok(_) => (
-            true,
-            None,
-            RaiseReport {
-                new: 0,
-                already_open: 0,
-            },
-        ),
+        Ok(projection) => {
+            record_losses(run, mapping_id, &projection.loss).await?;
+            (
+                true,
+                None,
+                RaiseReport {
+                    new: 0,
+                    already_open: 0,
+                },
+            )
+        }
         Err(tam_domain::ProjectionBlocked::Blocked {
-            gaps, elections, ..
+            gaps,
+            elections,
+            loss,
+            ..
         }) => {
+            record_losses(run, mapping_id, &loss).await?;
             let causes: Vec<(CanonicalTermId, tam_domain::TermKind)> = gaps
                 .iter()
                 .map(|gap| {
@@ -773,6 +780,35 @@ fn listing_inventory(listing: &tam_marketplace::ImportedListing) -> InventoryId 
         .native
         .first()
         .map_or(InventoryId::TesGb, |term| term.inventory)
+}
+
+/// What the import's own projection could not carry, recorded against the
+/// mapping it just minted.
+///
+/// The import projects once immediately, which is what makes its report the
+/// drain measurement; the losses that projection measured belong to the same
+/// record, so a Tes-to-TPT licence drop is visible from the moment the product
+/// exists rather than only after a sync run has leased it.
+async fn record_losses<A: FirstPartyExport>(
+    run: &ImportRun<'_, A>,
+    mapping: MappingId,
+    losses: &[tam_domain::equivalence::Loss],
+) -> Result<(), ImportError> {
+    if losses.is_empty() {
+        return Ok(());
+    }
+    MappingRepo::new(run.pool.clone())
+        .record_losses(
+            tam_storage::LossScope {
+                org: run.org,
+                mapping,
+                attempt: tam_types::AttemptId(fresh_uuid()),
+                at: run.now,
+            },
+            losses,
+        )
+        .await?;
+    Ok(())
 }
 
 /// Row identity, minted at the import boundary.
