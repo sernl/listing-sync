@@ -48,40 +48,74 @@
       "1": {
         "label": "3-5",
         "ageLow": 3,
-        "ageHigh": 5
+        "ageHigh": 5,
+        "humanAges": [
+          3,
+          4,
+          5
+        ]
       },
       "2": {
         "label": "5-7",
         "ageLow": 5,
-        "ageHigh": 7
+        "ageHigh": 7,
+        "humanAges": [
+          5,
+          6,
+          7
+        ]
       },
       "3": {
         "label": "7-11",
         "ageLow": 7,
-        "ageHigh": 11
+        "ageHigh": 11,
+        "humanAges": [
+          7,
+          8,
+          9,
+          10,
+          11
+        ]
       },
       "4": {
         "label": "11-14",
         "ageLow": 11,
-        "ageHigh": 14
+        "ageHigh": 14,
+        "humanAges": [
+          11,
+          12,
+          13,
+          14
+        ]
       },
       "5": {
         "label": "14-16",
         "ageLow": 14,
-        "ageHigh": 16
+        "ageHigh": 16,
+        "humanAges": [
+          14,
+          15,
+          16
+        ]
       },
       "6": {
         "label": "16+",
         "ageLow": 16,
-        "ageHigh": null
+        "ageHigh": null,
+        "humanAges": [
+          16,
+          17,
+          18
+        ]
       },
       "7": {
         "label": "Age not applicable",
         "ageLow": null,
-        "ageHigh": null
+        "ageHigh": null,
+        "humanAges": []
       }
     },
-    "note": "The draft body also carries a literal `ages` array (e.g. [16,17,18]) derived from the selected range."
+    "note": "The draft body also carries a literal `ages` array, which the 2026-08-29 uploader-bootstrap capture shows is the sorted union of the selected bands' humanAges rather than a contiguous fill between them: bands [2,6] post [5,6,7,16,17,18]. `mainAge` and `additionalAge` are band ids, not ages, and both ride the draft POST. Band 6 is closed on the wire at 16-18; the picker offers no humanAges value above 18 in either vocabulary."
   },
   "curriculum": {
     "field": "curriculum",

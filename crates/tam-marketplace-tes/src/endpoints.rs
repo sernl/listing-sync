@@ -217,11 +217,14 @@ pub struct TesListing {
     pub age_channel: TesAges,
     pub ages: Vec<i64>,
     pub main_type: Option<i64>,
-    /// Absent where the grade declaration derived no age span. The registry
-    /// declares the field optional, and the only span a 16+-only declaration
-    /// could state is one nobody has measured an upper bound for, so the key
-    /// is omitted exactly as `main_type` is rather than sent as zero -- which
-    /// names age zero as surely as `mainType: 0` named a real resource type.
+    /// Which `ageRanges` band buyers see, as a band id and not an age: the
+    /// capture pairs `mainAge: 6` with `ages: [16,17,18]`, and the resource
+    /// page renders that band's own label alone.
+    ///
+    /// Absent where the declaration derives no ages at all -- the
+    /// not-applicable band, or no band -- because the registry declares the
+    /// field optional and a zero here names a real band as surely as
+    /// `mainType: 0` named a real resource type.
     pub main_age: Option<i64>,
     pub pricing: TesPricing,
 }
@@ -290,7 +293,110 @@ impl TesAges {
             Self::YearGroups(_) => &[],
         }
     }
+
+    /// The two derived age fields this declaration posts.
+    ///
+    /// The 2026-08-29 capture fixes the rule on three independent states
+    /// across two recordings: `ages` is the sorted union of the declared
+    /// bands' `humanAges` and `mainAge` names one of the bands. A contiguous
+    /// `low..=high` fill agrees with the union only where the bands are
+    /// adjacent; for the captured `[2, 6]` the union is `{5,6,7,16,17,18}`
+    /// where a fill would post everything from 5 to 18.
+    ///
+    /// A year-group inventory derives neither. Both fields belong to the
+    /// `ageRanges` vocabulary -- `mainAge` is a band id, not an age -- and no
+    /// capture shows what a year-group listing posts in their place, so they
+    /// are omitted rather than filled from a table that does not address
+    /// them.
+    pub fn derived_ages(&self) -> Result<DerivedAges, UnknownAgeBand> {
+        let Self::Ranges(ids) = self else {
+            return Ok(DerivedAges {
+                ages: Vec::new(),
+                main_age: None,
+            });
+        };
+        let mut ages: Vec<i64> = Vec::new();
+        let mut main_age = None;
+        for id in ids {
+            let band = AGE_BANDS
+                .iter()
+                .find(|band| band.id == *id)
+                .ok_or(UnknownAgeBand(*id))?;
+            if band.human_ages.is_empty() {
+                continue;
+            }
+            // The band buyers see. Which band that is, where a seller
+            // declared several, is theirs to elect; until the election
+            // lands the first declared band with ages is the one named,
+            // and never the not-applicable row, which declares none.
+            main_age.get_or_insert(band.id);
+            ages.extend_from_slice(band.human_ages);
+        }
+        ages.sort_unstable();
+        ages.dedup();
+        Ok(DerivedAges { ages, main_age })
+    }
 }
+
+/// The literal `ages` array a declaration posts and the band `mainAge` names.
+/// Both are absent together: `mainAge` names what `ages` is derived from, and
+/// a declaration deriving no ages -- the not-applicable band, or none at all
+/// -- states neither rather than an empty list beside age zero.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedAges {
+    pub ages: Vec<i64>,
+    pub main_age: Option<i64>,
+}
+
+/// A grade id the `ageRanges` vocabulary does not hold. The crosswalk seeds
+/// these ids from that vocabulary, so one that is not in it is a seeding
+/// fault; refusing names it rather than posting a band Tes will read as
+/// something else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownAgeBand(pub i64);
+
+/// One row of the uploader's `ageRanges` vocabulary, with the `humanAges` Tes
+/// itself publishes for it, transcribed from `docs/design/data/tes-vocabulary
+/// .json` and checked against it below.
+///
+/// Band 6 is the one worth stating plainly: `16+` is not half-open on the
+/// wire. Tes closes it at `{16, 17, 18}` and its picker offers nothing above
+/// 18, so a 16+ listing posts real ages rather than omitting the pair.
+struct AgeBand {
+    id: i64,
+    human_ages: &'static [i64],
+}
+
+const AGE_BANDS: [AgeBand; 7] = [
+    AgeBand {
+        id: 1,
+        human_ages: &[3, 4, 5],
+    },
+    AgeBand {
+        id: 2,
+        human_ages: &[5, 6, 7],
+    },
+    AgeBand {
+        id: 3,
+        human_ages: &[7, 8, 9, 10, 11],
+    },
+    AgeBand {
+        id: 4,
+        human_ages: &[11, 12, 13, 14],
+    },
+    AgeBand {
+        id: 5,
+        human_ages: &[14, 15, 16],
+    },
+    AgeBand {
+        id: 6,
+        human_ages: &[16, 17, 18],
+    },
+    AgeBand {
+        id: 7,
+        human_ages: &[],
+    },
+];
 
 #[must_use]
 pub fn create_draft_request() -> HttpRequest {
@@ -379,14 +485,18 @@ fn metadata_body(listing: &TesListing) -> Value {
     if let Some(main_type) = listing.main_type {
         body["mainType"] = json!(main_type);
     }
-    // The same rule for the age pair, which the registry also declares
-    // optional. A 16+-only declaration derives no span -- closing the band
-    // would need an upper age nobody has measured -- and the pair used to go
-    // out as an empty list beside `mainAge: 0`, which names age zero. The two
-    // keys travel together because they come from one derived span.
+    // The same rule for the age fields, which the registry also declares
+    // optional. They travel together because they are one derivation: the
+    // band buyers see, the union of every declared band's ages, and the other
+    // band where the seller declared a second one. The draft POST carries all
+    // three -- entry 44 of the 2026-08-29 capture is a draft and holds
+    // `additionalAge` -- so the publish restates them rather than adding one.
     if let Some(main_age) = listing.main_age {
         body["ages"] = json!(listing.ages);
         body["mainAge"] = json!(main_age);
+        if let Some(additional) = additional_age(listing) {
+            body["additionalAge"] = json!(additional);
+        }
     }
     if let Some(price) = listing.pricing.price() {
         body["price"] = json!(price.minor_units());
@@ -409,12 +519,12 @@ pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
     )
 }
 
-/// The age range the publish body carries beside `mainAge`: the other range
-/// the draft declares. Absent from a draft declaring only its main one, and
+/// The age range the body carries beside `mainAge`: the other band the
+/// declaration names. Absent from a declaration naming only its main one, and
 /// omitted rather than invented when there is none.
 ///
-/// Absent too when the draft states no main age at all, because an additional
-/// age names what it is additional to.
+/// Absent too when the declaration states no main age at all, because an
+/// additional age names what it is additional to.
 fn additional_age(listing: &TesListing) -> Option<i64> {
     let main = listing.main_age?;
     listing
@@ -578,17 +688,15 @@ pub fn confirm_request(id: DraftId, upload: &PresignedUpload) -> HttpRequest {
 /// which carries no metadata for the licence to be validated against.
 ///
 /// `primaryCategory` is the first category the draft declares, which is what
-/// the capture carries; both it and `additionalAge` are omitted rather than
-/// invented when the draft declares nothing to fill them with.
+/// the capture carries, and it is omitted rather than invented when the draft
+/// declares nothing to fill it with. `additionalAge` is not added here: it
+/// rides the draft body itself, which is where the capture shows it.
 #[must_use]
 pub fn publish_request(id: DraftId, listing: &TesListing) -> HttpRequest {
     let mut body = metadata_body(listing);
     body["customThumbnails"] = json!([]);
     if let Some(primary) = listing.category_ids.first() {
         body["primaryCategory"] = json!(primary);
-    }
-    if let Some(additional) = additional_age(listing) {
-        body["additionalAge"] = json!(additional);
     }
     HttpRequest::post_json(
         format!("{ORIGIN}/api/v2/resources/{}/draft/publish", id.0),
@@ -775,6 +883,139 @@ mod tests {
     /// semantics live in the JSON and in a prose comment and in no
     /// consultable type, which is exactly the condition under which a
     /// transcription drifts.
+    /// The same rule for the age bands: the table drives what the wire's
+    /// `ages` array holds, so a transcription slip there posts ages the
+    /// seller never declared.
+    #[test]
+    fn the_age_bands_agree_with_the_polled_vocabulary() {
+        let vocabulary: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/design/data/tes-vocabulary.json"
+        ))
+        .expect("the polled vocabulary parses");
+        let options = vocabulary["ageRanges"]["options"]
+            .as_object()
+            .expect("ageRanges.options is an object");
+        assert_eq!(
+            options.len(),
+            super::AGE_BANDS.len(),
+            "the picker offers seven bands and the table models all seven"
+        );
+        for band in &super::AGE_BANDS {
+            let row = options
+                .get(&band.id.to_string())
+                .unwrap_or_else(|| panic!("band {} is a polled row", band.id));
+            let polled: Vec<i64> = row["humanAges"]
+                .as_array()
+                .expect("every band publishes its humanAges")
+                .iter()
+                .filter_map(serde_json::Value::as_i64)
+                .collect();
+            assert_eq!(
+                polled, band.human_ages,
+                "band {} posts the ages Tes publishes for it",
+                band.id
+            );
+        }
+    }
+
+    /// The union rule, on the capture's own disjoint pair. A contiguous fill
+    /// would post everything from 5 to 18 here.
+    #[test]
+    fn a_disjoint_declaration_posts_the_union_of_its_bands_and_not_the_fill() {
+        let derived = TesAges::Ranges(vec![2, 6])
+            .derived_ages()
+            .expect("both are bands");
+        assert_eq!(
+            derived,
+            super::DerivedAges {
+                ages: vec![5, 6, 7, 16, 17, 18],
+                main_age: Some(2),
+            },
+            "the 2026-08-29 capture posts exactly this array for bands 2 and 6"
+        );
+    }
+
+    /// P.1, settled. `16+` closes at 18 on the wire, so a 16+-only listing
+    /// states real ages rather than omitting the pair.
+    #[test]
+    fn the_sixteen_plus_band_alone_posts_its_own_closed_age_set() {
+        let derived = TesAges::Ranges(vec![6])
+            .derived_ages()
+            .expect("6 is a band");
+        assert_eq!(
+            derived,
+            super::DerivedAges {
+                ages: vec![16, 17, 18],
+                main_age: Some(6),
+            },
+            "the uploader bootstrap publishes humanAges [16,17,18] for band 6"
+        );
+    }
+
+    /// And the one band that really has no ages still omits both keys, which
+    /// is what the not-applicable row means.
+    #[test]
+    fn the_not_applicable_band_states_neither_key() {
+        for declaration in [TesAges::Ranges(vec![7]), TesAges::Ranges(vec![])] {
+            let derived = declaration.derived_ages().expect("7 is a band");
+            assert_eq!(
+                derived,
+                super::DerivedAges {
+                    ages: vec![],
+                    main_age: None,
+                },
+                "an empty age set states no ages and no main band"
+            );
+        }
+    }
+
+    #[test]
+    fn a_year_group_declaration_derives_neither_age_field() {
+        let derived = TesAges::YearGroups(vec![4, 5])
+            .derived_ages()
+            .expect("a year group is never read against the band table");
+        assert_eq!(
+            derived,
+            super::DerivedAges {
+                ages: vec![],
+                main_age: None,
+            },
+            "`mainAge` is an ageRanges band id, and no capture shows what a year-group \
+             listing posts in its place"
+        );
+    }
+
+    #[test]
+    fn a_grade_id_outside_the_band_vocabulary_is_named_rather_than_dropped() {
+        assert_eq!(
+            TesAges::Ranges(vec![4, 99]).derived_ages(),
+            Err(super::UnknownAgeBand(99)),
+            "the ids are seeded from this vocabulary, so one that is not in it is a fault"
+        );
+    }
+
+    /// The draft POST carries `additionalAge`: entry 44 of the 2026-08-29
+    /// capture is a draft and holds it beside `mainAge`.
+    #[test]
+    fn the_draft_body_carries_the_additional_band_beside_the_main_one() {
+        let listing = TesListing {
+            age_channel: TesAges::Ranges(vec![2, 6]),
+            ages: vec![5, 6, 7, 16, 17, 18],
+            main_age: Some(6),
+            ..listing(TesPricing::Free(FreeLicence::CcBy))
+        };
+        let RequestBody::Json(body) = super::set_metadata_request(DraftId(1), &listing).body else {
+            panic!("the draft metadata is a JSON post");
+        };
+        assert_eq!(body["mainAge"], serde_json::json!(6));
+        assert_eq!(body["additionalAge"], serde_json::json!(2));
+        assert_eq!(
+            body["ages"],
+            serde_json::json!([5, 6, 7, 16, 17, 18]),
+            "the draft carries the whole derivation, not a fragment of it"
+        );
+    }
+
     #[test]
     fn the_seven_tokens_agree_with_the_polled_vocabulary() {
         let vocabulary: serde_json::Value = serde_json::from_str(include_str!(

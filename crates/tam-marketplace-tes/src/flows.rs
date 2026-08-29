@@ -546,18 +546,21 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 None => None,
             };
         let age_channel = TesAges::of(self.inventory, grade_ids);
-        // P.1. A grade set the declaration could not close -- the 16+ band is
-        // half-open, and closing it would need an upper age nobody has
-        // measured -- states no span rather than a zero. The pair is omitted
-        // from the wire the way `mainType` is, and the supervised capture is
-        // what will settle whether Tes wants something else there.
-        let (ages, main_age): (Vec<i64>, Option<i64>) = match listing.ages {
-            Some(span) => (
-                (i64::from(span.low_years)..=i64::from(span.high_years)).collect(),
-                Some(i64::from(span.low_years)),
-            ),
-            None => (Vec::new(), None),
-        };
+        // P.1, settled by the 2026-08-29 capture. The wire's age fields are
+        // derived from the bands the seller declared, not from the canonical
+        // interval: `ages` is the union of those bands' own age sets and
+        // `mainAge` names a band. The interval is the wrong source twice
+        // over -- it fills the gap between disjoint bands, and its low year
+        // reaches `mainAge` as a band id, where 7 names "Age not applicable"
+        // and 11 names nothing at all.
+        let endpoints::DerivedAges { ages, main_age } =
+            age_channel
+                .derived_ages()
+                .map_err(|endpoints::UnknownAgeBand(id)| {
+                    unprojectable_grade(format!(
+                        "Tes grade id {id} is not one of the seven age bands the uploader offers"
+                    ))
+                })?;
         Ok(FieldSet {
             body_format: Some(listing.body_format),
             entries: vec![

@@ -774,8 +774,13 @@ pub const TES_MAIN_AGE_RANGES: [TesAgeRange; 7] = [
 /// re-emission uses.
 ///
 /// `From` is refused here on purpose even though the band states its lower
-/// bound: closing it would need an upper age nobody has measured, and that
-/// invented number reaches the wire as the literal Tes `ages` array.
+/// bound. This interval is the canonical claim about the ages a resource
+/// suits, and a `16+` band states no upper one.
+///
+/// What Tes posts is a separate question and no longer reads this value: the
+/// adapter derives the literal `ages` array from the declared bands' own
+/// published age sets, where band 6 is closed at 18. A band closed on the
+/// wire is not thereby closed as a claim about who the resource is for.
 ///
 /// The table's bounded rows are all non-inverted, so `AgeInterval::new` cannot
 /// reject the derived pair; `.ok()` carries that without asserting it.

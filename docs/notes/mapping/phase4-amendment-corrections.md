@@ -99,30 +99,42 @@ residue for the reconciliation queue, while a year group no age band covers is
 a measured absence in a vocabulary held whole. Widening the shared type would
 invite seeding the first as the second.
 
-## P.1's election is deferred, and the wire stops inventing a value meanwhile
+## P.1's wire question is answered, and the omit-interim narrows to the empty case
 
-P.1 settles two things: the bounds model states 16+ honestly, and a 16+-only
+P.1 settled two things: the bounds model states 16+ honestly, and a 16+-only
 grade set raises an election in which the seller states the target ages.
-The first landed. The second does not fit the election model as built, and the
-gap is structural rather than an omission.
+The first landed. The second was written against a wire nobody had measured,
+and the 2026-08-29 capture measures it.
 
-An `ElectionAnswer` names `VocabularyPath`s, and every trigger resolves to a
-set of them. "The target ages" is a year span, and Tes's own age vocabulary
-holds no bounded band above 16 — bands 1 to 5 stop at 14-16, band 6 is the
-half-open 16+ itself, and band 7 is the not-applicable sentinel. So there is no
-path the seller could name that answers the question, and raising a `Supply` or
-a `Narrow` over the bounded bands would offer a candidate set that cannot mean
-what it says. Delivering P.1's election therefore needs a new answer shape — a
-span rather than a path — which reaches the `election_item` CHECK, the trigger
-kind, the answer codec, the API and the client. That is a feature, and it is
-gated on the same supervised capture P.1 defers the wire question to.
+Band 6 is not half-open on the wire. The uploader's own bootstrap publishes
+`humanAges: [16,17,18]` for it, and no `humanAges` value anywhere in the
+vocabulary exceeds 18, in either the age bands or the thirty year groups. So a
+16+-only listing posts `ages: [16,17,18]` beside `mainAge: 6`, and the interim
+that omitted the pair was over-conservative: the number it declined to invent
+is one Tes publishes.
 
-What landed instead is the half that needs no such decision: the wire stops
-inventing a value. `mainAge` and `ages` are both `required: false` in the
-registry, so an underivable span omits the pair exactly as an unprojected
-resource type omits `mainType` — D3's fix, applied to its twin. `ageRanges`
-still carries band 6, because the declaration is what the seller stated and it
-is true; what is absent is the number nobody measured.
+The election shape follows from the same evidence. The answer space is the
+closed seven-band vocabulary rather than an open span, so the `ElectionAnswer`
+shape as built already carries it — a main-band choice with an optional
+additional band, both `VocabularyPath`s. The new span-shaped answer kind the
+old reading needed, and the `election_item` CHECK, trigger kind, codec, API and
+client changes behind it, are not needed.
+
+What remains omitted is the case that is genuinely empty: band 7, "Age not
+applicable", publishes no ages at all, and a declaration naming no band derives
+none. There `mainAge` and `ages` are both absent exactly as an unprojected
+resource type omits `mainType`, because an empty list beside `mainAge: 0` names
+a real band as surely as `mainType: 0` named a real resource type.
+
+The capture also corrected two things the interim was not looking for. `ages`
+is the union of the declared bands' age sets and not a contiguous fill between
+them, which diverges the moment the bands are disjoint: for the captured
+`[2, 6]` the union is `{5,6,7,16,17,18}` where the fill claims every age from 5
+to 18. And `mainAge` is a band id rather than an age in years, so the interval's
+low year reaching that field posted band 7 for a `[3,4]` declaration and a
+number outside the vocabulary for most others. Both are fixed at the source:
+the wire's age fields derive from the declared bands, not from the canonical
+interval.
 
 ## Migration numbering
 
@@ -167,6 +179,9 @@ already names: the D2 licence value and the D3 `mainType` absence are proven
 against the cassettes and against the documented field semantics, and not
 against a response from Tes.
 
-The 16+ wire values from P.1 are in the same position and for the same reason,
-which is why the two travel together: the supervised capture that answers what
-the wire writes for a 16+-only listing is the run that would verify these.
+The 16+ wire values from P.1 were in the same position until the 2026-08-29
+capture answered them. What the adapter now posts for a 16+-only listing is
+read from Tes's own published vocabulary and from three captured states of the
+draft body, which is a stronger footing than the cassettes alone; a live run
+would still be the thing that witnesses Tes accepting a single-band post, which
+no capture carries.

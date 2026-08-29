@@ -614,14 +614,13 @@ fn a_description_without_a_declared_format_is_refused_rather_than_assumed() {
     );
 }
 
-/// P.1. A 16+-only declaration derives no age span — closing the half-open
-/// band would need an upper age nobody has measured — and the pair used to go
-/// out as an empty `ages` list beside `mainAge: 0`, which names age zero as
-/// surely as `mainType: 0` named a real resource type. The registry declares
-/// both optional, so both keys are absent until the supervised capture says
-/// what the wire wants there.
+/// P.1, settled by the 2026-08-29 capture. `16+` is closed on the wire at
+/// `{16,17,18}`, so a 16+-only listing states its real ages instead of
+/// omitting the pair the way the interim did. The band is what `mainAge`
+/// names; the interval that used to fill both fields put an age in a field
+/// Tes reads as a band id.
 #[test]
-fn an_underivable_age_span_omits_the_pair_rather_than_stating_age_zero() {
+fn a_sixteen_plus_declaration_posts_the_bands_own_closed_age_set() {
     let adapter = adapter(
         Cassette {
             interactions: vec![],
@@ -629,10 +628,44 @@ fn an_underivable_age_span_omits_the_pair_rather_than_stating_age_zero() {
         vec![],
     );
     let mut listing = projected(PriceIntent::Free);
+    listing.grades[0].native_id = Some("6".to_owned());
+    // The interval a 16+ band derives is nothing, which is what made the
+    // interim omit the pair; the wire fields do not come from it any more.
     listing.ages = None;
     let fields = adapter
         .project_fields(&listing)
-        .expect("an underivable span is not a refusal; the grade ids still project");
+        .expect("a 16+ declaration projects");
+    let grades: Value =
+        serde_json::from_str(&entry(&fields, FieldKey::Grades)).expect("grades are JSON");
+    assert_eq!(
+        grades["ages"],
+        json!([16, 17, 18]),
+        "Tes publishes humanAges [16,17,18] for the band, so this is a read value: {grades}"
+    );
+    assert_eq!(
+        grades["mainAge"],
+        json!(6),
+        "and `mainAge` names the band, not an age in years: {grades}"
+    );
+}
+
+/// The other half of the narrowing: the pair is still omitted where the
+/// declaration really has no ages -- band 7 is "Age not applicable" and
+/// publishes an empty set -- because an empty list beside `mainAge: 0` names
+/// age zero as surely as `mainType: 0` named a real resource type.
+#[test]
+fn a_declaration_with_no_ages_at_all_still_omits_the_pair() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let mut listing = projected(PriceIntent::Free);
+    listing.grades[0].native_id = Some("7".to_owned());
+    let fields = adapter
+        .project_fields(&listing)
+        .expect("the not-applicable band is a declaration like any other");
     let grades: Value =
         serde_json::from_str(&entry(&fields, FieldKey::Grades)).expect("grades are JSON");
     assert!(
@@ -641,6 +674,7 @@ fn an_underivable_age_span_omits_the_pair_rather_than_stating_age_zero() {
     );
 
     let spanless = TesListing {
+        age_channel: tam_marketplace_tes::endpoints::TesAges::Ranges(vec![7]),
         ages: vec![],
         main_age: None,
         ..sample_listing()
@@ -653,8 +687,47 @@ fn an_underivable_age_span_omits_the_pair_rather_than_stating_age_zero() {
         "and the wire carries neither, got {body}"
     );
     assert!(
+        body.get("additionalAge").is_none(),
+        "nor an additional band, which names what it is additional to: {body}"
+    );
+    assert!(
         body.get("ageRanges").is_some(),
         "the declaration itself still travels: the bands are what the seller stated"
+    );
+}
+
+/// The union rule where the projection meets it: two disjoint bands post
+/// their union, and the contiguous fill this replaces would have claimed
+/// every age between them.
+#[test]
+fn two_disjoint_bands_project_their_union_rather_than_the_span_between_them() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let mut listing = projected(PriceIntent::Free);
+    listing.grades = vec![
+        NativeTerm {
+            native_id: Some("2".to_owned()),
+            segments: vec!["Primary".to_owned()],
+        },
+        NativeTerm {
+            native_id: Some("6".to_owned()),
+            segments: vec!["Post-16".to_owned()],
+        },
+    ];
+    let fields = adapter
+        .project_fields(&listing)
+        .expect("two bands project as readily as one");
+    let grades: Value =
+        serde_json::from_str(&entry(&fields, FieldKey::Grades)).expect("grades are JSON");
+    assert_eq!(
+        grades["ages"],
+        json!([5, 6, 7, 16, 17, 18]),
+        "the capture posts exactly this for bands 2 and 6; a fill would claim 8 through 15: \
+         {grades}"
     );
 }
 
