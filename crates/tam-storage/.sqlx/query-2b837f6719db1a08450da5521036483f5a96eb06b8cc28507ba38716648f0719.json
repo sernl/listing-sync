@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO job_event (org_id, org_seq, job_id, job_item_id, kind, payload, created_at) SELECT $1, $2, $3, NULL, $4, $5, $6 WHERE NOT EXISTS ( SELECT 1 FROM job_event WHERE org_id = $1 AND job_id = $3 AND kind = $4 )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2b837f6719db1a08450da5521036483f5a96eb06b8cc28507ba38716648f0719"
+}

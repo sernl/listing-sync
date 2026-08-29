@@ -27,10 +27,11 @@ pub use job_reads::{
     JobReadRepo, JobSnapshot, LedgerCursor, MappingSeed,
 };
 pub use jobs::{
-    append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
-    CreatedJob, EventScope, HaltCause, HaltRepo, InventoryFailureWindow, InventoryHaltRow,
-    ItemVerdict, JobRepo, LandingEffect, LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob,
-    NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo,
+    append_event, revive_by_gap, revive_on, settle_if_complete, AttemptIntent, AttemptRef,
+    AttemptVerdict, BindDisposition, BudgetGrant, CreatedJob, EventScope, HaltCause, HaltRepo,
+    InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef,
+    LeaseRepo, LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage,
+    OutboxRepo, RateBudgetRepo, WriteAttemptRepo, REVIVABLE_GATES,
 };
 pub use mapping::{MappingHead, MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};

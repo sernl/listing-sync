@@ -1,9 +1,10 @@
 //! The machine seed produced from the ledger and the projection: the worker
 //! cannot lease what it cannot project, so this is the gate between the
 //! ledger and the marketplace. A blocked preparation raises its queue items
-//! and parks the item rather than settling it, because a drained queue
+//! and parks the item rather than settling it, because answering the question
 //! un-parks it into a clean retry — the treadmill inverted into the drain's
-//! own retry loop.
+//! own retry loop. The answer is what revives it; the day-long park expiry is
+//! the backstop for an answer nobody gives.
 //!
 //! Two halves, deliberately separate. [`prepare_item`] is the ledger's: it
 //! reads, checks the item's operation against the binding the mapping

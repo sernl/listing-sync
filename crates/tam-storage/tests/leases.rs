@@ -16,8 +16,9 @@ use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_storage::{
-    BudgetGrant, HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LeaseRepo, MappingRepo,
-    NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo, StorageError,
+    revive_by_gap, revive_on, BudgetGrant, HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo,
+    LeaseRepo, MappingRepo, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo,
+    RateBudgetRepo, StorageError,
 };
 use tam_types::{
     CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail, FileId, FileKind,
@@ -244,6 +245,278 @@ async fn the_tenant_mutex_holds_and_parallelism_is_inter_tenant(app: PgPool) {
             "every lease belongs to a seeded tenant"
         );
     }
+}
+
+/// Parks the item under a lease and returns nothing but the park's effect, so
+/// a revive test reads only what it set up.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn park_leased(leases: &LeaseRepo, worker: &str, gate: &str, expires: Timestamp) {
+    let lease = leases
+        .acquire(worker, T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the item leases");
+    leases
+        .park(&lease.lease_ref(), gate, expires)
+        .await
+        .expect("the park is fenced on a live lease");
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn states(pool: &PgPool, org: OrgId) -> Vec<(String, Option<String>)> {
+    sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state, blocked_on FROM job_item WHERE org_id = $1 ORDER BY id",
+    )
+    .bind(db_uuid(org.0))
+    .fetch_all(pool)
+    .await
+    .expect("the ledger is readable")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn event_kinds(pool: &PgPool, org: OrgId) -> Vec<String> {
+    sqlx::query_scalar::<_, String>("SELECT kind FROM job_event WHERE org_id = $1 ORDER BY org_seq")
+        .bind(db_uuid(org.0))
+        .fetch_all(pool)
+        .await
+        .expect("the event stream is readable")
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC1, true).await;
+    enqueue_one(&engine, &tenant, 0x51, 0x52).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let expires = Timestamp(T0.0 + 1_000);
+    park_leased(&leases, "w1", "reconciliation", expires).await;
+
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 500))
+            .await
+            .expect("the unparker runs"),
+        0,
+        "a park that has not expired is not the unparker's business"
+    );
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 2_000))
+            .await
+            .expect("the unparker runs"),
+        1,
+        "an expired projection park requeues into a clean retry"
+    );
+    assert_eq!(
+        states(&engine, tenant.org).await,
+        vec![("queued".to_owned(), None)],
+        "the gate is cleared with the state, so the item does not re-park on a stale reason"
+    );
+    assert!(
+        event_kinds(&engine, tenant.org)
+            .await
+            .contains(&"ItemResumed".to_owned()),
+        "the ledger says why a parked item is running again"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_expired_challenge_park_is_left_where_the_driver_put_it(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC2, true).await;
+    enqueue_one(&engine, &tenant, 0x53, 0x54).await;
+    let leases = LeaseRepo::new(engine.clone());
+    // The driver writes the challenge's own debug form here, never a gate.
+    park_leased(&leases, "w1", "Captcha", Timestamp(T0.0 + 1_000)).await;
+
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 2_000))
+            .await
+            .expect("the unparker runs"),
+        0,
+        "a challenge park still holds an in-flight write attempt, so reviving it would burn \
+         the attempt budget and settle the item failed a day later with nothing to explain it"
+    );
+    assert_eq!(
+        states(&engine, tenant.org).await,
+        vec![("parked_live".to_owned(), Some("Captcha".to_owned()))],
+        "the park survives untouched"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn resolving_one_gap_revives_every_item_parked_behind_it(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC3, true).await;
+    // One queue row stands for every product that hit the gap, so the revive
+    // has to be keyed on the gate rather than on a mapping.
+    for seed in [0x61_u8, 0x63, 0x65] {
+        enqueue_one(&engine, &tenant, seed, seed.wrapping_add(1)).await;
+    }
+    let leases = LeaseRepo::new(engine.clone());
+    for worker in ["w1", "w2", "w3"] {
+        park_leased(
+            &leases,
+            worker,
+            "reconciliation",
+            Timestamp(T0.0 + 86_400_000),
+        )
+        .await;
+    }
+
+    let mut tx = app.begin().await.expect("the answering transaction opens");
+    let revived = revive_by_gap(&mut tx, tenant.org, "reconciliation", T0)
+        .await
+        .expect("the gap revive runs");
+    tx.commit().await.expect("the answer commits");
+    assert_eq!(
+        revived, 3,
+        "a five-hundred-item bulk behind one queue row must not revive one item and leave \
+         the other four hundred and ninety-nine to the day-long timer"
+    );
+    assert!(
+        states(&engine, tenant.org)
+            .await
+            .iter()
+            .all(|(state, gate)| state == "queued" && gate.is_none()),
+        "every item behind the answered gap is queued"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_election_revive_touches_only_its_own_mapping(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let first = seed_tenant(&app, 0xC4, true).await;
+    let second = seed_tenant(&app, 0xC8, true).await;
+    enqueue_one(&engine, &first, 0x71, 0x72).await;
+    enqueue_one(&engine, &second, 0x73, 0x74).await;
+    let leases = LeaseRepo::new(engine.clone());
+    park_leased(&leases, "w1", "election", Timestamp(T0.0 + 86_400_000)).await;
+    park_leased(&leases, "w2", "election", Timestamp(T0.0 + 86_400_000)).await;
+
+    let mut tx = app.begin().await.expect("the answering transaction opens");
+    let revived = revive_on(&mut tx, first.org, first.mapping, "election", T0)
+        .await
+        .expect("the election revive runs");
+    tx.commit().await.expect("the answer commits");
+    assert_eq!(
+        revived, 1,
+        "an election is one-to-one with a product's mapping"
+    );
+    assert_eq!(
+        states(&engine, second.org).await,
+        vec![("parked_live".to_owned(), Some("election".to_owned()))],
+        "another tenant's park is untouched, which the pin is what guarantees"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC5, true).await;
+    let job = JobId(Uuid([0x81; 16]));
+    let mut first = item(0x82);
+    first.mapping = tenant.mapping;
+    let mut second = item(0x83);
+    second.mapping = tenant.mapping;
+    JobRepo::new(engine.clone())
+        .enqueue(
+            tenant.org,
+            &NewJob {
+                job,
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            &[first, second],
+        )
+        .await
+        .expect("the two-item job enqueues");
+
+    let leases = LeaseRepo::new(engine.clone());
+    let one = leases
+        .acquire("w1", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the first item leases");
+    leases
+        .settle(&one.lease_ref(), &verdict(ItemOutcome::Succeeded), T0)
+        .await
+        .expect("the first item settles");
+    assert!(
+        !event_kinds(&engine, tenant.org)
+            .await
+            .contains(&"JobSettled".to_owned()),
+        "a job with an unsettled item has not finished"
+    );
+
+    let two = leases
+        .acquire("w1", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the second item leases");
+    leases
+        .settle(&two.lease_ref(), &verdict(ItemOutcome::Failed), T0)
+        .await
+        .expect("the second item settles");
+    let kinds = event_kinds(&engine, tenant.org).await;
+    assert_eq!(
+        kinds.iter().filter(|kind| *kind == "JobSettled").count(),
+        1,
+        "the ledger says a job finished exactly once, without resting on a tenant mutex the \
+         design elsewhere names as removable"
+    );
+
+    let topics =
+        sqlx::query_scalar::<_, String>("SELECT topic FROM outbox_message WHERE org_id = $1")
+            .bind(db_uuid(tenant.org.0))
+            .fetch_all(&engine)
+            .await
+            .expect("the outbox is readable");
+    assert_eq!(
+        topics,
+        vec!["email.job_settled".to_owned()],
+        "the seller is told, which nothing did before"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_job_whose_last_item_exhausts_its_attempts_still_says_it_finished(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC6, true).await;
+    enqueue_one(&engine, &tenant, 0x91, 0x92).await;
+    let leases = LeaseRepo::new(engine.clone());
+    leases
+        .acquire("w1", T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the item leases");
+
+    // The commonest bulk failure: the item dies in the maintenance loop's own
+    // cross-tenant statement, with no job context and no worker involved.
+    let touched = leases
+        .expire_and_steal(Timestamp(T0.0 + 61_000), 1)
+        .await
+        .expect("the stealer runs");
+    assert_eq!(
+        touched, 1,
+        "the attempt budget is exhausted, so the item settles failed"
+    );
+    assert!(
+        event_kinds(&engine, tenant.org)
+            .await
+            .contains(&"JobSettled".to_owned()),
+        "a job that ended this way flipped to Settled with no event to explain it"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

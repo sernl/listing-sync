@@ -64,8 +64,10 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_POLL_MS: u64 = 5_000;
 const LEASE_TTL_SECS: i64 = 300;
-/// A projection-blocked item parks for a day; a drained queue un-parks it
-/// into a clean retry on the next steal pass after expiry.
+/// A projection-blocked item parks for a day. The seller's answer un-parks it
+/// immediately through the revive the answering transaction runs; this is the
+/// backstop for an answer that never comes, and the maintenance pass requeues
+/// it into a clean retry once it expires.
 const BLOCKED_PARK_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// The real wait the driver's verification poll takes between reads. The
@@ -549,6 +551,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(0) => {}
             Ok(stolen) => eprintln!("tam-worker {worker_name}: stole {stolen} expired leases"),
             Err(error) => eprintln!("tam-worker {worker_name}: steal failed: {error}"),
+        }
+        match leases.revive_expired(now).await {
+            Ok(0) => {}
+            Ok(revived) => eprintln!("tam-worker {worker_name}: revived {revived} expired parks"),
+            Err(error) => eprintln!("tam-worker {worker_name}: revive failed: {error}"),
         }
         match run_breaker(&jobs, &halts, now).await {
             Ok(report) if !report.tripped.is_empty() => {

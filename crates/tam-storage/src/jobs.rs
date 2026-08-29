@@ -12,7 +12,7 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
-use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
     FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp,
@@ -24,7 +24,7 @@ use crate::codec::{
     uuid_from_db, uuid_to_db, OperationColumns, RemoteIdColumns, StoredOperation,
 };
 use crate::mapping::{remote_id_from_db, LifecycleColumns};
-use crate::StorageError;
+use crate::{pin_org, StorageError};
 
 pub(crate) const fn item_outcome_to_db(outcome: ItemOutcome) -> &'static str {
     match outcome {
@@ -296,17 +296,15 @@ async fn insert_job_item(
     Ok(())
 }
 
-/// Appends one event inside the caller's transaction, allocating `org_seq`
-/// by locking the per-organisation counter row — identity values are
-/// allocated before commit and can appear out of order, which is exactly the
-/// resume-query unsoundness the counter exists to repair.
-pub async fn append_event(
+/// Allocates the next `org_seq` by locking the per-organisation counter row.
+/// The lock is what serialises event appends within one organisation, which
+/// the conditional append below relies on: a second transaction evaluating
+/// its own existence check has already waited on this row, so it sees the
+/// first one's committed event.
+async fn allocate_org_seq(
     tx: &mut Transaction<'_, Postgres>,
-    scope: &EventScope,
-    payload: &JobEventPayload,
-    at: Timestamp,
-) -> Result<(), StorageError> {
-    let EventScope { org, job, item } = *scope;
+    org: OrgId,
+) -> Result<i64, StorageError> {
     let org_db = uuid_to_db(org.0);
     sqlx::query!(
         "INSERT INTO org_event_counter (org_id) VALUES ($1) ON CONFLICT (org_id) DO NOTHING",
@@ -321,6 +319,22 @@ pub async fn append_event(
     )
     .fetch_one(&mut **tx)
     .await?;
+    Ok(seq)
+}
+
+/// Appends one event inside the caller's transaction, allocating `org_seq`
+/// by locking the per-organisation counter row — identity values are
+/// allocated before commit and can appear out of order, which is exactly the
+/// resume-query unsoundness the counter exists to repair.
+pub async fn append_event(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: &EventScope,
+    payload: &JobEventPayload,
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    let EventScope { org, job, item } = *scope;
+    let org_db = uuid_to_db(org.0);
+    let seq = allocate_org_seq(tx, org).await?;
     let encoded = serde_json::to_value(payload).map_err(|error| StorageError::Inconsistent {
         reason: format!("a job event payload must serialise: {error}"),
     })?;
@@ -343,6 +357,232 @@ pub async fn append_event(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// The gates a projection or an election park writes, and the only ones an
+/// expiry revive may touch.
+///
+/// A challenge park is a different animal: `SyncMachine::park` advances with
+/// the write attempt still `in_flight`, and `write_attempt_one_in_flight` then
+/// refuses `AttemptRepo::open` on the revived run, so the item burns its
+/// attempt budget and settles `failed`/`Other` a day later with nothing in the
+/// ledger to explain it. `blocked_on` is what tells the two apart: these are
+/// written by the seed gate, and a challenge park writes the challenge's own
+/// debug form.
+pub const REVIVABLE_GATES: [&str; 6] = [
+    "reconciliation",
+    "election",
+    "currency_unknown",
+    "cover_missing",
+    "scan_incomplete",
+    "awaiting_counterpart",
+];
+
+/// The gap queue's revive. Keyed on the gate rather than on the mapping,
+/// because one `reconciliation_item` row stands for every product that hit
+/// it: `reconciliation_item_open_dedup` collapses a five-hundred-product
+/// batch into one question, so resolving it must un-block all five hundred
+/// items and not the one whose mapping happens to be named as provenance.
+///
+/// Requeuing an item whose gap is still open is harmless — it re-projects,
+/// re-parks, and costs one lease.
+pub async fn revive_by_gap(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    gate: &str,
+    at: Timestamp,
+) -> Result<u64, StorageError> {
+    pin_org(tx, org).await?;
+    let rows = sqlx::query!(
+        "UPDATE job_item \
+         SET state = 'queued', blocked_on = NULL, park_expires_at = NULL \
+         WHERE org_id = $1 AND state = 'parked_live' AND blocked_on = $2 \
+         RETURNING org_id, job_id, id",
+        uuid_to_db(org.0),
+        gate,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let revived = revived(rows.into_iter().map(|row| (row.org_id, row.job_id, row.id)));
+    record_resumptions(tx, &revived, at).await?;
+    Ok(count_of(&revived))
+}
+
+/// The election queue's revive. Keyed on the mapping, because
+/// `election_item_open_dedup` makes an election one-to-one with a product's
+/// mapping and there is nothing to fan out to.
+///
+/// Both revives take the answering transaction rather than their own pool
+/// handle: a crash between recording the seller's answer and requeueing the
+/// item leaves it parked for the full day, which is exactly the latency this
+/// exists to remove. And both pin, because `job_item` carries FORCE ROW LEVEL
+/// SECURITY — the clause that removes the owner's exemption — so an unpinned
+/// `tam_app` session updates nothing and reports it as a row count of zero.
+pub async fn revive_on(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    mapping: MappingId,
+    gate: &str,
+    at: Timestamp,
+) -> Result<u64, StorageError> {
+    pin_org(tx, org).await?;
+    let rows = sqlx::query!(
+        "UPDATE job_item \
+         SET state = 'queued', blocked_on = NULL, park_expires_at = NULL \
+         WHERE org_id = $1 AND mapping_id = $2 AND state = 'parked_live' \
+           AND blocked_on = $3 \
+         RETURNING org_id, job_id, id",
+        uuid_to_db(org.0),
+        uuid_to_db(mapping.0),
+        gate,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let revived = revived(rows.into_iter().map(|row| (row.org_id, row.job_id, row.id)));
+    record_resumptions(tx, &revived, at).await?;
+    Ok(count_of(&revived))
+}
+
+fn revived(
+    rows: impl Iterator<Item = (uuid::Uuid, uuid::Uuid, uuid::Uuid)>,
+) -> Vec<(OrgId, JobId, JobItemId)> {
+    rows.map(|(org, job, item)| {
+        (
+            OrgId(uuid_from_db(org)),
+            JobId(uuid_from_db(job)),
+            JobItemId(uuid_from_db(item)),
+        )
+    })
+    .collect()
+}
+
+fn count_of(revived: &[(OrgId, JobId, JobItemId)]) -> u64 {
+    u64::try_from(revived.len()).unwrap_or(u64::MAX)
+}
+
+/// Records the resumption of every item a revive requeued, in the same
+/// transaction, so the ledger explains why a parked item is running again.
+async fn record_resumptions(
+    tx: &mut Transaction<'_, Postgres>,
+    revived: &[(OrgId, JobId, JobItemId)],
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    for &(org, job, item) in revived {
+        append_event(
+            tx,
+            &EventScope {
+                org,
+                job,
+                item: Some(item),
+            },
+            &JobEventPayload::ItemResumed,
+            at,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Emits `JobSettled` and the seller's notification once every item of a job
+/// has settled, and does nothing otherwise.
+///
+/// This hangs off the ledger write rather than off the worker's control flow
+/// because the commonest bulk failure never passes through the worker at all:
+/// `expire_and_steal` settles an attempt-exhausted item `failed`/`Other` in
+/// its own cross-tenant statement, from the maintenance loop, with no job
+/// context. A job whose last item dies there would flip to `Settled` with no
+/// event to explain it.
+///
+/// Idempotent at the database. `job_event` has no uniqueness on
+/// `(org_id, job_id, kind)`, so a duplicate would be accepted silently, and
+/// the only thing preventing two settles today is a tenant mutex the design
+/// elsewhere names as removable.
+pub async fn settle_if_complete(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    let org_db = uuid_to_db(org.0);
+    let job_db = uuid_to_db(job.0);
+    let counts = sqlx::query!(
+        r#"SELECT
+             count(*) FILTER (WHERE state <> 'settled')          AS "unsettled!",
+             count(*) FILTER (WHERE outcome = 'succeeded')       AS "succeeded!",
+             count(*) FILTER (WHERE outcome = 'degraded')        AS "degraded!",
+             count(*) FILTER (WHERE outcome = 'failed')          AS "failed!",
+             count(*) FILTER (WHERE outcome = 'ambiguous')       AS "ambiguous!",
+             count(*) FILTER (WHERE outcome = 'skipped')         AS "skipped!",
+             count(*) FILTER (WHERE outcome = 'blocked')         AS "blocked!",
+             count(*)                                            AS "total!"
+           FROM job_item WHERE org_id = $1 AND job_id = $2"#,
+        org_db,
+        job_db,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if counts.total == 0 || counts.unsettled > 0 {
+        return Ok(false);
+    }
+
+    let payload = JobEventPayload::JobSettled {
+        succeeded: count_u32(counts.succeeded)?,
+        degraded: count_u32(counts.degraded)?,
+        failed: count_u32(counts.failed)?,
+        ambiguous: count_u32(counts.ambiguous)?,
+        skipped: count_u32(counts.skipped)?,
+        blocked: count_u32(counts.blocked)?,
+    };
+    let seq = allocate_org_seq(tx, org).await?;
+    let encoded = serde_json::to_value(&payload).map_err(|error| StorageError::Inconsistent {
+        reason: format!("a job event payload must serialise: {error}"),
+    })?;
+    let body = encoded
+        .get(payload.kind())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let inserted = sqlx::query!(
+        "INSERT INTO job_event \
+         (org_id, org_seq, job_id, job_item_id, kind, payload, created_at) \
+         SELECT $1, $2, $3, NULL, $4, $5, $6 \
+         WHERE NOT EXISTS ( \
+             SELECT 1 FROM job_event \
+             WHERE org_id = $1 AND job_id = $3 AND kind = $4 \
+         )",
+        org_db,
+        seq,
+        job_db,
+        payload.kind(),
+        body,
+        timestamp_to_db(at)?,
+    )
+    .execute(&mut **tx)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return Ok(false);
+    }
+
+    OutboxRepo::append(
+        tx,
+        &NewOutboxMessage {
+            org,
+            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            topic: "email.job_settled".to_owned(),
+            dedupe_key: format!("{:?}:{:02x?}", SellerEvent::JobSettled, job.0 .0),
+            payload: serde_json::json!({ "event": format!("{:?}", SellerEvent::JobSettled) }),
+            at,
+        },
+    )
+    .await?;
+    Ok(true)
+}
+
+/// The ledger counts rows and the event vocabulary counts items; the widths
+/// differ and the conversion is arithmetic rather than a design choice.
+fn count_u32(count: i64) -> Result<u32, StorageError> {
+    u32::try_from(count).map_err(|_| StorageError::Inconsistent {
+        reason: format!("a job item count does not fit the event vocabulary: {count}"),
+    })
 }
 
 /// How an item settled in the ledger's own vocabulary: the outcome, its
@@ -455,6 +695,10 @@ impl LeaseRepo {
 
     /// Every fenced write shares this shape: the epoch must still match, and
     /// a zero-row update is the stale worker finding out, not racing.
+    ///
+    /// The job-level settle hangs off this write rather than off the caller's
+    /// control flow, so `JobSettled` is a consequence of the last item
+    /// settling however it settled.
     pub async fn settle(
         &self,
         lease: &LeaseRef,
@@ -471,12 +715,14 @@ impl LeaseRepo {
             failure_code,
             failure_detail,
         } = verdict;
-        let updated = sqlx::query!(
+        let mut tx = self.pool.begin().await?;
+        let settled = sqlx::query!(
             "UPDATE job_item \
              SET state = 'settled', outcome = $4, failure_code = $5, failure_detail = $6, \
                  settled_at = $7, lease_owner = NULL, lease_expires_at = NULL \
              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
-               AND state IN ('leased', 'running', 'verifying')",
+               AND state IN ('leased', 'running', 'verifying') \
+             RETURNING job_id",
             uuid_to_db(org.0),
             uuid_to_db(item.0),
             lease_epoch,
@@ -485,11 +731,13 @@ impl LeaseRepo {
             failure_detail.as_ref().map(|detail| detail.0.as_str()),
             timestamp_to_db(at)?,
         )
-        .execute(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-        if updated.rows_affected() == 0 {
+        let Some(row) = settled else {
             return Err(StorageError::StaleLease);
-        }
+        };
+        settle_if_complete(&mut tx, org, JobId(uuid_from_db(row.job_id)), at).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -527,23 +775,30 @@ impl LeaseRepo {
     /// Requeues expired leases with the epoch bumped so the previous holder's
     /// writes are fenced out, and settles items that exhausted their attempt
     /// budget as failed rather than requeueing them forever.
+    ///
+    /// The failed branch is the commonest way a bulk job ends and it runs
+    /// here, cross-tenant, with no job context at all, so it carries the
+    /// job-level settle with it: otherwise a job whose last item dies of
+    /// attempt exhaustion flips to `Settled` with no event explaining it.
     pub async fn expire_and_steal(
         &self,
         now: Timestamp,
         attempts_max: i32,
     ) -> Result<u64, StorageError> {
         let now_db = timestamp_to_db(now)?;
+        let mut tx = self.pool.begin().await?;
         let failed = sqlx::query!(
             "UPDATE job_item \
              SET state = 'settled', outcome = 'failed', failure_code = 'Other', \
                  settled_at = $1, lease_owner = NULL, lease_expires_at = NULL, \
                  lease_epoch = lease_epoch + 1 \
              WHERE state IN ('leased', 'running', 'verifying') \
-               AND lease_expires_at <= $1 AND attempt_count + 1 >= $2",
+               AND lease_expires_at <= $1 AND attempt_count + 1 >= $2 \
+             RETURNING org_id, job_id",
             now_db,
             attempts_max,
         )
-        .execute(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
         let stolen = sqlx::query!(
             "UPDATE job_item \
@@ -553,9 +808,53 @@ impl LeaseRepo {
                AND lease_expires_at <= $1",
             now_db,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        Ok(failed.rows_affected() + stolen.rows_affected())
+
+        let mut seen: Vec<(OrgId, JobId)> = Vec::new();
+        for row in &failed {
+            let pair = (
+                OrgId(uuid_from_db(row.org_id)),
+                JobId(uuid_from_db(row.job_id)),
+            );
+            if !seen.contains(&pair) {
+                seen.push(pair);
+            }
+        }
+        for (org, job) in seen {
+            settle_if_complete(&mut tx, org, job, now).await?;
+        }
+        let expired = u64::try_from(failed.len()).unwrap_or(u64::MAX);
+        tx.commit().await?;
+        Ok(expired.saturating_add(stolen.rows_affected()))
+    }
+
+    /// Requeues items whose park has expired, and only those parked on a gate
+    /// a drained queue can actually clear.
+    ///
+    /// Cross-tenant and unpinned on purpose: this runs under `tam_engine`,
+    /// which is BYPASSRLS, so `job_item`'s FORCE ROW LEVEL SECURITY does not
+    /// apply. The lease epoch is deliberately not bumped — `park` and
+    /// `acquire` both leave it alone, the parking worker has already
+    /// returned, and every fenced write additionally requires a live lease
+    /// state.
+    pub async fn revive_expired(&self, now: Timestamp) -> Result<u64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query!(
+            "UPDATE job_item \
+             SET state = 'queued', blocked_on = NULL, park_expires_at = NULL \
+             WHERE state = 'parked_live' AND park_expires_at <= $1 \
+               AND blocked_on = ANY($2) \
+             RETURNING org_id, job_id, id",
+            timestamp_to_db(now)?,
+            &REVIVABLE_GATES.map(str::to_owned)[..],
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let revived = revived(rows.into_iter().map(|row| (row.org_id, row.job_id, row.id)));
+        record_resumptions(&mut tx, &revived, now).await?;
+        tx.commit().await?;
+        Ok(count_of(&revived))
     }
 
     /// The tenant's connection for a marketplace, if one is linked.

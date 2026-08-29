@@ -104,7 +104,8 @@ The import's source and target inventories are fixed in `crates/tam-import/src/m
 5. Work the reconciliation queue in the client at `/queue` until the rows intended for this run are projectable.
    A blocked row is honest output rather than something to route around.
 6. Enqueue the job, start `tam-worker`, and watch it.
-   A projection-blocked item parks for a day and un-parks into a clean retry on the first steal pass after expiry.
+   A projection-blocked item parks until the question blocking it is answered, and the answer un-parks it in the same transaction that records it.
+   An unanswered park expires after a day and the maintenance pass requeues it then.
 7. Review the settled ledger per item in the client at `/jobs`, then the job view and the per-item detail.
    The outcome vocabulary is `Succeeded`, `Degraded`, `Failed`, `Ambiguous`, `Skipped` and `Blocked`; an ambiguous item halts the tenant mutex by design and is the founder's to adjudicate.
 8. Repeat from step one for the rest of the catalogue only after the first pass has been reviewed item by item.

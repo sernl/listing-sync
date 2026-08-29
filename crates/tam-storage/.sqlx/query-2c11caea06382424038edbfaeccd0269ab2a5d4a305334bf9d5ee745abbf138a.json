@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item SET state = 'queued', blocked_on = NULL, park_expires_at = NULL WHERE state = 'parked_live' AND park_expires_at <= $1 AND blocked_on = ANY($2) RETURNING org_id, job_id, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2c11caea06382424038edbfaeccd0269ab2a5d4a305334bf9d5ee745abbf138a"
+}
