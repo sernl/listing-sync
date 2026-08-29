@@ -15,6 +15,8 @@
 //!       [--price <minor units>] [--yes-publish-live]
 //!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar> \
 //!       delete-published <pdf> --yes-publish-live
+//!   cargo run -p tam-marketplace-tes --example live_smoke -- <jar> \
+//!       delete <resource-id>
 //!
 //! `preflight` probes the draft schema and creates nothing that outlives it.
 //! `list` reads the seller's own catalogue and writes nothing at all.
@@ -23,7 +25,9 @@
 //! deletes it. `paid` creates a priced draft and, only with
 //! `--yes-publish-live`, publishes it before reading it back and deleting it.
 //! `delete-published` publishes a free listing for the sole purpose of
-//! deleting it through the published-resource route.
+//! deleting it through the published-resource route. `delete` creates nothing
+//! and takes down a resource this script did not create, named on the command
+//! line, which is the backstop for an orphan a failed cleanup left behind.
 
 use std::io::Read as _;
 
@@ -346,7 +350,8 @@ async fn sweep(adapter: &Adapter, id: DraftId, state: ListingState) -> Result<()
         }
     }
     println!(
-        "  swept both routes for what this run left as a {}",
+        "  swept both routes for {}, stated as a {}",
+        id.0,
         route_name(state)
     );
     confirm_gone(adapter, id).await
@@ -596,6 +601,38 @@ async fn run_delete_published(
     finish(adapter, id, state, outcome).await
 }
 
+/// Take down a resource this run did not create, named on the command line.
+///
+/// The Tes counterpart of `live_write`'s `delete <product-id>`: the identifier
+/// is required rather than defaulted, because every other mode deletes what it
+/// just made and knows the id for certain, and a cleanup mode that guessed one
+/// would delete a resource nobody asked it to.
+///
+/// It sweeps rather than probing. `delete_probing_state` recovers the state
+/// from the route the resource answers on, and `/resources/{id}` lags a
+/// publish, so soon after one that probe reads a live listing as a draft and
+/// removes its overlay instead — which is what left a live paid listing
+/// standing on 2026-08-29. `Live` is stated for the same reason the publish
+/// path states it before its request leaves: an orphan whose state is unknown
+/// is assumed to be the one that matters, and both deletes are issued either
+/// way.
+async fn run_delete(adapter: &Adapter, arguments: &[String]) -> Result<(), Failure> {
+    let raw = arguments
+        .get(2)
+        .filter(|argument| !argument.starts_with("--"))
+        .ok_or("delete needs the numeric Tes resource id to take down")?;
+    let id = DraftId(
+        raw.parse::<i64>()
+            .map_err(|error| format!("{raw:?} is not a Tes resource id: {error}"))?,
+    );
+    println!(
+        "delete: taking down {}, which this run did not create; its state is unknown, so \
+         both routes are swept",
+        id.0
+    );
+    sweep(adapter, id, ListingState::Live).await
+}
+
 fn flag(arguments: &[String], name: &str) -> bool {
     arguments.iter().any(|argument| argument == name)
 }
@@ -637,14 +674,15 @@ async fn main() -> Result<(), Failure> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let jar_path = arguments.first().ok_or(
         "usage: live_smoke <jar> [preflight|list|draft <pdf>|edit <pdf>|paid <pdf> \
-         [--price <minor units>] [--yes-publish-live]|delete-published <pdf> --yes-publish-live]",
+         [--price <minor units>] [--yes-publish-live]|delete-published <pdf> \
+         --yes-publish-live|delete <resource-id>]",
     )?;
     let mut jar = String::new();
     std::fs::File::open(jar_path)?.read_to_string(&mut jar)?;
     let session = TesSession::from_netscape_jar(&jar)?;
     let transport = ReqwestTransport::new(&session)?;
     let mode = arguments.get(1).map_or("preflight", String::as_str);
-    let file = if matches!(mode, "preflight" | "list") {
+    let file = if matches!(mode, "preflight" | "list" | "delete") {
         empty_file()
     } else {
         file_argument(&arguments)?
@@ -660,9 +698,10 @@ async fn main() -> Result<(), Failure> {
         "edit" => run_edit(&adapter, file, now).await,
         "paid" => run_paid(&adapter, file, now, price_argument(&arguments)?, publish).await,
         "delete-published" => run_delete_published(&adapter, file, now, publish).await,
+        "delete" => run_delete(&adapter, &arguments).await,
         other => Err(format!(
-            "unknown mode {other:?}; expected preflight, list, draft, edit, paid or \
-             delete-published"
+            "unknown mode {other:?}; expected preflight, list, draft, edit, paid, \
+             delete-published or delete"
         )
         .into()),
     }
