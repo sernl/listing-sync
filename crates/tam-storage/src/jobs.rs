@@ -896,6 +896,63 @@ impl LeaseRepo {
         Ok(())
     }
 
+    /// Advances this item's consecutive-preflight-failure streak and answers
+    /// what it now stands at.
+    ///
+    /// Separate from `attempt_count`, which counts leases rather than
+    /// preflights and which only the reapers advance: the caller's bound is
+    /// on failures *in a row*, so it needs a counter a healthy preflight can
+    /// return to zero. Fenced on the epoch like every other lease write, so a
+    /// stolen item's former holder cannot move a counter its new holder is
+    /// also moving.
+    pub async fn preflight_failed(&self, lease: &LeaseRef) -> Result<u32, StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        let streak = sqlx::query_scalar!(
+            r#"UPDATE job_item
+               SET preflight_failures = preflight_failures + 1
+               WHERE org_id = $1 AND id = $2 AND lease_epoch = $3
+                 AND state IN ('leased', 'running', 'verifying')
+               RETURNING preflight_failures AS "streak!""#,
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        count_u32(i64::from(streak.ok_or(StorageError::StaleLease)?))
+    }
+
+    /// Returns the streak to zero, so the bound the caller holds is on
+    /// consecutive failures rather than on a lifetime tally.
+    ///
+    /// A zero row count is either a row already at zero or a lease the
+    /// stealer took, and neither is something this caller can act on: the
+    /// writes that follow in the same run are fenced on the same epoch and
+    /// report the steal themselves.
+    pub async fn preflight_succeeded(&self, lease: &LeaseRef) -> Result<(), StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        sqlx::query!(
+            "UPDATE job_item SET preflight_failures = 0 \
+             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
+               AND state IN ('leased', 'running', 'verifying') \
+               AND preflight_failures <> 0",
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Requeues expired leases with the epoch bumped so the previous holder's
     /// writes are fenced out, and settles items that exhausted their attempt
     /// budget as failed rather than requeueing them forever.

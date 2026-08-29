@@ -420,6 +420,28 @@ const fn seller_event_topic(event: SellerEvent) -> &'static str {
     }
 }
 
+/// How many indeterminate preflights in a row stop being read as a transient.
+///
+/// A preflight failure other than schema drift abandons the run, which is the
+/// stall bias and is right for a moment. It is wrong for a condition that
+/// holds: the Tes preflight is write-bearing, so a broker holding a stale
+/// secret fails it identically every cycle, and each abandoned lease keeps
+/// `job_item_one_live_lease_per_org` shut for its whole TTL — the tenant's
+/// entire queue waiting behind an item that will never move.
+///
+/// Three rather than five: the streak advances once per lease, so this is
+/// three separate sessions against the marketplace before the connection
+/// rather than the moment is blamed, and it stays clear of the bound below.
+pub const PREFLIGHT_FAILURES_MAX: u32 = 3;
+
+/// The preflight bound has to be reached first, or `expire_and_steal` settles
+/// the item `failed`/`Other` on the attempt budget and the seller reads a
+/// generic failure for a connection that only needed re-linking.
+const _: () = assert!(
+    PREFLIGHT_FAILURES_MAX < tam_limits::job::ATTEMPTS_MAX,
+    "the preflight streak must run out before the attempt budget does"
+);
+
 /// Drives one leased item to a terminal state, a park, or abandonment.
 #[expect(
     clippy::too_many_lines,
@@ -483,15 +505,14 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                 Effect::AssertFormSchema { form } => {
                     let asserted = ctx.adapter.assert_form_schema(org, form).await;
                     pending = Some(match asserted {
-                        Ok(fingerprint) => Input::PreflightResult(Ok(fingerprint)),
+                        Ok(fingerprint) => {
+                            ctx.leases.preflight_succeeded(&lease_ref).await?;
+                            Input::PreflightResult(Ok(fingerprint))
+                        }
                         Err(AdapterError::SchemaDrift(drift)) => {
                             Input::PreflightResult(Err(*drift))
                         }
-                        Err(error) => {
-                            return Ok(RunVerdict::Abandoned {
-                                reason: format!("preflight failed transiently: {error:?}"),
-                            })
-                        }
+                        Err(error) => return preflight_failed(ctx, lease, &error, now).await,
                     });
                 }
                 Effect::RecordIntent { intent_hash } => {
@@ -900,6 +921,72 @@ async fn rate_refused_before_the_write(
     Ok(RunVerdict::Abandoned {
         reason: "the per-connection rate window is exhausted".to_owned(),
     })
+}
+
+/// The preflight answered something other than drift. Below the bound this
+/// is the stall bias as it always was — abandon, let the lease expire, let
+/// the stealer requeue. At the bound the same answer arriving for the third
+/// consecutive lease is evidence about the connection rather than about the
+/// moment, so the item stops waiting for a session that is not coming.
+///
+/// Gate first, settle second. The gate is what stops this tenant's remaining
+/// items each repeating the whole streak against the same dead credential;
+/// settling alone would clear one item and hand the wedge to the next. The
+/// item settles `Blocked` rather than `Failed` because nothing was refused —
+/// no write was ever attempted — and `SessionExpired` beside a sentence the
+/// seller can act on is what the report renders.
+///
+/// Blaming the connection can be wrong: a marketplace having a bad hour fails
+/// the preflight indeterminately too, and its seller is then asked to re-link
+/// a credential that was never broken. That is the cheap error of the two.
+/// Re-linking costs one seller one minute and the gate lifts; the alternative
+/// spends every item in the queue on the same twenty-five minutes of dead
+/// leases and settles them all `failed`/`Other`.
+async fn preflight_failed(
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    lease: &LeasedItem,
+    error: &AdapterError,
+    at: Timestamp,
+) -> Result<RunVerdict, EngineError> {
+    let lease_ref = lease.lease_ref();
+    let streak = ctx.leases.preflight_failed(&lease_ref).await?;
+    if streak < PREFLIGHT_FAILURES_MAX {
+        return Ok(RunVerdict::Abandoned {
+            reason: format!("preflight failed transiently: {error:?}"),
+        });
+    }
+    ctx.leases
+        .gate_connection(lease.org, lease.inventory)
+        .await?;
+    record_event(
+        ctx,
+        lease,
+        &JobEventPayload::ItemBlocked {
+            cause: block_cause_name(BlockCause::Reauth).to_owned(),
+        },
+        at,
+    )
+    .await?;
+    let verdict = ItemVerdict {
+        outcome: ItemOutcome::Blocked,
+        failure_code: Some(FailureCode::SessionExpired),
+        failure_detail: Some(tam_types::FailureDetail(format!(
+            "this marketplace connection needs re-linking: {streak} checks in a row could \
+             not be completed before writing"
+        ))),
+    };
+    ctx.leases.settle(&lease_ref, &verdict, at).await?;
+    record_event(
+        ctx,
+        lease,
+        &JobEventPayload::ItemSettled {
+            outcome: format!("{:?}", ItemOutcome::Blocked),
+        },
+        at,
+    )
+    .await?;
+    notify(ctx, lease.org, lease, SellerEvent::ReauthRequired, at).await?;
+    Ok(RunVerdict::Settled(ItemOutcome::Blocked))
 }
 
 /// What an unfinished attempt names. A revise or a removal addressed a

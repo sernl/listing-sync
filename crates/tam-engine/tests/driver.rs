@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{ItemOutcome, StepBudget};
-use tam_engine::driver::{run_item, DriverContext, MachineSeed, NowSource, RunVerdict};
+use tam_engine::driver::{
+    run_item, DriverContext, MachineSeed, NowSource, RunVerdict, PREFLIGHT_FAILURES_MAX,
+};
 use tam_engine::seed::verify_policy;
 use tam_marketplace::FetchReason;
 use tam_marketplace::{
@@ -39,13 +41,19 @@ impl NowSource for SteppingClock {
     }
 }
 
-/// Scripted per call: submit answers are consumed in order, the preflight is
-/// fixed, and the read-back either observes the draft or answers the one
-/// condition the fixture was built with.
+/// Scripted per call: submit and preflight answers are consumed in order, and
+/// the read-back either observes the draft or answers the one condition the
+/// fixture was built with.
 struct ScriptedAdapter {
     submit_answers: Vec<Result<SubmitEvidence, AdapterError>>,
     submit_cursor: AtomicUsize,
     read_back_condition: Option<AdapterError>,
+    /// Consumed in order, then held at the last entry: a preflight scripted
+    /// to fail is standing in for a condition that holds across leases, not
+    /// for one unlucky call, and the adapter is rebuilt per run in neither
+    /// case — one fixture drives every lease the test takes.
+    preflight_answers: Vec<Result<FormSchemaFingerprint, AdapterError>>,
+    preflight_cursor: AtomicUsize,
 }
 
 impl ScriptedAdapter {
@@ -54,11 +62,21 @@ impl ScriptedAdapter {
             submit_answers: vec![submit],
             submit_cursor: AtomicUsize::new(0),
             read_back_condition: None,
+            preflight_answers: vec![Ok(FormSchemaFingerprint(ContentHash([0x0F; 32])))],
+            preflight_cursor: AtomicUsize::new(0),
         }
     }
 
     fn with_read_back_condition(mut self, condition: AdapterError) -> Self {
         self.read_back_condition = Some(condition);
+        self
+    }
+
+    fn with_preflight_script(
+        mut self,
+        answers: Vec<Result<FormSchemaFingerprint, AdapterError>>,
+    ) -> Self {
+        self.preflight_answers = answers;
         self
     }
 }
@@ -81,7 +99,14 @@ impl MarketplaceAdapter for ScriptedAdapter {
         _org: OrgId,
         _form: FormId,
     ) -> Result<FormSchemaFingerprint, AdapterError> {
-        Ok(FormSchemaFingerprint(ContentHash([0x0F; 32])))
+        let position = self.preflight_cursor.fetch_add(1, Ordering::SeqCst);
+        self.preflight_answers
+            .get(position)
+            .or_else(|| self.preflight_answers.last())
+            .cloned()
+            .unwrap_or(Err(AdapterError::Uncaptured {
+                capability: "scripted.preflight",
+            }))
     }
 
     async fn submit(
@@ -299,10 +324,6 @@ fn seed_machine(strategy: CreateStrategy) -> MachineSeed {
     }
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
-)]
 async fn run(
     app: &PgPool,
     adapter: &ScriptedAdapter,
@@ -311,28 +332,66 @@ async fn run(
     let engine = engine_pool(app).await;
     seed(app, &engine).await;
     let leases = LeaseRepo::new(engine.clone());
+    let verdict = drive(&engine, &leases, adapter, strategy, T0).await;
+    (verdict, engine)
+}
+
+const LEASE_SECONDS: i64 = 600;
+
+/// One lease and one pump against a ledger the caller has already seeded, so
+/// a test that needs the same item driven across several leases can take them
+/// one at a time.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn drive(
+    engine: &PgPool,
+    leases: &LeaseRepo,
+    adapter: &ScriptedAdapter,
+    strategy: CreateStrategy,
+    at: Timestamp,
+) -> RunVerdict {
     let lease = leases
-        .acquire("driver-test", T0, 600)
+        .acquire("driver-test", at, LEASE_SECONDS)
         .await
         .expect("the scan runs")
         .expect("the item leases");
-    let clock = SteppingClock(AtomicI64::new(T0.0 + 1_000));
+    let clock = SteppingClock(AtomicI64::new(at.0 + 1_000));
     let cancel = CancellationToken::new();
     let ctx = DriverContext {
         adapter,
-        leases: &leases,
+        leases,
         halts: &HaltRepo::new(engine.clone()),
         attempts: &WriteAttemptRepo::new(engine.clone()),
         budgets: &RateBudgetRepo::new(engine.clone()),
-        pool: &engine,
+        pool: engine,
         clock: &clock,
         cancel: &cancel,
         pause: &InstantPause,
     };
-    let verdict = run_item(&ctx, &lease, seed_machine(strategy))
+    run_item(&ctx, &lease, seed_machine(strategy))
         .await
-        .expect("the driver runs");
-    (verdict, engine)
+        .expect("the driver runs")
+}
+
+/// The worker's maintenance pass, run far enough past the lease that the
+/// abandoned item is stolen back onto the queue with its epoch bumped. What
+/// it answers is the instant the next lease starts from.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn requeue(leases: &LeaseRepo, at: Timestamp) -> Timestamp {
+    let after = Timestamp(at.0 + (LEASE_SECONDS + 1) * 1_000);
+    leases
+        .expire_and_steal(
+            after,
+            i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX),
+        )
+        .await
+        .expect("the maintenance pass runs");
+    after
 }
 
 /// The mapping the seed left unbound, read after the run. The bind is folded
@@ -506,5 +565,203 @@ async fn a_read_back_condition_abandons_rather_than_crashing_the_run(app: PgPool
     assert_eq!(
         binding, "unbound",
         "the read never observed the listing, so there is nothing to bind"
+    );
+}
+
+/// The wedge this bound exists for, as the Phase 5 battery met it: the broker
+/// held a stale Tes secret, so the write-bearing preflight answered
+/// `Ambiguous(ReadBackIndeterminate)` on every lease. Each run abandoned, the
+/// lease sat unexpired for its whole TTL, and `job_item_one_live_lease_per_org`
+/// held the tenant's every other item behind it for that time — cycle after
+/// cycle, until a human re-linked the connection.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_preflight_that_stays_indeterminate_stops_wedging_the_queue(app: PgPool) {
+    let adapter =
+        ScriptedAdapter::answering(Ok(landed_evidence())).with_preflight_script(vec![Err(
+            AdapterError::Ambiguous(AmbiguityCause::ReadBackIndeterminate),
+        )]);
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let mut at = T0;
+    let mut verdicts = Vec::new();
+    for lease in 0..PREFLIGHT_FAILURES_MAX {
+        if lease > 0 {
+            at = requeue(&leases, at).await;
+        }
+        verdicts.push(
+            drive(
+                &engine,
+                &leases,
+                &adapter,
+                CreateStrategy::HaltOnAmbiguity,
+                at,
+            )
+            .await,
+        );
+    }
+
+    let (last, earlier) = verdicts.split_last().expect("the loop ran at least once");
+    for verdict in earlier {
+        let RunVerdict::Abandoned { reason } = verdict else {
+            panic!("under the bound the preflight is still a transient: {verdict:?}");
+        };
+        assert!(
+            reason.contains("ReadBackIndeterminate"),
+            "the abandon names the condition that stopped it: {reason}"
+        );
+    }
+    assert_eq!(
+        last,
+        &RunVerdict::Settled(ItemOutcome::Blocked),
+        "the same answer on the {PREFLIGHT_FAILURES_MAX}th lease is evidence about the \
+         connection, so the item stops waiting for a session that is not coming"
+    );
+
+    let settled: (String, Option<String>, Option<String>, Option<String>, i32) = sqlx::query_as(
+        "SELECT state, outcome, failure_code, failure_detail, preflight_failures \
+         FROM job_item LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the item row reads");
+    assert_eq!(
+        (
+            settled.0.as_str(),
+            settled.1.as_deref(),
+            settled.2.as_deref(),
+            settled.4
+        ),
+        (
+            "settled",
+            Some("blocked"),
+            Some("SessionExpired"),
+            i32::try_from(PREFLIGHT_FAILURES_MAX).unwrap_or(i32::MAX)
+        ),
+        "the streak is what settled the item, and it settles blocked on the session \
+         rather than failed on nothing"
+    );
+    let detail = settled.3.expect("a blocked item states why");
+    assert!(
+        detail.contains("re-linking"),
+        "the report needs a sentence the seller can act on, not an enum: {detail}"
+    );
+
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "needs_reauth",
+        "the condition is the connection's, so it surfaces there — otherwise the next \
+         item repeats the whole streak against the same dead credential"
+    );
+    let notified: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM outbox_message WHERE topic = 'email.parked_job'")
+            .fetch_one(&engine)
+            .await
+            .expect("the outbox reads");
+    assert_eq!(notified, 1, "the seller is asked to re-link exactly once");
+
+    assert!(
+        leases
+            .acquire("driver-test", Timestamp(at.0 + 1_000_000), LEASE_SECONDS)
+            .await
+            .expect("the scan runs")
+            .is_none(),
+        "the gated connection holds the tenant's queue back rather than burning it"
+    );
+    sqlx::query("UPDATE connection SET state = 'linked'")
+        .execute(&engine)
+        .await
+        .expect("the seller re-links");
+    assert!(
+        leases
+            .acquire("driver-test", Timestamp(at.0 + 2_000_000), LEASE_SECONDS)
+            .await
+            .expect("the scan runs")
+            .is_none(),
+        "and the settled item is never re-selected, so the queue drains past it once the \
+         connection is healthy again"
+    );
+}
+
+/// The bound is on failures in a row, so one healthy preflight has to wipe
+/// what came before it. Without the reset a connection that flickers reaches
+/// the bound on its own arithmetic and blames a credential that works.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_healthy_preflight_wipes_the_streak(app: PgPool) {
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence())).with_preflight_script(vec![
+        Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate,
+        )),
+        Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate,
+        )),
+        Ok(FormSchemaFingerprint(ContentHash([0x0F; 32]))),
+    ]);
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let first = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        T0,
+    )
+    .await;
+    let at = requeue(&leases, T0).await;
+    let second = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        at,
+    )
+    .await;
+    assert!(
+        matches!(first, RunVerdict::Abandoned { .. })
+            && matches!(second, RunVerdict::Abandoned { .. }),
+        "two failures is under the bound: {first:?}, {second:?}"
+    );
+    let streak: i32 = sqlx::query_scalar("SELECT preflight_failures FROM job_item LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the item row reads");
+    assert_eq!(streak, 2, "both failures counted");
+
+    let at = requeue(&leases, at).await;
+    let third = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        at,
+    )
+    .await;
+    assert_eq!(
+        third,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "a healthy preflight lets the run finish"
+    );
+    let streak: i32 = sqlx::query_scalar("SELECT preflight_failures FROM job_item LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the item row reads");
+    assert_eq!(
+        streak, 0,
+        "one success wipes the streak; leaving it at 2 would spend the bound on failures \
+         that were never consecutive"
+    );
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "linked",
+        "nothing reached the bound, so the connection was never blamed"
     );
 }
