@@ -693,58 +693,89 @@ impl<'a> Accumulator<'a> {
     }
 }
 
+/// What one age row bounds. `16+` and `Age not applicable` are different
+/// facts and an `Option<(u8, u8)>` records them as the same one: the JSON has
+/// `ageLow: 16, ageHigh: null` for the first and nulls for both on the
+/// second, so collapsing them loses a lower bound the vocabulary states.
+///
+/// A half-open band derives no interval — `AgeInterval` is a closed pair and
+/// there is no measured upper age to close it with — so this type is read by
+/// the crosswalk's covering computation, which needs the lower bound, and not
+/// by `derive_interval`, which needs the pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgeBounds {
+    Between { low: u8, high: u8 },
+    From { low: u8 },
+    NotApplicable,
+}
+
+impl AgeBounds {
+    /// The lowest age the band admits, where it states one.
+    #[must_use]
+    pub const fn low(self) -> Option<u8> {
+        match self {
+            Self::Between { low, .. } | Self::From { low } => Some(low),
+            Self::NotApplicable => None,
+        }
+    }
+}
+
 /// One row of the Tes main-age-range field, transcribed from the measured
-/// uploader vocabulary in `docs/design/data/tes-vocabulary.json`. `16+` and
-/// `Age not applicable` carry no bounds, which is the fact rather than a gap.
+/// uploader vocabulary in `docs/design/data/tes-vocabulary.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TesAgeRange {
     pub native_id: &'static str,
     pub label: &'static str,
-    pub bounds: Option<(u8, u8)>,
+    pub bounds: AgeBounds,
 }
 
 pub const TES_MAIN_AGE_RANGES: [TesAgeRange; 7] = [
     TesAgeRange {
         native_id: "1",
         label: "3-5",
-        bounds: Some((3, 5)),
+        bounds: AgeBounds::Between { low: 3, high: 5 },
     },
     TesAgeRange {
         native_id: "2",
         label: "5-7",
-        bounds: Some((5, 7)),
+        bounds: AgeBounds::Between { low: 5, high: 7 },
     },
     TesAgeRange {
         native_id: "3",
         label: "7-11",
-        bounds: Some((7, 11)),
+        bounds: AgeBounds::Between { low: 7, high: 11 },
     },
     TesAgeRange {
         native_id: "4",
         label: "11-14",
-        bounds: Some((11, 14)),
+        bounds: AgeBounds::Between { low: 11, high: 14 },
     },
     TesAgeRange {
         native_id: "5",
         label: "14-16",
-        bounds: Some((14, 16)),
+        bounds: AgeBounds::Between { low: 14, high: 16 },
     },
     TesAgeRange {
         native_id: "6",
         label: "16+",
-        bounds: None,
+        bounds: AgeBounds::From { low: 16 },
     },
     TesAgeRange {
         native_id: "7",
         label: "Age not applicable",
-        bounds: None,
+        bounds: AgeBounds::NotApplicable,
     },
 ];
 
 /// Derives the age interval a declaration spans, and only when every declared
-/// range carries both bounds. An empty declaration, an unrecognised native id
-/// and an unbounded row each derive nothing rather than an invented number;
-/// the declaration itself remains the fact that re-emission uses.
+/// range is closed. An empty declaration, an unrecognised native id, a
+/// half-open band and the not-applicable row each derive nothing rather than
+/// an invented number; the declaration itself remains the fact that
+/// re-emission uses.
+///
+/// `From` is refused here on purpose even though the band states its lower
+/// bound: closing it would need an upper age nobody has measured, and that
+/// invented number reaches the wire as the literal Tes `ages` array.
 ///
 /// The table's bounded rows are all non-inverted, so `AgeInterval::new` cannot
 /// reject the derived pair; `.ok()` carries that without asserting it.
@@ -760,7 +791,13 @@ pub fn derive_interval(paths: &[VocabularyPath]) -> Option<AgeInterval> {
         let row = TES_MAIN_AGE_RANGES
             .iter()
             .find(|range| range.native_id == native)?;
-        let (row_low, row_high) = row.bounds?;
+        let AgeBounds::Between {
+            low: row_low,
+            high: row_high,
+        } = row.bounds
+        else {
+            return None;
+        };
         low = low.min(row_low);
         high = high.max(row_high);
     }
@@ -770,8 +807,8 @@ pub fn derive_interval(paths: &[VocabularyPath]) -> Option<AgeInterval> {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_crosswalk, derive_interval, parse_tree, CrosswalkError, MismatchReason, TesSubject,
-        TesTopic, TesTree,
+        derive_crosswalk, derive_interval, parse_tree, AgeBounds, CrosswalkError, MismatchReason,
+        TesSubject, TesTopic, TesTree,
     };
     use tam_domain::{TermKind, VocabularyId, VocabularyPath};
     use tam_types::{InventoryId, Timestamp};
@@ -1297,6 +1334,34 @@ mod tests {
     #[test]
     fn an_empty_declaration_derives_nothing() {
         assert_eq!(derive_interval(&[]), None);
+    }
+
+    #[test]
+    fn a_half_open_band_states_its_lower_bound_and_a_missing_one_states_nothing() {
+        let bounds = |native: &str| {
+            super::TES_MAIN_AGE_RANGES
+                .iter()
+                .find(|row| row.native_id == native)
+                .map(|row| row.bounds)
+        };
+        assert_eq!(
+            bounds("6"),
+            Some(AgeBounds::From { low: 16 }),
+            "the vocabulary records ageLow 16 with a null high, so 16+ has a lower bound"
+        );
+        assert_eq!(
+            bounds("7"),
+            Some(AgeBounds::NotApplicable),
+            "both bounds are null, which is a different fact from a half-open band"
+        );
+        assert_eq!(
+            (
+                bounds("6").and_then(AgeBounds::low),
+                bounds("7").and_then(AgeBounds::low)
+            ),
+            (Some(16), None),
+            "the two rows an Option<(u8, u8)> collapsed now read apart"
+        );
     }
 
     #[test]
