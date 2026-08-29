@@ -16,8 +16,8 @@ use tam_marketplace::transport::{HttpResponse, Transport};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
     FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, ListingState,
-    MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle, RemoteListingId,
-    RemovalPlan, RevisePlan, SubmitEvidence,
+    MarketplaceAdapter, NativeAxis, ObservedListing, ProjectedListing, RemoteLifecycle,
+    RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
 };
 use tam_types::{
     ContentHash, CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, ImportedPrice,
@@ -460,10 +460,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             // than the one this country does not use.
             age_channel: TesAges::of(inventory, ids(&grades, TesAges::empty(inventory).field())),
             ages: ids(&grades, "ages"),
-            main_type: taxonomy
-                .get("mainType")
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
+            main_type: taxonomy.get("mainType").and_then(Value::as_i64),
             main_age: grades.get("mainAge").and_then(Value::as_i64).unwrap_or(0),
             pricing,
         })
@@ -485,9 +482,19 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// A category the crosswalk left without a numeric id is refused: Tes
     /// addresses categories by number and there is nothing to send.
     fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
+        let elected = licence_from(&listing.natives);
         let licence = match listing.price {
-            PriceIntent::Free => TesLicence::CcBy.as_str().to_owned(),
-            PriceIntent::Paid(money) => paid_price_token(self.inventory, money)?,
+            PriceIntent::Free => elected
+                .ok_or_else(|| {
+                    unprojectable_licence(
+                        "Tes requires a licence and the projection carried none; the seller's \
+                         election is the only source and this adapter will not choose a rights \
+                         grant on their behalf"
+                            .to_owned(),
+                    )
+                })?
+                .to_owned(),
+            PriceIntent::Paid(money) => paid_price_token(self.inventory, elected, money)?,
         };
         let mut categories: Vec<i64> = Vec::new();
         for term in &listing.taxonomy {
@@ -511,6 +518,16 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 unprojectable_grade(format!("non-numeric Tes grade id {native:?}"))
             })?);
         }
+        // The resource type is projected or it is absent. Sending zero named
+        // a real Tes type on every listing we ever created; the registry says
+        // the field is optional, so an unprojected axis omits the key.
+        let main_type =
+            match native_of(&listing.natives, TermKind::ResourceType) {
+                Some(native) => Some(native.parse::<i64>().map_err(|_| {
+                    refused(format!("non-numeric Tes resource type id {native:?}"))
+                })?),
+                None => None,
+            };
         let age_channel = TesAges::of(self.inventory, grade_ids);
         let (ages, main_age): (Vec<i64>, i64) = match listing.ages {
             Some(span) => (
@@ -524,10 +541,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 (FieldKey::Title, listing.title.clone()),
                 (FieldKey::Description, listing.body.clone()),
                 (FieldKey::Price, licence),
-                (
-                    FieldKey::Taxonomy,
-                    serde_json::json!({ "categories": categories, "mainType": 0 }).to_string(),
-                ),
+                (FieldKey::Taxonomy, taxonomy_entry(&categories, main_type)),
                 (
                     FieldKey::Grades,
                     serde_json::json!({
@@ -1123,7 +1137,25 @@ const PRICE_TOKEN_SEPARATOR: char = ':';
 /// is bound for would be posted as an amount in a denomination nobody chose;
 /// that is refused here rather than converted, because converting is a
 /// mapping decision and this is a rendering.
-fn paid_price_token(inventory: InventoryId, money: Money) -> Result<String, AdapterError> {
+fn paid_price_token(
+    inventory: InventoryId,
+    elected: Option<&str>,
+    money: Money,
+) -> Result<String, AdapterError> {
+    // A price states the paid branch on its own, and `TES-PAID` is the only
+    // paid token this adapter writes, so an absent election is not a rights
+    // grant chosen on the seller's behalf. An election naming anything else
+    // is refused rather than overridden: the seller stated a licence and
+    // posting a different one is the defect this commit removes.
+    if let Some(token) = elected {
+        if token != TesLicence::TesPaid.as_str() {
+            return Err(unprojectable_licence(format!(
+                "the elected licence is {token:?} and this listing carries a price; Tes writes \
+                 {} for a paid resource and refuses a Creative Commons value with one",
+                TesLicence::TesPaid.as_str()
+            )));
+        }
+    }
     match inventory.currency_rule() {
         CurrencyRule::Fixed(currency) => {
             if currency == money.currency() {
@@ -1191,6 +1223,42 @@ fn refused(detail: String) -> AdapterError {
         code: FailureCode::UploadRejected,
         detail: FailureDetail(detail),
     }
+}
+
+/// A rights grant this adapter will not choose. Written through `refused` for
+/// the same reason every other refusal is: the seam has one rejection code
+/// and the cause belongs in the detail rather than in a code the driver would
+/// have to interpret.
+fn unprojectable_licence(detail: String) -> AdapterError {
+    refused(detail)
+}
+
+/// One axis's elected value as the target's own native id, which is the form
+/// `NativeAxis` carries and the form the wire takes. A value with no native
+/// id is not a token, so it is absent rather than approximated from a label.
+fn native_of(natives: &[NativeAxis], axis: TermKind) -> Option<&str> {
+    natives
+        .iter()
+        .find(|native| native.axis == axis)?
+        .value
+        .native_id
+        .as_deref()
+}
+
+fn licence_from(natives: &[NativeAxis]) -> Option<&str> {
+    native_of(natives, TermKind::Licence)
+}
+
+/// The `Taxonomy` entry, carrying `mainType` only where the projection
+/// resolved one. The key's absence is what the registry's `required: false`
+/// means, and it is what stops a placeholder naming a real Tes type.
+fn taxonomy_entry(categories: &[i64], main_type: Option<i64>) -> String {
+    let mut entry = serde_json::Map::new();
+    entry.insert("categories".to_owned(), serde_json::json!(categories));
+    if let Some(main_type) = main_type {
+        entry.insert("mainType".to_owned(), serde_json::json!(main_type));
+    }
+    Value::Object(entry).to_string()
 }
 
 /// A projection Tes cannot express. The category ids it addresses are

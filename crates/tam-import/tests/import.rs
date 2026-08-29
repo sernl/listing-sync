@@ -19,6 +19,7 @@ use tam_marketplace::FetchReason;
 use tam_marketplace_tes::{endpoints as tes, DraftId, TesAdapter};
 use tam_secrets::Kek;
 use tam_storage::{JobReadRepo, ProductRepo, TaxonomyRepo};
+use tam_taxonomy::licences::derive_licence_crosswalk;
 use tam_types::{CanonicalTermId, FileKind, InventoryId, OrgId, PriceIntent, Timestamp, Uuid};
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -94,6 +95,19 @@ async fn seed(pool: &PgPool, with_nz_edges: bool) {
         .await
         .expect("the org seeds");
     let taxonomy = TaxonomyRepo::new(pool.clone());
+    // The licence relation as the seeder writes it: one canonical term per
+    // Tes token with an identity edge into every Tes inventory. A Tes-to-Tes
+    // sync therefore translates the seller's own grant through the relation
+    // and asks nothing, which is the production shape.
+    let licences = derive_licence_crosswalk(
+        include_str!("../../../docs/design/data/tes-vocabulary.json"),
+        NOW,
+    )
+    .expect("the polled licence vocabulary parses");
+    taxonomy
+        .seed(&licences.terms, &licences.edges)
+        .await
+        .expect("the licence crosswalk seeds");
     let terms = [
         CanonicalTerm {
             id: SUBJECT,

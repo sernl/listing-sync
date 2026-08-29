@@ -14,6 +14,9 @@ use tokio::sync::Mutex;
 use base64::Engine as _;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use tam_domain::equivalence::{
+    ElectionAnswer, ElectionRule, ElectionTriggerKind, NewElectionRule, PricingBranch,
+};
 use tam_domain::{
     Binding, CanonicalTerm, Decider, EdgeKind, ItemOutcome, ProjectionEdge, TermKind, Verification,
     VocabularyId, VocabularyPath,
@@ -30,13 +33,13 @@ use tam_marketplace::{
 };
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
-    BudgetGrant, HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo,
-    RateBudgetRepo, TaxonomyRepo, WriteAttemptRepo,
+    BudgetGrant, ElectionRepo, HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem,
+    ProductRepo, RateBudgetRepo, TaxonomyRepo, WriteAttemptRepo,
 };
 use tam_types::{
     CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId,
     ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
-    ScanOutcome, Timestamp, Title, Uuid,
+    ScanOutcome, Timestamp, Title, UserId, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -513,6 +516,33 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
         )
         .await
         .expect("the crosswalk seeds");
+    // The seller's standing licence policy. Tes declares the licence
+    // required, so without one every create here parks on the election
+    // instead of exercising the write path the gauntlet is about.
+    let elections = ElectionRepo::new(pool.clone());
+    for inventory in [InventoryId::TesGb, InventoryId::TesNz] {
+        let rule = ElectionRule::new(NewElectionRule {
+            org: ORG,
+            inventory,
+            axis: TermKind::Licence,
+            trigger_kind: ElectionTriggerKind::Supply,
+            trigger_key: Some(PricingBranch::Free.as_str().to_owned()),
+            answer: ElectionAnswer::Value {
+                path: VocabularyPath {
+                    vocabulary: VocabularyId(inventory, TermKind::Licence),
+                    segments: vec!["CC-BY-SA".to_owned()],
+                    native_id: Some("CC-BY-SA".to_owned()),
+                },
+            },
+            decided_by: Decider::Human {
+                user: UserId(Uuid([0x5E; 16])),
+                org: ORG,
+            },
+            decided_at: NOW,
+        })
+        .expect("a licence value is a legal answer; only delegation is not");
+        elections.upsert_rule(&rule).await.expect("the rule seeds");
+    }
     let product = tam_domain::CanonicalProduct {
         id: PRODUCT,
         org: ORG,

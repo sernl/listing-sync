@@ -9,8 +9,8 @@ use tam_marketplace::transport::{FilePart, HttpResponse};
 use tam_marketplace::{
     AdapterError, AgeSpan, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource,
     FileSourceError, FormId, LifecycleTransition, ListingLocator, ListingState, MarketplaceAdapter,
-    NativeTerm, ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan,
-    WriteAttemptId,
+    NativeAxis, NativeTerm, ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan,
+    RevisePlan, WriteAttemptId,
 };
 use tam_marketplace_tes::endpoints::{
     self, CatalogueEntry, DraftId, FreeLicence, TesListing, TesPrice, TesPricing,
@@ -18,7 +18,7 @@ use tam_marketplace_tes::endpoints::{
 use tam_marketplace_tes::{schema, TesAdapter};
 use tam_types::{
     CopyFormat, Currency, FailureCode, FieldKey, FileId, InventoryId, Money, OrgId, PriceIntent,
-    Timestamp, Uuid,
+    TermKind, Timestamp, Uuid,
 };
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -70,7 +70,7 @@ fn sample_listing() -> TesListing {
         category_ids: vec![1_000_448],
         age_channel: tam_marketplace_tes::endpoints::TesAges::Ranges(vec![4]),
         ages: vec![11, 12],
-        main_type: 99_009,
+        main_type: Some(99_009),
         main_age: 4,
         pricing: TesPricing::Free(FreeLicence::CcBy),
     }
@@ -363,7 +363,22 @@ fn projected(price: PriceIntent) -> ProjectedListing {
         }),
         files: vec![FileId(Uuid([0x21; 16]))],
         body_format: CopyFormat::Markdown,
-        natives: Vec::new(),
+        // The licence the seller elected, in the branch's own token: the
+        // projection resolves one per pricing branch because Tes gates the
+        // write on it, and every fixture here is a projection that resolved.
+        natives: vec![NativeAxis {
+            axis: TermKind::Licence,
+            value: NativeTerm {
+                native_id: Some(
+                    match price {
+                        PriceIntent::Free => "CC-BY-SA",
+                        PriceIntent::Paid(_) => "TES-PAID",
+                    }
+                    .to_owned(),
+                ),
+                segments: vec!["Licence".to_owned()],
+            },
+        }],
     }
 }
 
@@ -407,8 +422,71 @@ fn a_paid_projection_carries_the_tes_paid_licence_and_its_price_in_minor_units()
         .expect("a free listing projects");
     assert_eq!(
         entry(&free, FieldKey::Price),
-        "CC-BY",
-        "and a free listing is still the bare Creative Commons token"
+        "CC-BY-SA",
+        "and a free listing carries the licence the seller elected, not a default"
+    );
+}
+
+/// D2. Every free listing we created was published under CC-BY -- a
+/// perpetual, irrevocable grant -- because the adapter substituted one when
+/// the projection carried none. The substitution is gone: with nothing
+/// elected there is nothing to send, and a refusal is the only honest answer.
+#[test]
+fn a_free_listing_with_no_elected_licence_is_refused_rather_than_granted_cc_by() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let mut listing = projected(PriceIntent::Free);
+    listing.natives.clear();
+    let refused = adapter.project_fields(&listing);
+    assert!(
+        matches!(refused, Err(AdapterError::Rejected { .. })),
+        "issuing a rights grant the seller never chose is the failure this refusal \
+         exists to prevent: {refused:?}"
+    );
+}
+
+/// The other half of the same rule: an election that names a licence Tes
+/// refuses with a price is not quietly overridden by the paid token.
+#[test]
+fn an_elected_creative_commons_licence_on_a_priced_listing_is_refused() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let mut listing = projected(PriceIntent::Paid(money(500, Currency::Gbp)));
+    listing.natives[0].value.native_id = Some("CC-BY-ND".to_owned());
+    let refused = adapter.project_fields(&listing);
+    assert!(
+        matches!(refused, Err(AdapterError::Rejected { .. })),
+        "Tes refuses a Creative Commons value with a price, so this adapter does too \
+         rather than posting a licence the seller did not elect: {refused:?}"
+    );
+}
+
+/// D3. `mainType: 0` names a real Tes resource type, and it was on every
+/// listing we ever created. The axis is unrouted, so the key is absent.
+#[test]
+fn an_unprojected_resource_type_omits_main_type_rather_than_sending_zero() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let fields = adapter
+        .project_fields(&projected(PriceIntent::Free))
+        .expect("a free listing projects");
+    let taxonomy: Value =
+        serde_json::from_str(&entry(&fields, FieldKey::Taxonomy)).expect("the taxonomy is JSON");
+    assert!(
+        taxonomy.get("mainType").is_none(),
+        "an optional field nothing projected into is absent, never zero: {taxonomy}"
     );
 }
 

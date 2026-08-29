@@ -7,7 +7,8 @@
 //! the distinction the edge dropped.
 
 use tam_domain::equivalence::{
-    AxisOutcome, Election, ElectionTrigger, Loss, PricingBranch, VocabularyGap,
+    resolved_by, satisfied_by, AxisOutcome, Election, ElectionRule, ElectionTrigger, Loss,
+    PricingBranch, VocabularyGap,
 };
 use tam_domain::registry::{registry, AxisBinding, Cardinality};
 use tam_domain::{
@@ -144,6 +145,10 @@ pub struct AxisRequest<'a> {
     /// question is unanswerable without it, because the branch decides which
     /// values the target will even accept.
     pub pricing: PricingBranch,
+    /// The tenant's standing answers. Consulted before any election is
+    /// returned, so a question the seller has already answered as a policy is
+    /// never asked a second time and never reaches the queue at all.
+    pub rules: &'a [ElectionRule],
 }
 
 /// Projects one whole axis into one target inventory, naming a gap, an
@@ -194,6 +199,27 @@ pub fn project_axis(
             pricing: request.pricing,
         }));
     }
+
+    // The standing rules answer last, over every election this axis raised,
+    // because a rule is a policy about a trigger rather than about the path
+    // that produced it. An answered election resolves into the same set the
+    // relation would have resolved into, so nothing downstream can tell a
+    // policy answer from a translated one -- which is the point: the seller
+    // decided once, and the decision is now data like any other.
+    let mut standing = Vec::new();
+    for election in core::mem::take(&mut outcome.elections) {
+        match satisfied_by(request.rules, &election)
+            .and_then(|answer| resolved_by(&election.trigger, answer))
+        {
+            Some(paths) => {
+                for path in &paths {
+                    push_distinct(&mut outcome.resolved, path);
+                }
+            }
+            None => standing.push(election),
+        }
+    }
+    outcome.elections = standing;
     outcome
 }
 
@@ -556,6 +582,7 @@ mod tests {
             terms,
             sources: &[],
             pricing: PricingBranch::Free,
+            rules: &[],
         }
     }
 

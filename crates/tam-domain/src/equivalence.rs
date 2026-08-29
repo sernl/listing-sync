@@ -381,6 +381,67 @@ impl ElectionRule {
     }
 }
 
+/// What a standing answer settles one election to, or `None` where it cannot
+/// settle this one and the question stands.
+///
+/// An answer that names values the trigger never offered is not applied: a
+/// rule written against one product's candidate set would otherwise inject a
+/// value into a later product the relation never resolved for it. `Delegate`
+/// resolves nothing here — best fit is a computation over the candidates that
+/// this function has no inputs for, and a legal axis refuses delegation
+/// outright — so a delegated trigger stays a question rather than becoming a
+/// silent pick.
+#[must_use]
+pub fn resolved_by(
+    trigger: &ElectionTrigger,
+    answer: &ElectionAnswer,
+) -> Option<Vec<VocabularyPath>> {
+    let among = |offered: &[VocabularyPath], chosen: &[VocabularyPath], cap: usize| {
+        let kept: Vec<VocabularyPath> = chosen
+            .iter()
+            .filter(|path| offered.contains(path))
+            .take(cap)
+            .cloned()
+            .collect();
+        (!kept.is_empty()).then_some(kept)
+    };
+    match (trigger, answer) {
+        // Supply asks for a value the source never carried, so the answer is
+        // the value itself and there is no candidate set to check it against.
+        (ElectionTrigger::Supply { .. }, ElectionAnswer::Value { path }) => {
+            Some(vec![path.clone()])
+        }
+        (ElectionTrigger::Supply { .. }, ElectionAnswer::Ordering { prefer }) => {
+            prefer.first().map(|path| vec![path.clone()])
+        }
+        (ElectionTrigger::ElectOne { from }, ElectionAnswer::Value { path }) => {
+            among(from, core::slice::from_ref(path), 1)
+        }
+        (ElectionTrigger::ElectOne { from }, ElectionAnswer::Ordering { prefer }) => {
+            among(from, prefer, 1)
+        }
+        (ElectionTrigger::OverCap { cap, from }, ElectionAnswer::Ordering { prefer }) => {
+            among(from, prefer, *cap)
+        }
+        (ElectionTrigger::OverCap { cap, from }, ElectionAnswer::Value { path }) => {
+            among(from, core::slice::from_ref(path), *cap)
+        }
+        (ElectionTrigger::Narrow { candidates, .. }, ElectionAnswer::Value { path }) => {
+            among(candidates, core::slice::from_ref(path), candidates.len())
+        }
+        (ElectionTrigger::Narrow { candidates, .. }, ElectionAnswer::Ordering { prefer }) => {
+            among(candidates, prefer, candidates.len())
+        }
+        (
+            ElectionTrigger::Supply { .. }
+            | ElectionTrigger::ElectOne { .. }
+            | ElectionTrigger::OverCap { .. }
+            | ElectionTrigger::Narrow { .. },
+            ElectionAnswer::Delegate,
+        ) => None,
+    }
+}
+
 /// The first of the three idempotency mechanisms, and the only pure one: an
 /// election a standing rule answers is never enqueued at all, so the common
 /// path writes nothing.

@@ -22,8 +22,8 @@ use tam_pipeline::scan::EicarScanner;
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    BlobRepo, EventScope, JobRepo, MappingRepo, NewJob, ProductRepo, RaiseReport, RaiseScope,
-    StorageError, TaxonomyRepo, TenantBlobSink,
+    BlobRepo, ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob, ProductRepo, RaiseReport,
+    RaiseScope, StorageError, TaxonomyRepo, TenantBlobSink,
 };
 use tam_taxonomy::listing::{project_listing, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
@@ -570,6 +570,7 @@ where
         .edges_into_all(&tam_taxonomy::projection_vocabularies(run.target, &product))
         .await?;
     let no_counterparts = taxonomy.no_counterparts_into(run.target).await?;
+    let rules = ElectionRepo::new(run.pool.clone()).rules(run.org).await?;
     let outcome = project_listing(
         &product,
         &ListingContext {
@@ -580,6 +581,7 @@ where
             terms: &terms,
             edges: &target_edges,
             no_counterparts: &no_counterparts,
+            rules: &rules,
         },
     );
     let (projectable, blocked_by, raised) = match outcome {

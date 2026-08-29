@@ -10,6 +10,9 @@
 #![cfg(feature = "pg-tests")]
 
 use sqlx::PgPool;
+use tam_domain::equivalence::{
+    ElectionAnswer, ElectionRule, ElectionTriggerKind, NewElectionRule, PricingBranch,
+};
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
@@ -18,11 +21,11 @@ use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
 use tam_marketplace_tes::TesAdapter;
-use tam_storage::{LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
+use tam_storage::{ElectionRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
 use tam_types::{
     CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole, InventoryId,
     JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, ScanOutcome, Timestamp, Title, Uuid,
+    ProductId, ScanOutcome, Timestamp, Title, UserId, Uuid,
 };
 
 /// The rendering reads no files, so the source is a refusal.
@@ -103,6 +106,33 @@ async fn provision_lifecycle(
         .seed(&terms, &edges)
         .await
         .expect("the crosswalk seeds");
+    // The seller's standing licence policy, without which every projection
+    // below parks on the licence election rather than reaching the gate the
+    // test is about.
+    let elections = ElectionRepo::new(pool.clone());
+    for inventory in [InventoryId::TesGb, InventoryId::TesNz] {
+        let rule = ElectionRule::new(NewElectionRule {
+            org: ORG,
+            inventory,
+            axis: TermKind::Licence,
+            trigger_kind: ElectionTriggerKind::Supply,
+            trigger_key: Some(PricingBranch::Free.as_str().to_owned()),
+            answer: ElectionAnswer::Value {
+                path: VocabularyPath {
+                    vocabulary: VocabularyId(inventory, TermKind::Licence),
+                    segments: vec!["CC-BY-SA".to_owned()],
+                    native_id: Some("CC-BY-SA".to_owned()),
+                },
+            },
+            decided_by: Decider::Human {
+                user: UserId(Uuid([0x5E; 16])),
+                org: ORG,
+            },
+            decided_at: NOW,
+        })
+        .expect("a licence value is a legal answer; only delegation is not");
+        elections.upsert_rule(&rule).await.expect("the rule seeds");
+    }
 
     let product = tam_domain::CanonicalProduct {
         id: PRODUCT,
@@ -296,7 +326,11 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
     .expect("a Tes inventory");
     let seed = seed_from_projection(&adapter, &lease(), &projected).expect("the adapter renders");
     assert_eq!(entry(&seed, FieldKey::Title), "Fractions practice");
-    assert_eq!(entry(&seed, FieldKey::Price), "CC-BY", "free is CC-BY");
+    assert_eq!(
+        entry(&seed, FieldKey::Price),
+        "CC-BY-SA",
+        "the licence is the one the seller's standing rule elected, not a default"
+    );
     let taxonomy: serde_json::Value =
         serde_json::from_str(&entry(&seed, FieldKey::Taxonomy)).expect("taxonomy is JSON");
     assert_eq!(

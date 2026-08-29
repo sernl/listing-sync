@@ -22,7 +22,8 @@ use tam_marketplace::{
     NativeTerm, ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
 };
 use tam_storage::{
-    LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
+    ElectionRepo, LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError,
+    TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
 use tam_types::{InventoryId, Timestamp};
@@ -218,6 +219,8 @@ pub async fn prepare_item(
         .edges_into_all(&projection_vocabularies(lease.inventory, &product))
         .await?;
     let no_counterparts = taxonomy.no_counterparts_into(lease.inventory).await?;
+    let elections = ElectionRepo::new(pool.clone());
+    let rules = elections.rules(lease.org).await?;
 
     let projection = match project_listing(
         &product,
@@ -229,11 +232,14 @@ pub async fn prepare_item(
             terms: &terms,
             edges: &edges,
             no_counterparts: &no_counterparts,
+            rules: &rules,
         },
     ) {
         Ok(projection) => projection,
         Err(ProjectionBlocked::Blocked {
-            gaps, elections, ..
+            gaps,
+            elections: raised_elections,
+            ..
         }) => {
             // Gaps first, because they drain: the answer is a durable edge
             // every later product finds waiting, so raising them is progress
@@ -258,7 +264,14 @@ pub async fn prepare_item(
                     &causes,
                 )
                 .await?;
-            let gate = if gaps.is_empty() && !elections.is_empty() {
+            // The seller's questions are enqueued under the engine pool for
+            // the same reason the reconciliation items above are: this is
+            // where the projection discovers them, and a question discovered
+            // and not recorded is a park with nothing behind it.
+            elections
+                .raise(lease.org, lease.mapping, &raised_elections, now)
+                .await?;
+            let gate = if gaps.is_empty() && !raised_elections.is_empty() {
                 "election"
             } else {
                 "reconciliation"

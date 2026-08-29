@@ -17,28 +17,34 @@
 
 use std::collections::HashMap;
 
-use tam_domain::equivalence::{Election, Loss, PricingBranch, VocabularyGap};
+use tam_domain::equivalence::{Election, ElectionRule, Loss, PricingBranch, VocabularyGap};
 use tam_domain::registry::{registry, truncate, AxisBinding, FieldSpec};
 use tam_domain::{
     CanonicalProduct, CanonicalTerm, ListingProjection, ProjectionBlocked, ProjectionEdge,
-    TermKind, TermProjection, VocabularyId, VocabularyPath,
+    RightsDeclaration, TermKind, TermProjection, VocabularyId, VocabularyPath,
 };
 use tam_types::{
     CanonicalTermId, CurrencyRule, InventoryId, MappingId, OrgId, PriceIntent, ScanOutcome,
     Timestamp,
 };
 
-use crate::project::{ingest_grades, project_axis, AxisRequest};
+use crate::project::{ingest, ingest_grades, project_axis, AxisRequest};
 
 /// The axes this projection routes, and the reason the list is shorter than
 /// the registry's.
 ///
-/// `Licence` is bound by every Tes inventory and is deliberately absent: its
-/// queue is the seller's election surface, and routing it before that surface
-/// exists would block every product whose rights are unstated on a gate with
-/// nowhere to record the question. `ResourceType` waits for the same reason
-/// its own crosswalk does.
-const ROUTED_AXES: [TermKind; 3] = [TermKind::Subject, TermKind::Topic, TermKind::Phase];
+/// `Licence` joins now that the election queue exists to hold the question:
+/// Tes declares it required, so a product whose rights are unstated raises a
+/// `Supply` election rather than being published under a grant nobody chose.
+/// `ResourceType` stays absent because its crosswalk is unseeded -- routing it
+/// would ask a question no vocabulary can answer -- and the wire omits the
+/// field rather than sending a placeholder for it.
+const ROUTED_AXES: [TermKind; 4] = [
+    TermKind::Subject,
+    TermKind::Topic,
+    TermKind::Phase,
+    TermKind::Licence,
+];
 
 fn routed_axes(inventory: InventoryId) -> impl Iterator<Item = AxisBinding> {
     registry(inventory)
@@ -70,12 +76,22 @@ pub fn projection_vocabularies(
     product: &CanonicalProduct,
 ) -> Vec<VocabularyId> {
     let mut wanted = routed_vocabularies(inventory);
-    for path in &product.grades.raw {
+    let declared = rights_source(product).into_iter();
+    for path in product.grades.raw.iter().chain(declared) {
         if !wanted.contains(&path.vocabulary) {
             wanted.push(path.vocabulary);
         }
     }
     wanted
+}
+
+/// The path a product's rights were declared as, which the licence axis
+/// ingests from exactly as a grade ingests from its source vocabulary.
+fn rights_source(product: &CanonicalProduct) -> Option<&VocabularyPath> {
+    match &product.rights {
+        RightsDeclaration::Unstated => None,
+        RightsDeclaration::Declared { source } => Some(source),
+    }
 }
 
 /// Everything the projection decides over beyond the product itself: the
@@ -89,6 +105,9 @@ pub struct ListingContext<'a> {
     pub terms: &'a [CanonicalTerm],
     pub edges: &'a [ProjectionEdge],
     pub no_counterparts: &'a [(CanonicalTermId, VocabularyId)],
+    /// The tenant's standing election answers, so a decision already taken as
+    /// a policy resolves here instead of being asked again.
+    pub rules: &'a [ElectionRule],
 }
 
 pub fn project_listing(
@@ -109,6 +128,23 @@ pub fn project_listing(
     // reaches the target under the target vocabulary's own native id, where
     // before it kept the source's id and only its vocabulary label changed.
     let ingested = ingest_grades(&product.grades, ctx.edges);
+    // Rights enter the relation the same way grades do: as the source
+    // platform's own path, translated into the target's own token. A stated
+    // grant the relation does not recognise is carried out as unrecognised
+    // rather than dropped, and the axis then has no value, so the seller is
+    // asked for one they can state in a vocabulary we hold.
+    let mut unrecognised = ingested.unrecognised;
+    let mut rights_terms: Vec<CanonicalTermId> = Vec::new();
+    let mut rights_sources: Vec<VocabularyPath> = Vec::new();
+    if let Some(source) = rights_source(product) {
+        match ingest(source, ctx.edges) {
+            Some(term) => {
+                rights_terms.push(term);
+                rights_sources.push(source.clone());
+            }
+            None => unrecognised.push(source.clone()),
+        }
+    }
     let pricing = match product.price {
         PriceIntent::Free => PricingBranch::Free,
         PriceIntent::Paid(_) => PricingBranch::Paid,
@@ -129,13 +165,13 @@ pub fn project_listing(
             .collect();
         let (terms, sources): (&[CanonicalTermId], &[VocabularyPath]) = match binding.axis {
             TermKind::Phase => (&ingested.terms, &ingested.sources),
-            TermKind::Subject | TermKind::Topic | TermKind::ResourceType | TermKind::Licence => {
-                (&of_kind, &[])
-            }
+            TermKind::Licence => (&rights_terms, &rights_sources),
+            TermKind::Subject | TermKind::Topic | TermKind::ResourceType => (&of_kind, &[]),
         };
-        if terms.is_empty() {
-            continue;
-        }
+        // An empty set is not a reason to skip the axis: a target that
+        // requires a value asks for one precisely when the source carried
+        // none, which is the whole TPT-to-Tes licence case. `project_axis`
+        // returns an empty outcome for every axis that requires nothing.
         let outcome = project_axis(
             AxisRequest {
                 product: product.id,
@@ -144,6 +180,7 @@ pub fn project_listing(
                 terms,
                 sources,
                 pricing,
+                rules: ctx.rules,
             },
             ctx.edges,
             ctx.no_counterparts,
@@ -182,7 +219,7 @@ pub fn project_listing(
         return Err(ProjectionBlocked::Blocked {
             gaps,
             elections,
-            unrecognised: ingested.unrecognised,
+            unrecognised,
         });
     }
 
@@ -235,6 +272,9 @@ fn capped(text: &str, spec: &FieldSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::{project_listing, ListingContext};
+    use tam_domain::equivalence::{
+        ElectionAnswer, ElectionRule, ElectionTrigger, ElectionTriggerKind, PricingBranch,
+    };
     use tam_domain::{
         CanonicalTerm, Decider, EdgeKind, ProjectionBlocked, ProjectionEdge, TermKind,
         VocabularyId, VocabularyPath,
@@ -348,7 +388,45 @@ mod tests {
         }
     }
 
-    fn ctx<'a>(terms: &'a [CanonicalTerm], edges: &'a [ProjectionEdge]) -> ListingContext<'a> {
+    /// The tenant's standing licence policy. Every fixture product below is
+    /// `Unstated`, which Tes refuses -- so without a policy each of these
+    /// tests would assert the licence election rather than what it is about.
+    /// The seller answered once and the rule is what makes that durable.
+    fn licence_policy() -> Vec<ElectionRule> {
+        // One rule per pricing branch, because Tes accepts a different set of
+        // licences on each side of the free/paid gate and a policy that
+        // ignored the branch would be unwritable.
+        [
+            (PricingBranch::Free, "CC-BY-SA"),
+            (PricingBranch::Paid, "TES-PAID"),
+        ]
+        .into_iter()
+        .map(|(pricing, token)| ElectionRule {
+            org: ORG,
+            inventory: InventoryId::TesNz,
+            axis: TermKind::Licence,
+            trigger_kind: ElectionTriggerKind::Supply,
+            trigger_key: Some(pricing.as_str().to_owned()),
+            answer: ElectionAnswer::Value {
+                path: VocabularyPath {
+                    vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Licence),
+                    segments: vec![token.to_owned()],
+                    native_id: Some(token.to_owned()),
+                },
+            },
+            decided_by: Decider::Imported {
+                source: "test".to_owned(),
+            },
+            decided_at: NOW,
+        })
+        .collect()
+    }
+
+    fn ctx<'a>(
+        terms: &'a [CanonicalTerm],
+        edges: &'a [ProjectionEdge],
+        rules: &'a [ElectionRule],
+    ) -> ListingContext<'a> {
         ListingContext {
             org: ORG,
             mapping: MAPPING,
@@ -357,16 +435,18 @@ mod tests {
             terms,
             edges,
             no_counterparts: &[],
+            rules,
         }
     }
 
     #[test]
     fn a_free_scanned_covered_mapped_product_projects() {
         let catalogue = terms();
+        let policy = licence_policy();
         let edges = [nz_edge()];
         let projection = project_listing(
             &product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW }),
-            &ctx(&catalogue, &edges),
+            &ctx(&catalogue, &edges, &policy),
         )
         .expect("everything is in order, so it projects");
         assert_eq!(projection.title, "A worksheet", "copy is verbatim in M1");
@@ -383,8 +463,71 @@ mod tests {
         );
     }
 
+    /// D2. Tes declares the licence required and the source stated none, so
+    /// the projection asks rather than publishing under a grant nobody chose.
+    /// The question is about this product against this target, which is what
+    /// makes it an election rather than a vocabulary gap.
+    #[test]
+    fn an_unstated_licence_into_a_target_that_requires_one_asks_rather_than_defaulting() {
+        let catalogue = terms();
+        let edges = [nz_edge()];
+        let blocked = project_listing(
+            &product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW }),
+            &ctx(&catalogue, &edges, &[]),
+        )
+        .expect_err("a required axis the source never carried blocks");
+        let ProjectionBlocked::Blocked {
+            gaps, elections, ..
+        } = blocked
+        else {
+            panic!("the licence is an election, not another gate: {blocked:?}");
+        };
+        assert!(
+            gaps.is_empty(),
+            "nothing here is a question about a vocabulary pair"
+        );
+        assert_eq!(elections.len(), 1, "one product, one question");
+        assert_eq!(elections[0].axis, TermKind::Licence);
+        assert_eq!(
+            elections[0].trigger,
+            ElectionTrigger::Supply {
+                pricing: PricingBranch::Free
+            },
+            "the branch travels because Tes gates the write on it"
+        );
+    }
+
+    /// The founder's do-not-re-ask requirement, as an assertion: two products
+    /// under one standing rule raise nothing at all, and both carry the value
+    /// the seller elected. A rule is consulted before anything is enqueued,
+    /// so the common path writes no queue row.
+    #[test]
+    fn a_standing_rule_answers_the_licence_for_every_later_product() {
+        let catalogue = terms();
+        let edges = [nz_edge()];
+        let policy = licence_policy();
+        for price in [PriceIntent::Free, PriceIntent::Free] {
+            let projection = project_listing(
+                &product(price, true, ScanOutcome::Clean { at: NOW }),
+                &ctx(&catalogue, &edges, &policy),
+            )
+            .expect("the standing rule answers the only question this product raised");
+            let (_, licence) = projection
+                .natives
+                .iter()
+                .find(|(axis, _)| *axis == TermKind::Licence)
+                .expect("the elected licence travels labelled by the axis it answers");
+            assert_eq!(
+                licence.native_id.as_deref(),
+                Some("CC-BY-SA"),
+                "and it travels as the target's own token, which is what the wire takes"
+            );
+        }
+    }
+
     #[test]
     fn a_grade_reaches_the_target_under_the_targets_own_id_rather_than_the_sources() {
+        let policy = licence_policy();
         let catalogue = [
             terms().remove(0),
             CanonicalTerm {
@@ -406,8 +549,8 @@ mod tests {
             native_id: Some("17".to_owned()),
         }];
 
-        let projection =
-            project_listing(&source, &ctx(&catalogue, &edges)).expect("the grade is mapped");
+        let projection = project_listing(&source, &ctx(&catalogue, &edges, &policy))
+            .expect("the grade is mapped");
         assert_eq!(
             projection.grades[0].vocabulary,
             VocabularyId(InventoryId::TesNz, TermKind::Phase),
@@ -424,9 +567,10 @@ mod tests {
     #[test]
     fn an_unmapped_term_blocks_as_a_vocabulary_gap() {
         let catalogue = terms();
+        let policy = licence_policy();
         let blocked = project_listing(
             &product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW }),
-            &ctx(&catalogue, &[]),
+            &ctx(&catalogue, &[], &policy),
         );
         let Err(ProjectionBlocked::Blocked {
             gaps, elections, ..
@@ -448,12 +592,13 @@ mod tests {
     #[test]
     fn a_priced_nz_listing_projects_now_that_the_currency_is_fixed_and_a_free_one_always_did() {
         let catalogue = terms();
+        let policy = licence_policy();
         let edges = [nz_edge()];
         let paid = PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("a price"));
         assert!(
             project_listing(
                 &product(paid, true, ScanOutcome::Clean { at: NOW }),
-                &ctx(&catalogue, &edges),
+                &ctx(&catalogue, &edges, &policy),
             )
             .is_ok(),
             "the NZ currency is fixed to GBP, so a priced listing clears the currency gate"
@@ -461,7 +606,7 @@ mod tests {
         assert!(
             project_listing(
                 &product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW }),
-                &ctx(&catalogue, &edges),
+                &ctx(&catalogue, &edges, &policy),
             )
             .is_ok(),
             "a free listing needs no currency and passes the same gate"
@@ -495,6 +640,7 @@ mod tests {
             terms: &catalogue,
             edges: std::slice::from_ref(&etsy_edge),
             no_counterparts: &[],
+            rules: &[],
         };
         let paid = PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("a price"));
         let blocked = project_listing(
@@ -515,6 +661,7 @@ mod tests {
     #[test]
     fn a_tes_projection_is_verbatim_because_no_tes_cap_is_declared() {
         let catalogue = terms();
+        let policy = licence_policy();
         let edges = [nz_edge()];
         let long = "A worksheet ".repeat(400);
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
@@ -523,8 +670,8 @@ mod tests {
             body: long.clone(),
             format: CopyFormat::Markdown,
         };
-        let projection =
-            project_listing(&source, &ctx(&catalogue, &edges)).expect("everything is in order");
+        let projection = project_listing(&source, &ctx(&catalogue, &edges, &policy))
+            .expect("everything is in order");
         assert_eq!(
             (projection.title.as_str(), projection.body.as_str()),
             (long.as_str(), long.as_str()),
@@ -559,6 +706,7 @@ mod tests {
             terms: &catalogue,
             edges: std::slice::from_ref(&etsy_edge),
             no_counterparts: &[],
+            rules: &[],
         };
         let long: String = std::iter::repeat_n('é', 200).collect();
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
@@ -582,12 +730,13 @@ mod tests {
     #[test]
     fn a_missing_cover_blocks() {
         let catalogue = terms();
+        let policy = licence_policy();
         let edges = [nz_edge()];
         assert!(
             matches!(
                 project_listing(
                     &product(PriceIntent::Free, false, ScanOutcome::Clean { at: NOW }),
-                    &ctx(&catalogue, &edges),
+                    &ctx(&catalogue, &edges, &policy),
                 ),
                 Err(ProjectionBlocked::CoverMissing)
             ),
@@ -598,10 +747,11 @@ mod tests {
     #[test]
     fn an_unscanned_payload_blocks_naming_the_file() {
         let catalogue = terms();
+        let policy = licence_policy();
         let edges = [nz_edge()];
         let blocked = project_listing(
             &product(PriceIntent::Free, true, ScanOutcome::Pending),
-            &ctx(&catalogue, &edges),
+            &ctx(&catalogue, &edges, &policy),
         );
         assert!(
             matches!(
@@ -617,10 +767,11 @@ mod tests {
         // Everything wrong at once: no edge, priced into unmeasured, no
         // cover, unscanned. The answer is the taxonomy gate, deterministically.
         let catalogue = terms();
+        let policy = licence_policy();
         let paid = PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("a price"));
         let blocked = project_listing(
             &product(paid, false, ScanOutcome::Pending),
-            &ctx(&catalogue, &[]),
+            &ctx(&catalogue, &[], &policy),
         );
         assert!(
             matches!(blocked, Err(ProjectionBlocked::Blocked { .. })),

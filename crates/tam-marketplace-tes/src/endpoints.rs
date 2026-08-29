@@ -210,7 +210,7 @@ pub struct TesListing {
     pub category_ids: Vec<i64>,
     pub age_channel: TesAges,
     pub ages: Vec<i64>,
-    pub main_type: i64,
+    pub main_type: Option<i64>,
     pub main_age: i64,
     pub pricing: TesPricing,
 }
@@ -303,7 +303,7 @@ pub fn probe_listing() -> TesListing {
         category_ids: vec![1_000_448],
         age_channel: TesAges::Ranges(vec![4]),
         ages: vec![11, 12, 13, 14],
-        main_type: 99_009,
+        main_type: Some(99_009),
         main_age: 4,
         pricing: TesPricing::Free(FreeLicence::CcBy),
     }
@@ -332,10 +332,15 @@ fn metadata_body(listing: &TesListing) -> Value {
         "ageRanges": listing.age_channel.ranges(),
         "ages": listing.ages,
         "yearGroups": year_groups(&listing.age_channel),
-        "mainType": listing.main_type,
         "mainAge": listing.main_age,
         "licence": listing.pricing.licence().as_str(),
     });
+    // The registry declares `mainType` optional, so an unprojected resource
+    // type omits the key. It used to be sent as zero, which is a real Tes
+    // type and named one on every listing we ever created.
+    if let Some(main_type) = listing.main_type {
+        body["mainType"] = json!(main_type);
+    }
     if let Some(price) = listing.pricing.price() {
         body["price"] = json!(price.minor_units());
     }
@@ -811,7 +816,7 @@ mod tests {
             category_ids: vec![1_000_448, 1_000_977],
             age_channel: TesAges::Ranges(vec![3, 4]),
             ages: vec![11, 12],
-            main_type: 99_009,
+            main_type: Some(99_009),
             main_age: 4,
             pricing,
         }
