@@ -1,7 +1,13 @@
 //! The fleet circuit breaker: the machine already halts one tenant's
 //! inventory on any ambiguous create; this adds the rate trip — a rise in
-//! failed-or-ambiguous settlements across tenants halts the inventory for
-//! the whole fleet, durably, in the same tables every lease scan reads.
+//! adverse settlements across tenants halts the inventory for the whole
+//! fleet, durably, in the same tables every lease scan reads.
+//!
+//! Adverse is `failed`, `ambiguous` and `blocked` together, because the
+//! predicate this has to answer is whether the marketplace is working rather
+//! than how far into a write each item got. A condition that stops every
+//! tenant before the write settles `blocked` fleet-wide, and it is exactly
+//! the shape of event the breaker exists to catch.
 
 use tam_storage::{HaltCause, HaltRepo, JobRepo, StorageError};
 use tam_types::Timestamp;
@@ -29,7 +35,7 @@ pub async fn run_breaker(
         if window.settled < BREAKER_MIN_SAMPLE {
             continue;
         }
-        let trips = window.failed_or_ambiguous.saturating_mul(1000)
+        let trips = window.adverse.saturating_mul(1000)
             >= BREAKER_TRIP_PERMILLE.saturating_mul(window.settled);
         if trips {
             halts
@@ -38,8 +44,8 @@ pub async fn run_breaker(
                     &HaltCause {
                         raised_by: "breaker".to_owned(),
                         reason: format!(
-                            "{} of {} settlements failed or ambiguous in the window",
-                            window.failed_or_ambiguous, window.settled
+                            "{} of {} settlements ended failed, ambiguous or blocked in the window",
+                            window.adverse, window.settled
                         ),
                         at: now,
                     },

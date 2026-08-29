@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT j.inventory AS \"inventory!\",\n                 count(*) AS \"settled!\",\n                 count(*) FILTER (WHERE ji.outcome IN ('failed', 'ambiguous', 'blocked'))\n                     AS \"adverse!\"\n             FROM job_item ji\n             JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id\n             WHERE ji.state = 'settled' AND ji.settled_at >= $1\n             GROUP BY j.inventory",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "settled!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "adverse!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "38b0255095d01f3bb19f6063c98499acec926889e4cf0d8637edb6efd11d2e7d"
+}

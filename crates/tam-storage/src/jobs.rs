@@ -223,14 +223,21 @@ impl JobRepo {
     }
 }
 
-/// One inventory's recent terminal outcomes, for the fleet breaker: how
-/// many items settled at all and how many settled failed or ambiguous.
-/// Cross-tenant by construction; runs on the engine role.
+/// One inventory's recent terminal outcomes, for the fleet breaker: how many
+/// items settled at all and how many of those say the marketplace is not
+/// working. Cross-tenant by construction; runs on the engine role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InventoryFailureWindow {
     pub inventory: InventoryId,
     pub settled: i64,
-    pub failed_or_ambiguous: i64,
+    /// `failed`, `ambiguous` and `blocked`. The third is the one that is easy
+    /// to leave out and the one that hurts most when it is: a marketplace-wide
+    /// condition that stops every tenant *before* the write — an expired
+    /// session, an unclearable challenge, a preflight that will not complete —
+    /// settles `blocked` on every tenant at once. Counted only in the
+    /// denominator it does the opposite of its job, driving the ratio down
+    /// precisely as the fleet-wide event this breaker exists for unfolds.
+    pub adverse: i64,
 }
 
 impl JobRepo {
@@ -241,8 +248,8 @@ impl JobRepo {
         let rows = sqlx::query!(
             r#"SELECT j.inventory AS "inventory!",
                  count(*) AS "settled!",
-                 count(*) FILTER (WHERE ji.outcome IN ('failed', 'ambiguous'))
-                     AS "failed_or_ambiguous!"
+                 count(*) FILTER (WHERE ji.outcome IN ('failed', 'ambiguous', 'blocked'))
+                     AS "adverse!"
              FROM job_item ji
              JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
              WHERE ji.state = 'settled' AND ji.settled_at >= $1
@@ -256,7 +263,7 @@ impl JobRepo {
                 Ok(InventoryFailureWindow {
                     inventory: inventory_from_db(&row.inventory)?,
                     settled: row.settled,
-                    failed_or_ambiguous: row.failed_or_ambiguous,
+                    adverse: row.adverse,
                 })
             })
             .collect()
