@@ -23,7 +23,9 @@ use tam_storage::{
     HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
     WriteAttemptRepo,
 };
-use tam_types::{ContentHash, FieldKey, InventoryId, JobId, MappingId, OrgId, Timestamp, Uuid};
+use tam_types::{
+    ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId, Timestamp, Uuid,
+};
 use tokio_util::sync::CancellationToken;
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -186,6 +188,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                 title: tam_types::Title("Fixture".to_owned()),
                 body: tam_types::ListingCopy {
                     body: "Fixture".to_owned(),
+                    format: CopyFormat::Markdown,
                 },
                 payload: tam_types::PayloadSet::new(
                     tam_types::ProductFile {

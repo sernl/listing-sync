@@ -17,8 +17,8 @@ use tam_marketplace_tes::endpoints::{
 };
 use tam_marketplace_tes::{schema, TesAdapter};
 use tam_types::{
-    Currency, FailureCode, FieldKey, FileId, InventoryId, Money, OrgId, PriceIntent, Timestamp,
-    Uuid,
+    CopyFormat, Currency, FailureCode, FieldKey, FileId, InventoryId, Money, OrgId, PriceIntent,
+    Timestamp, Uuid,
 };
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -362,6 +362,8 @@ fn projected(price: PriceIntent) -> ProjectedListing {
             high_years: 12,
         }),
         files: vec![FileId(Uuid([0x21; 16]))],
+        body_format: CopyFormat::Markdown,
+        natives: Vec::new(),
     }
 }
 

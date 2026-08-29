@@ -116,6 +116,7 @@ pub fn project_listing(
 
     let mut included = Vec::new();
     let mut grades = Vec::new();
+    let mut natives: Vec<(TermKind, VocabularyPath)> = Vec::new();
     let mut loss: Vec<Loss> = Vec::new();
     let mut gaps: Vec<VocabularyGap> = Vec::new();
     let mut elections: Vec<Election> = Vec::new();
@@ -147,10 +148,19 @@ pub fn project_listing(
             ctx.edges,
             ctx.no_counterparts,
         );
-        if binding.axis == TermKind::Phase {
-            grades.extend(outcome.resolved);
-        } else {
-            included.extend(outcome.resolved);
+        match binding.axis {
+            TermKind::Subject | TermKind::Topic => included.extend(outcome.resolved),
+            TermKind::Phase => grades.extend(outcome.resolved),
+            // An axis the seam's listing names no field for travels labelled
+            // by the axis it answers. Empty until the licence axis is routed,
+            // and shaped this way now so that routing is one entry in
+            // ROUTED_AXES rather than a second carriage mechanism.
+            TermKind::ResourceType | TermKind::Licence => natives.extend(
+                outcome
+                    .resolved
+                    .into_iter()
+                    .map(|path| (binding.axis, path)),
+            ),
         }
         loss.extend(outcome.loss);
         gaps.extend(outcome.gaps);
@@ -207,10 +217,12 @@ pub fn project_listing(
         inventory: ctx.inventory,
         title: capped(&product.title.0, &declared.title),
         body: capped(&product.body.body, &declared.description),
+        body_format: product.body.format,
         price: product.price,
         taxonomy: included,
         grades,
         files: product.payload.iter().map(|file| file.id).collect(),
+        natives,
         loss,
     })
 }
@@ -228,9 +240,9 @@ mod tests {
         VocabularyId, VocabularyPath,
     };
     use tam_types::{
-        CanonicalTermId, ContentHash, Currency, FileId, FileKind, FileRole, InventoryId,
-        ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId,
-        ScanOutcome, Timestamp, Title, Uuid,
+        CanonicalTermId, ContentHash, CopyFormat, Currency, FileId, FileKind, FileRole,
+        InventoryId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, ProductFile,
+        ProductId, ScanOutcome, Timestamp, Title, Uuid,
     };
 
     const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -272,6 +284,7 @@ mod tests {
             title: Title("A worksheet".to_owned()),
             body: ListingCopy {
                 body: "Body text.".to_owned(),
+                format: CopyFormat::Markdown,
             },
             payload: PayloadSet::new(file(scan), vec![]),
             cover: with_cover.then(cover),
@@ -506,7 +519,10 @@ mod tests {
         let long = "A worksheet ".repeat(400);
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
         source.title = Title(long.clone());
-        source.body = ListingCopy { body: long.clone() };
+        source.body = ListingCopy {
+            body: long.clone(),
+            format: CopyFormat::Markdown,
+        };
         let projection =
             project_listing(&source, &ctx(&catalogue, &edges)).expect("everything is in order");
         assert_eq!(

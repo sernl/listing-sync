@@ -19,9 +19,9 @@ use tam_storage::{
     WriteAttemptRepo,
 };
 use tam_types::{
-    CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId,
+    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    ScanOutcome, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -58,6 +58,7 @@ fn product(seed: u8) -> CanonicalProduct {
         title: Title("Fixture".to_owned()),
         body: ListingCopy {
             body: "Fixture".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             ProductFile {

@@ -39,7 +39,9 @@ use tam_marketplace_tpt::s3::{self, S3Operation, S3Signature, UploadSlot, Upload
 use tam_marketplace_tpt::upload::{cache_buster, Hop, ProcessedHandle, QueueJob, UploadHandle};
 use tam_marketplace_tpt::write_model::{self, AuthorshipDeclaration};
 use tam_marketplace_tpt::{InstantPause, ProductId, TptAdapter};
-use tam_types::{ContentHash, FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{
+    ContentHash, CopyFormat, FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid,
+};
 
 // Placeholders throughout. Same shape as the captured values, same length
 // class where the length matters, and no relationship to anything live.
@@ -156,6 +158,8 @@ fn projected() -> ProjectedListing {
         }],
         ages: None,
         files: vec![FileId(Uuid([1; 16]))],
+        body_format: CopyFormat::Html,
+        natives: Vec::new(),
     }
 }
 

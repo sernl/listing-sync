@@ -22,9 +22,9 @@ use tam_domain::{
 use tam_marketplace::RemoteLifecycle;
 use tam_storage::{MappingRepo, ProductRepo, RaiseScope, SessionRepo, SessionToken, TaxonomyRepo};
 use tam_types::{
-    CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, ListingCopy, MappingId,
-    OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp,
-    Title, UserId, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, ListingCopy,
+    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
+    Timestamp, Title, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -73,6 +73,7 @@ async fn provision(pool: &PgPool) {
                 title: Title("Fixture product".to_owned()),
                 body: ListingCopy {
                     body: "Fixture body.".to_owned(),
+                    format: CopyFormat::Markdown,
                 },
                 payload: PayloadSet::new(
                     ProductFile {

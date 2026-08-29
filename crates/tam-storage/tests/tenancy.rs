@@ -13,8 +13,8 @@ use tam_domain::{
 };
 use tam_storage::ProductRepo;
 use tam_types::{
-    CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, ListingCopy, OrgId,
-    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, ListingCopy,
+    OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
 };
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -56,6 +56,7 @@ fn sample_product(org: OrgId) -> CanonicalProduct {
         title: Title("Fractions revision pack".to_owned()),
         body: ListingCopy {
             body: "A worked example pack.".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             file(
@@ -245,9 +246,9 @@ async fn a_product_without_a_payload_cannot_commit(pool: PgPool) {
         .expect("tenant pin applies");
     sqlx::query(
         "INSERT INTO product \
-         (org_id, id, title, body, price_kind, price_minor_units, price_currency, \
-          rights_state, created_at, updated_at) \
-         VALUES ($1, $2, 't', 'b', 'free', NULL, NULL, 'unstated', now(), now())",
+         (org_id, id, title, body, body_format, price_kind, price_minor_units, \
+          price_currency, rights_state, created_at, updated_at) \
+         VALUES ($1, $2, 't', 'b', 'markdown', 'free', NULL, NULL, 'unstated', now(), now())",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(PRODUCT_1.0))

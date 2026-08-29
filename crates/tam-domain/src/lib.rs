@@ -20,7 +20,7 @@ use tam_marketplace::{
     WriteAttemptId,
 };
 use tam_types::{
-    AttemptId, CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail,
+    AttemptId, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
     FieldMismatch, FileId, ImportedTerm, InventoryId, ListingCopy, LogicalInstant, MappingId,
     OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, Timestamp, Title, UserId,
     Uuid,
@@ -350,10 +350,17 @@ pub struct ListingProjection {
     pub inventory: InventoryId,
     pub title: String,
     pub body: String,
+    /// The declared format of `body`, carried across the seam so an adapter
+    /// whose platform takes the other one refuses rather than converting.
+    pub body_format: CopyFormat,
     pub price: PriceIntent,
     pub taxonomy: Vec<VocabularyPath>,
     pub grades: Vec<VocabularyPath>,
     pub files: Vec<FileId>,
+    /// Resolved values in axes the seam's listing names no field for -- the
+    /// elected licence, the projected resource type. `taxonomy` and `grades`
+    /// keep their own fields because every adapter already reads them.
+    pub natives: Vec<(TermKind, VocabularyPath)>,
     pub loss: Vec<Loss>,
 }
 

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, id, title, body, price_kind, price_minor_units, price_currency, rights_state, rights_source_inventory, rights_segments, rights_native_id, created_at, updated_at FROM product WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+  "query": "SELECT org_id, id, title, body, body_format, price_kind, price_minor_units, price_currency, rights_state, rights_source_inventory, rights_segments, rights_native_id, created_at, updated_at FROM product WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -25,46 +25,51 @@
       },
       {
         "ordinal": 4,
-        "name": "price_kind",
+        "name": "body_format",
         "type_info": "Text"
       },
       {
         "ordinal": 5,
+        "name": "price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
         "name": "price_minor_units",
         "type_info": "Int8"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "price_currency",
         "type_info": "Text"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "rights_state",
         "type_info": "Text"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "rights_source_inventory",
         "type_info": "Text"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "rights_segments",
         "type_info": "TextArray"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "rights_native_id",
         "type_info": "Text"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -81,6 +86,7 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       false,
@@ -91,5 +97,5 @@
       false
     ]
   },
-  "hash": "89eea4d9cd1ff3f4dc3272992574bc4cb0b8843d2dc34b9b4e0a41ea21dc6514"
+  "hash": "8910439daa89a6c57cefe2ce197d83a98b551ceb701fd0460d0d3eb02d82eaec"
 }

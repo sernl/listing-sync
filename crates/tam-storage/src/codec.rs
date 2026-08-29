@@ -453,6 +453,23 @@ pub(crate) fn inventory_from_db(raw: &str) -> Result<InventoryId, StorageError> 
     }
 }
 
+pub(crate) const fn copy_format_to_db(format: tam_types::CopyFormat) -> &'static str {
+    match format {
+        tam_types::CopyFormat::Markdown => "markdown",
+        tam_types::CopyFormat::Html => "html",
+    }
+}
+
+pub(crate) fn copy_format_from_db(raw: &str) -> Result<tam_types::CopyFormat, StorageError> {
+    match raw {
+        "markdown" => Ok(tam_types::CopyFormat::Markdown),
+        "html" => Ok(tam_types::CopyFormat::Html),
+        other => Err(StorageError::Inconsistent {
+            reason: format!("unknown body format {other}"),
+        }),
+    }
+}
+
 pub(crate) const fn term_kind_to_db(kind: tam_domain::TermKind) -> &'static str {
     match kind {
         tam_domain::TermKind::Subject => "subject",

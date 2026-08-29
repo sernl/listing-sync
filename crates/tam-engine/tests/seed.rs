@@ -20,9 +20,9 @@ use tam_marketplace::{FileContent, FileSource, FileSourceError};
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
 use tam_types::{
-    CanonicalTermId, ContentHash, FieldKey, FileId, FileKind, FileRole, InventoryId, JobId,
-    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
-    ScanOutcome, Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole, InventoryId,
+    JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
+    ProductId, ScanOutcome, Timestamp, Title, Uuid,
 };
 
 /// The rendering reads no files, so the source is a refusal.
@@ -110,6 +110,7 @@ async fn provision_lifecycle(
         title: Title("Fractions practice".to_owned()),
         body: ListingCopy {
             body: "A worksheet.".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             ProductFile {

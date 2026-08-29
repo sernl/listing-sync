@@ -421,11 +421,35 @@ pub struct AgeSpan {
 pub struct ProjectedListing {
     pub title: String,
     pub body: String,
+    /// How `body` is written, so an adapter whose platform takes the other
+    /// format refuses rather than posting escaped markup nobody asked for.
+    pub body_format: CopyFormat,
     pub price: PriceIntent,
     pub taxonomy: Vec<NativeTerm>,
     pub grades: Vec<NativeTerm>,
     pub ages: Option<AgeSpan>,
     pub files: Vec<FileId>,
+    /// Values the projection resolved in axes this struct names no field for,
+    /// each labelled by the axis it answers. Empty for every listing whose
+    /// target binds no such axis, which is why the fields above do not move
+    /// and why the TPT adapter reads nothing new.
+    pub natives: Vec<NativeAxis>,
+}
+
+/// One axis's resolved value as the seam carries it: which equivalence axis it
+/// answers, and the target vocabulary's own term for it.
+///
+/// The value travels as `NativeTerm`, whose `native_id` is "the marketplace's
+/// own identifier where the crosswalk holds one" -- so an elected Tes licence
+/// arrives here as the wire token itself, exactly as `taxonomy` already
+/// carries category ids. What stays in the adapter is which `FieldKey` the
+/// value lands in and how it is framed on the wire, not the identifier: an
+/// adapter that read a display label out of `segments` and re-derived a token
+/// from it would reintroduce the guess the election exists to remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeAxis {
+    pub axis: TermKind,
+    pub value: NativeTerm,
 }
 
 /// What the driver observed about the submit itself, which is evidence and

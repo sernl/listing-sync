@@ -49,9 +49,9 @@ use tam_storage::{
     ProductRepo, SessionRepo, TaxonomyRepo,
 };
 use tam_types::{
-    CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId,
+    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    ScanOutcome, Timestamp, Title, Uuid,
 };
 
 const USAGE: &str = "usage: live_provision create <db-url> <kek-path> <store-root> <payload> \
@@ -196,6 +196,7 @@ fn fixture_product(
         title: Title(title),
         body: ListingCopy {
             body: "A single-page test file. Delete on sight.".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             ProductFile {

@@ -16,9 +16,9 @@ use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode};
 use tam_marketplace::RemoteLifecycle;
 use tam_storage::{MappingRepo, ProductRepo, SessionRepo, SessionToken};
 use tam_types::{
-    ContentHash, FileId, FileKind, FileRole, InventoryId, ListingCopy, MappingId, OrgId,
-    PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Title,
-    UserId, Uuid,
+    ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, ListingCopy, MappingId,
+    OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp,
+    Title, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -45,6 +45,7 @@ fn product(id: u8, hash: u8) -> tam_domain::CanonicalProduct {
         title: Title(format!("Fixture {id}")),
         body: ListingCopy {
             body: "Fixture body.".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             ProductFile {

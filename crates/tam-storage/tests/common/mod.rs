@@ -4,8 +4,8 @@
 use sqlx::PgPool;
 use tam_domain::{CanonicalProduct, DeclarationSource, GradeDeclaration};
 use tam_types::{
-    ContentHash, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet, PriceIntent,
-    ProductFile, ProductId, ScanOutcome, Title, Uuid,
+    ContentHash, CopyFormat, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
+    PriceIntent, ProductFile, ProductId, ScanOutcome, Title, Uuid,
 };
 
 pub(crate) const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -22,6 +22,7 @@ pub(crate) fn minimal_product() -> CanonicalProduct {
         title: Title("Fixture product".to_owned()),
         body: ListingCopy {
             body: "Fixture body.".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             ProductFile {

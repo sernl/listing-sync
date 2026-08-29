@@ -872,7 +872,9 @@ mod tests {
     use crate::form::TptFormTokens;
     use crate::upload::ProcessedHandle;
     use tam_marketplace::{AdapterError, AgeSpan, NativeTerm, ProjectedListing};
-    use tam_types::{Currency, FailureCode, FieldKey, FileId, Money, PriceIntent, Timestamp, Uuid};
+    use tam_types::{
+        CopyFormat, Currency, FailureCode, FieldKey, FileId, Money, PriceIntent, Timestamp, Uuid,
+    };
 
     /// The only way to obtain a token set is to scrape a render, which is
     /// the invariant the write path depends on.
@@ -1222,6 +1224,8 @@ mod tests {
                 high_years: 10,
             }),
             files: vec![FileId(Uuid([1; 16]))],
+            body_format: CopyFormat::Html,
+            natives: Vec::new(),
         }
     }
 

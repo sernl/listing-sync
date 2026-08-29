@@ -34,9 +34,9 @@ use tam_storage::{
     RateBudgetRepo, TaxonomyRepo, WriteAttemptRepo,
 };
 use tam_types::{
-    CanonicalTermId, ContentHash, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId,
+    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    ScanOutcome, Timestamp, Title, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -519,6 +519,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
         title: Title("Fractions practice".to_owned()),
         body: ListingCopy {
             body: "A worksheet.".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             ProductFile {

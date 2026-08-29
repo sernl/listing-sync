@@ -18,8 +18,8 @@ use tam_domain::{
     Binding, ItemOperation, ProjectionBlocked, StepBudget, VocabularyId, VocabularyPath,
 };
 use tam_marketplace::{
-    AgeSpan, CreateStrategy, FieldSet, FormId, ListingState, MarketplaceAdapter, NativeTerm,
-    ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
+    AgeSpan, CreateStrategy, FieldSet, FormId, ListingState, MarketplaceAdapter, NativeAxis,
+    NativeTerm, ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
 };
 use tam_storage::{
     LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
@@ -289,6 +289,18 @@ pub async fn prepare_item(
                 high_years: interval.high_years(),
             }),
             files: projection.files,
+            body_format: projection.body_format,
+            // The lowering beside the two that already exist: a resolved axis
+            // the seam names no field for travels as the target vocabulary's
+            // own term, labelled by the axis it answers.
+            natives: projection
+                .natives
+                .iter()
+                .map(|(axis, path)| NativeAxis {
+                    axis: *axis,
+                    value: native_term(path),
+                })
+                .collect(),
         }),
     })
 }

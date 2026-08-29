@@ -75,8 +75,9 @@ async fn ingest_then_fetch_back_closes_the_adapter_seam(pool: PgPool) {
         .expect("pin");
     sqlx::query(
         "INSERT INTO product \
-         (org_id, id, title, body, price_kind, rights_state, created_at, updated_at) \
-         VALUES ($1, $2, 't', 'b', 'free', 'unstated', now(), now())",
+         (org_id, id, title, body, body_format, price_kind, rights_state, \
+          created_at, updated_at) \
+         VALUES ($1, $2, 't', 'b', 'markdown', 'free', 'unstated', now(), now())",
     )
     .bind(uuid::Uuid::from_bytes(ORG.0 .0))
     .bind(uuid::Uuid::from_bytes([0x10; 16]))

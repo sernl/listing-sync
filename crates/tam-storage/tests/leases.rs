@@ -21,8 +21,8 @@ use tam_storage::{
     RateBudgetRepo, StorageError,
 };
 use tam_types::{
-    CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail, FileId, FileKind,
-    FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent,
+    CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail, FileId,
+    FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent,
     PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
 };
 
@@ -77,6 +77,7 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
         title: Title("Fixture".to_owned()),
         body: ListingCopy {
             body: "Fixture".to_owned(),
+            format: CopyFormat::Markdown,
         },
         payload: PayloadSet::new(
             ProductFile {

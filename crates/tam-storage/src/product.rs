@@ -16,10 +16,10 @@ use tam_types::{
 };
 
 use crate::codec::{
-    file_kind_from_db, file_kind_to_db, file_role_from_db, file_role_to_db, hash_from_db, hash_hex,
-    hash_to_db, inventory_from_db, inventory_to_db, price_from_db, scan_from_db, term_kind_from_db,
-    term_kind_to_db, timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db, PriceColumns,
-    ScanColumns,
+    copy_format_from_db, copy_format_to_db, file_kind_from_db, file_kind_to_db, file_role_from_db,
+    file_role_to_db, hash_from_db, hash_hex, hash_to_db, inventory_from_db, inventory_to_db,
+    price_from_db, scan_from_db, term_kind_from_db, term_kind_to_db, timestamp_from_db,
+    timestamp_to_db, uuid_from_db, uuid_to_db, PriceColumns, ScanColumns,
 };
 use crate::{pin_org, StorageError};
 
@@ -70,14 +70,15 @@ impl ProductRepo {
         let rights = RightsColumns::encode(&product.rights);
         sqlx::query!(
             "INSERT INTO product \
-             (org_id, id, title, body, price_kind, price_minor_units, price_currency, \
-              rights_state, rights_source_inventory, rights_segments, rights_native_id, \
-              created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)",
+             (org_id, id, title, body, body_format, price_kind, price_minor_units, \
+              price_currency, rights_state, rights_source_inventory, rights_segments, \
+              rights_native_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)",
             org_db,
             product_db,
             product.title.0,
             product.body.body,
+            copy_format_to_db(product.body.format),
             price.kind,
             price.minor_units,
             price.currency,
@@ -164,9 +165,9 @@ impl ProductRepo {
 
         let Some(row) = sqlx::query_as!(
             ProductRow,
-            "SELECT org_id, id, title, body, price_kind, price_minor_units, price_currency, \
-             rights_state, rights_source_inventory, rights_segments, rights_native_id, \
-             created_at, updated_at \
+            "SELECT org_id, id, title, body, body_format, price_kind, price_minor_units, \
+             price_currency, rights_state, rights_source_inventory, rights_segments, \
+             rights_native_id, created_at, updated_at \
              FROM product \
              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
             org_db,
@@ -262,7 +263,10 @@ impl ProductRepo {
                 id: ProductId(uuid_from_db(row.id)),
                 org: OrgId(uuid_from_db(row.org_id)),
                 title: Title(row.title),
-                body: tam_types::ListingCopy { body: row.body },
+                body: tam_types::ListingCopy {
+                    body: row.body,
+                    format: copy_format_from_db(&row.body_format)?,
+                },
                 payload,
                 cover,
                 previews,
@@ -465,6 +469,7 @@ struct ProductRow {
     id: uuid::Uuid,
     title: String,
     body: String,
+    body_format: String,
     price_kind: String,
     price_minor_units: Option<i64>,
     price_currency: Option<String>,

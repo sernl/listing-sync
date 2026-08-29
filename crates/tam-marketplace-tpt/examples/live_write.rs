@@ -38,7 +38,9 @@ use tam_marketplace::{
 };
 use tam_marketplace_tpt::write_model::{self, AuthorshipDeclaration, StatusUser};
 use tam_marketplace_tpt::{ProductId, ReqwestTransport, TptAdapter, TptSession};
-use tam_types::{Currency, FieldKey, FileId, Money, OrgId, PriceIntent, Timestamp, Uuid};
+use tam_types::{
+    CopyFormat, Currency, FieldKey, FileId, Money, OrgId, PriceIntent, Timestamp, Uuid,
+};
 
 const DEFAULT_JAR: &str = "probes/local/tpt-cookies.jar";
 /// Neither identifier reaches TPT. The org scopes nothing here because this
@@ -161,6 +163,8 @@ fn projection(title: String, body: String, price: PriceIntent) -> ProjectedListi
         }],
         ages: None,
         files: vec![FILE],
+        body_format: CopyFormat::Html,
+        natives: Vec::new(),
     }
 }
 

@@ -355,6 +355,10 @@ pub enum LengthUnit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListingCopy {
     pub body: String,
+    /// How the body is written, declared by whatever read or authored it.
+    /// Durable rather than derived, because the only alternative is sniffing
+    /// the bytes and the tree already ruled that out.
+    pub format: CopyFormat,
 }
 
 /// How a listing body is written. Declared rather than sniffed: guessing a
