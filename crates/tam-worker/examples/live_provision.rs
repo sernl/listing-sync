@@ -3,21 +3,33 @@
 //! writes through, so the roles and the row-level security a live run leans
 //! on are exercised rather than bypassed.
 //!
-//! Four modes, in the order a proof uses them:
+//! Five modes, in the order a proof uses them:
 //!
-//!   live_provision create    <db-url> <kek-path> <store-root> <payload> <cover>
+//!   live_provision create    <db-url> <inventory> <kek-path> <store-root> \
+//!                            <payload> <cover> [--price <minor units>]
 //!   live_provision preflight <db-url> <kek-path> <store-root> <mapping-id>
+//!   live_provision retitle   <db-url> <mapping-id> <suffix>
 //!   live_provision remove    <db-url> <mapping-id>
 //!   live_provision show      <db-url> <mapping-id>
 //!
+//! `<inventory>` is `tpt` or `tes-gb`, and `create` is the only mode that
+//! takes one: every other mode names a mapping, and a mapping already records
+//! which inventory it is for. Reading it there rather than accepting it again
+//! is what makes the two impossible to disagree.
+//!
 //! `create` seeds the crosswalk, stores both files as real per-tenant blobs,
-//! inserts the product and an unbound Tpt mapping, links the `tpt` connection
-//! the lease scan gates on, and enqueues one create item. `preflight` runs
-//! the ledger's own admission and projection over that mapping and renders
-//! the field set Tpt would receive, without leasing anything and without a
-//! byte leaving the process. `remove` reads the listing the create bound and
-//! enqueues the removal that names it, which the engine admits only while the
-//! mapping still holds that exact identifier. `show` prints the mapping, item
+//! inserts the product and an unbound mapping, links the connection the lease
+//! scan gates on, and enqueues one create item; `--price` makes the fixture a
+//! paid listing in the inventory's own currency. `preflight` runs the ledger's
+//! own admission and projection over that mapping and renders the field set
+//! its target would receive, without leasing anything and without a byte
+//! leaving the process. `retitle` appends to the canonical title, which is the
+//! write a seller-facing edit makes and what gives a revise something to
+//! carry. `remove` reads the listing the create bound and enqueues the removal
+//! that names it, which the engine admits only while the mapping still holds
+//! that exact identifier — and only while the mapping records the listing as a
+//! draft, so a listing this proof published is cleaned up through the
+//! adapter's own delete-by-id path instead. `show` prints the mapping, item
 //! and attempt rows the acceptance is read off.
 //!
 //! Nothing here talks to a marketplace. `tam-worker` does, and it is the
@@ -36,11 +48,17 @@ use sqlx::{PgPool, Row as _};
 use tam_domain::{
     Binding, CanonicalProduct, CanonicalTerm, Decider, DeclarationSource, EdgeKind, FieldPolicies,
     FieldPolicy, GradeDeclaration, ItemOperation, JobItemId, Mapping, ProjectionEdge, PublishMode,
-    TermKind, VocabularyId, VocabularyPath,
+    RightsDeclaration, TermKind, VocabularyId, VocabularyPath,
 };
 use tam_engine::seed::{prepare_item, ItemPreparation};
 use tam_marketplace::idempotency::derive_idempotency_key;
-use tam_marketplace::{FileSource as _, IdempotencyKey, ListingState, RemoteLifecycle};
+use tam_marketplace::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+use tam_marketplace::{
+    FieldSet, FileContent, FileSource, FileSourceError, IdempotencyKey, ListingState,
+    MarketplaceAdapter as _, ProjectedListing, RemoteLifecycle,
+};
+use tam_marketplace_tes::endpoints::TesLicence;
+use tam_marketplace_tes::TesAdapter;
 use tam_marketplace_tpt::write_model;
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
@@ -49,25 +67,48 @@ use tam_storage::{
     ProductRepo, SessionRepo, TaxonomyRepo,
 };
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId,
-    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
-    ScanOutcome, Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, CurrencyRule, FileId, FileKind, FileRole,
+    InventoryId, JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule,
+    ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
 };
 
-const USAGE: &str = "usage: live_provision create <db-url> <kek-path> <store-root> <payload> \
-                     <cover> | live_provision preflight <db-url> <kek-path> <store-root> \
-                     <mapping-id> | live_provision remove <db-url> <mapping-id> | live_provision \
-                     show <db-url> <mapping-id>";
+const USAGE: &str = "usage: live_provision create <db-url> <inventory> <kek-path> <store-root> \
+                     <payload> <cover> [--price <minor units>] | live_provision preflight \
+                     <db-url> <kek-path> <store-root> <mapping-id> | live_provision retitle \
+                     <db-url> <mapping-id> <suffix> | live_provision remove <db-url> \
+                     <mapping-id> | live_provision show <db-url> <mapping-id>";
 
 /// The dev organisation `just dev-session --ensure-org founder-dev` mints,
-/// and the one `TAM_TPT_ORG` must name for the worker to drive these items.
+/// and the one `TAM_TPT_ORG` must name for the worker to drive TPT items.
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
-/// The `tpt` connection row. It holds no secret: the worker's cookie jar is
-/// the credential and this row is the queue gate `LeaseRepo::acquire`
-/// requires, exactly as `crates/tam-worker/src/main.rs` records.
+/// The connection row minted where the organisation holds none for the
+/// marketplace yet. It holds no secret, which is all a TPT run needs — the
+/// worker's cookie jar is the credential and this row is only the queue gate
+/// `LeaseRepo::acquire` requires. A Tes run reaches its account through the
+/// broker, so a row minted here would gate the queue open on a credential
+/// that does not exist; the upsert below keeps an existing row's id, and with
+/// it the sealed secret the broker reads.
 const CONNECTION: Uuid = Uuid([0x3C; 16]);
 /// The one crosswalked subject this fixture projects through.
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x7A; 16]));
+/// The licence this fixture's rights name, where the target binds a licence
+/// axis, and the grade band it declares. Both are minted only where the hub
+/// holds no term for the native id already.
+const LICENCE: CanonicalTermId = CanonicalTermId(Uuid([0x7B; 16]));
+const GRADE: CanonicalTermId = CanonicalTermId(Uuid([0x7C; 16]));
+/// What this fixture's own terms and edges are labelled by, in the decider
+/// and in the first segment of every path it mints.
+const FIXTURE: &str = "live_provision fixture";
+/// The Tes category the fixture projects onto: node 1000448, "Algebra" under
+/// Mathematics, which is the id `endpoints::probe_listing` carries and the one
+/// the M0 spike's create posted live. Two segments, deliberately:
+/// `derive_crosswalk` writes a seeded subject as one segment and a seeded
+/// topic as two, so a two-segment subject path is one no seeded edge claims,
+/// and `projection_edge_exact_reverse` admits only one term per path.
+const TES_CATEGORY: &str = "1000448";
+/// The Tes age band the fixture declares: `ageRanges` 4, which the 2026-08-28
+/// publish capture carried and which `AGE_BANDS` spans ages 11 to 14.
+const TES_AGE_BAND: &str = "4";
 /// The create's intent version, and the removal's. They differ because
 /// `job_item` is unique on `(org_id, idempotency_key)` and both items name
 /// the same tenant, inventory, product and payload hash.
@@ -119,7 +160,7 @@ async fn connect(db_url: &str) -> Result<PgPool, sqlx::Error> {
 }
 
 /// The tenant pin the row-level-security policies read. `tam_storage` pins
-/// inside its own transactions and keeps the helper crate-private, so the two
+/// inside its own transactions and keeps the helper crate-private, so the
 /// raw statements below carry their own.
 async fn pin(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(), sqlx::Error> {
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
@@ -129,32 +170,232 @@ async fn pin(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(), sqlx:
         .map(drop)
 }
 
-/// The canonical subject the fixture carries, and its Tpt counterpart.
-///
-/// `algebra` and `not-grade-specific` are TPT's own slugs, taken from the
-/// captured create that `examples/live_write.rs` proved live. Neither names a
-/// seller shelf, so nothing lands on one of the founder's own categories.
-fn crosswalk(at: Timestamp) -> (Vec<CanonicalTerm>, Vec<ProjectionEdge>) {
-    let terms = vec![CanonicalTerm {
+/// The terms and edges one fixture needs in the hub for its declarations to
+/// ingest and its subject to project.
+struct Crosswalk {
+    terms: Vec<CanonicalTerm>,
+    edges: Vec<ProjectionEdge>,
+}
+
+/// Everything one inventory's fixture differs in.
+struct Fixture {
+    inventory: InventoryId,
+    price: PriceIntent,
+    grades: GradeDeclaration,
+    rights: RightsDeclaration,
+    crosswalk: Crosswalk,
+}
+
+/// The term a fixture mints for an axis where the hub holds none.
+struct Minted {
+    term: CanonicalTermId,
+    label: String,
+    segments: Vec<String>,
+}
+
+/// What an axis resolved to: the path the product declares, and whatever the
+/// fixture must seed for it to ingest.
+struct Resolved {
+    path: VocabularyPath,
+    crosswalk: Crosswalk,
+}
+
+fn fixture_edge(from: CanonicalTermId, to: VocabularyPath, at: Timestamp) -> ProjectionEdge {
+    ProjectionEdge {
+        from,
+        to,
+        kind: EdgeKind::Exact,
+        decided_by: Decider::Imported {
+            source: FIXTURE.to_owned(),
+        },
+        decided_at: at,
+    }
+}
+
+/// The canonical subject the fixture carries. One term across both targets,
+/// so a product provisioned into either projects through the same catalogue
+/// entry.
+fn subject_term() -> CanonicalTerm {
+    CanonicalTerm {
         id: SUBJECT,
         kind: TermKind::Subject,
         parent: None,
         label: "Algebra".to_owned(),
-    }];
-    let edges = vec![ProjectionEdge {
-        from: SUBJECT,
-        to: VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Subject),
-            segments: vec!["Math".to_owned(), "Algebra".to_owned()],
-            native_id: Some("algebra".to_owned()),
+    }
+}
+
+/// The path a declaration names on an axis a seeded hub may already hold.
+///
+/// `projection_edge_exact_reverse` admits one Exact edge per target path and
+/// `ingest_by_native_id` refuses a native id two terms claim, so a fixture
+/// that always minted its own term would fail its insert against a hub seeded
+/// from the committed captures, and one that always assumed the hub would
+/// declare a path nothing recognises against an empty one. It reads first and
+/// mints only what is missing.
+async fn resolved_axis(
+    taxonomy: &TaxonomyRepo,
+    vocabulary: VocabularyId,
+    native: &str,
+    minted: Minted,
+    at: Timestamp,
+) -> Result<Resolved, Failure> {
+    let held = taxonomy.edges_into(vocabulary).await?;
+    let mut claiming = held.iter().filter(|edge| {
+        edge.kind == EdgeKind::Exact && edge.to.native_id.as_deref() == Some(native)
+    });
+    if let Some(edge) = claiming.next() {
+        if claiming.next().is_some() {
+            return Err(format!(
+                "two terms claim {native:?} in {vocabulary:?}; the hub is ambiguous there and \
+                 no declaration against it can ingest"
+            )
+            .into());
+        }
+        return Ok(Resolved {
+            path: edge.to.clone(),
+            crosswalk: Crosswalk {
+                terms: Vec::new(),
+                edges: Vec::new(),
+            },
+        });
+    }
+    let path = VocabularyPath {
+        vocabulary,
+        segments: minted.segments,
+        native_id: Some(native.to_owned()),
+    };
+    Ok(Resolved {
+        path: path.clone(),
+        crosswalk: Crosswalk {
+            terms: vec![CanonicalTerm {
+                id: minted.term,
+                kind: vocabulary.1,
+                parent: None,
+                label: minted.label,
+            }],
+            edges: vec![fixture_edge(minted.term, path, at)],
         },
-        kind: EdgeKind::Exact,
-        decided_by: Decider::Imported {
-            source: "live_provision fixture".to_owned(),
+    })
+}
+
+/// `algebra` and `not-grade-specific` are TPT's own slugs, taken from the
+/// captured create that `tam-marketplace-tpt`'s `live_write` proved live.
+/// Neither names a seller shelf, so nothing lands on one of the founder's own
+/// categories. TPT holds no licence field anywhere on its wire, so a grant
+/// declared here would be a disclosed loss rather than a value, and the
+/// fixture states none.
+fn tpt_fixture(price: PriceIntent, at: Timestamp) -> Fixture {
+    let phase = VocabularyId(InventoryId::Tpt, TermKind::Phase);
+    Fixture {
+        inventory: InventoryId::Tpt,
+        price,
+        grades: GradeDeclaration {
+            source: DeclarationSource::Imported { vocabulary: phase },
+            raw: vec![VocabularyPath {
+                vocabulary: phase,
+                segments: vec!["Not grade specific".to_owned()],
+                native_id: Some("not-grade-specific".to_owned()),
+            }],
+            derived: None,
         },
-        decided_at: at,
-    }];
-    (terms, edges)
+        rights: RightsDeclaration::Unstated,
+        crosswalk: Crosswalk {
+            terms: vec![subject_term()],
+            edges: vec![fixture_edge(
+                SUBJECT,
+                VocabularyPath {
+                    vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Subject),
+                    segments: vec!["Math".to_owned(), "Algebra".to_owned()],
+                    native_id: Some("algebra".to_owned()),
+                },
+                at,
+            )],
+        },
+    }
+}
+
+/// Tes requires a licence and will never let one be chosen on the seller's
+/// behalf, so the fixture states one: the free branch takes `CC-BY` and a
+/// priced one takes `TES-PAID`, which is the only paid token Tes writes and
+/// the only one `paid_price_token` accepts beside a price.
+async fn tes_fixture(
+    taxonomy: &TaxonomyRepo,
+    inventory: InventoryId,
+    price: PriceIntent,
+    at: Timestamp,
+) -> Result<Fixture, Failure> {
+    let token = match price {
+        PriceIntent::Free => TesLicence::CcBy,
+        PriceIntent::Paid(_) => TesLicence::TesPaid,
+    }
+    .as_str();
+    let licence = resolved_axis(
+        taxonomy,
+        VocabularyId(inventory, TermKind::Licence),
+        token,
+        Minted {
+            term: LICENCE,
+            label: token.to_owned(),
+            segments: vec![FIXTURE.to_owned(), token.to_owned()],
+        },
+        at,
+    )
+    .await?;
+    let phase = VocabularyId(inventory, TermKind::Phase);
+    let grade = resolved_axis(
+        taxonomy,
+        phase,
+        TES_AGE_BAND,
+        Minted {
+            term: GRADE,
+            label: "11-14".to_owned(),
+            segments: vec![FIXTURE.to_owned(), "11-14".to_owned()],
+        },
+        at,
+    )
+    .await?;
+    let mut terms = vec![subject_term()];
+    let mut edges = vec![fixture_edge(
+        SUBJECT,
+        VocabularyPath {
+            vocabulary: VocabularyId(inventory, TermKind::Subject),
+            segments: vec!["Mathematics".to_owned(), "Algebra".to_owned()],
+            native_id: Some(TES_CATEGORY.to_owned()),
+        },
+        at,
+    )];
+    for held in [licence.crosswalk, grade.crosswalk] {
+        terms.extend(held.terms);
+        edges.extend(held.edges);
+    }
+    Ok(Fixture {
+        inventory,
+        price,
+        grades: GradeDeclaration {
+            source: DeclarationSource::Imported { vocabulary: phase },
+            raw: vec![grade.path],
+            derived: None,
+        },
+        rights: RightsDeclaration::Declared {
+            source: licence.path,
+        },
+        crosswalk: Crosswalk { terms, edges },
+    })
+}
+
+async fn fixture(
+    taxonomy: &TaxonomyRepo,
+    inventory: InventoryId,
+    price: PriceIntent,
+    at: Timestamp,
+) -> Result<Fixture, Failure> {
+    match inventory {
+        InventoryId::Tpt => Ok(tpt_fixture(price, at)),
+        InventoryId::TesGb => tes_fixture(taxonomy, inventory, price, at).await,
+        InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy => {
+            Err(format!("{inventory:?} has no fixture here; this provisions tpt and tes-gb").into())
+        }
+    }
 }
 
 /// The two stored blobs a product is made of, already content-addressed.
@@ -185,6 +426,7 @@ async fn store_files(
 }
 
 fn fixture_product(
+    fixture: &Fixture,
     id: ProductId,
     title: String,
     stored: &Stored,
@@ -222,29 +464,19 @@ fn fixture_product(
         }),
         previews: vec![],
         subjects: vec![SUBJECT],
-        grades: GradeDeclaration {
-            source: DeclarationSource::Imported {
-                vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Phase),
-            },
-            raw: vec![VocabularyPath {
-                vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Phase),
-                segments: vec!["Not grade specific".to_owned()],
-                native_id: Some("not-grade-specific".to_owned()),
-            }],
-            derived: None,
-        },
-        price: PriceIntent::Free,
-        rights: tam_domain::RightsDeclaration::Unstated,
+        grades: fixture.grades.clone(),
+        price: fixture.price,
+        rights: fixture.rights.clone(),
         native_residue: vec![],
     }
 }
 
-fn fixture_mapping(id: MappingId, product: ProductId) -> Mapping {
+fn fixture_mapping(fixture: &Fixture, id: MappingId, product: ProductId) -> Mapping {
     Mapping {
         id,
         org: ORG,
         product,
-        inventory: InventoryId::Tpt,
+        inventory: fixture.inventory,
         policies: FieldPolicies {
             title: FieldPolicy::Managed,
             description: FieldPolicy::Managed,
@@ -253,7 +485,7 @@ fn fixture_mapping(id: MappingId, product: ProductId) -> Mapping {
             grades: FieldPolicy::Managed,
             files: FieldPolicy::Managed,
         },
-        price_rule: PriceRule::Explicit(PriceIntent::Free),
+        price_rule: PriceRule::Explicit(fixture.price),
         publish: PublishMode::DryRun,
         // The create binds the lifecycle its read-back observes; nothing has
         // been observed yet, and `Absent` is the only honest starting value.
@@ -264,27 +496,49 @@ fn fixture_mapping(id: MappingId, product: ProductId) -> Mapping {
 
 /// The queue gate. `LeaseRepo::acquire`'s candidate CTE admits an item only
 /// where its org holds a `linked` connection for the marketplace, and
-/// `gate_connection` flipping this row to `needs_reauth` still stops Tpt
-/// items even though the secret it would carry was never the one sent.
-async fn link_connection(pool: &PgPool) -> Result<(), sqlx::Error> {
+/// `gate_connection` flipping this row to `needs_reauth` still stops the
+/// inventory's items even where the secret it would carry was never the one
+/// sent.
+///
+/// The upsert names the marketplace, never the row: `connection` is unique on
+/// `(org_id, marketplace)` and the conflict clause writes `state` alone, so an
+/// account already linked keeps its id — and `connection_secret`, which is
+/// keyed on that id, keeps the sealed credential the broker reads. What was
+/// inserted or found is printed, because that is the only thing that
+/// distinguishes a gate opened over a real credential from one opened over
+/// nothing.
+async fn link_connection(pool: &PgPool, marketplace: &str) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     pin(&mut tx).await?;
-    sqlx::query(
+    let row = sqlx::query(
         "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
-         VALUES ($1::uuid, $2::uuid, 'tpt', 'linked', now(), now()) \
-         ON CONFLICT (org_id, marketplace) DO UPDATE SET state = 'linked', updated_at = now()",
+         VALUES ($1::uuid, $2::uuid, $3, 'linked', now(), now()) \
+         ON CONFLICT (org_id, marketplace) DO UPDATE SET state = 'linked', updated_at = now() \
+         RETURNING id::text AS id, (xmax = 0) AS inserted",
     )
     .bind(ORG.0.to_hyphenated())
     .bind(CONNECTION.to_hyphenated())
-    .execute(&mut *tx)
+    .bind(marketplace)
+    .fetch_one(&mut *tx)
     .await?;
-    tx.commit().await
+    tx.commit().await?;
+    println!(
+        "  connection   {} on {marketplace} ({})",
+        row.try_get::<String, _>("id")?,
+        if row.try_get::<bool, _>("inserted")? {
+            "minted here, so it carries no secret"
+        } else {
+            "already linked; its sealed secret is untouched"
+        },
+    );
+    Ok(())
 }
 
 /// One job carrying one item, which is the shape both halves of the proof
 /// take.
 async fn enqueue_one(
     pool: &PgPool,
+    inventory: InventoryId,
     operation: ItemOperation,
     keyed: (ProductId, MappingId, ContentHash, u32),
     at: Timestamp,
@@ -295,17 +549,13 @@ async fn enqueue_one(
     JobRepo::new(pool.clone())
         .enqueue(
             ORG,
-            &NewJob {
-                job,
-                inventory: InventoryId::Tpt,
-                at,
-            },
+            &NewJob { job, inventory, at },
             &[NewJobItem {
                 item,
                 mapping,
                 idempotency_key: derive_idempotency_key(
                     ORG,
-                    InventoryId::Tpt,
+                    inventory,
                     product,
                     intent_version,
                     payload_hash,
@@ -320,6 +570,8 @@ async fn enqueue_one(
 
 /// What `create` was told to build from.
 struct CreateInputs<'a> {
+    inventory: InventoryId,
+    price: PriceIntent,
     kek_path: &'a str,
     store_root: &'a str,
     payload: &'a str,
@@ -333,8 +585,11 @@ async fn create(pool: &PgPool, inputs: &CreateInputs<'_>) -> Result<(), Failure>
     SessionRepo::new(pool.clone())
         .ensure_org(ORG, "founder-dev", now)
         .await?;
-    let (terms, edges) = crosswalk(now);
-    let seeded_crosswalk = TaxonomyRepo::new(pool.clone()).seed(&terms, &edges).await?;
+    let taxonomy = TaxonomyRepo::new(pool.clone());
+    let fixture = fixture(&taxonomy, inputs.inventory, inputs.price, now).await?;
+    let seeded_crosswalk = taxonomy
+        .seed(&fixture.crosswalk.terms, &fixture.crosswalk.edges)
+        .await?;
 
     let blobs = BlobRepo::new(
         pool.clone(),
@@ -345,17 +600,17 @@ async fn create(pool: &PgPool, inputs: &CreateInputs<'_>) -> Result<(), Failure>
 
     let product = ProductId(seeded(now, 0x01));
     let mapping = MappingId(seeded(now, 0x31));
-    let canonical = fixture_product(product, title.clone(), &stored, now);
+    let canonical = fixture_product(&fixture, product, title.clone(), &stored, now);
     ProductRepo::new(pool.clone())
         .insert(ORG, &canonical, now)
         .await?;
     MappingRepo::new(pool.clone())
-        .insert(ORG, &fixture_mapping(mapping, product), 0, now)
+        .insert(ORG, &fixture_mapping(&fixture, mapping, product), 0, now)
         .await?;
-    link_connection(pool).await?;
 
     let (job, item) = enqueue_one(
         pool,
+        fixture.inventory,
         ItemOperation::Create,
         (product, mapping, stored.payload, CREATE_INTENT),
         now,
@@ -363,12 +618,59 @@ async fn create(pool: &PgPool, inputs: &CreateInputs<'_>) -> Result<(), Failure>
     .await?;
 
     println!("provisioned a create for {title:?}");
+    println!("  inventory    {:?}", fixture.inventory);
+    println!("  price        {:?}", fixture.price);
     println!("  crosswalk    {seeded_crosswalk:?}");
-    println!("  TAM_TPT_ORG  {}", ORG.0.to_hyphenated());
+    println!("  org          {}", ORG.0.to_hyphenated());
+    link_connection(pool, marketplace_of(fixture.inventory)).await?;
     println!("  product      {}", product.0.to_hyphenated());
     println!("  mapping      {}", mapping.0.to_hyphenated());
     println!("  job          {}", job.0.to_hyphenated());
     println!("  item         {}", item.0.to_hyphenated());
+    Ok(())
+}
+
+/// The `connection.marketplace` value one inventory's account is held under.
+/// The column's own check constraint is the closed set.
+const fn marketplace_of(inventory: InventoryId) -> &'static str {
+    match inventory {
+        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz => "tes",
+        InventoryId::Tpt => "tpt",
+        InventoryId::Etsy => "etsy",
+    }
+}
+
+/// The canonical write a seller-facing edit makes, so a revise has something
+/// to carry: `POST /v1/jobs` on a bound mapping lowers to `Revise`, which
+/// re-projects the product, and with the product unchanged that is a no-op
+/// re-post.
+///
+/// The tenant is pinned rather than assumed: the statement is raw, so the
+/// row-level-security policy sees a pin only if this puts one there.
+async fn retitle(pool: &PgPool, mapping: MappingId, suffix: &str) -> Result<(), Failure> {
+    let record = MappingRepo::new(pool.clone())
+        .get(ORG, mapping)
+        .await?
+        .ok_or("no such mapping in this organisation")?;
+    let mut tx = pool.begin().await?;
+    pin(&mut tx).await?;
+    let row = sqlx::query(
+        "UPDATE product SET title = title || $3, updated_at = now() \
+         WHERE org_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL \
+         RETURNING title",
+    )
+    .bind(ORG.0.to_hyphenated())
+    .bind(record.mapping.product.0.to_hyphenated())
+    .bind(suffix)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or("the mapped product has gone")?;
+    tx.commit().await?;
+    println!(
+        "retitled {} to {:?}",
+        record.mapping.product.0.to_hyphenated(),
+        row.try_get::<String, _>("title")?
+    );
     Ok(())
 }
 
@@ -392,7 +694,9 @@ async fn remove(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
     if !matches!(record.mapping.lifecycle, RemoteLifecycle::Draft) {
         return Err(format!(
             "the mapping records the listing as {:?}; this proof removes a draft, and a \
-             removal whose stated state diverges from the mapping is parked rather than run",
+             removal whose stated state diverges from the mapping is parked rather than run. \
+             A listing this proof published is taken down through the adapter's own \
+             delete-by-id path instead",
             record.mapping.lifecycle
         )
         .into());
@@ -411,6 +715,7 @@ async fn remove(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
 
     let (job, item) = enqueue_one(
         pool,
+        record.mapping.inventory,
         ItemOperation::Remove {
             subject: id.clone(),
             state: ListingState::Draft,
@@ -421,6 +726,7 @@ async fn remove(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
     .await?;
 
     println!("provisioned a removal of {id:?}");
+    println!("  inventory    {:?}", record.mapping.inventory);
     println!("  mapping      {}", mapping.0.to_hyphenated());
     println!("  job          {}", job.0.to_hyphenated());
     println!("  item         {}", item.0.to_hyphenated());
@@ -439,6 +745,7 @@ async fn show(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
         "  product      {}",
         record.mapping.product.0.to_hyphenated()
     );
+    println!("  inventory    {:?}", record.mapping.inventory);
     println!("  binding      {:?}", record.mapping.binding);
     println!("  lifecycle    {:?}", record.mapping.lifecycle);
 
@@ -503,10 +810,66 @@ async fn show(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
     Ok(())
 }
 
+/// A transport no preflight reaches, and a file source no projection reads.
+///
+/// `project_fields` is pure on both adapters; Tes's is a seam method where
+/// TPT's is a free function, so rendering the Tes shape needs an adapter and
+/// an adapter needs these. Standing them in for the session this mode
+/// deliberately does not hold is what makes a preview unable to become a
+/// request.
+struct NoTransport;
+
+impl Transport for NoTransport {
+    fn send(
+        &self,
+        _request: HttpRequest,
+    ) -> impl core::future::Future<Output = Result<HttpResponse, TransportError>> + Send {
+        core::future::ready(Err(TransportError::AfterSend {
+            detail: "the preflight holds no session and sends nothing".to_owned(),
+        }))
+    }
+}
+
+/// See [`NoTransport`].
+struct NoFiles;
+
+impl FileSource for NoFiles {
+    fn fetch(
+        &self,
+        file: FileId,
+    ) -> impl core::future::Future<Output = Result<FileContent, FileSourceError>> + Send {
+        core::future::ready(Err(FileSourceError::Missing(file)))
+    }
+}
+
+/// The wire shape the target's own adapter renders from the projection.
+fn render(inventory: InventoryId, projected: &ProjectedListing) -> Result<FieldSet, Failure> {
+    match inventory {
+        InventoryId::Tpt => write_model::project_fields(projected)
+            .map_err(|error| format!("Tpt refused the projection: {error:?}").into()),
+        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz => {
+            TesAdapter::new(inventory, NoTransport, NoFiles)?
+                .project_fields(projected)
+                .map_err(|error| format!("Tes refused the projection: {error:?}").into())
+        }
+        InventoryId::Etsy => Err("no adapter renders Etsy".into()),
+    }
+}
+
+/// What `preflight` was told to read blobs back through.
+struct PreflightInputs<'a> {
+    kek_path: &'a str,
+    store_root: &'a str,
+}
+
 /// The whole path up to the first outbound byte, run against the real
 /// ledger: the admission `prepare_item` applies, the projection it produces,
-/// the wire shape Tpt's write model renders from it, and the payload blob
-/// read back through the same `FileSource` the worker hands its adapter.
+/// the wire shape the target's write model renders from it, and the payload
+/// blob read back through the same `FileSource` the worker hands its adapter.
+///
+/// The inventory is the mapping's own, never an argument: the ledger projects
+/// into the inventory the mapping records, and a preview that took a second
+/// answer could render a shape the live run would never send.
 ///
 /// The item is synthesised rather than leased. `prepare_item` reads a leased
 /// item's organisation, mapping, inventory and operation and nothing else, so
@@ -516,16 +879,21 @@ async fn show(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
 /// set — so the create is the only projection there is to preview.
 async fn preflight(
     pool: &PgPool,
-    inputs: &CreateInputs<'_>,
+    inputs: &PreflightInputs<'_>,
     mapping: MappingId,
 ) -> Result<(), Failure> {
     let now = wall_now()?;
+    let record = MappingRepo::new(pool.clone())
+        .get(ORG, mapping)
+        .await?
+        .ok_or("no such mapping in this organisation")?;
+    let inventory = record.mapping.inventory;
     let lease = LeasedItem {
         org: ORG,
         item: JobItemId(Uuid([0; 16])),
         job: JobId(Uuid([0; 16])),
         mapping,
-        inventory: InventoryId::Tpt,
+        inventory,
         idempotency_key: IdempotencyKey(Uuid([0; 16])),
         operation: ItemOperation::Create,
         lease_epoch: 0,
@@ -541,15 +909,15 @@ async fn preflight(
         }
         ItemPreparation::Blocked { gate, raised } => {
             return Err(format!(
-                "the ledger would park this item on {gate} ({} raised, {} already open);                  the live run would park the same way",
+                "the ledger would park this item on {gate} ({} raised, {} already open); the \
+                 live run would park the same way",
                 raised.new, raised.already_open
             )
             .into())
         }
     };
-    let fields = write_model::project_fields(&projected)
-        .map_err(|error| format!("Tpt refused the projection: {error:?}"))?;
-    println!("the item projects; Tpt would receive");
+    let fields = render(inventory, &projected)?;
+    println!("the item projects; {inventory:?} would receive");
     for (key, value) in &fields.entries {
         println!("  {key:?} = {value}");
     }
@@ -586,6 +954,44 @@ fn mapping_argument(raw: Option<&String>) -> Result<MappingId, Failure> {
         .ok_or_else(|| format!("{raw:?} is not a hyphenated mapping id").into())
 }
 
+/// The inventories this fixture provisions, named as the operator names them
+/// rather than as the enum spells them.
+fn inventory_argument(raw: Option<&String>) -> Result<InventoryId, Failure> {
+    match raw.ok_or(USAGE)?.as_str() {
+        "tpt" => Ok(InventoryId::Tpt),
+        "tes-gb" => Ok(InventoryId::TesGb),
+        other => Err(
+            format!("{other:?} is not a provisionable inventory; expected tpt or tes-gb").into(),
+        ),
+    }
+}
+
+/// The price the fixture states, in the inventory's own currency: a listing
+/// is priced in one currency per marketplace and the seller does not choose
+/// it, so naming one on the command line would only be a way to disagree with
+/// the registry.
+fn price_argument(arguments: &[String], inventory: InventoryId) -> Result<PriceIntent, Failure> {
+    let named = arguments
+        .iter()
+        .position(|argument| argument == "--price")
+        .map(|at| {
+            arguments
+                .get(at.saturating_add(1))
+                .ok_or("--price needs an amount in minor units")
+        });
+    let Some(raw) = named.transpose()? else {
+        return Ok(PriceIntent::Free);
+    };
+    let minor_units: i64 = raw.parse()?;
+    match inventory.currency_rule() {
+        CurrencyRule::Fixed(currency) => Ok(PriceIntent::Paid(Money::new(minor_units, currency)?)),
+        CurrencyRule::SellerScoped | CurrencyRule::Unmeasured => Err(format!(
+            "{inventory:?} has no measured fixed currency, so a price cannot be stated for it"
+        )
+        .into()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Failure> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -593,13 +999,16 @@ async fn main() -> Result<(), Failure> {
     let pool = connect(arguments.get(1).ok_or(USAGE)?).await?;
     match mode {
         "create" => {
+            let inventory = inventory_argument(arguments.get(2))?;
             create(
                 &pool,
                 &CreateInputs {
-                    kek_path: arguments.get(2).ok_or(USAGE)?,
-                    store_root: arguments.get(3).ok_or(USAGE)?,
-                    payload: arguments.get(4).ok_or(USAGE)?,
-                    cover: arguments.get(5).ok_or(USAGE)?,
+                    inventory,
+                    price: price_argument(&arguments, inventory)?,
+                    kek_path: arguments.get(3).ok_or(USAGE)?,
+                    store_root: arguments.get(4).ok_or(USAGE)?,
+                    payload: arguments.get(5).ok_or(USAGE)?,
+                    cover: arguments.get(6).ok_or(USAGE)?,
                 },
             )
             .await
@@ -607,13 +1016,19 @@ async fn main() -> Result<(), Failure> {
         "preflight" => {
             preflight(
                 &pool,
-                &CreateInputs {
+                &PreflightInputs {
                     kek_path: arguments.get(2).ok_or(USAGE)?,
                     store_root: arguments.get(3).ok_or(USAGE)?,
-                    payload: "",
-                    cover: "",
                 },
                 mapping_argument(arguments.get(4))?,
+            )
+            .await
+        }
+        "retitle" => {
+            retitle(
+                &pool,
+                mapping_argument(arguments.get(2))?,
+                arguments.get(3).ok_or(USAGE)?,
             )
             .await
         }
