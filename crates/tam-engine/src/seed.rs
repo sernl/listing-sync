@@ -233,12 +233,19 @@ pub async fn prepare_item(
         },
     ) {
         Ok(projection) => projection,
-        Err(ProjectionBlocked::Taxonomy { items }) => {
-            let causes: Vec<_> = items
+        Err(ProjectionBlocked::Blocked {
+            gaps, elections, ..
+        }) => {
+            // Gaps first, because they drain: the answer is a durable edge
+            // every later product finds waiting, so raising them is progress
+            // even when an election blocks the same item. An election is this
+            // product's own question and its queue is the seller's decision
+            // surface, so the gate names whichever is still outstanding.
+            let causes: Vec<_> = gaps
                 .iter()
-                .map(|item| {
-                    let VocabularyId(_, kind) = item.target;
-                    (item.term, kind)
+                .map(|gap| {
+                    let VocabularyId(_, kind) = gap.target;
+                    (gap.term, kind)
                 })
                 .collect();
             let raised = taxonomy
@@ -252,10 +259,12 @@ pub async fn prepare_item(
                     &causes,
                 )
                 .await?;
-            return Ok(ItemPreparation::Blocked {
-                gate: "reconciliation",
-                raised,
-            });
+            let gate = if gaps.is_empty() && !elections.is_empty() {
+                "election"
+            } else {
+                "reconciliation"
+            };
+            return Ok(ItemPreparation::Blocked { gate, raised });
         }
         Err(ProjectionBlocked::CurrencyUnknown { .. }) => {
             return Ok(blocked("currency_unknown"));

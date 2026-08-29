@@ -17,17 +17,18 @@
 
 use std::collections::HashMap;
 
+use tam_domain::equivalence::{Loss, VocabularyGap};
 use tam_domain::registry::{registry, truncate, FieldSpec};
 use tam_domain::{
     CanonicalProduct, CanonicalTerm, ListingProjection, ProjectionBlocked, ProjectionEdge,
-    ReconciliationItem, ReconciliationState, TermKind, VocabularyId, VocabularyPath,
+    TermKind, TermProjection, VocabularyId, VocabularyPath,
 };
 use tam_types::{
     CanonicalTermId, CurrencyRule, InventoryId, MappingId, OrgId, PriceIntent, ScanOutcome,
     Timestamp,
 };
 
-use crate::project::project_terms;
+use crate::project::{broadening, project_terms};
 
 /// Everything the projection decides over beyond the product itself: the
 /// tenant scope the raised items carry, the target, the instant, and the
@@ -51,11 +52,11 @@ pub fn project_listing(
         ctx.terms.iter().map(|term| (term.id, term.kind)).collect();
 
     // Gate one: taxonomy. Terms are projected per kind because a vocabulary
-    // is per (inventory, kind); blocked terms become the queue items the
-    // caller raises, deduplicated here on (term, kind) so one gap is one item.
+    // is per (inventory, kind); blocked terms become the gaps the caller
+    // raises, deduplicated here on (term, kind) so one gap is one item.
     let mut included = Vec::new();
-    let mut loss = Vec::new();
-    let mut items: Vec<ReconciliationItem> = Vec::new();
+    let mut loss: Vec<Loss> = Vec::new();
+    let mut gaps: Vec<VocabularyGap> = Vec::new();
     for kind in [TermKind::Subject, TermKind::Topic] {
         let of_kind: Vec<CanonicalTermId> = product
             .subjects
@@ -69,15 +70,12 @@ pub fn project_listing(
         let vocabulary = VocabularyId(ctx.inventory, kind);
         let outcome = project_terms(&of_kind, vocabulary, ctx.edges, ctx.no_counterparts);
         included.extend(outcome.included);
-        loss.extend(outcome.loss);
+        loss.extend(outcome.loss.iter().filter_map(broadening));
         for blocked in outcome.blocked {
-            items.push(ReconciliationItem {
-                org: ctx.org,
+            gaps.push(VocabularyGap {
                 term: blocked.term,
                 target: vocabulary,
-                raised_by: ctx.mapping,
-                raised_at: ctx.now,
-                state: ReconciliationState::Open,
+                projection: blocked.projection,
             });
         }
     }
@@ -86,18 +84,19 @@ pub fn project_listing(
     // vocabulary, which is the fail-closed reading of an impossible input.
     for term in &product.subjects {
         if !kinds.contains_key(term) {
-            items.push(ReconciliationItem {
-                org: ctx.org,
+            gaps.push(VocabularyGap {
                 term: *term,
                 target: VocabularyId(ctx.inventory, TermKind::Subject),
-                raised_by: ctx.mapping,
-                raised_at: ctx.now,
-                state: ReconciliationState::Open,
+                projection: TermProjection::Absent,
             });
         }
     }
-    if !items.is_empty() {
-        return Err(ProjectionBlocked::Taxonomy { items });
+    if !gaps.is_empty() {
+        return Err(ProjectionBlocked::Blocked {
+            gaps,
+            elections: Vec::new(),
+            unrecognised: Vec::new(),
+        });
     }
 
     // Gate two: currency. Free needs none; a priced listing into an
@@ -296,19 +295,26 @@ mod tests {
     }
 
     #[test]
-    fn an_unmapped_term_blocks_as_a_taxonomy_item() {
+    fn an_unmapped_term_blocks_as_a_vocabulary_gap() {
         let catalogue = terms();
         let blocked = project_listing(
             &product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW }),
             &ctx(&catalogue, &[]),
         );
-        let Err(ProjectionBlocked::Taxonomy { items }) = blocked else {
-            panic!("no edge means the taxonomy gate blocks, got {blocked:?}");
+        let Err(ProjectionBlocked::Blocked {
+            gaps, elections, ..
+        }) = blocked
+        else {
+            panic!("no edge means the equivalence gate blocks, got {blocked:?}");
         };
         assert_eq!(
-            (items.len(), items[0].term, items[0].raised_by),
-            (1, TERM, MAPPING),
-            "one gap raises one item naming the term and the mapping"
+            (gaps.len(), gaps[0].term, gaps[0].target),
+            (1, TERM, VocabularyId(InventoryId::TesNz, TermKind::Subject)),
+            "one gap names the term and the vocabulary pair it is a question about"
+        );
+        assert!(
+            elections.is_empty(),
+            "a missing equivalence is a question about a vocabulary, not about this product"
         );
     }
 
@@ -487,7 +493,7 @@ mod tests {
             &ctx(&catalogue, &[]),
         );
         assert!(
-            matches!(blocked, Err(ProjectionBlocked::Taxonomy { .. })),
+            matches!(blocked, Err(ProjectionBlocked::Blocked { .. })),
             "several gates would fire; the enum's first names the block: {blocked:?}"
         );
     }

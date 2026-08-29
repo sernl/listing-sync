@@ -32,6 +32,8 @@ use tam_types::{
 /// hub is where it is reasoned about.
 pub use tam_types::TermKind;
 
+use crate::equivalence::{Election, Loss, VocabularyGap};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobItemId(pub Uuid);
 
@@ -352,15 +354,37 @@ pub struct ListingProjection {
     pub taxonomy: Vec<VocabularyPath>,
     pub grades: Vec<VocabularyPath>,
     pub files: Vec<FileId>,
-    pub loss: Vec<TermProjection>,
+    pub loss: Vec<Loss>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionBlocked {
-    Taxonomy { items: Vec<ReconciliationItem> },
-    CurrencyUnknown { inventory: InventoryId },
+    /// The equivalence relation could not carry this listing, and the variant
+    /// says which of the two reasons it was.
+    ///
+    /// A gap is a question about a vocabulary pair, answered once and reused
+    /// by every later product, which is why it becomes a reconciliation item.
+    /// An election is a question about this product against this target and
+    /// cannot deduplicate across products, so it goes to its own queue. The
+    /// two block alike and are raised differently, and a caller that flattened
+    /// them would send an election to an index designed to collapse it.
+    ///
+    /// `unrecognised` never blocks on its own; it rides along so the seller
+    /// sees the source values the relation does not know, which cannot become
+    /// a queue item at all because `reconciliation_item.term` references
+    /// `canonical_term`.
+    Blocked {
+        gaps: Vec<VocabularyGap>,
+        elections: Vec<Election>,
+        unrecognised: Vec<VocabularyPath>,
+    },
+    CurrencyUnknown {
+        inventory: InventoryId,
+    },
     CoverMissing,
-    ScanIncomplete { file: FileId },
+    ScanIncomplete {
+        file: FileId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

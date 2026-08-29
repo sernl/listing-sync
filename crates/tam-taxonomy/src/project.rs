@@ -307,7 +307,7 @@ fn elect_over_cardinality(
 /// `project_terms` carries its loss as the `TermProjection` that produced it;
 /// an axis outcome carries it as a `Loss`, which is the form the seller sees
 /// and the mapping records.
-fn broadening(projection: &TermProjection) -> Option<Loss> {
+pub(crate) fn broadening(projection: &TermProjection) -> Option<Loss> {
     match projection {
         TermProjection::Broadened { to, dropped } => Some(Loss::Broadened {
             to: to.clone(),

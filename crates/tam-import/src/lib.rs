@@ -616,12 +616,14 @@ where
                 already_open: 0,
             },
         ),
-        Err(tam_domain::ProjectionBlocked::Taxonomy { items }) => {
-            let causes: Vec<(CanonicalTermId, tam_domain::TermKind)> = items
+        Err(tam_domain::ProjectionBlocked::Blocked {
+            gaps, elections, ..
+        }) => {
+            let causes: Vec<(CanonicalTermId, tam_domain::TermKind)> = gaps
                 .iter()
-                .map(|item| {
-                    let tam_domain::VocabularyId(_, kind) = item.target;
-                    (item.term, kind)
+                .map(|gap| {
+                    let tam_domain::VocabularyId(_, kind) = gap.target;
+                    (gap.term, kind)
                 })
                 .collect();
             let raised = taxonomy
@@ -635,7 +637,12 @@ where
                     &causes,
                 )
                 .await?;
-            (false, Some("taxonomy".to_owned()), raised)
+            let gate = if gaps.is_empty() && !elections.is_empty() {
+                "election"
+            } else {
+                "taxonomy"
+            };
+            (false, Some(gate.to_owned()), raised)
         }
         Err(tam_domain::ProjectionBlocked::CurrencyUnknown { .. }) => (
             false,
