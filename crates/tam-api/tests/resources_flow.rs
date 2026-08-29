@@ -94,6 +94,7 @@ async fn provision(pool: &PgPool) {
                     derived: None,
                 },
                 price: PriceIntent::Free,
+                rights: tam_domain::RightsDeclaration::Unstated,
             },
             Timestamp(1_000),
         )

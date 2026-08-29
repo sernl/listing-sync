@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, id, title, body, price_kind, price_minor_units, price_currency, created_at, updated_at FROM product WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+  "query": "SELECT org_id, id, title, body, price_kind, price_minor_units, price_currency, rights_state, rights_source_inventory, rights_segments, rights_native_id, created_at, updated_at FROM product WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -40,11 +40,31 @@
       },
       {
         "ordinal": 7,
+        "name": "rights_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "rights_source_inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "rights_segments",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 10,
+        "name": "rights_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 12,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -64,8 +84,12 @@
       true,
       true,
       false,
+      true,
+      true,
+      true,
+      false,
       false
     ]
   },
-  "hash": "c48078d92c13645757c62dd9aa4265a0f1afa7c2b4b0a25301bad2d0294042a3"
+  "hash": "89eea4d9cd1ff3f4dc3272992574bc4cb0b8843d2dc34b9b4e0a41ea21dc6514"
 }

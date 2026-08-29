@@ -7,8 +7,8 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tam_domain::{
-    AgeInterval, CanonicalProduct, DeclarationSource, GradeDeclaration, VocabularyId,
-    VocabularyPath,
+    AgeInterval, CanonicalProduct, DeclarationSource, GradeDeclaration, RightsDeclaration,
+    TermKind, VocabularyId, VocabularyPath,
 };
 use tam_types::{
     CanonicalTermId, FileId, FileRole, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId,
@@ -67,11 +67,13 @@ impl ProductRepo {
         pin_org(&mut tx, org).await?;
 
         let price = PriceColumns::from_intent(product.price);
+        let rights = RightsColumns::encode(&product.rights);
         sqlx::query!(
             "INSERT INTO product \
              (org_id, id, title, body, price_kind, price_minor_units, price_currency, \
+              rights_state, rights_source_inventory, rights_segments, rights_native_id, \
               created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)",
             org_db,
             product_db,
             product.title.0,
@@ -79,7 +81,10 @@ impl ProductRepo {
             price.kind,
             price.minor_units,
             price.currency,
-            at_db,
+            rights.state,
+            rights.inventory,
+            rights.segments.as_deref(),
+            rights.native_id,
             at_db,
         )
         .execute(&mut *tx)
@@ -140,6 +145,7 @@ impl ProductRepo {
         let Some(row) = sqlx::query_as!(
             ProductRow,
             "SELECT org_id, id, title, body, price_kind, price_minor_units, price_currency, \
+             rights_state, rights_source_inventory, rights_segments, rights_native_id, \
              created_at, updated_at \
              FROM product \
              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
@@ -212,6 +218,7 @@ impl ProductRepo {
             reason: "product without a grade_declaration row".to_owned(),
         })?;
         let grades = decode_grades(&grade, paths)?;
+        let rights = rights_from_db(&row)?;
         let price = price_from_db(&row.price_kind, row.price_minor_units, row.price_currency)?;
 
         Ok(Some(ProductRecord {
@@ -226,6 +233,7 @@ impl ProductRepo {
                 subjects,
                 grades,
                 price,
+                rights,
             },
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),
@@ -423,8 +431,63 @@ struct ProductRow {
     price_kind: String,
     price_minor_units: Option<i64>,
     price_currency: Option<String>,
+    rights_state: String,
+    rights_source_inventory: Option<String>,
+    rights_segments: Option<Vec<String>>,
+    rights_native_id: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+/// The four columns a rights declaration occupies, so the insert and the
+/// `product_rights_total` CHECK cannot disagree about which combination is
+/// representable.
+struct RightsColumns {
+    state: &'static str,
+    inventory: Option<String>,
+    segments: Option<Vec<String>>,
+    native_id: Option<String>,
+}
+
+impl RightsColumns {
+    fn encode(rights: &RightsDeclaration) -> Self {
+        match rights {
+            RightsDeclaration::Unstated => Self {
+                state: "unstated",
+                inventory: None,
+                segments: None,
+                native_id: None,
+            },
+            RightsDeclaration::Declared { source } => Self {
+                state: "declared",
+                inventory: Some(inventory_to_db(source.vocabulary.0).to_owned()),
+                segments: Some(source.segments.clone()),
+                native_id: source.native_id.clone(),
+            },
+        }
+    }
+}
+
+/// The kind is not stored: a rights declaration is a licence by construction,
+/// and a column that could disagree with that is a column that will.
+fn rights_from_db(row: &ProductRow) -> Result<RightsDeclaration, StorageError> {
+    match (
+        row.rights_state.as_str(),
+        row.rights_source_inventory.as_deref(),
+        row.rights_segments.as_ref(),
+    ) {
+        ("unstated", None, None) => Ok(RightsDeclaration::Unstated),
+        ("declared", Some(inventory), Some(segments)) => Ok(RightsDeclaration::Declared {
+            source: VocabularyPath {
+                vocabulary: VocabularyId(inventory_from_db(inventory)?, TermKind::Licence),
+                segments: segments.clone(),
+                native_id: row.rights_native_id.clone(),
+            },
+        }),
+        (state, inventory, segments) => Err(StorageError::CorruptRow {
+            reason: format!("inconsistent rights columns ({state:?}, {inventory:?}, {segments:?})"),
+        }),
+    }
 }
 
 struct SummaryRow {

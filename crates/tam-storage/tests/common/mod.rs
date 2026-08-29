@@ -43,6 +43,7 @@ pub(crate) fn minimal_product() -> CanonicalProduct {
             derived: None,
         },
         price: PriceIntent::Free,
+        rights: tam_domain::RightsDeclaration::Unstated,
     }
 }
 

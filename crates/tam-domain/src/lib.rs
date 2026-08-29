@@ -292,6 +292,23 @@ impl Mapping {
     }
 }
 
+/// What the source stated about the rights it grants, kept as the source's
+/// own value rather than as a canonical one.
+///
+/// A licence is a legal instrument and a translation of one is a different
+/// instrument, so nothing derives one vocabulary's grant from another's. The
+/// projection either finds an edge the seller authored or asks them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RightsDeclaration {
+    /// No grant was captured. The honest state of every product imported
+    /// before this existed — the import read the licence and discarded it —
+    /// and the reason the backfill is this rather than a plausible default.
+    Unstated,
+    Declared {
+        source: VocabularyPath,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalProduct {
     pub id: ProductId,
@@ -304,6 +321,7 @@ pub struct CanonicalProduct {
     pub subjects: Vec<CanonicalTermId>,
     pub grades: GradeDeclaration,
     pub price: PriceIntent,
+    pub rights: RightsDeclaration,
 }
 
 /// The per-inventory rendering of a canonical product. Derived, never authored,

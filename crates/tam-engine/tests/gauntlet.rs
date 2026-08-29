@@ -547,6 +547,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
             derived: None,
         },
         price: PriceIntent::Free,
+        rights: tam_domain::RightsDeclaration::Unstated,
     };
     ProductRepo::new(pool.clone())
         .insert(ORG, &product, NOW)

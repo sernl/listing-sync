@@ -79,6 +79,7 @@ fn product(seed: u8) -> CanonicalProduct {
             derived: None,
         },
         price: PriceIntent::Free,
+        rights: tam_domain::RightsDeclaration::Unstated,
     }
 }
 

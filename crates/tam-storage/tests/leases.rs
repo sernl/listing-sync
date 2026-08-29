@@ -98,6 +98,7 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
             derived: None,
         },
         price: PriceIntent::Free,
+        rights: tam_domain::RightsDeclaration::Unstated,
     };
     ProductRepo::new(app.clone())
         .insert(org, &full_product, T0)

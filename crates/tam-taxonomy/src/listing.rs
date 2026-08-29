@@ -226,6 +226,7 @@ mod tests {
                 derived: None,
             },
             price,
+            rights: tam_domain::RightsDeclaration::Unstated,
         }
     }
 

@@ -233,6 +233,7 @@ fn fixture_product(
             derived: None,
         },
         price: PriceIntent::Free,
+        rights: tam_domain::RightsDeclaration::Unstated,
     }
 }
 

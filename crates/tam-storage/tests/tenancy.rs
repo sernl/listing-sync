@@ -8,8 +8,8 @@
 
 use sqlx::PgPool;
 use tam_domain::{
-    AgeInterval, CanonicalProduct, DeclarationSource, GradeDeclaration, TermKind, VocabularyId,
-    VocabularyPath,
+    AgeInterval, CanonicalProduct, DeclarationSource, GradeDeclaration, RightsDeclaration,
+    TermKind, VocabularyId, VocabularyPath,
 };
 use tam_storage::ProductRepo;
 use tam_types::{
@@ -92,6 +92,16 @@ fn sample_product(org: OrgId) -> CanonicalProduct {
             derived: Some(interval),
         },
         price: PriceIntent::Free,
+        // The declared arm is the fixture, so the aggregate round trip is
+        // also the rights round trip: a grant is kept as the source's own
+        // value, and a licence is a kind a term may have.
+        rights: RightsDeclaration::Declared {
+            source: VocabularyPath {
+                vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+                segments: vec!["Creative Commons Attribution-ShareAlike".to_owned()],
+                native_id: Some("CC-BY-SA".to_owned()),
+            },
+        },
     }
 }
 
@@ -158,6 +168,54 @@ async fn the_aggregate_round_trips(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_product_that_stated_no_grant_reads_back_as_having_stated_none(pool: PgPool) {
+    seed_fixture(&pool).await.expect("fixture rows insert");
+    let repo = ProductRepo::new(pool.clone());
+    let mut product = sample_product(ORG_A);
+    product.rights = RightsDeclaration::Unstated;
+    repo.insert(ORG_A, &product, Timestamp(1))
+        .await
+        .expect("tenant A inserts the aggregate");
+
+    let record = repo
+        .get(ORG_A, PRODUCT_1)
+        .await
+        .expect("tenant A reads back")
+        .expect("the product exists for tenant A");
+    assert_eq!(
+        record.product.rights,
+        RightsDeclaration::Unstated,
+        "an absent grant is the honest state of every product imported before the column \
+         existed, and it must not read back as a plausible default"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_half_declared_grant_is_refused_by_the_database_and_not_only_by_the_type(pool: PgPool) {
+    seed_fixture(&pool).await.expect("fixture rows insert");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(ORG_A.0).to_string())
+        .execute(&pool)
+        .await
+        .expect("the tenant pin is set");
+    let refused = sqlx::query(
+        "INSERT INTO product \
+         (org_id, id, title, body, price_kind, rights_state, rights_source_inventory, \
+          created_at, updated_at) \
+         VALUES ($1, $2, 'x', 'y', 'free', 'declared', 'tes_gb', now(), now())",
+    )
+    .bind(db_uuid(ORG_A.0))
+    .bind(db_uuid(Uuid([0x5A; 16])))
+    .execute(&pool)
+    .await;
+    assert!(
+        refused.is_err(),
+        "the encoder makes the illegal combination unrepresentable, and the CHECK refuses it \
+         for anything that writes the row directly"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn two_files_sharing_a_hash_share_one_blob(pool: PgPool) {
     seed_fixture(&pool).await.expect("fixture rows insert");
     let repo = ProductRepo::new(pool.clone());
@@ -187,8 +245,8 @@ async fn a_product_without_a_payload_cannot_commit(pool: PgPool) {
     sqlx::query(
         "INSERT INTO product \
          (org_id, id, title, body, price_kind, price_minor_units, price_currency, \
-          created_at, updated_at) \
-         VALUES ($1, $2, 't', 'b', 'free', NULL, NULL, now(), now())",
+          rights_state, created_at, updated_at) \
+         VALUES ($1, $2, 't', 'b', 'free', NULL, NULL, 'unstated', now(), now())",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(PRODUCT_1.0))
@@ -272,8 +330,8 @@ async fn tenant_b_cannot_write_a_row_into_tenant_a(pool: PgPool) {
     let smuggled = sqlx::query(
         "INSERT INTO product \
          (org_id, id, title, body, price_kind, price_minor_units, price_currency, \
-          created_at, updated_at) \
-         VALUES ($1, $2, 't', 'b', 'free', NULL, NULL, now(), now())",
+          rights_state, created_at, updated_at) \
+         VALUES ($1, $2, 't', 'b', 'free', NULL, NULL, 'unstated', now(), now())",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(PRODUCT_1.0))

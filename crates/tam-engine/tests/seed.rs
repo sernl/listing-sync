@@ -126,6 +126,7 @@ async fn provision_lifecycle(
             derived: Some(tam_domain::AgeInterval::new(5, 7).expect("a bounded range")),
         },
         price: PriceIntent::Free,
+        rights: tam_domain::RightsDeclaration::Unstated,
     };
     ProductRepo::new(pool.clone())
         .insert(ORG, &product, NOW)

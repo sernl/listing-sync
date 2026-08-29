@@ -66,6 +66,7 @@ fn product(id: u8, hash: u8) -> tam_domain::CanonicalProduct {
             derived: None,
         },
         price: PriceIntent::Free,
+        rights: tam_domain::RightsDeclaration::Unstated,
     }
 }
 

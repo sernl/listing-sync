@@ -511,6 +511,7 @@ where
         subjects,
         grades,
         price,
+        rights: tam_domain::RightsDeclaration::Unstated,
     };
     ProductRepo::new(run.pool.clone())
         .insert(run.org, &product, run.now)
