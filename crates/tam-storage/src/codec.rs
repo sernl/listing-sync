@@ -359,6 +359,14 @@ impl<'a> OperationColumns<'a> {
                     state_to: Some(listing_state_to_db(transition.to)),
                 }
             }
+            ItemOperation::Publish { to } => Self {
+                operation: "publish",
+                subject_kind: None,
+                subject_url: None,
+                subject_numeric_id: None,
+                state_from: None,
+                state_to: Some(listing_state_to_db(*to)),
+            },
             ItemOperation::Remove { subject, state } => {
                 let remote = RemoteIdColumns::encode(subject)?;
                 Self {
@@ -408,6 +416,7 @@ impl StoredOperation {
             .transpose()?;
         match (self.operation.as_str(), subject, from, to) {
             ("create", None, None, None) => Ok(ItemOperation::Create),
+            ("publish", None, None, Some(to)) => Ok(ItemOperation::Publish { to }),
             ("revise", Some(subject), Some(from), Some(to)) => Ok(ItemOperation::Revise {
                 subject,
                 transition: LifecycleTransition { from, to },

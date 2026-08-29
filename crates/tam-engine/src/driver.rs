@@ -185,6 +185,15 @@ pub(crate) fn intent_as_json(operation: &ItemOperation, fields: &FieldSet) -> se
             "entries": entries,
             "files": files,
         }),
+        // The subject is deliberately absent: a publish that reaches the
+        // driver has been lowered to a revise, so this arm is the record of
+        // an unlowered one rather than an intent anything will act on.
+        ItemOperation::Publish { to } => json!({
+            "operation": "publish",
+            "to": state_name(*to),
+            "entries": entries,
+            "files": files,
+        }),
         ItemOperation::Remove { subject, state } => json!({
             "operation": "remove",
             "subject": subject_as_json(subject),
@@ -239,13 +248,14 @@ fn outcome_to_landing(
     };
     match (operation, committed) {
         (ItemOperation::Remove { .. }, Some(id)) => LandingEffect::Severed { id: id.clone() },
-        (ItemOperation::Create | ItemOperation::Revise { .. }, Some(id)) => {
-            observed.map_or(LandingEffect::None, |lifecycle| LandingEffect::Landed {
-                id: id.clone(),
-                lifecycle: lifecycle.clone(),
-            })
-        }
-        (ItemOperation::Create, None) => LandingEffect::None,
+        (
+            ItemOperation::Create | ItemOperation::Publish { .. } | ItemOperation::Revise { .. },
+            Some(id),
+        ) => observed.map_or(LandingEffect::None, |lifecycle| LandingEffect::Landed {
+            id: id.clone(),
+            lifecycle: lifecycle.clone(),
+        }),
+        (ItemOperation::Create | ItemOperation::Publish { .. }, None) => LandingEffect::None,
         (ItemOperation::Revise { subject, .. } | ItemOperation::Remove { subject, .. }, None) => {
             LandingEffect::Addressed {
                 id: subject.clone(),

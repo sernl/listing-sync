@@ -534,6 +534,18 @@ fn create_digest(
     tam_pipeline::hash::content_hash(&encoded)
 }
 
+/// A publish's digest: the job, and nothing else it could name. The create
+/// that binds its subject sits in the same job, and the pair is separated by
+/// this function's own domain tag rather than by a subject neither has.
+fn publish_digest(job: JobId) -> tam_types::ContentHash {
+    let mut encoded = Vec::with_capacity(48);
+    encoded.extend_from_slice(NON_CREATE_INTENT_DOMAIN);
+    encoded.extend_from_slice(b"publish");
+    encoded.push(0);
+    encoded.extend_from_slice(&job.0 .0);
+    tam_pipeline::hash::content_hash(&encoded)
+}
+
 /// The digest that identifies one item's intent.
 ///
 /// A create is content-addressed: the same files in the same order name the
@@ -559,6 +571,11 @@ pub fn intent_digest(
 ) -> tam_types::ContentHash {
     let (tag, subject) = match operation {
         ItemOperation::Create => return create_digest(hashes, sever_generation),
+        // A publish names no subject at enqueue time, so it is keyed on the
+        // job alone, like the other non-create arms and for the same reason:
+        // duplicate protection within a job, and none across jobs, where it
+        // was never wanted.
+        ItemOperation::Publish { .. } => return publish_digest(job),
         ItemOperation::Revise { subject, .. } => (&b"revise"[..], subject),
         ItemOperation::Remove { subject, .. } => (&b"remove"[..], subject),
     };

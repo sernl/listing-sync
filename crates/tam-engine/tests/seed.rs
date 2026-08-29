@@ -381,6 +381,70 @@ async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
 /// until the target listing exists and the driver's own verification read saw
 /// it, so the unsafe direction -- source gone, target absent -- is
 /// unreachable and the failure mode is a duplicate.
+/// Publish-to-live from nothing is two writes, and the second cannot name its
+/// subject in advance: the create binds the id minutes after the seller
+/// asked. The lowering happens where the id first exists.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_publish_resolves_its_subject_from_the_binding_the_create_wrote(pool: PgPool) {
+    let bound = tes("https://www.tes.com/teaching-resource/fractions-9001");
+    provision_lifecycle(
+        &pool,
+        true,
+        tam_domain::Binding::Bound {
+            id: bound.clone(),
+            first_seen: NOW,
+            verified: tam_domain::Verification::Clean { at: NOW },
+        },
+        tam_marketplace::RemoteLifecycle::Draft,
+    )
+    .await;
+    let outcome = prepare_item(
+        &pool,
+        &leasing(tam_domain::ItemOperation::Publish {
+            to: tam_marketplace::ListingState::Live,
+        }),
+        NOW,
+    )
+    .await
+    .expect("the preparation runs");
+    let ItemPreparation::Ready { operation, .. } = outcome else {
+        panic!("a bound mapping has a subject to publish");
+    };
+    assert_eq!(
+        operation,
+        tam_domain::ItemOperation::Revise {
+            subject: bound,
+            transition: tam_marketplace::LifecycleTransition {
+                from: tam_marketplace::ListingState::Draft,
+                to: tam_marketplace::ListingState::Live,
+            },
+        },
+        "the subject is the id the create bound and `from` is the lifecycle we observed, \
+         neither of which the seller could have stated when they asked"
+    );
+}
+
+/// The variant exists because `Revise` cannot serve this case, so the arm
+/// that refuses it has to be the binding rather than a diverged subject:
+/// there is no subject to diverge.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_publish_against_an_unbound_mapping_is_refused_for_being_unbound(pool: PgPool) {
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
+    let outcome = prepare_item(
+        &pool,
+        &leasing(tam_domain::ItemOperation::Publish {
+            to: tam_marketplace::ListingState::Live,
+        }),
+        NOW,
+    )
+    .await
+    .expect("the preparation runs");
+    let ItemPreparation::Blocked { gate, .. } = outcome else {
+        panic!("there is nothing to publish yet");
+    };
+    assert_eq!(gate, "unbound");
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_removal_waits_while_its_counterpart_is_still_unbound(pool: PgPool) {
     provision(&pool, true, tam_domain::Binding::Unbound).await;

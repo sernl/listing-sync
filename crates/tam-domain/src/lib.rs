@@ -477,6 +477,14 @@ pub enum SellerEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemOperation {
     Create,
+    /// A publish whose subject is not known at enqueue time. A create binds a
+    /// draft and the id it binds is the id the publish must name, so the
+    /// subject is resolved from the binding at lease time rather than stated.
+    /// `Revise` cannot serve this: it requires a stated subject in both the
+    /// type and `job_item_operation_total`, and an unbound mapping has none.
+    Publish {
+        to: ListingState,
+    },
     Revise {
         subject: RemoteListingId,
         transition: LifecycleTransition,
@@ -492,7 +500,7 @@ impl ItemOperation {
     #[must_use]
     pub const fn subject(&self) -> Option<&RemoteListingId> {
         match self {
-            Self::Create => None,
+            Self::Create | Self::Publish { .. } => None,
             Self::Revise { subject, .. } | Self::Remove { subject, .. } => Some(subject),
         }
     }
@@ -512,12 +520,14 @@ impl ItemOperation {
 #[must_use]
 pub fn verification_settles(operation: &ItemOperation, observed: &ObservedListing) -> bool {
     let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
+    let reaches = |to| match to {
+        ListingState::Draft => !absent,
+        ListingState::Live => matches!(observed.lifecycle, RemoteLifecycle::Live { .. }),
+    };
     match operation {
         ItemOperation::Create => !absent,
-        ItemOperation::Revise { transition, .. } => match transition.to {
-            ListingState::Draft => !absent,
-            ListingState::Live => matches!(observed.lifecycle, RemoteLifecycle::Live { .. }),
-        },
+        ItemOperation::Publish { to } => reaches(*to),
+        ItemOperation::Revise { transition, .. } => reaches(transition.to),
         ItemOperation::Remove { .. } => absent,
     }
 }
@@ -659,6 +669,10 @@ pub enum MachineError {
     /// machine is consumed and unchanged: the caller held a budget it had
     /// already spent and should have sent `Input::BudgetExhausted` instead.
     EffectBudgetExceeded,
+    /// A publish reached the machine with no subject resolved. The seeding
+    /// step owns that resolution, so this is the caller skipping it rather
+    /// than a write that failed.
+    UnloweredPublish,
 }
 
 /// Whether a halting-ambiguous row captures diagnostics before it halts. The
@@ -752,7 +766,9 @@ impl SyncMachine {
                 SyncState::AwaitingPreflight,
                 vec![Effect::AssertFormSchema { form }],
             ),
-            ItemOperation::Revise { .. } | ItemOperation::Remove { .. } => (
+            ItemOperation::Publish { .. }
+            | ItemOperation::Revise { .. }
+            | ItemOperation::Remove { .. } => (
                 SyncState::PreflightAsserted { schema: None },
                 vec![Effect::RecordIntent {
                     intent_hash: self.intent_hash,
@@ -864,7 +880,7 @@ impl SyncMachine {
     ) -> Result<Transition, MachineError> {
         match *input {
             Input::IntentRecorded(attempt) => {
-                let effects = vec![self.write_effect(attempt)];
+                let effects = vec![self.write_effect(attempt)?];
                 self.advance(SyncState::IntentRecorded { attempt, schema }, effects)
             }
             Input::PreflightResult(_)
@@ -880,8 +896,14 @@ impl SyncMachine {
     /// The one write this operation means, named by the attempt that
     /// authorises it. Every arm carries the same fencing token, which is what
     /// makes the write-safety properties quantify over all three.
-    fn write_effect(&self, attempt: WriteAttemptId) -> Effect {
-        match &self.operation {
+    fn write_effect(&self, attempt: WriteAttemptId) -> Result<Effect, MachineError> {
+        Ok(match &self.operation {
+            // A publish states no subject, so it is not a write this machine
+            // can interpret: `prepare_item` resolves the id the create bound
+            // and lowers the operation to a revise before seeding. One that
+            // arrives unlowered is a caller that skipped that step, which is
+            // a construction error rather than an unsuccessful write.
+            ItemOperation::Publish { .. } => return Err(MachineError::UnloweredPublish),
             ItemOperation::Create => Effect::Submit {
                 attempt,
                 key: self.key,
@@ -901,7 +923,7 @@ impl SyncMachine {
                 subject: subject.clone(),
                 state: *state,
             },
-        }
+        })
     }
 
     fn intent_recorded_rows(

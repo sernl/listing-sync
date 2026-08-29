@@ -18,8 +18,9 @@ use tam_domain::{
     Binding, ItemOperation, ProjectionBlocked, StepBudget, VocabularyId, VocabularyPath,
 };
 use tam_marketplace::{
-    AgeSpan, CreateStrategy, FieldSet, FormId, ListingState, MarketplaceAdapter, NativeAxis,
-    NativeTerm, ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
+    AgeSpan, CreateStrategy, FieldSet, FormId, LifecycleTransition, ListingState,
+    MarketplaceAdapter, NativeAxis, NativeTerm, ProjectedListing, RemoteLifecycle,
+    RemoteLifecycleKind,
 };
 use tam_storage::{
     ElectionRepo, LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError,
@@ -188,6 +189,17 @@ fn admission(
         ItemOperation::Create => {
             return matches!(binding, Binding::Bound { .. }).then_some("binding");
         }
+        // A publish states no subject, so there is nothing to diverge from
+        // and nothing to compare a `from` against. What it does need is a
+        // binding: the id it addresses is the one the create bound, and an
+        // unbound mapping has none yet.
+        ItemOperation::Publish { .. } => match binding {
+            Binding::Bound { .. } => return None,
+            Binding::Unbound
+            | Binding::Creating { .. }
+            | Binding::AmbiguousCreate { .. }
+            | Binding::Severed { .. } => return Some("unbound"),
+        },
         ItemOperation::Revise {
             subject,
             transition,
@@ -261,6 +273,30 @@ pub async fn prepare_item(
     ) {
         return Ok(blocked(gate));
     }
+    // The lowering, here rather than at the API, because here is the first
+    // place the id exists: the create bound it minutes ago and the seller
+    // could not have named it when they asked. `from` is the binding's own
+    // observed lifecycle rather than a state the enqueuer guessed.
+    let operation = match operation {
+        ItemOperation::Publish { to } => match &mapping.mapping.binding {
+            Binding::Bound { id, .. } => ItemOperation::Revise {
+                subject: id.clone(),
+                transition: LifecycleTransition {
+                    from: observed_state(&mapping.mapping.lifecycle).unwrap_or(ListingState::Draft),
+                    to,
+                },
+            },
+            // `admission` refused every other binding above, so this is
+            // unreachable rather than merely unhandled.
+            Binding::Unbound
+            | Binding::Creating { .. }
+            | Binding::AmbiguousCreate { .. }
+            | Binding::Severed { .. } => return Ok(blocked("unbound")),
+        },
+        other @ (ItemOperation::Create
+        | ItemOperation::Revise { .. }
+        | ItemOperation::Remove { .. }) => other,
+    };
     if matches!(operation, ItemOperation::Remove { .. }) {
         return Ok(ItemPreparation::Ready {
             operation,
