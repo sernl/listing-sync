@@ -263,6 +263,7 @@ fn leasing(operation: tam_domain::ItemOperation) -> LeasedItem {
         operation,
         lease_epoch: 0,
         attempt_count: 0,
+        requires_bound_on: None,
     }
 }
 
@@ -374,6 +375,94 @@ async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
         .await
         .expect("the queue reads");
     assert_eq!(open.len(), 1, "the founder sees the gap the worker hit");
+}
+
+/// The whole safety property of a migrate. The source listing does not go
+/// until the target listing exists and the driver's own verification read saw
+/// it, so the unsafe direction -- source gone, target absent -- is
+/// unreachable and the failure mode is a duplicate.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_waits_while_its_counterpart_is_still_unbound(pool: PgPool) {
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
+    let mut waiting = leasing(tam_domain::ItemOperation::Remove {
+        subject: tes("https://www.tes.com/teaching-resource/fractions-9001"),
+        state: tam_marketplace::ListingState::Live,
+    });
+    // The counterpart is the mapping this fixture already wrote, and it is
+    // Unbound: the target create has not landed.
+    waiting.requires_bound_on = Some(InventoryId::TesNz);
+    let outcome = prepare_item(&pool, &waiting, NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Blocked { gate, .. } = outcome else {
+        panic!("a removal whose counterpart has not bound must not run");
+    };
+    assert_eq!(
+        gate, "awaiting_counterpart",
+        "the park names what it waits on, so the report can say why the removal has not run"
+    );
+}
+
+/// The gate's terminal arm. A counterpart that settled somewhere it will not
+/// leave is never going to bind, and without this the waiting item cycles
+/// park to queue to park every day forever: it is invisible to every existing
+/// reaper, and the job it belongs to reads active for good.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_whose_counterpart_can_never_bind_stops_waiting(pool: PgPool) {
+    provision(
+        &pool,
+        true,
+        tam_domain::Binding::AmbiguousCreate {
+            attempt: tam_types::AttemptId(Uuid([0x61; 16])),
+            candidates: vec![tes("https://www.tes.com/teaching-resource/fractions-9001")],
+            since: NOW,
+        },
+    )
+    .await;
+    let mut waiting = leasing(tam_domain::ItemOperation::Remove {
+        subject: tes("https://www.tes.com/teaching-resource/fractions-9001"),
+        state: tam_marketplace::ListingState::Live,
+    });
+    waiting.requires_bound_on = Some(InventoryId::TesNz);
+    let outcome = prepare_item(&pool, &waiting, NOW)
+        .await
+        .expect("the preparation runs");
+    assert!(
+        matches!(
+            outcome,
+            ItemPreparation::CounterpartLost {
+                counterpart: InventoryId::TesNz
+            }
+        ),
+        "nobody knows what an ambiguous create did, so removing on the strength of it \
+         would be removing on the strength of a guess"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_runs_once_its_counterpart_has_bound(pool: PgPool) {
+    provision(
+        &pool,
+        true,
+        tam_domain::Binding::Bound {
+            id: tes("https://www.tes.com/teaching-resource/fractions-9001"),
+            first_seen: NOW,
+            verified: tam_domain::Verification::Clean { at: NOW },
+        },
+    )
+    .await;
+    let mut waiting = leasing(tam_domain::ItemOperation::Remove {
+        subject: tes("https://www.tes.com/teaching-resource/fractions-9001"),
+        state: tam_marketplace::ListingState::Live,
+    });
+    waiting.requires_bound_on = Some(InventoryId::TesNz);
+    let outcome = prepare_item(&pool, &waiting, NOW)
+        .await
+        .expect("the preparation runs");
+    assert!(
+        matches!(outcome, ItemPreparation::Ready { .. }),
+        "the counterpart exists and we saw it, which is exactly what the column asks"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

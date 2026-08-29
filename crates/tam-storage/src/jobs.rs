@@ -73,6 +73,14 @@ pub struct NewJobItem {
     /// subject the caller states is a divergence the engine can detect,
     /// where an unstated one silently retargets a rebound mapping.
     pub operation: ItemOperation,
+    /// The inventory whose binding this item waits on, if any.
+    ///
+    /// A migrate's removal names the target: the source listing must not go
+    /// until the target listing exists and we have seen it. A publish names
+    /// its own inventory: the create binds the id the publish must address,
+    /// and FIFO within a job would usually get that right but not when the
+    /// create parks on an election and the publish leases first.
+    pub requires_bound_on: Option<InventoryId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +94,7 @@ pub struct LeasedItem {
     pub operation: ItemOperation,
     pub lease_epoch: i64,
     pub attempt_count: i32,
+    pub requires_bound_on: Option<InventoryId>,
 }
 
 impl LeasedItem {
@@ -271,8 +280,8 @@ async fn insert_job_item(
         "INSERT INTO job_item \
          (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, \
           operation, subject_kind, subject_url, subject_numeric_id, \
-          state_from, state_to) \
-         VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11, $12)",
+          state_from, state_to, requires_bound_on) \
+         VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11, $12, $13)",
         org,
         uuid_to_db(item.item.0),
         job,
@@ -285,6 +294,7 @@ async fn insert_job_item(
         operation.subject_numeric_id,
         operation.state_from,
         operation.state_to,
+        item.requires_bound_on.map(inventory_to_db),
     )
     .execute(&mut **tx)
     .await;
@@ -651,6 +661,7 @@ impl LeaseRepo {
                  item.idempotency_key, item.lease_epoch, item.attempt_count,
                  item.operation, item.subject_kind, item.subject_url,
                  item.subject_numeric_id, item.state_from, item.state_to,
+                 item.requires_bound_on,
                  j2.inventory AS "inventory!""#,
             worker,
             expires,
@@ -688,6 +699,11 @@ impl LeaseRepo {
                     .decode()?,
                     lease_epoch: row.lease_epoch,
                     attempt_count: row.attempt_count,
+                    requires_bound_on: row
+                        .requires_bound_on
+                        .as_deref()
+                        .map(inventory_from_db)
+                        .transpose()?,
                 })
             })
             .transpose()
@@ -838,11 +854,48 @@ impl LeaseRepo {
     /// `acquire` both leave it alone, the parking worker has already
     /// returned, and every fenced write additionally requires a live lease
     /// state.
-    pub async fn revive_expired(&self, now: Timestamp) -> Result<u64, StorageError> {
+    ///
+    /// `attempts_max` is the caller's, because the budget is a limit the
+    /// worker owns and this crate holds no limits of its own.
+    pub async fn revive_expired(
+        &self,
+        now: Timestamp,
+        attempts_max: i32,
+    ) -> Result<u64, StorageError> {
         let mut tx = self.pool.begin().await?;
+        // The give-up arm, first, mirroring `expire_and_steal`'s two-statement
+        // shape. A park cycling forever is invisible to every existing reaper
+        // -- `expire_and_steal` filters on the live states a parked row does
+        // not have, and the wall-clock bound is per run inside the driver --
+        // so without this an item whose gate never clears re-parks every day
+        // and the job it belongs to reads active forever.
+        let exhausted = sqlx::query!(
+            "UPDATE job_item \
+             SET state = 'settled', outcome = 'skipped', failure_code = 'other', \
+                 failure_detail = 'the gate ' || COALESCE(blocked_on, 'unknown') \
+                     || ' did not clear within the attempt budget', \
+                 blocked_on = NULL, park_expires_at = NULL, settled_at = $1 \
+             WHERE state = 'parked_live' AND park_expires_at <= $1 \
+               AND blocked_on = ANY($2) \
+               AND attempt_count + 1 >= $3 \
+             RETURNING org_id, job_id, id",
+            timestamp_to_db(now)?,
+            &REVIVABLE_GATES.map(str::to_owned)[..],
+            attempts_max,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut settled: Vec<(uuid::Uuid, uuid::Uuid)> = Vec::new();
+        for row in &exhausted {
+            let pair = (row.org_id, row.job_id);
+            if !settled.contains(&pair) {
+                settled.push(pair);
+            }
+        }
         let rows = sqlx::query!(
             "UPDATE job_item \
-             SET state = 'queued', blocked_on = NULL, park_expires_at = NULL \
+             SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, \
+                 attempt_count = attempt_count + 1 \
              WHERE state = 'parked_live' AND park_expires_at <= $1 \
                AND blocked_on = ANY($2) \
              RETURNING org_id, job_id, id",
@@ -853,6 +906,15 @@ impl LeaseRepo {
         .await?;
         let revived = revived(rows.into_iter().map(|row| (row.org_id, row.job_id, row.id)));
         record_resumptions(&mut tx, &revived, now).await?;
+        for (org, job) in settled {
+            settle_if_complete(
+                &mut tx,
+                OrgId(uuid_from_db(org)),
+                JobId(uuid_from_db(job)),
+                now,
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(count_of(&revived))
     }
@@ -1205,6 +1267,7 @@ impl WriteAttemptRepo {
                 let severed = sqlx::query!(
                     "UPDATE mapping \
                      SET binding_state = 'severed', \
+                         sever_generation = sever_generation + 1, \
                          severed_at = $6, sever_cause = 'removed_by_seller', \
                          verify_state = 'stale', verified_at = NULL, \
                          verify_stale_since = NULL, \

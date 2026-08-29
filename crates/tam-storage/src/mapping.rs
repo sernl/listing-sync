@@ -32,6 +32,27 @@ pub struct MappingRecord {
     pub updated_at: Timestamp,
 }
 
+/// Two mappings must not claim one listing, and the path that reaches this is
+/// an ordinary seller one: a migrate mints a fresh product per read and
+/// dedupes by nothing, so the same source listing submitted twice under two
+/// idempotency keys raises the second bound claim. Named rather than left as
+/// a bare unique violation, which surfaces as a 500 for what is a validation
+/// answer.
+fn map_bound_claim<T>(outcome: Result<T, sqlx::Error>) -> Result<T, StorageError> {
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(sqlx::Error::Database(database))
+            if matches!(
+                database.constraint(),
+                Some("mapping_one_bound_url" | "mapping_one_bound_numeric_id")
+            ) =>
+        {
+            Err(StorageError::ListingAlreadyBound)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub struct MappingRepo {
     pool: PgPool,
 }
@@ -67,7 +88,7 @@ impl MappingRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
 
-        sqlx::query!(
+        let inserted = sqlx::query!(
             "INSERT INTO mapping \
              (org_id, id, product_id, inventory, marketplace, \
               binding_state, remote_id_kind, remote_url, remote_numeric_id, \
@@ -122,7 +143,8 @@ impl MappingRepo {
             at_db,
         )
         .execute(&mut *tx)
-        .await?;
+        .await;
+        map_bound_claim(inserted)?;
 
         for (position, mismatch) in verify.mismatches.iter().enumerate() {
             let row = MismatchColumns::encode(mismatch)?;

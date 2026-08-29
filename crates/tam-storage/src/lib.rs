@@ -69,6 +69,16 @@ pub enum StorageError {
     DuplicateIdempotencyKey { key: uuid::Uuid },
     #[error("another write attempt is in flight for this mapping")]
     AttemptInFlight,
+    /// A second mapping claims a listing another mapping already binds.
+    ///
+    /// Reachable through the ordinary seller path rather than only through a
+    /// corrupt write: a migrate mints a fresh product per read and never
+    /// dedupes by remote id, so submitting the same source listing twice
+    /// under two idempotency keys lands here. Named rather than left as a
+    /// bare unique violation, which surfaces as a 500 for what is a
+    /// validation answer.
+    #[error("that listing is already bound to another mapping")]
+    ListingAlreadyBound,
 }
 
 /// Declares the tenant for the rest of this transaction. `set_config` with

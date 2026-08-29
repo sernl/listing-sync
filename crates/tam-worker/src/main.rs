@@ -45,7 +45,7 @@
 use std::io::Read as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tam_domain::ItemOperation;
+use tam_domain::{ItemOperation, ItemOutcome};
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::{request_lease, LeasePurpose};
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
@@ -56,10 +56,10 @@ use tam_marketplace_tpt::{AuthorshipDeclaration, ReqwestTransport, TptAdapter, T
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    BlobRepo, HaltRepo, JobRepo, LeaseRepo, LeasedItem, PipelineFileSource, RateBudgetRepo,
-    WriteAttemptRepo,
+    BlobRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo, LeasedItem, PipelineFileSource,
+    RateBudgetRepo, WriteAttemptRepo,
 };
-use tam_types::{Marketplace, OrgId, Timestamp};
+use tam_types::{FailureCode, FailureDetail, Marketplace, OrgId, Timestamp};
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_POLL_MS: u64 = 5_000;
@@ -269,6 +269,23 @@ impl Pump {
                     Err(error) => {
                         eprintln!("tam-worker {worker}: park failed: {error}");
                     }
+                }
+                return;
+            }
+            // Waiting is over rather than merely unsatisfied. The listing is
+            // safely on both platforms, which is what the gate is for; what
+            // the seller needs now is to be told the migration ended and why.
+            Ok(ItemPreparation::CounterpartLost { counterpart }) => {
+                let verdict = ItemVerdict {
+                    outcome: ItemOutcome::Skipped,
+                    failure_code: Some(FailureCode::Other),
+                    failure_detail: Some(FailureDetail(format!(
+                        "the listing on {counterpart:?} never bound, so this item's counterpart \
+                         will not arrive; the source listing was left in place"
+                    ))),
+                };
+                if let Err(error) = self.leases.settle(&item.lease_ref(), &verdict, now).await {
+                    eprintln!("tam-worker {worker}: settling a lost counterpart failed: {error}");
                 }
                 return;
             }
@@ -553,7 +570,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(stolen) => eprintln!("tam-worker {worker_name}: stole {stolen} expired leases"),
             Err(error) => eprintln!("tam-worker {worker_name}: steal failed: {error}"),
         }
-        match leases.revive_expired(now).await {
+        match leases.revive_expired(now, attempts_max).await {
             Ok(0) => {}
             Ok(revived) => eprintln!("tam-worker {worker_name}: revived {revived} expired parks"),
             Err(error) => eprintln!("tam-worker {worker_name}: revive failed: {error}"),

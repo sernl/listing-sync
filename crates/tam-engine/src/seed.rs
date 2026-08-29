@@ -26,7 +26,7 @@ use tam_storage::{
     TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
-use tam_types::{InventoryId, Timestamp};
+use tam_types::{InventoryId, OrgId, Timestamp};
 
 use crate::driver::{intent_as_json, EngineError, MachineSeed, VerifyPolicy};
 
@@ -90,6 +90,51 @@ pub enum ItemPreparation {
         gate: &'static str,
         raised: RaiseReport,
     },
+    /// The item waits on a counterpart that will never bind, so waiting is
+    /// over rather than merely unsatisfied. Settled `skipped` naming the
+    /// inventory it waited on, because a migrate whose target create failed
+    /// leaves the seller with a listing on both platforms and no statement
+    /// that the migration ended.
+    CounterpartLost { counterpart: InventoryId },
+}
+
+/// The gate's own park reason, which reaches the ledger and the job report.
+pub const AWAITING_COUNTERPART: &str = "awaiting_counterpart";
+
+/// What the counterpart's own mapping says about whether this item may run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CounterpartState {
+    Bound,
+    /// Still in flight: unbound, or a create that has not landed yet.
+    Waiting,
+    /// Settled somewhere it will not leave. An ambiguous create is here
+    /// deliberately: nobody knows what it did, so a removal on the strength
+    /// of it would be a removal on the strength of a guess.
+    Unreachable,
+}
+
+/// One `SELECT` against the sibling mapping. `mapping_one_per_inventory`
+/// guarantees at most one row, and its absence is the honest wait: the
+/// counterpart's mapping is minted by the same drain that mints this item's,
+/// so a missing row means the pass has not reached it.
+async fn counterpart_binding(
+    pool: &PgPool,
+    org: OrgId,
+    product: tam_types::ProductId,
+    inventory: InventoryId,
+) -> Result<CounterpartState, EngineError> {
+    let found = MappingRepo::new(pool.clone())
+        .list_for_product(org, product)
+        .await?
+        .into_iter()
+        .find(|record| record.mapping.inventory == inventory);
+    Ok(match found.as_ref().map(|record| &record.mapping.binding) {
+        Some(Binding::Bound { .. }) => CounterpartState::Bound,
+        None | Some(Binding::Unbound | Binding::Creating { .. }) => CounterpartState::Waiting,
+        Some(Binding::Severed { .. } | Binding::AmbiguousCreate { .. }) => {
+            CounterpartState::Unreachable
+        }
+    })
 }
 
 fn blocked(gate: &'static str) -> ItemPreparation {
@@ -188,6 +233,27 @@ pub async fn prepare_item(
             reason: "a leased item's mapping must exist".to_owned(),
         })?;
     let operation = lease.operation.clone();
+    // The counterpart gate, here rather than in `admission`, which is a
+    // synchronous total function of the operation and the mapping and is
+    // unit-tested without a database precisely because it is. This check
+    // needs the pool and the product, so folding it in would destroy that
+    // property for every caller.
+    if let Some(counterpart) = lease.requires_bound_on {
+        match counterpart_binding(pool, lease.org, mapping.mapping.product, counterpart).await? {
+            CounterpartState::Bound => {}
+            CounterpartState::Waiting => return Ok(blocked(AWAITING_COUNTERPART)),
+            // The gate's terminal arm. A counterpart that settled anything
+            // other than bound is never going to bind, and without this the
+            // waiting item cycles park to queue to park every day forever:
+            // it is invisible to `expire_and_steal`, which filters on the
+            // live states a parked row does not have. The listing is safely
+            // on both platforms, which is the point of the gate -- but
+            // nobody would ever be told the migration was over.
+            CounterpartState::Unreachable => {
+                return Ok(ItemPreparation::CounterpartLost { counterpart });
+            }
+        }
+    }
     if let Some(gate) = admission(
         &operation,
         &mapping.mapping.binding,

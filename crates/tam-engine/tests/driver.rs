@@ -273,6 +273,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                 mapping,
                 idempotency_key: IdempotencyKey(Uuid([0x08; 16])),
                 operation: tam_domain::ItemOperation::Create,
+                requires_bound_on: None,
             }],
         )
         .await

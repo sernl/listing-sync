@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.id AS mapping_id, m.product_id, f.hash FROM mapping m JOIN product_file f ON f.org_id = m.org_id AND f.product_id = m.product_id WHERE m.org_id = $1 AND m.inventory = $2 AND m.id = ANY($3) AND f.role = 'payload' AND f.deleted_at IS NULL ORDER BY m.id, f.position",
+  "query": "SELECT m.id AS mapping_id, m.product_id, m.sever_generation, f.hash FROM mapping m JOIN product_file f ON f.org_id = m.org_id AND f.product_id = m.product_id WHERE m.org_id = $1 AND m.inventory = $2 AND m.id = ANY($3) AND f.role = 'payload' AND f.deleted_at IS NULL ORDER BY m.id, f.position",
   "describe": {
     "columns": [
       {
@@ -15,6 +15,11 @@
       },
       {
         "ordinal": 2,
+        "name": "sever_generation",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
         "name": "hash",
         "type_info": "Bytea"
       }
@@ -29,8 +34,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "6928d76b9e427abd551d041720e51ae6211afad516e5b810a319ec91eb1484d1"
+  "hash": "02c6176c3d590dc423cb4c9671b31e36a952562016201d38b68d3cde3f2f4435"
 }

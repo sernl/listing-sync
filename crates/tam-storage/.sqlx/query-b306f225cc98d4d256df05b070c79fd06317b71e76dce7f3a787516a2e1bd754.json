@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE job_item SET state = 'queued', blocked_on = NULL, park_expires_at = NULL WHERE state = 'parked_live' AND park_expires_at <= $1 AND blocked_on = ANY($2) RETURNING org_id, job_id, id",
+  "query": "UPDATE job_item SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, attempt_count = attempt_count + 1 WHERE state = 'parked_live' AND park_expires_at <= $1 AND blocked_on = ANY($2) RETURNING org_id, job_id, id",
   "describe": {
     "columns": [
       {
@@ -31,5 +31,5 @@
       false
     ]
   },
-  "hash": "2c11caea06382424038edbfaeccd0269ab2a5d4a305334bf9d5ee745abbf138a"
+  "hash": "b306f225cc98d4d256df05b070c79fd06317b71e76dce7f3a787516a2e1bd754"
 }

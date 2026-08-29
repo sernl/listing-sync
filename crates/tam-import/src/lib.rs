@@ -15,6 +15,7 @@ use sqlx::PgPool;
 use tam_domain::registry::{registry, NativeVocabulary};
 use tam_marketplace::{
     AdapterError, FetchReason, FileContent, FileSource, FileSourceError, FirstPartyExport,
+    ListingState, RemoteListingId,
 };
 use tam_pipeline::archive::ExtractBudget;
 use tam_pipeline::pipeline::{ingest, IngestContext, IngestError, Ingested};
@@ -96,6 +97,15 @@ pub struct ImportRowReport {
     pub raised: RaiseReport,
     pub projectable: bool,
     pub blocked_by: Option<String>,
+    /// How the source addresses the listing this row was read from, and which
+    /// side of its draft line it sits on.
+    ///
+    /// A migrate's removal names both, and both come from the read that
+    /// produced this row rather than from a second one. `state` is `None`
+    /// where the read did not carry it, which is a refusal at the API and
+    /// never a default: a removal must not post a lifecycle nobody observed.
+    pub source: RemoteListingId,
+    pub source_state: Option<ListingState>,
 }
 
 #[derive(Debug)]
@@ -659,6 +669,8 @@ where
         raised,
         projectable,
         blocked_by,
+        source: listing.remote.clone(),
+        source_state: listing.state,
     })
 }
 

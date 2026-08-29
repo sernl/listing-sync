@@ -240,8 +240,9 @@ async fn drain_one(
     };
     let report = drain_request(requests, &run, request, &reason_for(source)).await?;
     println!(
-        "tam-sync-worker: request {request:?}: {} canonicalised, {} already done, {} failed",
-        report.canonicalised, report.skipped, report.failed
+        "tam-sync-worker: request {request:?}: {} canonicalised, {} already done, {} failed, \
+         jobs {:?} and {:?}",
+        report.canonicalised, report.skipped, report.failed, report.create_job, report.remove_job
     );
     Ok(())
 }

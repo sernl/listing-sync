@@ -365,9 +365,15 @@ pub(crate) async fn create_job(
                 body.inventory,
                 seed.product,
                 INTENT_VERSION,
-                intent_digest(&ItemOperation::Create, job, &seed.payload_hashes),
+                intent_digest(
+                    &ItemOperation::Create,
+                    job,
+                    &seed.payload_hashes,
+                    seed.sever_generation,
+                ),
             ),
             operation: ItemOperation::Create,
+            requires_bound_on: None,
         })
         .collect();
     let new = NewJob {

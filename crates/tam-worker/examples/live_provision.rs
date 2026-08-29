@@ -311,6 +311,7 @@ async fn enqueue_one(
                     payload_hash,
                 ),
                 operation,
+                requires_bound_on: None,
             }],
         )
         .await?;
@@ -529,8 +530,12 @@ async fn preflight(
         operation: ItemOperation::Create,
         lease_epoch: 0,
         attempt_count: 0,
+        requires_bound_on: None,
     };
     let projected = match prepare_item(pool, &lease, now).await? {
+        ItemPreparation::CounterpartLost { counterpart } => {
+            return Err(format!("the counterpart on {counterpart:?} never bound").into())
+        }
         ItemPreparation::Ready { projected, .. } => {
             projected.ok_or("a create must project a listing")?
         }

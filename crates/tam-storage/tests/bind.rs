@@ -180,6 +180,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
                 mapping: MAPPING,
                 idempotency_key: IdempotencyKey(Uuid([0xC9; 16])),
                 operation: ItemOperation::Create,
+                requires_bound_on: None,
             }],
         )
         .await?;
@@ -226,6 +227,7 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
                 mapping: RIVAL,
                 idempotency_key: IdempotencyKey(Uuid([0xCB; 16])),
                 operation: ItemOperation::Create,
+                requires_bound_on: None,
             }],
         )
         .await?;

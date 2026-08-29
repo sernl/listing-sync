@@ -27,6 +27,9 @@ use tam_types::{
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
+/// The worker's own budget, restated here because the revive takes it as a
+/// parameter rather than holding a limit this crate does not own.
+const ATTEMPTS_MAX: i32 = 5;
 
 fn db_uuid(id: Uuid) -> uuid::Uuid {
     uuid::Uuid::from_bytes(id.0)
@@ -168,6 +171,7 @@ fn item(seed: u8) -> NewJobItem {
         mapping: MappingId(Uuid([0; 16])),
         idempotency_key: IdempotencyKey(Uuid([seed.wrapping_add(0x40); 16])),
         operation: ItemOperation::Create,
+        requires_bound_on: None,
     }
 }
 
@@ -305,7 +309,7 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
 
     assert_eq!(
         leases
-            .revive_expired(Timestamp(T0.0 + 500))
+            .revive_expired(Timestamp(T0.0 + 500), ATTEMPTS_MAX)
             .await
             .expect("the unparker runs"),
         0,
@@ -313,7 +317,7 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
     );
     assert_eq!(
         leases
-            .revive_expired(Timestamp(T0.0 + 2_000))
+            .revive_expired(Timestamp(T0.0 + 2_000), ATTEMPTS_MAX)
             .await
             .expect("the unparker runs"),
         1,
@@ -343,7 +347,7 @@ async fn an_expired_challenge_park_is_left_where_the_driver_put_it(app: PgPool) 
 
     assert_eq!(
         leases
-            .revive_expired(Timestamp(T0.0 + 2_000))
+            .revive_expired(Timestamp(T0.0 + 2_000), ATTEMPTS_MAX)
             .await
             .expect("the unparker runs"),
         0,

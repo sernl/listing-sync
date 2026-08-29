@@ -647,6 +647,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
                     ContentHash([0x51; 32]),
                 ),
                 operation: fixture.operation,
+                requires_bound_on: None,
             }],
         )
         .await
@@ -762,6 +763,9 @@ async fn pump(
         } => (operation, projected),
         ItemPreparation::Blocked { gate, .. } => {
             panic!("the fixture prepares; blocked on {gate}")
+        }
+        ItemPreparation::CounterpartLost { counterpart } => {
+            panic!("the fixture's counterpart binds; {counterpart:?} did not")
         }
     };
     let adapter = TesAdapter::new(InventoryId::TesNz, fake, OneFile).expect("a Tes inventory");

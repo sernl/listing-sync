@@ -16,14 +16,17 @@
 
 #![forbid(unsafe_code)]
 
-use tam_domain::{ItemOperation, JobItemId};
+use tam_domain::{Binding, ItemOperation, JobItemId, Mapping, PublishMode, Verification};
 use tam_import::{import_one, ImportEntry, ImportError, ImportRun, NamedBytes};
-use tam_marketplace::{FetchReason, FirstPartyExport};
-use tam_storage::{
-    job_request_key, Canonicalised, Disposition, Enqueued, JobReadRepo, JobRepo, NewJob,
-    NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
+use tam_marketplace::idempotency::derive_idempotency_key;
+use tam_marketplace::{
+    FetchReason, FirstPartyExport, ListingState, RemoteLifecycle, RemoteListingId,
 };
-use tam_types::{InventoryId, JobId, OrgId, Uuid};
+use tam_storage::{
+    job_request_key, Canonicalised, Disposition, Enqueued, JobReadRepo, JobRepo, MappingRepo,
+    NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
+};
+use tam_types::{InventoryId, JobId, MappingId, OrgId, Uuid};
 
 /// What one request's drain produced, so a caller reports it rather than
 /// reading it back out of the row it just wrote.
@@ -34,6 +37,7 @@ pub struct DrainReport {
     pub skipped: usize,
     pub failed: usize,
     pub create_job: Option<Uuid>,
+    pub remove_job: Option<Uuid>,
 }
 
 #[derive(Debug)]
@@ -93,8 +97,10 @@ where
         skipped: 0,
         failed: 0,
         create_job: None,
+        remove_job: None,
     };
     let mut mappings = Vec::new();
+    let mut canonicalised: Vec<Canonicalisation> = Vec::new();
     for resource in &record.resources {
         if resource.is_canonicalised() {
             report.skipped += 1;
@@ -111,12 +117,13 @@ where
                         &Canonicalised {
                             request,
                             ordinal: resource.ordinal,
-                            product: row.0,
-                            mapping: row.1,
+                            product: row.product,
+                            mapping: row.mapping,
                         },
                     )
                     .await?;
-                mappings.push(row.1);
+                mappings.push(row.mapping);
+                canonicalised.push(row);
                 report.canonicalised += 1;
             }
             Err(error) => {
@@ -143,14 +150,24 @@ where
         return Ok(report);
     }
     let create_job = enqueue_create(run, &record, &mappings).await?;
-    report.create_job = Some(create_job.0);
+    report.create_job = Some(create_job);
+    // A migrate is two jobs, forced: `job.inventory` is single-valued, so the
+    // create on the target and the removal on the source cannot share one.
+    // The request row is what holds the pair together and is what the seller
+    // polls.
+    let remove_job = if removes_the_source(record.disposition) {
+        Some(enqueue_removal(run, &record, &canonicalised).await?)
+    } else {
+        None
+    };
+    report.remove_job = remove_job;
     requests
         .record_enqueued(
             run.org,
             &Enqueued {
                 request,
-                create_job: Some(create_job.0),
-                remove_job: None,
+                create_job: Some(create_job),
+                remove_job,
                 at: run.now,
             },
         )
@@ -158,11 +175,22 @@ where
     Ok(report)
 }
 
+/// One resource's canonicalisation, including what the read observed about
+/// the source listing. A migrate's removal names both, and they come from the
+/// read that already happened rather than from a second one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Canonicalisation {
+    product: tam_types::ProductId,
+    mapping: tam_types::MappingId,
+    source: RemoteListingId,
+    source_state: Option<ListingState>,
+}
+
 async fn canonicalise_one<A>(
     run: &ImportRun<'_, A>,
     locator: &str,
     reason: &FetchReason,
-) -> Result<(tam_types::ProductId, tam_types::MappingId), DrainError>
+) -> Result<Canonicalisation, DrainError>
 where
     A: FirstPartyExport,
     A::Resource: TryFrom<i64> + Copy,
@@ -186,7 +214,12 @@ where
         }],
     };
     let row = import_one(run, &entry).await.map_err(DrainError::Import)?;
-    Ok((row.product, row.mapping))
+    Ok(Canonicalisation {
+        product: row.product,
+        mapping: row.mapping,
+        source: row.source,
+        source_state: row.source_state,
+    })
 }
 
 /// The write leg, minted with a key derived from the request rather than with
@@ -201,7 +234,7 @@ async fn enqueue_create<A>(
     run: &ImportRun<'_, A>,
     record: &SyncRequestRecord,
     mappings: &[tam_types::MappingId],
-) -> Result<(Uuid, bool), DrainError>
+) -> Result<Uuid, DrainError>
 where
     A: FirstPartyExport,
 {
@@ -214,7 +247,7 @@ where
         .map(|seed| NewJobItem {
             item: JobItemId(fresh_uuid()),
             mapping: seed.mapping,
-            idempotency_key: tam_marketplace::idempotency::derive_idempotency_key(
+            idempotency_key: derive_idempotency_key(
                 run.org,
                 record.target,
                 seed.product,
@@ -223,9 +256,11 @@ where
                     &ItemOperation::Create,
                     job,
                     &seed.payload_hashes,
+                    seed.sever_generation,
                 ),
             ),
             operation: ItemOperation::Create,
+            requires_bound_on: None,
         })
         .collect();
     let created = JobRepo::new(run.pool.clone())
@@ -240,7 +275,113 @@ where
             &items,
         )
         .await?;
-    Ok((created.job.0, created.replay))
+    Ok(created.job.0)
+}
+
+/// The removal leg: the source mapping bound from the read, and one removal
+/// item gated on the target's binding.
+///
+/// The source mapping is inserted `Bound` because the import read *is* the
+/// observation -- not a presumption -- and its lifecycle comes from the same
+/// read. Following `import_one`'s own precedent and writing `Absent` would
+/// manufacture a fresh bound-but-absent row, which the API refuses as
+/// unverifiable, so a listing migrated away could never be published,
+/// revised or re-synced again with an error saying nothing was verified.
+///
+/// A source whose read carried no state is refused rather than removed: a
+/// removal must never post a lifecycle nobody has observed.
+async fn enqueue_removal<A>(
+    run: &ImportRun<'_, A>,
+    record: &SyncRequestRecord,
+    canonicalised: &[Canonicalisation],
+) -> Result<Uuid, DrainError>
+where
+    A: FirstPartyExport,
+{
+    let mappings = MappingRepo::new(run.pool.clone());
+    let mut items = Vec::new();
+    let job = JobId(fresh_uuid());
+    for row in canonicalised {
+        let Some(state) = row.source_state else {
+            return Err(DrainError::Locator(
+                "the source read carried no lifecycle, so its removal would state one                  nobody observed"
+                    .to_owned(),
+            ));
+        };
+        // The policies and the price rule are the target mapping's, which the
+        // canonicalisation just derived from this very read. Inventing a
+        // second set here would be two answers to one question about one
+        // product.
+        let target = mappings
+            .get(run.org, row.mapping)
+            .await?
+            .ok_or_else(|| DrainError::Locator("the canonicalised mapping vanished".to_owned()))?;
+        let mapping = MappingId(fresh_uuid());
+        let source = Mapping {
+            id: mapping,
+            org: run.org,
+            product: row.product,
+            inventory: record.source,
+            binding: Binding::Bound {
+                id: row.source.clone(),
+                first_seen: run.now,
+                verified: Verification::Clean { at: run.now },
+            },
+            policies: target.mapping.policies,
+            price_rule: target.mapping.price_rule,
+            publish: PublishMode::DryRun,
+            lifecycle: lifecycle_of(state, run.now),
+        };
+        mappings.insert(run.org, &source, 0, run.now).await?;
+        items.push(NewJobItem {
+            item: JobItemId(fresh_uuid()),
+            mapping,
+            idempotency_key: derive_idempotency_key(
+                run.org,
+                record.source,
+                row.product,
+                INTENT_VERSION,
+                tam_storage::job_reads::intent_digest(
+                    &ItemOperation::Remove {
+                        subject: row.source.clone(),
+                        state,
+                    },
+                    job,
+                    &[],
+                    0,
+                ),
+            ),
+            operation: ItemOperation::Remove {
+                subject: row.source.clone(),
+                state,
+            },
+            // The whole safety property. The source listing does not go until
+            // the target listing exists and the driver's own verification
+            // read saw it, so the unsafe direction -- source gone, target
+            // absent -- is unreachable and the failure mode is a duplicate.
+            requires_bound_on: Some(record.target),
+        });
+    }
+    let created = JobRepo::new(run.pool.clone())
+        .create_with_request_key(
+            run.org,
+            job_request_key(record.id, REMOVE_LEG),
+            &NewJob {
+                job,
+                inventory: record.source,
+                at: run.now,
+            },
+            &items,
+        )
+        .await?;
+    Ok(created.job.0)
+}
+
+const fn lifecycle_of(state: ListingState, at: tam_types::Timestamp) -> RemoteLifecycle {
+    match state {
+        ListingState::Draft => RemoteLifecycle::Draft,
+        ListingState::Live => RemoteLifecycle::Live { since: at },
+    }
 }
 
 /// A migrate's removal leg needs its own key, and this is where it comes

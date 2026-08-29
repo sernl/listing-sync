@@ -432,6 +432,11 @@ pub struct MappingSeed {
     pub mapping: MappingId,
     pub product: tam_types::ProductId,
     pub payload_hashes: Vec<tam_types::ContentHash>,
+    /// How many times this mapping's listing has been severed, which the
+    /// create's intent digest mixes so a migrate-back is a fresh key while an
+    /// ordinary re-sync of unchanged content stays the no-op it was built to
+    /// be.
+    pub sever_generation: i32,
 }
 
 impl JobReadRepo {
@@ -445,7 +450,7 @@ impl JobReadRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
-            "SELECT m.id AS mapping_id, m.product_id, f.hash \
+            "SELECT m.id AS mapping_id, m.product_id, m.sever_generation, f.hash \
              FROM mapping m \
              JOIN product_file f \
                ON f.org_id = m.org_id AND f.product_id = m.product_id \
@@ -469,6 +474,7 @@ impl JobReadRepo {
                     mapping,
                     product: tam_types::ProductId(uuid_from_db(row.product_id)),
                     payload_hashes: vec![hash],
+                    sever_generation: row.sever_generation,
                 }),
             }
         }
@@ -492,6 +498,42 @@ pub fn payload_digest(hashes: &[tam_types::ContentHash]) -> tam_types::ContentHa
 /// read as a concatenation of payload hashes.
 const NON_CREATE_INTENT_DOMAIN: &[u8] = b"tam.item.intent.v1\x00";
 
+/// The separator for a create whose mapping has been severed at least once.
+/// Its own domain so a severed create can never collide with a non-create
+/// intent that happened to hash the same bytes.
+const SEVERED_CREATE_DOMAIN: &[u8] = b"tam.item.intent.create.severed.v1\x00";
+
+/// A create's digest: the payload, plus the number of times this mapping has
+/// been severed.
+///
+/// The payload alone is what makes re-uploading unchanged content a no-op,
+/// and that property is deliberate. But `mapping_one_per_inventory` is
+/// unpredicated, so a migrate reversed lands on the severed row rather than
+/// minting a new one, and a re-create of the same product with the same files
+/// then reproduces the first create's key exactly. `job_item_idempotent` is
+/// table-wide with no job scoping and `job_item` rows are never deleted, so
+/// the second round trip is refused forever with a message about unchanged
+/// content that is false: the listing no longer exists on that platform.
+///
+/// Mixing the job would fix it and delete the no-op property for every
+/// ordinary sync. The sever counter separates keys across a sever and nowhere
+/// else, which is exactly the boundary that matters. Generation zero hashes
+/// to the payload digest unchanged, so no in-flight create is re-keyed.
+fn create_digest(
+    hashes: &[tam_types::ContentHash],
+    sever_generation: i32,
+) -> tam_types::ContentHash {
+    let payload = payload_digest(hashes);
+    if sever_generation == 0 {
+        return payload;
+    }
+    let mut encoded = Vec::with_capacity(48);
+    encoded.extend_from_slice(SEVERED_CREATE_DOMAIN);
+    encoded.extend_from_slice(&payload.0);
+    encoded.extend_from_slice(&sever_generation.to_be_bytes());
+    tam_pipeline::hash::content_hash(&encoded)
+}
+
 /// The digest that identifies one item's intent.
 ///
 /// A create is content-addressed: the same files in the same order name the
@@ -513,9 +555,10 @@ pub fn intent_digest(
     operation: &ItemOperation,
     job: JobId,
     hashes: &[tam_types::ContentHash],
+    sever_generation: i32,
 ) -> tam_types::ContentHash {
     let (tag, subject) = match operation {
-        ItemOperation::Create => return payload_digest(hashes),
+        ItemOperation::Create => return create_digest(hashes, sever_generation),
         ItemOperation::Revise { subject, .. } => (&b"revise"[..], subject),
         ItemOperation::Remove { subject, .. } => (&b"remove"[..], subject),
     };
@@ -556,12 +599,16 @@ mod tests {
     const HASHES: [ContentHash; 2] = [ContentHash([0x51; 32]), ContentHash([0x52; 32])];
 
     fn key(operation: &ItemOperation, job: JobId) -> IdempotencyKey {
+        key_at(operation, job, 0)
+    }
+
+    fn key_at(operation: &ItemOperation, job: JobId, sever_generation: i32) -> IdempotencyKey {
         derive_idempotency_key(
             ORG,
             InventoryId::TesGb,
             PRODUCT,
             1,
-            intent_digest(operation, job, &HASHES),
+            intent_digest(operation, job, &HASHES, sever_generation),
         )
     }
 
@@ -590,7 +637,7 @@ mod tests {
     #[test]
     fn a_create_delegates_rather_than_re_deriving() {
         assert_eq!(
-            intent_digest(&ItemOperation::Create, JOB, &HASHES),
+            intent_digest(&ItemOperation::Create, JOB, &HASHES, 0),
             payload_digest(&HASHES),
             "two implementations of one digest would drift silently"
         );
@@ -598,6 +645,30 @@ mod tests {
             key(&ItemOperation::Create, JOB),
             key(&ItemOperation::Create, OTHER_JOB),
             "a create is content-addressed, so the job it was asked for cannot enter its key"
+        );
+    }
+
+    /// Migrate-back. `mapping_one_per_inventory` is unpredicated, so a
+    /// re-create of the same product with the same files lands on the severed
+    /// row and would otherwise reproduce the first create's key exactly --
+    /// which `job_item_idempotent` refuses forever, with a message about
+    /// unchanged content that is false for a listing that no longer exists.
+    #[test]
+    fn a_create_after_a_sever_is_a_fresh_key_and_an_unsevered_one_is_not() {
+        assert_eq!(
+            key_at(&ItemOperation::Create, JOB, 0),
+            key(&ItemOperation::Create, JOB),
+            "no in-flight create is re-keyed: generation zero is the digest it always was"
+        );
+        assert_ne!(
+            key_at(&ItemOperation::Create, JOB, 1),
+            key_at(&ItemOperation::Create, JOB, 0),
+            "a migrate-back is a new intent, not a duplicate of the create that was removed"
+        );
+        assert_eq!(
+            key_at(&ItemOperation::Create, JOB, 1),
+            key_at(&ItemOperation::Create, OTHER_JOB, 1),
+            "and it stays content-addressed: the job still cannot enter a create's key"
         );
     }
 
