@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod authorship;
 pub mod blobs;
 mod codec;
 pub mod connections;
@@ -21,8 +22,12 @@ pub mod pruning;
 pub mod sessions;
 pub mod taxonomy;
 
+pub use authorship::{AuthorshipRecord, AuthorshipRepo};
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
-pub use connections::{ConnectionRepo, ConnectionRow};
+pub use connections::{
+    record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,
+    ConnectionRepo, ConnectionRow,
+};
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
     JobListRow, JobReadRepo, JobSnapshot, LedgerCursor, MappingSeed,
@@ -31,9 +36,9 @@ pub use jobs::{
     append_event, revive_by_gap, revive_counterparts, revive_on, settle_if_complete, AttemptIntent,
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, CreatedJob, EventScope, HaltCause,
     HaltRepo, InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect,
-    LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage,
+    LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
     OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo, AWAITING_COUNTERPART, ELECTION,
-    REVIVABLE_GATES,
+    REAUTH_REQUIRED, REVIVABLE_GATES,
 };
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,

@@ -48,6 +48,7 @@ just dev-session   # mint a development login; paste the printed line into /logi
 just web-dev       # the client dev server, proxying /v1 to a running tam-server
 just web-check     # the web lane: vocabulary freshness, svelte-check, vitest, build
 just db-test       # the database-backed lane: two-tenant RLS isolation
+just pre-push      # before pushing: check, then the database lane, no fail-fast
 nix flake check    # everything
 ```
 

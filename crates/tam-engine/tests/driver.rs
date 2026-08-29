@@ -26,7 +26,8 @@ use tam_storage::{
     WriteAttemptRepo,
 };
 use tam_types::{
-    ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId, Timestamp, Uuid,
+    Actor, ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId,
+    SystemComponent, Timestamp, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -293,6 +294,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                 job: JobId(Uuid([0x06; 16])),
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[NewJobItem {
                 item: tam_domain::JobItemId(Uuid([0x07; 16])),

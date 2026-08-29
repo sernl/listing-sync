@@ -15,8 +15,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
-    FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId, Timestamp,
-    Uuid,
+    Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId,
+    SystemComponent, Timestamp, Uuid,
 };
 
 use crate::codec::{
@@ -37,6 +37,16 @@ pub(crate) const fn item_outcome_to_db(outcome: ItemOutcome) -> &'static str {
     }
 }
 
+/// What opening a write attempt needs beyond the lease it runs under,
+/// grouped for the same reason [`NewJob`] is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NewAttempt<'a> {
+    pub mapping: MappingId,
+    pub intent: &'a AttemptIntent,
+    pub at: Timestamp,
+    pub actor: Actor,
+}
+
 /// The job-level half of an enqueue, grouped so call sites read as one
 /// value rather than a parameter list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +54,10 @@ pub struct NewJob {
     pub job: JobId,
     pub inventory: InventoryId,
     pub at: Timestamp,
+    /// Who queued it. Job-level like the rest of this struct: a job has one
+    /// author, and carrying it here rather than beside it keeps a caller from
+    /// describing one job and attributing another.
+    pub actor: Actor,
 }
 
 /// Which organisation, item and epoch a fenced write speaks for.
@@ -127,19 +141,27 @@ impl JobRepo {
         new: &NewJob,
         items: &[NewJobItem],
     ) -> Result<(), StorageError> {
-        let NewJob { job, inventory, at } = *new;
+        let NewJob {
+            job,
+            inventory,
+            at,
+            actor,
+        } = *new;
         let org_db = uuid_to_db(org.0);
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
         crate::pin_org(&mut tx, org).await?;
         sqlx::query!(
-            "INSERT INTO job (org_id, id, inventory, marketplace, created_at) \
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO job \
+             (org_id, id, inventory, marketplace, created_at, actor_kind, actor_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
             org_db,
             uuid_to_db(job.0),
             inventory_to_db(inventory),
             marketplace_to_db(inventory.marketplace()),
             at_db,
+            actor.kind(),
+            actor.id(),
         )
         .execute(&mut *tx)
         .await?;
@@ -158,6 +180,7 @@ impl JobRepo {
             },
             &JobEventPayload::JobQueued { items: item_count },
             at,
+            actor,
         )
         .await?;
         tx.commit().await?;
@@ -171,14 +194,14 @@ impl JobRepo {
     /// itself.
     pub async fn record_event(
         &self,
-        org: OrgId,
         scope: &EventScope,
         payload: &JobEventPayload,
         at: Timestamp,
+        actor: Actor,
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
-        crate::pin_org(&mut tx, org).await?;
-        append_event(&mut tx, scope, payload, at).await?;
+        crate::pin_org(&mut tx, scope.org).await?;
+        append_event(&mut tx, scope, payload, at, actor).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -375,6 +398,7 @@ pub async fn append_event(
     scope: &EventScope,
     payload: &JobEventPayload,
     at: Timestamp,
+    actor: Actor,
 ) -> Result<(), StorageError> {
     let EventScope { org, job, item } = *scope;
     let org_db = uuid_to_db(org.0);
@@ -388,8 +412,9 @@ pub async fn append_event(
         .unwrap_or(serde_json::Value::Null);
     sqlx::query!(
         "INSERT INTO job_event \
-         (org_id, org_seq, job_id, job_item_id, kind, payload, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+         (org_id, org_seq, job_id, job_item_id, kind, payload, created_at, \
+          actor_kind, actor_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         org_db,
         seq,
         uuid_to_db(job.0),
@@ -397,6 +422,8 @@ pub async fn append_event(
         payload.kind(),
         body,
         timestamp_to_db(at)?,
+        actor.kind(),
+        actor.id(),
     )
     .execute(&mut **tx)
     .await?;
@@ -441,6 +468,18 @@ pub const AWAITING_COUNTERPART: &str = "awaiting_counterpart";
 /// projection that raises it, the answer that clears it and the worker's
 /// own re-check after parking all name it.
 pub const ELECTION: &str = "election";
+
+/// The gate a session that died mid-submit parks on.
+///
+/// Deliberately not in `REVIVABLE_GATES`: that list is time-gated, and a
+/// re-link is the only thing that clears this one, so the clock must not.
+/// `LeaseRepo::revive_expired` reads it back on its own arm.
+///
+/// The driver writes it as `ChallengeKind::ReauthRequired`'s `Debug` form
+/// rather than through a codec, so this spelling is pinned against that
+/// derivation in this crate's tests; a second spelling of it is a park
+/// nothing ever wakes.
+pub const REAUTH_REQUIRED: &str = "ReauthRequired";
 
 /// The gap queue's revive. Keyed on the gate rather than on the mapping,
 /// because one `reconciliation_item` row stands for every product that hit
@@ -590,6 +629,9 @@ async fn record_resumptions(
             },
             &JobEventPayload::ItemResumed,
             at,
+            // The revive sweep is the engine's own timer firing; no request
+            // and no seller is behind an item resuming.
+            Actor::System(SystemComponent::Engine),
         )
         .await?;
     }
@@ -667,8 +709,9 @@ pub async fn settle_if_complete(
         .unwrap_or(serde_json::Value::Null);
     let inserted = sqlx::query!(
         "INSERT INTO job_event \
-         (org_id, org_seq, job_id, job_item_id, kind, payload, created_at) \
-         SELECT $1, $2, $3, NULL, $4, $5, $6 \
+         (org_id, org_seq, job_id, job_item_id, kind, payload, created_at, \
+          actor_kind, actor_id) \
+         SELECT $1, $2, $3, NULL, $4, $5, $6, $7, $8 \
          WHERE NOT EXISTS ( \
              SELECT 1 FROM job_event \
              WHERE org_id = $1 AND job_id = $3 AND kind = $4 \
@@ -680,6 +723,10 @@ pub async fn settle_if_complete(
         payload.kind(),
         body,
         timestamp_to_db(at)?,
+        // A job settles when its last item settles, which the engine
+        // observes rather than anyone requesting.
+        Actor::System(SystemComponent::Engine).kind(),
+        Actor::System(SystemComponent::Engine).id(),
     )
     .execute(&mut **tx)
     .await?;
@@ -1018,7 +1065,13 @@ impl LeaseRepo {
     }
 
     /// Requeues items whose park has expired, and only those parked on a gate
-    /// a drained queue can actually clear.
+    /// a drained queue can actually clear, plus items parked on
+    /// [`REAUTH_REQUIRED`] whose connection has since been re-linked.
+    ///
+    /// The two are separate arms because their releasing event differs: the
+    /// first is the clock, the second is the seller re-linking, and a gate the
+    /// clock cannot clear must never be revived by it. The answer is a count
+    /// of everything requeued by either.
     ///
     /// Cross-tenant and unpinned on purpose: this runs under `tam_engine`,
     /// which is BYPASSRLS, so `job_item`'s FORCE ROW LEVEL SECURITY does not
@@ -1084,6 +1137,79 @@ impl LeaseRepo {
         .await?;
         let revived = revived(rows.into_iter().map(|row| (row.org_id, row.job_id, row.id)));
         record_resumptions(&mut tx, &revived, now).await?;
+
+        // The re-link arm, conditioned on the connection rather than on the
+        // clock. `park_expires_at` is deliberately not read here: a re-link is
+        // the event that clears this gate, and until it happens no amount of
+        // waiting should.
+        //
+        // The stranded attempt is released first, and that ordering is the
+        // whole of why this arm is two statements. `SyncMachine::park`
+        // advances with the write attempt still `in_flight`, and nothing on
+        // the parked path settles it -- the driver returns `Parked` and the
+        // worker only logs it. A revive that left the row standing would meet
+        // `write_attempt_one_in_flight` at `AttemptRepo::open`, abandon, and
+        // repeat that on every pass until the attempt budget settled the item
+        // `failed`/`Other` with nothing in the ledger: the exact failure
+        // `REVIVABLE_GATES` is written to avoid.
+        //
+        // `create` is excluded and stays parked. Settling its attempt would
+        // release the only fence there is against a second listing on the
+        // seller's store -- the engine's `may_settle_unverified` holds a
+        // create's attempt standing for that reason, and neither adapter
+        // offers an idempotent create. A submit that died on `SessionExpired`
+        // may or may not have landed, so the resolution a create needs is a
+        // read-back that settles on what is actually there; that read is not
+        // available to this scan, and building it is the intended next step
+        // rather than an omission.
+        let at = timestamp_to_db(now)?;
+        sqlx::query!(
+            "UPDATE write_attempt wa \
+             SET state = 'abandoned', settled_at = $1, \
+                 remote_id_kind = ji.subject_kind, \
+                 remote_url = ji.subject_url, \
+                 remote_numeric_id = ji.subject_numeric_id \
+             FROM job_item ji, job j \
+             WHERE ji.org_id = wa.org_id AND ji.id = wa.job_item_id \
+               AND j.org_id = ji.org_id AND j.id = ji.job_id \
+               AND wa.state = 'in_flight' \
+               AND ji.state = 'parked_live' \
+               AND ji.blocked_on = $2 \
+               AND ji.operation <> 'create' \
+               AND EXISTS (SELECT 1 FROM connection c \
+                     WHERE c.org_id = ji.org_id \
+                       AND c.marketplace = j.marketplace \
+                       AND c.state = 'linked')",
+            at,
+            REAUTH_REQUIRED,
+        )
+        .execute(&mut *tx)
+        .await?;
+        let relinked = sqlx::query!(
+            "UPDATE job_item ji \
+             SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, \
+                 attempt_count = attempt_count + 1 \
+             FROM job j \
+             WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+               AND ji.state = 'parked_live' \
+               AND ji.blocked_on = $1 \
+               AND ji.operation <> 'create' \
+               AND EXISTS (SELECT 1 FROM connection c \
+                     WHERE c.org_id = ji.org_id \
+                       AND c.marketplace = j.marketplace \
+                       AND c.state = 'linked') \
+             RETURNING ji.org_id, ji.job_id, ji.id",
+            REAUTH_REQUIRED,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let relinked = self::revived(
+            relinked
+                .into_iter()
+                .map(|row| (row.org_id, row.job_id, row.id)),
+        );
+        record_resumptions(&mut tx, &relinked, now).await?;
+
         for (org, job) in settled {
             settle_if_complete(
                 &mut tx,
@@ -1094,7 +1220,7 @@ impl LeaseRepo {
             .await?;
         }
         tx.commit().await?;
-        Ok(count_of(&revived))
+        Ok(count_of(&revived).saturating_add(count_of(&relinked)))
     }
 
     /// The tenant's connection for a marketplace, if one is linked.
@@ -1121,15 +1247,41 @@ impl LeaseRepo {
         &self,
         org: OrgId,
         inventory: InventoryId,
+        at: Timestamp,
     ) -> Result<(), StorageError> {
-        sqlx::query!(
+        let mut tx = self.pool.begin().await?;
+        // RETURNING rather than a separate read: the audit must record the
+        // connection this statement actually gated, and a row that was
+        // already gated matches nothing and is not recorded twice.
+        let gated = sqlx::query!(
             "UPDATE connection SET state = 'needs_reauth', updated_at = now() \
-             WHERE org_id = $1 AND marketplace = $2 AND state = 'linked'",
+             WHERE org_id = $1 AND marketplace = $2 AND state = 'linked' \
+             RETURNING id",
             uuid_to_db(org.0),
             marketplace_to_db(inventory.marketplace()),
         )
-        .execute(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+        if let Some(row) = gated {
+            crate::connections::record_connection_event(
+                &mut tx,
+                &crate::connections::ConnectionEventRecord {
+                    org,
+                    connection: tam_types::ConnectionId(uuid_from_db(row.id)),
+                    event: tam_types::ConnectionEvent::NeedsReauth,
+                    // The gate is the engine classifying a failure as an
+                    // authentication problem; no seller asked for it.
+                    actor: Actor::System(SystemComponent::Engine),
+                    // The inventory, not the marketplace: the connection is
+                    // per-marketplace, so which of its inventories failed is
+                    // the part the row does not already carry.
+                    detail: Some(inventory_to_db(inventory)),
+                    at,
+                },
+            )
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 }
@@ -1299,14 +1451,18 @@ impl WriteAttemptRepo {
     pub async fn open(
         &self,
         lease: &LeaseRef,
-        mapping: MappingId,
-        intent: &AttemptIntent,
-        at: Timestamp,
+        new: &NewAttempt<'_>,
     ) -> Result<tam_types::Uuid, StorageError> {
+        let NewAttempt {
+            mapping,
+            intent,
+            at,
+            actor,
+        } = *new;
         let AttemptIntent { body, hash } = intent;
         let attempt = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
         let inserted = sqlx::query!(
-            "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8)",
+            "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10)",
             uuid_to_db(lease.org.0),
             uuid_to_db(attempt),
             uuid_to_db(lease.item.0),
@@ -1315,6 +1471,8 @@ impl WriteAttemptRepo {
             body,
             hash.as_slice(),
             timestamp_to_db(at)?,
+            actor.kind(),
+            actor.id(),
         )
         .execute(&self.pool)
         .await;
@@ -2003,21 +2161,29 @@ impl JobRepo {
                 replay: true,
             });
         }
-        let NewJob { job, inventory, at } = *new;
+        let NewJob {
+            job,
+            inventory,
+            at,
+            actor,
+        } = *new;
         let org_db = uuid_to_db(org.0);
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
         crate::pin_org(&mut tx, org).await?;
         let inserted = sqlx::query!(
             "INSERT INTO job \
-             (org_id, id, inventory, marketplace, created_at, request_idempotency_key) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             (org_id, id, inventory, marketplace, created_at, \
+              request_idempotency_key, actor_kind, actor_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             org_db,
             uuid_to_db(job.0),
             inventory_to_db(inventory),
             marketplace_to_db(inventory.marketplace()),
             at_db,
             uuid_to_db(request_key),
+            actor.kind(),
+            actor.id(),
         )
         .execute(&mut *tx)
         .await;
@@ -2054,6 +2220,7 @@ impl JobRepo {
             },
             &JobEventPayload::JobQueued { items: item_count },
             at,
+            actor,
         )
         .await?;
         tx.commit().await?;
@@ -2107,5 +2274,31 @@ impl HaltRepo {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REAUTH_REQUIRED, REVIVABLE_GATES};
+    use tam_marketplace::ChallengeKind;
+
+    /// The driver parks a challenge under `format!("{challenge:?}")`, so this
+    /// constant is bound to a `Debug` derivation rather than to a codec. A
+    /// rename of the variant would otherwise leave the revive reading a gate
+    /// nothing writes, and the park would go back to being unreachable.
+    #[test]
+    fn the_reauth_gate_matches_the_debug_form_the_driver_writes() {
+        assert_eq!(
+            format!("{:?}", ChallengeKind::ReauthRequired),
+            REAUTH_REQUIRED
+        );
+    }
+
+    /// The re-link arm and the expiry arm must stay disjoint: `REVIVABLE_GATES`
+    /// is time-gated, so a `REAUTH_REQUIRED` entry there would requeue the item
+    /// on the clock while the connection was still unusable.
+    #[test]
+    fn the_reauth_gate_is_not_time_revivable() {
+        assert!(!REVIVABLE_GATES.contains(&REAUTH_REQUIRED));
     }
 }

@@ -22,8 +22,8 @@ use tam_storage::{
     StorageError,
 };
 use tam_types::{
-    AttemptId, CanonicalTermId, InventoryId, JobId, MappingId, OrgId, PriceIntent, PriceRule,
-    Timestamp, Uuid,
+    Actor, AttemptId, CanonicalTermId, InventoryId, JobId, MappingId, OrgId, PriceIntent,
+    PriceRule, SystemComponent, Timestamp, Uuid,
 };
 
 use common::{minimal_product, seed_org_a, ORG_A};
@@ -426,6 +426,7 @@ async fn item_in(app: &PgPool, mapping: MappingId, state: &str, gate: Option<&st
                 job: JOB,
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[NewJobItem {
                 item: ITEM,

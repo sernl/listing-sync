@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, ApiFailure, type ConnectionView } from '$lib/api';
+	import { present } from '$lib/connection-status';
 	import { toast } from '$lib/toast';
 
 	let connections = $state<ConnectionView[]>([]);
@@ -65,14 +66,13 @@
 			<li class="flex items-center gap-4 px-4 py-3">
 				<span class="font-medium">{connection.marketplace}</span>
 				<span
-					class="rounded px-2 py-0.5 text-xs
-						{connection.state === 'linked'
-						? 'bg-emerald-100 text-emerald-800'
-						: connection.state === 'needs_reauth'
-							? 'bg-orange-100 text-orange-800'
-							: 'bg-slate-100 text-slate-700'}"
+					class="rounded px-2 py-0.5 text-xs {present(connection.status).tone}"
+					title={present(connection.status).explanation}
 				>
-					{connection.state}
+					{connection.status}
+				</span>
+				<span class="text-xs text-slate-500">
+					{present(connection.status).explanation}
 				</span>
 				<span class="grow"></span>
 				{#if connection.state !== 'revoked'}

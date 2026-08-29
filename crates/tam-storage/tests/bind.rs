@@ -15,13 +15,13 @@ use tam_domain::{
 use tam_marketplace::{IdempotencyKey, ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, ItemVerdict, JobRepo,
-    LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, StorageError,
-    WriteAttemptRepo,
+    LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewAttempt, NewJob, NewJobItem, ProductRepo,
+    StorageError, WriteAttemptRepo,
 };
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId,
-    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
-    ScanOutcome, Timestamp, Title, Uuid,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
+    JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
+    ProductId, ScanOutcome, SystemComponent, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -178,6 +178,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
                 job: JOB,
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[NewJobItem {
                 item: ITEM,
@@ -225,6 +226,7 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
                 job: RIVAL_JOB,
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[NewJobItem {
                 item: RIVAL_ITEM,
@@ -254,12 +256,15 @@ async fn settle_attempt(
     let attempt = attempts
         .open(
             lease,
-            mapping,
-            &AttemptIntent {
-                body: serde_json::json!({}),
-                hash: vec![0x01],
+            &NewAttempt {
+                mapping,
+                intent: &AttemptIntent {
+                    body: serde_json::json!({}),
+                    hash: vec![0x01],
+                },
+                at,
+                actor: Actor::System(SystemComponent::Engine),
             },
-            at,
         )
         .await?;
     attempts
@@ -915,6 +920,7 @@ async fn park_a_waiting_publish(
                 job,
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[NewJobItem {
                 item,

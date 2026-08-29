@@ -56,8 +56,9 @@ async fn insert_attempt(pool: &PgPool, attempt: Uuid, state: &str) -> Result<(),
     sqlx::query(
         "INSERT INTO write_attempt \
          (org_id, id, job_item_id, mapping_id, lease_epoch, intent, intent_hash, \
-          state, opened_at) \
-         VALUES ($1, $2, $3, $4, 1, '{}'::jsonb, decode('00', 'hex'), $5, now())",
+          state, opened_at, actor_kind, actor_id) \
+         VALUES ($1, $2, $3, $4, 1, '{}'::jsonb, decode('00', 'hex'), $5, now(), \
+                 'system', 'engine')",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(attempt))
@@ -84,8 +85,9 @@ async fn one_write_attempt_in_flight_per_mapping(pool: PgPool) {
     let mut tx = pool.begin().await.expect("transaction begins");
     pin_a(&mut tx).await.expect("tenant pin applies");
     sqlx::query(
-        "INSERT INTO job (org_id, id, inventory, marketplace, created_at) \
-         VALUES ($1, $2, 'tes_gb', 'tes', now())",
+        "INSERT INTO job \
+         (org_id, id, inventory, marketplace, created_at, actor_kind, actor_id) \
+         VALUES ($1, $2, 'tes_gb', 'tes', now(), 'system', 'engine')",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(JOB_1))
@@ -167,8 +169,9 @@ async fn seed_ledger_job_only(pool: &PgPool) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     pin_a(&mut tx).await?;
     sqlx::query(
-        "INSERT INTO job (org_id, id, inventory, marketplace, created_at) \
-         VALUES ($1, $2, 'tes_gb', 'tes', now())",
+        "INSERT INTO job \
+         (org_id, id, inventory, marketplace, created_at, actor_kind, actor_id) \
+         VALUES ($1, $2, 'tes_gb', 'tes', now(), 'system', 'engine')",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(JOB_1))

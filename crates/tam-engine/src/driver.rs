@@ -19,11 +19,11 @@ use tam_marketplace::{
 use tam_storage::{
     append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
     EventScope, HaltCause, HaltRepo, ItemVerdict, LandingEffect, LeaseRef, LeaseRepo, LeasedItem,
-    NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
+    NewAttempt, NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
-    BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId,
-    Timestamp, Uuid,
+    Actor, BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant,
+    OrgId, SystemComponent, Timestamp, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -529,12 +529,17 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                         .attempts
                         .open(
                             &lease_ref,
-                            lease.mapping,
-                            &AttemptIntent {
-                                body: intent_as_json(&operation, &next.fields),
-                                hash: intent_hash.0.to_vec(),
+                            &NewAttempt {
+                                mapping: lease.mapping,
+                                intent: &AttemptIntent {
+                                    body: intent_as_json(&operation, &next.fields),
+                                    hash: intent_hash.0.to_vec(),
+                                },
+                                at: now,
+                                // The driver opens its own attempt rows; the
+                                // seller's part ended when the job was queued.
+                                actor: Actor::System(SystemComponent::Engine),
                             },
-                            now,
                         )
                         .await;
                     match attempt {
@@ -747,7 +752,9 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                     connection: _,
                     cause,
                 } => {
-                    ctx.leases.gate_connection(org, lease.inventory).await?;
+                    ctx.leases
+                        .gate_connection(org, lease.inventory, now)
+                        .await?;
                     record_event(
                         ctx,
                         lease,
@@ -984,7 +991,7 @@ async fn preflight_failed(
         });
     }
     ctx.leases
-        .gate_connection(lease.org, lease.inventory)
+        .gate_connection(lease.org, lease.inventory, at)
         .await?;
     record_event(
         ctx,
@@ -1143,6 +1150,7 @@ async fn record_event(
         },
         payload,
         at,
+        Actor::System(SystemComponent::Engine),
     )
     .await?;
     tx.commit().await?;

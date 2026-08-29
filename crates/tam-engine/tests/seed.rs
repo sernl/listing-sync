@@ -24,9 +24,9 @@ use tam_marketplace::{FileContent, FileSource, FileSourceError};
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{ElectionRepo, LeaseRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole, InventoryId,
-    JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, ScanOutcome, Timestamp, Title, UserId, Uuid,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole,
+    InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule,
+    ProductFile, ProductId, ScanOutcome, SystemComponent, Timestamp, Title, UserId, Uuid,
 };
 
 /// The rendering reads no files, so the source is a refusal.
@@ -1171,6 +1171,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
                 job,
                 inventory: InventoryId::TesNz,
                 at: NOW,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &items,
         )
@@ -1211,12 +1212,15 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
     let attempt = attempts
         .open(
             &create.lease_ref(),
-            MAPPING,
-            &tam_storage::AttemptIntent {
-                body: serde_json::json!({}),
-                hash: vec![0x01],
+            &tam_storage::NewAttempt {
+                mapping: MAPPING,
+                intent: &tam_storage::AttemptIntent {
+                    body: serde_json::json!({}),
+                    hash: vec![0x01],
+                },
+                at: NOW,
+                actor: Actor::System(SystemComponent::Engine),
             },
-            NOW,
         )
         .await
         .expect("the attempt opens");
@@ -1343,6 +1347,7 @@ async fn provision_refusing_queue(app: &PgPool, engine: &PgPool) {
                 job: REFUSING_JOB,
                 inventory: InventoryId::TesNz,
                 at: NOW,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[
                 tam_storage::NewJobItem {

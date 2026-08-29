@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, marketplace, state, created_at, updated_at FROM connection WHERE org_id = $1 ORDER BY marketplace",
+  "query": "SELECT id, marketplace, state, created_at, updated_at, session_verified_at, session_refresh_after, refresh_failures FROM connection WHERE org_id = $1 ORDER BY marketplace",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,21 @@
         "ordinal": 4,
         "name": "updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "session_verified_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "session_refresh_after",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "refresh_failures",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -39,8 +54,11 @@
       false,
       false,
       false,
+      false,
+      true,
+      true,
       false
     ]
   },
-  "hash": "c2fbe4dd8254afe5f7aabded3852a562fad12d5134742b8a911594cf47917aa0"
+  "hash": "ab57b07fe4283b1f78158d5d59c8be845d59eb18e1162a3382694d02d6182cc5"
 }

@@ -6,6 +6,7 @@
 import type {
 	APIErrorCode,
 	APIErrorKind,
+	ConnectionStatus,
 	FailureCode,
 	InventoryId,
 	ItemOutcome,
@@ -168,7 +169,11 @@ export type ItemDetail = ItemView & { events: EventView[] };
 export interface ConnectionView {
 	id: string;
 	marketplace: Marketplace;
+	/// The stored link state. `status` is what the page renders.
 	state: string;
+	/// Whether the connection is actually carrying work, which the link
+	/// state alone cannot say.
+	status: ConnectionStatus;
 	created_at: number;
 	updated_at: number;
 }

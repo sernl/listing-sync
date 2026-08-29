@@ -2414,6 +2414,7 @@ version = "0.0.0"
 dependencies = [
  "chacha20poly1305",
  "rand_core 0.6.4",
+ "sha2",
  "tam-types",
  "zeroize",
 ]

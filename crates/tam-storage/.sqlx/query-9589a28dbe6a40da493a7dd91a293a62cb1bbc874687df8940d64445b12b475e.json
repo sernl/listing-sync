@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE connection SET state = 'needs_reauth', updated_at = now() WHERE org_id = $1 AND marketplace = $2 AND state = 'linked' RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9589a28dbe6a40da493a7dd91a293a62cb1bbc874687df8940d64445b12b475e"
+}

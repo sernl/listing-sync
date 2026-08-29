@@ -10,7 +10,10 @@ use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
 use tam_api::{APIErrorCode, APIErrorKind};
 use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_storage::ItemStateKind;
-use tam_types::{FailureCode, InventoryId, JobEventPayload, Marketplace, TermKind};
+use tam_types::{
+    ConnectionEvent, ConnectionStatus, FailureCode, InventoryId, JobEventPayload, Marketplace,
+    TermKind,
+};
 
 fn union<T, F: Fn(&T) -> String>(name: &str, values: &[T], render: F) -> String {
     let members: Vec<String> = values.iter().map(render).collect();
@@ -33,6 +36,14 @@ fn main() {
     out.push_str(&union("InventoryId", &InventoryId::ALL, serde_name));
     out.push('\n');
     out.push_str(&union("Marketplace", &Marketplace::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union(
+        "ConnectionStatus",
+        &ConnectionStatus::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&union("ConnectionEvent", &ConnectionEvent::ALL, serde_name));
     out.push('\n');
     out.push_str(&union("ItemState", &ItemStateKind::ALL, |state| {
         format!("\"{}\"", state.as_str())

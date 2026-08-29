@@ -16,14 +16,16 @@ use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_storage::{
-    revive_by_gap, revive_on, settle_if_complete, BudgetGrant, HaltCause, HaltRepo, ItemVerdict,
-    JobReadRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
-    ProductRepo, RateBudgetRepo, StorageError,
+    revive_by_gap, revive_on, settle_if_complete, AttemptIntent, BudgetGrant, ConnectionAudit,
+    HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LeaseRepo, MappingRepo, NewAttempt,
+    NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo, StorageError,
+    WriteAttemptRepo, REAUTH_REQUIRED,
 };
 use tam_types::{
-    CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail, FileId,
-    FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent,
-    PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
+    Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
+    FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet,
+    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, SystemComponent, Timestamp, Title,
+    Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -57,6 +59,7 @@ async fn engine_pool(app: &PgPool) -> PgPool {
 
 struct Tenant {
     org: OrgId,
+    product: ProductId,
     mapping: MappingId,
 }
 
@@ -153,7 +156,11 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
         .expect("the fixture connection inserts");
         tx.commit().await.expect("the fixture connection commits");
     }
-    Tenant { org, mapping }
+    Tenant {
+        org,
+        product,
+        mapping,
+    }
 }
 
 /// An outcome with no failure code and no detail beside it.
@@ -200,6 +207,7 @@ async fn enqueue_operation(
                 job: JobId(Uuid([job_seed; 16])),
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             std::slice::from_ref(&new_item),
         )
@@ -492,6 +500,7 @@ async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
                 job,
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[first, second],
         )
@@ -678,9 +687,32 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
     assert_eq!(leased.org, unlinked.org, "only the linked tenant leases");
 
     leases
-        .gate_connection(leased.org, InventoryId::TesGb)
+        .gate_connection(leased.org, InventoryId::TesGb, T0)
         .await
         .expect("the gate flips");
+    // F10: the gate is a lifecycle event, and the connection row alone cannot
+    // say it happened, only that it is currently gated.
+    let gate_trail = ConnectionAudit::new(engine.clone())
+        .history(leased.org, connection_of(&engine, leased.org).await)
+        .await
+        .expect("the lifecycle audit reads back");
+    assert_eq!(
+        gate_trail
+            .iter()
+            .map(|row| (
+                row.event.as_str(),
+                row.actor_kind.as_str(),
+                row.actor_id.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("needs_reauth", "system", Some("engine"))],
+        "the gate records itself, attributed to the engine that closed it"
+    );
+    assert_eq!(
+        gate_trail[0].detail.as_deref(),
+        Some("tes_gb"),
+        "and names the inventory whose failure caused it"
+    );
     leases
         .settle(&leased.lease_ref(), &verdict(ItemOutcome::Blocked), T0)
         .await
@@ -746,6 +778,7 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
                 job,
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[first_item, second_item],
         )
@@ -833,6 +866,7 @@ async fn a_reused_idempotency_key_is_named(app: PgPool) {
                 job: JobId(Uuid([0x14; 16])),
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             std::slice::from_ref(&duplicate),
         )
@@ -1050,6 +1084,7 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
                 job: JobId(Uuid([0x15; 16])),
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             std::slice::from_ref(&new_item),
         )
@@ -1123,6 +1158,7 @@ async fn the_completeness_count_holds_the_organisation_event_lock(app: PgPool) {
                 job,
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[first, second],
         )
@@ -1167,4 +1203,410 @@ async fn the_completeness_count_holds_the_organisation_event_lock(app: PgPool) {
         1,
         "exactly one, and never none"
     );
+}
+
+/// A second inventory for a product this org already lists, which is the
+/// cross-listing shape rather than a second fixture: `mapping_one_per_inventory`
+/// is keyed on the product and the inventory, so one product carries one
+/// mapping per marketplace.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_mapping_on(
+    app: &PgPool,
+    tenant: &Tenant,
+    seed: u8,
+    inventory: InventoryId,
+) -> MappingId {
+    let mapping = MappingId(Uuid([seed; 16]));
+    MappingRepo::new(app.clone())
+        .insert(
+            tenant.org,
+            &Mapping {
+                id: mapping,
+                org: tenant.org,
+                product: tenant.product,
+                inventory,
+                binding: Binding::Unbound,
+                policies: FieldPolicies {
+                    title: FieldPolicy::Managed,
+                    description: FieldPolicy::Managed,
+                    price: FieldPolicy::Managed,
+                    taxonomy: FieldPolicy::Managed,
+                    grades: FieldPolicy::Managed,
+                    files: FieldPolicy::Managed,
+                },
+                price_rule: PriceRule::Explicit(PriceIntent::Free),
+                publish: PublishMode::DryRun,
+                lifecycle: RemoteLifecycle::Absent,
+            },
+            0,
+            T0,
+        )
+        .await
+        .expect("the second-inventory mapping inserts");
+    mapping
+}
+
+/// A linked connection for a marketplace the fixture tenant did not seed one
+/// for. Written over the app role behind a tenant pin, the way `seed_tenant`
+/// does: `tam_engine` may update `connection` -- that is what
+/// `gate_connection` is -- but it holds no INSERT on the table.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn link_connection(app: &PgPool, org: OrgId, marketplace: &str, seed: u8) {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+         VALUES ($1, $2, $3, 'linked', now(), now())",
+    )
+    .bind(db_uuid(org.0))
+    .bind(db_uuid(Uuid([seed; 16])))
+    .bind(marketplace)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture connection inserts");
+    tx.commit().await.expect("the fixture connection commits");
+}
+
+/// The re-link itself, which no repository method models: the broker owns
+/// that write, and this test stands in for it with the state change it makes.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn relink(engine: &PgPool, org: OrgId, marketplace: &str) {
+    let flipped = sqlx::query(
+        "UPDATE connection SET state = 'linked', updated_at = now() \
+         WHERE org_id = $1 AND marketplace = $2",
+    )
+    .bind(db_uuid(org.0))
+    .bind(marketplace)
+    .execute(engine)
+    .await
+    .expect("the re-link applies");
+    assert_eq!(
+        flipped.rows_affected(),
+        1,
+        "the fixture must re-link exactly the connection under test"
+    );
+}
+
+/// Enqueues onto a stated inventory, which `enqueue_operation` cannot: it
+/// fixes `InventoryId::TesGb`, and the marketplace the job carries is what
+/// the re-link arm joins the connection on.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is an axis a call site varies independently, and the \
+              cross-marketplace tests vary all of them; the pairing worth enforcing \
+              is mapping-to-inventory, and a struct for that belongs on `Tenant` \
+              beside the mapping it already carries rather than on this signature"
+)]
+async fn enqueue_on(
+    engine: &PgPool,
+    tenant: &Tenant,
+    mapping: MappingId,
+    job_seed: u8,
+    item_seed: u8,
+    inventory: InventoryId,
+    operation: ItemOperation,
+) -> JobItemId {
+    let mut new_item = item(item_seed);
+    new_item.mapping = mapping;
+    new_item.operation = operation;
+    JobRepo::new(engine.clone())
+        .enqueue(
+            tenant.org,
+            &NewJob {
+                job: JobId(Uuid([job_seed; 16])),
+                inventory,
+                at: T0,
+                actor: Actor::System(SystemComponent::Engine),
+            },
+            std::slice::from_ref(&new_item),
+        )
+        .await
+        .expect("the fixture job enqueues");
+    new_item.item
+}
+
+/// Leases the next item, opens its write attempt, and parks it on the gate a
+/// session that died mid-submit writes. This is the driver's own order --
+/// `RecordIntent` opens the attempt, the submit fails `SessionExpired`, and
+/// `SyncMachine::park` advances with that attempt still `in_flight` -- which
+/// is the whole reason the park needs releasing rather than merely reviving.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn park_mid_submit(engine: &PgPool, worker: &str, mapping: MappingId) -> JobItemId {
+    let leases = LeaseRepo::new(engine.clone());
+    let lease = leases
+        .acquire(worker, T0, 60)
+        .await
+        .expect("the scan runs")
+        .expect("the item leases");
+    assert_eq!(
+        lease.mapping, mapping,
+        "the fixture depends on FIFO order, so the expected item must be the one leased"
+    );
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &lease.lease_ref(),
+            &NewAttempt {
+                mapping,
+                intent: &intent(),
+                at: T0,
+                actor: Actor::System(SystemComponent::Engine),
+            },
+        )
+        .await
+        .expect("the attempt opens");
+    leases
+        .park(&lease.lease_ref(), REAUTH_REQUIRED, Timestamp(T0.0 + 1_000))
+        .await
+        .expect("the park is fenced on a live lease");
+    lease.item
+}
+
+fn intent() -> AttemptIntent {
+    AttemptIntent {
+        body: serde_json::json!({ "fixture": true }),
+        hash: vec![0x01; 32],
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn attempt_states(engine: &PgPool, org: OrgId, mapping: MappingId) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT state FROM write_attempt WHERE org_id = $1 AND mapping_id = $2 ORDER BY opened_at",
+    )
+    .bind(db_uuid(org.0))
+    .bind(db_uuid(mapping.0))
+    .fetch_all(engine)
+    .await
+    .expect("the attempt rows read")
+}
+
+/// The park a re-link is the only thing that clears.
+///
+/// `ReauthRequired` is outside `REVIVABLE_GATES` because that list is
+/// time-gated, so before this arm existed the item sat `parked_live` forever
+/// and the job it belonged to read active forever: the expiry pass neither
+/// revived it nor reached the give-up arm, and re-linking the connection did
+/// nothing to it.
+///
+/// The attempt assertions are what make this severe rather than merely green.
+/// Reviving the item alone would leave its `in_flight` attempt standing, and
+/// `write_attempt_one_in_flight` would then refuse `AttemptRepo::open` on
+/// every subsequent pass until the budget settled the item `failed` with
+/// nothing in the ledger -- a state in which "the item leases again" is still
+/// true and the fix is still absent.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC8, true).await;
+    let tpt_mapping = seed_mapping_on(&app, &tenant, 0xD1, InventoryId::Tpt).await;
+    link_connection(&app, tenant.org, "tpt", 0xD2).await;
+    let revision = ItemOperation::Revise {
+        subject: subject(0x71),
+        transition: LifecycleTransition {
+            from: ListingState::Draft,
+            to: ListingState::Live,
+        },
+    };
+    let tes_item = enqueue_on(
+        &engine,
+        &tenant,
+        tenant.mapping,
+        0x71,
+        0x72,
+        InventoryId::TesGb,
+        revision.clone(),
+    )
+    .await;
+    let tpt_item = enqueue_on(
+        &engine,
+        &tenant,
+        tpt_mapping,
+        0x73,
+        0x74,
+        InventoryId::Tpt,
+        revision,
+    )
+    .await;
+
+    let leases = LeaseRepo::new(engine.clone());
+    assert_eq!(
+        park_mid_submit(&engine, "w1", tenant.mapping).await,
+        tes_item
+    );
+    assert_eq!(park_mid_submit(&engine, "w2", tpt_mapping).await, tpt_item);
+    // What `Effect::RequeueBehindGate` does the moment the machine parks.
+    leases
+        .gate_connection(tenant.org, InventoryId::TesGb, T0)
+        .await
+        .expect("the tes connection gates");
+    leases
+        .gate_connection(tenant.org, InventoryId::Tpt, T0)
+        .await
+        .expect("the tpt connection gates");
+
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 2_000), ATTEMPTS_MAX)
+            .await
+            .expect("the unparker runs"),
+        0,
+        "the connection is still unusable, so the park stands however long the clock runs"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["in_flight".to_owned()],
+        "nothing is released while the item stays parked"
+    );
+
+    relink(&engine, tenant.org, "tes").await;
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 3_000), ATTEMPTS_MAX)
+            .await
+            .expect("the unparker runs"),
+        1,
+        "the re-linked marketplace's item requeues, and only that one"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["abandoned".to_owned()],
+        "the stranded attempt is settled in the same transaction, which is what frees the \
+         mapping for the next run"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tpt_mapping).await,
+        vec!["in_flight".to_owned()],
+        "a marketplace that was not re-linked keeps both its park and its fence"
+    );
+
+    let resumed = leases
+        .acquire("w3", Timestamp(T0.0 + 3_000), 60)
+        .await
+        .expect("the scan runs")
+        .expect("the revived item leases again");
+    assert_eq!(
+        resumed.item, tes_item,
+        "the item that leases is the one the re-link revived"
+    );
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &resumed.lease_ref(),
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                at: T0,
+                actor: Actor::System(SystemComponent::Engine),
+            },
+        )
+        .await
+        .expect(
+            "a fresh attempt opens: without the release this is where the revived run would \
+             have abandoned on write_attempt_one_in_flight, every pass, until the budget ran out",
+        );
+
+    let parked: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT state, blocked_on FROM job_item WHERE org_id = $1 AND id = $2")
+            .bind(db_uuid(tenant.org.0))
+            .bind(db_uuid(tpt_item.0))
+            .fetch_all(&engine)
+            .await
+            .expect("the ledger is readable");
+    assert_eq!(
+        parked,
+        vec![("parked_live".to_owned(), Some(REAUTH_REQUIRED.to_owned()))],
+        "the re-link arm is scoped to the marketplace that was re-linked, so a sibling parked \
+         on another one is untouched"
+    );
+}
+
+/// A create is the one operation the re-link cannot resume, and it stays
+/// parked deliberately.
+///
+/// `write_attempt_one_in_flight` is the only fence between a requeued create
+/// and a second listing on the seller's store, and neither adapter offers an
+/// idempotent create. A submit that died on `SessionExpired` may or may not
+/// have landed, so releasing the fence here would risk the one failure this
+/// ledger cannot undo. The resolution a create needs is a read-back that
+/// settles on what is actually on the marketplace, which this scan cannot do.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_relinked_create_stays_parked_behind_its_own_duplicate_fence(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC9, true).await;
+    let created = enqueue_on(
+        &engine,
+        &tenant,
+        tenant.mapping,
+        0x81,
+        0x82,
+        InventoryId::TesGb,
+        ItemOperation::Create,
+    )
+    .await;
+
+    let leases = LeaseRepo::new(engine.clone());
+    assert_eq!(
+        park_mid_submit(&engine, "w1", tenant.mapping).await,
+        created
+    );
+    leases
+        .gate_connection(tenant.org, InventoryId::TesGb, T0)
+        .await
+        .expect("the connection gates");
+    relink(&engine, tenant.org, "tes").await;
+
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 3_000), ATTEMPTS_MAX)
+            .await
+            .expect("the unparker runs"),
+        0,
+        "a create is excluded from the re-link arm, so the re-link revives nothing"
+    );
+    assert_eq!(
+        states(&engine, tenant.org).await,
+        vec![("parked_live".to_owned(), Some(REAUTH_REQUIRED.to_owned()))],
+        "the create stays where the driver put it"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["in_flight".to_owned()],
+        "and its attempt keeps standing, which is the fence doing its job"
+    );
+}
+
+/// The tenant's connection id, for assertions about the lifecycle audit.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn connection_of(pool: &sqlx::PgPool, org: OrgId) -> tam_types::ConnectionId {
+    let id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM connection WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .fetch_one(pool)
+        .await
+        .expect("the fixture linked exactly one connection");
+    tam_types::ConnectionId(tam_types::Uuid(*id.as_bytes()))
 }

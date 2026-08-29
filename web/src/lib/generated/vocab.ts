@@ -27,6 +27,7 @@ export type APIErrorCode =
   | "duplicate_sync_item"
   | "resource_missing"
   | "broker_unavailable"
+  | "platform_account_already_linked"
   | "internal";
 
 export type APIErrorKind =
@@ -46,6 +47,22 @@ export type Marketplace =
   | "Tes"
   | "Etsy"
   | "Tpt";
+
+export type ConnectionStatus =
+  | "connected"
+  | "checking"
+  | "unstable"
+  | "disconnected";
+
+export type ConnectionEvent =
+  | "linked"
+  | "claimed"
+  | "refreshed"
+  | "refresh_failed"
+  | "needs_reauth"
+  | "relinked"
+  | "revoked"
+  | "unlinked";
 
 export type ItemState =
   | "queued"

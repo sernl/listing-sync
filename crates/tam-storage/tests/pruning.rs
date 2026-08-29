@@ -8,7 +8,7 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_storage::{append_event, EventScope, JobRepo, NewJob, PruneRepo};
-use tam_types::{InventoryId, JobEventPayload, JobId, Timestamp, Uuid};
+use tam_types::{Actor, InventoryId, JobEventPayload, JobId, SystemComponent, Timestamp, Uuid};
 
 mod common;
 use common::{seed_org_a, ORG_A};
@@ -52,6 +52,7 @@ async fn provision(pool: &PgPool) {
                 job: JOB,
                 inventory: InventoryId::TesNz,
                 at: Timestamp(EVENT_TIMES[0]),
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[],
         )
@@ -73,6 +74,7 @@ async fn provision(pool: &PgPool) {
             },
             &JobEventPayload::JobQueued { items: 0 },
             Timestamp(at),
+            Actor::System(SystemComponent::Engine),
         )
         .await
         .expect("the event appends");

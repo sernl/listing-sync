@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 use tam_marketplace::transport::{HttpResponse, TransportError};
-use tam_marketplace::{AdapterError, AmbiguityCause};
+use tam_marketplace::{AdapterError, AmbiguityCause, ChallengeKind};
 use tam_types::{FailureCode, FailureDetail};
 
 use crate::endpoints::DraftId;
@@ -17,6 +17,46 @@ fn detail(status: u16, body: &str) -> FailureDetail {
 
 fn looks_like_signin(body: &str) -> bool {
     body.contains("<html") && (body.contains("sign-in") || body.contains("login"))
+}
+
+/// Cloudflare's interstitial, which the edge serves in place of the origin's
+/// answer while it decides about the caller. Recognised by its markers rather
+/// than by a status, because it arrives under 403 and under 200 alike.
+fn looks_like_challenge(body: &str) -> bool {
+    body.contains("/cdn-cgi/challenge-platform/h/")
+        || body.contains("cf-browser-verification")
+        || body.contains("Just a moment...")
+}
+
+/// Cloudflare's edge refusal, a different condition from its interstitial:
+/// a blocked request is answered by the `/cdn-cgi/error` page naming a ray id
+/// and a firewall rule, and it clears when the caller's address is allowed
+/// rather than when the session is refreshed.
+fn looks_like_edge_block(body: &str) -> bool {
+    body.contains("/cdn-cgi/error")
+        || body.contains("Sorry, you have been blocked")
+        || body.contains("Attention Required! | Cloudflare")
+        || body.contains("Error 1020")
+}
+
+/// Which condition a 401 or a 403 from the Cloudflare-fronted origin is.
+///
+/// The two call for different remedies and the status alone does not separate
+/// them. A 401, or a 403 carrying none of Cloudflare's markup, is Tes saying
+/// the cookie jar has lapsed, which a re-link fixes. A 403 carrying that
+/// markup is the edge refusing the caller, which no credential refresh
+/// clears. Reporting both as `SessionExpired`, as this crate did until the
+/// connection-truth work, tells a seller to re-link over an egress block.
+///
+/// The marker sets are the Tpt crate's verbatim: they describe Cloudflare's
+/// own pages rather than either marketplace, and these two adapters already
+/// keep their own `detail` and `looks_like_signin` rather than sharing one.
+fn denial(status: u16, body: &str) -> AdapterError {
+    if looks_like_challenge(body) || (status == 403 && looks_like_edge_block(body)) {
+        AdapterError::Challenge(ChallengeKind::JavaScriptInterstitial)
+    } else {
+        AdapterError::SessionExpired
+    }
 }
 
 /// Maps a transport failure onto the seam vocabulary. `AfterSend` is the
@@ -144,7 +184,7 @@ pub fn classify_read(response: &HttpResponse) -> Result<Value, AdapterError> {
                 detail: detail(response.status, &text),
             })
         }
-        401 | 403 => Err(AdapterError::SessionExpired),
+        status @ (401 | 403) => Err(denial(status, &response.text())),
         429 => Err(AdapterError::RateLimited { retry_after: None }),
         404 => Err(AdapterError::Rejected {
             code: FailureCode::PreconditionElementAbsent,
@@ -177,7 +217,17 @@ pub fn classify_read_bytes(response: &HttpResponse) -> Result<&[u8], AdapterErro
             }
             Ok(&response.body)
         }
-        401 | 403 => Err(AdapterError::SessionExpired),
+        // Only the head is decoded, for the reason the constant states; a
+        // Cloudflare page declares itself well inside it.
+        status @ (401 | 403) => Err(denial(
+            status,
+            &String::from_utf8_lossy(
+                response
+                    .body
+                    .get(..INTERSTITIAL_HEAD_BYTES)
+                    .unwrap_or(&response.body),
+            ),
+        )),
         429 => Err(AdapterError::RateLimited { retry_after: None }),
         404 => Err(AdapterError::Rejected {
             code: FailureCode::PreconditionElementAbsent,
@@ -315,6 +365,86 @@ mod tests {
                 Err(AdapterError::SessionExpired)
             ),
             "positive assertion: a 200 that is not the resource is not a success"
+        );
+    }
+
+    /// Synthetic: no capture in this tree was ever challenged or blocked, so
+    /// these carry the markers Cloudflare's pages are documented to carry. A
+    /// live capture should replace them once one is taken.
+    const CHALLENGE_BODY: &str = "<html><head><title>Just a moment...</title></head><body>\
+         <script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1\">\
+         </script></body></html>";
+    const BLOCKED_BODY: &str = "<html><head><title>Attention Required! | Cloudflare</title>\
+         </head><body>Sorry, you have been blocked<br>Error 1020\
+         <a href=\"/cdn-cgi/error/1020\">ray</a></body></html>";
+
+    #[test]
+    fn a_cloudflare_challenge_is_not_a_dead_session() {
+        use tam_marketplace::ChallengeKind;
+        assert!(
+            matches!(
+                classify_read(&response(403, CHALLENGE_BODY)),
+                Err(AdapterError::Challenge(
+                    ChallengeKind::JavaScriptInterstitial
+                ))
+            ),
+            "the edge deciding about the caller is not the jar having lapsed"
+        );
+        assert!(
+            matches!(
+                classify_read(&response(403, BLOCKED_BODY)),
+                Err(AdapterError::Challenge(
+                    ChallengeKind::JavaScriptInterstitial
+                ))
+            ),
+            "an egress block clears when the address is allowed, not on a re-link"
+        );
+        assert!(
+            matches!(
+                super::classify_read_bytes(&response(403, CHALLENGE_BODY)),
+                Err(AdapterError::Challenge(
+                    ChallengeKind::JavaScriptInterstitial
+                ))
+            ),
+            "the bundle read reads the same markers out of its decoded head"
+        );
+    }
+
+    #[test]
+    fn a_genuine_expiry_stays_a_dead_session() {
+        assert!(
+            matches!(
+                classify_read(&response(401, r#"{"error":"unauthorized"}"#)),
+                Err(AdapterError::SessionExpired)
+            ),
+            "a 401 carrying a JSON auth failure is the jar, which a re-link fixes"
+        );
+        assert!(
+            matches!(
+                classify_read(&response(403, "")),
+                Err(AdapterError::SessionExpired)
+            ),
+            "a 403 carrying none of Cloudflare's markers stays what it always was"
+        );
+        assert!(
+            matches!(
+                super::classify_read_bytes(&response(401, "")),
+                Err(AdapterError::SessionExpired)
+            ),
+            "the bundle read keeps the same reading of a bare 401"
+        );
+    }
+
+    /// A challenge met on a *write* stays ambiguous: the write may have landed
+    /// before the edge answered, and that asymmetry is deliberate.
+    #[test]
+    fn a_challenge_on_a_write_is_still_ambiguous() {
+        assert!(
+            matches!(
+                classify_write(&response(403, CHALLENGE_BODY), ID),
+                Err(AdapterError::Ambiguous(_))
+            ),
+            "the write classifier's 401/403 reading is untouched by the denial split"
         );
     }
 }

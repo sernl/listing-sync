@@ -8,8 +8,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod actor;
+pub mod connection;
 pub mod natives;
 
+pub use actor::{Actor, SystemComponent};
+pub use connection::{
+    connection_status, ConnectionEvent, ConnectionHealth, ConnectionState, ConnectionStatus,
+    VERIFICATION_FRESHNESS_MS,
+};
 use serde::{Deserialize, Serialize};
 
 /// Stands in for the `uuid` crate's type. On the wire it is the canonical

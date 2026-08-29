@@ -14,7 +14,9 @@ use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::{router, AppState, Config, SESSION_COOKIE};
 use tam_storage::{append_event, EventScope, JobRepo, NewJob, SessionRepo, SessionToken};
-use tam_types::{InventoryId, JobEventPayload, JobId, OrgId, Timestamp, UserId, Uuid};
+use tam_types::{
+    Actor, InventoryId, JobEventPayload, JobId, OrgId, SystemComponent, Timestamp, UserId, Uuid,
+};
 use tower::ServiceExt;
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -57,6 +59,7 @@ async fn provision(pool: &PgPool) {
                 job: JOB,
                 inventory: InventoryId::TesNz,
                 at: Timestamp(1_000),
+                actor: Actor::System(SystemComponent::Engine),
             },
             &[],
         )
@@ -78,6 +81,7 @@ async fn provision(pool: &PgPool) {
             },
             &JobEventPayload::JobQueued { items: 0 },
             Timestamp(2_000),
+            Actor::System(SystemComponent::Engine),
         )
         .await
         .expect("the extra event appends");

@@ -7,6 +7,10 @@ export SQLX_OFFLINE := "true"
 # Local-dev Postgres on both provisioning paths; dev-only credential
 db_url := "postgres://tam_app:tam_dev_password@127.0.0.1:5433/tam"
 
+# The pg-gated crates and the feature spelled per crate, shared by the two
+# database-backed lanes so a crate cannot be added to one and missed by the other
+pg_tests := "-p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests"
+
 default:
     @just --list
 
@@ -113,7 +117,19 @@ db-verify:
 # the API driven in-process over per-test databases, and the engine driven
 # end to end against a fake marketplace
 db-test: db-wait db-verify
-    DATABASE_URL={{db_url}} cargo nextest run -p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests
+    DATABASE_URL={{db_url}} cargo nextest run {{pg_tests}}
+
+# The same lane reporting every failure rather than stopping at the first,
+# which is what a pre-push check needs: one early failure otherwise hides
+# the rest and the next run finds them one at a time
+db-test-all: db-wait db-verify
+    DATABASE_URL={{db_url}} cargo nextest run --no-fail-fast {{pg_tests}}
+
+# Everything that can fail before a push. The gated lane compiles the
+# pg-gated tests but never runs them, so a query built from a literal SQL
+# string and an assertion whose expected value has moved both reach main
+# green; this runs them.
+pre-push: check db-verify db-test-all
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:

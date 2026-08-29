@@ -14,9 +14,9 @@ use tam_engine::breaker::{run_breaker, BREAKER_MIN_SAMPLE};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
 use tam_storage::{HaltRepo, JobRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
+    Actor, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
     MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, Uuid,
+    SystemComponent, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -139,6 +139,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str]) {
                 job: JobId(Uuid([0x06; 16])),
                 inventory: InventoryId::TesGb,
                 at: T0,
+                actor: Actor::System(SystemComponent::Engine),
             },
             &items,
         )
