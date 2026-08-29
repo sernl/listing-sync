@@ -17,13 +17,21 @@
 //! a no-counterpart record, because a nearest-band rule would silently file
 //! ages 1-4 under the 3-5 band and pass every count-based check.
 //!
-//! TPT's grade labels are not in `gradeLevels`, which holds a bare id-to-form
-//! -label map; the seller-facing labels live in `taxonomyTags` behind a
-//! `legacyId` join. That join is only unique within a category — `legacyId`
-//! 1 names both the `Grade-Level` facet `preschool` and the `Price-Range`
-//! facet `free` — so it is scoped to the two categories the grade selector
-//! draws from, and an ambiguous or missing join is refused rather than
-//! guessed.
+//! Neither half of a TPT grade path is in `gradeLevels`, which holds a bare
+//! id-to-form-label map; the seller-facing label and the slug TPT addresses
+//! the grade by both live in `taxonomyTags`, behind a `legacyId` join. That
+//! join is only unique within a category — `legacyId` 1 names both the
+//! `Grade-Level` facet `preschool` and the `Price-Range` facet `free` — so it
+//! is scoped to the two categories the grade selector draws from, and an
+//! ambiguous or missing join is refused rather than guessed.
+//!
+//! The slug is the identifier the path carries, not the `legacyId`. TPT posts
+//! and reads a grade as a `taxonomyTags` member — `6th-grade` beside `math`
+//! and `pdf` — while `legacyId` addresses the create form's own selector, and
+//! the two are not interchangeable on the wire. A path seeded under the
+//! numeric id is refused by the TPT adapter's slug-shape guard on the way
+//! out, and fails to ingest a TPT-sourced grade on the way in, because
+//! neither direction ever sees that number.
 
 use std::collections::BTreeMap;
 
@@ -171,9 +179,11 @@ pub enum GradeError {
         id: u64,
     },
     /// The `legacyId` join found no `Grade-Level` or `audience` facet, or
-    /// found more than one. Either way the label is unknown, and a grade
-    /// seeded under its form label would carry a different string than the
-    /// one TPT shows its own sellers.
+    /// found more than one. Either way both the label and the slug are
+    /// unknown: a grade seeded under its form label would carry a different
+    /// string than the one TPT shows its own sellers, and one seeded under
+    /// its `legacyId` would carry an identifier TPT's tag namespace does not
+    /// answer to.
     TptLabelNotJoinable {
         legacy_id: u64,
         matches: usize,
@@ -228,7 +238,7 @@ pub fn derive_grade_crosswalk(
     let year_groups = numbered(&tes.year_groups.options, "yearGroups")?;
     let bands = numbered(&tes.age_ranges.options, "ageRanges")?;
     let grade_levels = numbered(&tpt.grade_levels.options, "gradeLevels")?;
-    let labels = grade_labels(&tpt.taxonomy_tags.options);
+    let facets = grade_facets(&tpt.taxonomy_tags.options);
 
     let tes_source = Decider::Imported {
         source: tes.source.clone(),
@@ -303,7 +313,7 @@ pub fn derive_grade_crosswalk(
         }
         match paired.get(&id) {
             Some(&tpt_id) => {
-                let path = tpt_grade_path(tpt_id, &labels, &grade_levels)?;
+                let path = tpt_grade_path(tpt_id, &facets, &grade_levels)?;
                 tpt_grades.insert(id, path.clone());
                 out.edges.push(ProjectionEdge {
                     from: term,
@@ -330,7 +340,7 @@ pub fn derive_grade_crosswalk(
             continue;
         }
         let term = tpt_grade_term_id(tpt_id);
-        let path = tpt_grade_path(tpt_id, &labels, &grade_levels)?;
+        let path = tpt_grade_path(tpt_id, &facets, &grade_levels)?;
         out.terms.push(CanonicalTerm {
             id: term,
             kind: TermKind::Phase,
@@ -589,37 +599,45 @@ fn numbered<T: Clone>(
         .collect()
 }
 
-/// The `legacyId` to seller-facing-label join, scoped to the two categories
-/// TPT's grade selector draws from. A legacy id that resolves in more than one
-/// of them is left out and refused at the call site rather than won by
-/// whichever facet the capture happened to list first.
-fn grade_labels(tags: &BTreeMap<String, TaxonomyTag>) -> BTreeMap<String, Vec<String>> {
-    let mut labels: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for tag in tags.values() {
+/// The two halves of a TPT grade path, as `taxonomyTags` states them: the
+/// slug the facet is keyed by, which is what TPT's wire addresses it with, and
+/// the seller-facing name.
+struct GradeFacet {
+    slug: String,
+    name: String,
+}
+
+/// The `legacyId` to grade-facet join, scoped to the two categories TPT's
+/// grade selector draws from. A legacy id that resolves in more than one of
+/// them is left out and refused at the call site rather than won by whichever
+/// facet the capture happened to list first.
+fn grade_facets(tags: &BTreeMap<String, TaxonomyTag>) -> BTreeMap<String, Vec<GradeFacet>> {
+    let mut facets: BTreeMap<String, Vec<GradeFacet>> = BTreeMap::new();
+    for (slug, tag) in tags {
         let (Some(legacy), Some(category)) = (tag.legacy_id.as_ref(), tag.category.as_ref()) else {
             continue;
         };
         if !GRADE_TAG_CATEGORIES.contains(&category.as_str()) {
             continue;
         }
-        labels
-            .entry(legacy.clone())
-            .or_default()
-            .push(tag.name.clone());
+        facets.entry(legacy.clone()).or_default().push(GradeFacet {
+            slug: slug.clone(),
+            name: tag.name.clone(),
+        });
     }
-    labels
+    facets
 }
 
 fn tpt_grade_path(
     tpt_id: u64,
-    labels: &BTreeMap<String, Vec<String>>,
+    facets: &BTreeMap<String, Vec<GradeFacet>>,
     grade_levels: &BTreeMap<u64, GradeLevel>,
 ) -> Result<VocabularyPath, GradeError> {
     if !grade_levels.contains_key(&tpt_id) {
         return Err(GradeError::UnknownTptGrade { id: tpt_id });
     }
-    let joined: &[String] = labels.get(&tpt_id.to_string()).map_or(&[], Vec::as_slice);
-    let [label] = joined else {
+    let joined: &[GradeFacet] = facets.get(&tpt_id.to_string()).map_or(&[], Vec::as_slice);
+    let [facet] = joined else {
         return Err(GradeError::TptLabelNotJoinable {
             legacy_id: tpt_id,
             matches: joined.len(),
@@ -627,8 +645,8 @@ fn tpt_grade_path(
     };
     Ok(VocabularyPath {
         vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Phase),
-        segments: vec![label.clone()],
-        native_id: Some(tpt_id.to_string()),
+        segments: vec![facet.name.clone()],
+        native_id: Some(facet.slug.clone()),
     })
 }
 
@@ -878,19 +896,31 @@ mod tests {
                 vec![],
                 "3-5 covers Reception alone, which TPT does not pair",
             ),
-            (2, vec!["2", "3"], "5-7 covers Kindergarten 5-6 and 1st 6-7"),
+            (
+                2,
+                vec!["kindergarten", "1st-grade"],
+                "5-7 covers Kindergarten 5-6 and 1st 6-7",
+            ),
             (
                 3,
-                vec!["4", "5", "6", "7"],
+                vec!["2nd-grade", "3rd-grade", "4th-grade", "5th-grade"],
                 "7-11 covers 2nd through 5th, ages 7-11",
             ),
             (
                 4,
-                vec!["8", "9", "10"],
+                vec!["6th-grade", "7th-grade", "8th-grade"],
                 "11-14 covers 6th through 8th, ages 11-14",
             ),
-            (5, vec!["11", "12"], "14-16 covers 9th 14-15 and 10th 15-16"),
-            (6, vec!["13", "14"], "16+ covers 11th 16-17 and 12th 17-18"),
+            (
+                5,
+                vec!["9th-grade", "10th-grade"],
+                "14-16 covers 9th 14-15 and 10th 15-16",
+            ),
+            (
+                6,
+                vec!["11th-grade", "12th-grade"],
+                "16+ covers 11th 16-17 and 12th 17-18",
+            ),
         ];
         let mut named_total = 0_usize;
         for (band, expected, why) in table {
@@ -923,9 +953,15 @@ mod tests {
     fn a_named_tpt_grade_sits_inside_the_band_that_names_it() {
         let crosswalk = crosswalk();
         let tes: super::TesVocabulary = serde_json::from_str(TES).expect("the capture parses");
+        let captured = captured_grade_facets();
         let paired: std::collections::BTreeMap<String, u64> = super::GRADE_PAIRS
             .iter()
-            .map(|&(tpt_id, year_group)| (tpt_id.to_string(), year_group))
+            .map(|&(tpt_id, year_group)| {
+                let (slug, _) = captured
+                    .get(&tpt_id.to_string())
+                    .unwrap_or_else(|| panic!("the pairing names TPT grade {tpt_id}"));
+                (slug.clone(), year_group)
+            })
             .collect();
         let mut checked = 0_usize;
         for band in 1_u64..=6 {
@@ -938,8 +974,8 @@ mod tests {
                 row.age_low.expect("a bounded band declares its low age"),
                 row.age_high.unwrap_or(u8::MAX),
             );
-            for tpt_id in tpt_grades_named_by(&crosswalk, band) {
-                let year_group = paired[tpt_id];
+            for slug in tpt_grades_named_by(&crosswalk, band) {
+                let year_group = paired[slug];
                 let ages = &tes
                     .year_groups
                     .options
@@ -948,7 +984,7 @@ mod tests {
                     .human_ages;
                 assert!(
                     ages.iter().all(|&age| age >= low && age <= high),
-                    "TPT grade {tpt_id} is year group {year_group}, ages {ages:?}, which the \
+                    "TPT grade {slug} is year group {year_group}, ages {ages:?}, which the \
                      {} band does not admit",
                     row.label
                 );
@@ -999,12 +1035,130 @@ mod tests {
         let crosswalk = crosswalk();
         let preschool = edges_into(&crosswalk, InventoryId::Tpt)
             .into_iter()
-            .find(|edge| edge.to.native_id.as_deref() == Some("1"))
-            .expect("TPT grade 1 is paired");
+            .find(|edge| edge.to.native_id.as_deref() == Some("preschool"))
+            .expect("TPT grade 1 is paired, and its path is keyed by its facet's slug");
         assert_eq!(
             preschool.to.segments,
             vec!["Preschool".to_owned()],
             "TPT's own label for grade 1 is Preschool; PreK is the create form's abbreviation"
+        );
+    }
+
+    /// The `legacyId` to facet join read straight out of the capture, so the
+    /// pairing table's numeric ids and the slugs the edges carry can be held
+    /// against each other without going back through the derivation.
+    fn captured_grade_facets() -> std::collections::BTreeMap<String, (String, String)> {
+        let capture: serde_json::Value = serde_json::from_str(TPT).expect("the capture parses");
+        let options = capture["taxonomyTags"]["options"]
+            .as_object()
+            .expect("the capture holds a taxonomy tag map");
+        let mut out = std::collections::BTreeMap::new();
+        for (slug, tag) in options {
+            let (Some(legacy), Some(category), Some(name)) = (
+                tag["legacyId"].as_str(),
+                tag["category"].as_str(),
+                tag["name"].as_str(),
+            ) else {
+                continue;
+            };
+            if !super::GRADE_TAG_CATEGORIES.contains(&category) {
+                continue;
+            }
+            assert!(
+                out.insert(legacy.to_owned(), (slug.clone(), name.to_owned()))
+                    .is_none(),
+                "legacyId {legacy} names two grade facets, so any slug join would be a guess"
+            );
+        }
+        out
+    }
+
+    /// The shape `tam-marketplace-tpt`'s `is_tpt_tag_slug` admits, restated
+    /// because that crate sits above this one and the identifier is chosen
+    /// here. A native this rejects is refused on the way to a live listing.
+    fn is_tag_slug(native: &str) -> bool {
+        !native.is_empty()
+            && native.bytes().any(|byte| !byte.is_ascii_digit())
+            && native
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    }
+
+    /// TPT addresses a grade twice over and by different identifiers: the
+    /// create form's selector takes the `legacyId`, and the product's own wire
+    /// takes the `taxonomyTags` slug. The path is the wire's, so every edge
+    /// into `(Tpt, Phase)` carries the slug, and the slug and the label are
+    /// read off one facet rather than joined from two.
+    #[test]
+    fn a_tpt_grade_path_is_addressed_by_its_taxonomy_tag_slug_and_never_its_legacy_id() {
+        let crosswalk = crosswalk();
+        let captured = captured_grade_facets();
+        let edges = edges_into(&crosswalk, InventoryId::Tpt);
+        assert_eq!(
+            edges.len(),
+            32,
+            "nineteen grade options claimed once each, and the thirteen band coverings"
+        );
+        for edge in &edges {
+            let native = edge
+                .to
+                .native_id
+                .as_deref()
+                .expect("a TPT grade path is addressed or it cannot be posted");
+            let (legacy, (_, name)) = captured
+                .iter()
+                .find(|(_, (slug, _))| slug == native)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{native:?} is no slug the capture keys a grade facet by, so TPT's tag                          namespace does not answer to it"
+                    )
+                });
+            assert_eq!(
+                &edge.to.segments,
+                &vec![name.clone()],
+                "legacyId {legacy}'s slug and label are one facet's, not two joins'"
+            );
+            assert!(
+                is_tag_slug(native),
+                "{native:?} fails the adapter's slug-shape guard and would be refused rather                  than posted"
+            );
+        }
+    }
+
+    /// The arithmetic half: the nineteen `gradeLevels` options are exactly the
+    /// nineteen facets the projecting edges address, so no option is left
+    /// carrying a form-facing identifier.
+    #[test]
+    fn every_gradelevels_option_projects_under_the_slug_its_legacy_id_joins_to() {
+        let crosswalk = crosswalk();
+        let captured = captured_grade_facets();
+        let tpt: super::TptVocabulary = serde_json::from_str(TPT).expect("the capture parses");
+        let mut expected: Vec<&str> = tpt
+            .grade_levels
+            .options
+            .keys()
+            .map(|legacy| {
+                let Some((slug, _)) = captured.get(legacy) else {
+                    panic!("gradeLevels {legacy} joins no grade facet");
+                };
+                slug.as_str()
+            })
+            .collect();
+        let mut addressed: Vec<&str> = edges_into(&crosswalk, InventoryId::Tpt)
+            .into_iter()
+            .filter(|edge| edge.kind != EdgeKind::Narrower)
+            .filter_map(|edge| edge.to.native_id.as_deref())
+            .collect();
+        expected.sort_unstable();
+        addressed.sort_unstable();
+        assert_eq!(
+            expected.len(),
+            19,
+            "the capture holds nineteen grade options"
+        );
+        assert_eq!(
+            addressed, expected,
+            "each option is claimed once, under the slug and not the number"
         );
     }
 
@@ -1180,8 +1334,12 @@ mod tests {
             .collect()
     }
 
-    fn into_tpt(crosswalk: &GradeCrosswalk, band: &str) -> tam_domain::equivalence::AxisOutcome {
-        let declared = declaration(InventoryId::TesGb, band);
+    fn into_tpt(
+        crosswalk: &GradeCrosswalk,
+        inventory: InventoryId,
+        native: &str,
+    ) -> tam_domain::equivalence::AxisOutcome {
+        let declared = declaration(inventory, native);
         let ingested = ingest_grades(&declared, &crosswalk.edges);
         project_axis(
             AxisRequest {
@@ -1202,7 +1360,7 @@ mod tests {
     #[test]
     fn a_gb_band_cross_lists_to_tpt_as_the_same_question_it_asks_the_tes_us_side() {
         let crosswalk = crosswalk();
-        let outcome = into_tpt(&crosswalk, "3");
+        let outcome = into_tpt(&crosswalk, InventoryId::TesGb, "3");
         assert!(
             outcome.gaps.is_empty(),
             "a GB band reaching TPT is a choice the seller makes, not an equivalence \
@@ -1220,7 +1378,7 @@ mod tests {
                 .iter()
                 .filter_map(|path| path.native_id.as_deref())
                 .collect::<Vec<_>>(),
-            vec!["4", "5", "6", "7"],
+            vec!["2nd-grade", "3rd-grade", "4th-grade", "5th-grade"],
             "2nd through 5th grade, which is what ages 7-11 means to TPT"
         );
         assert!(
@@ -1232,7 +1390,7 @@ mod tests {
     #[test]
     fn the_band_no_tpt_grade_sits_inside_omits_rather_than_blocking_the_cross_list() {
         let crosswalk = crosswalk();
-        let outcome = into_tpt(&crosswalk, "1");
+        let outcome = into_tpt(&crosswalk, InventoryId::TesGb, "1");
         assert!(
             outcome.gaps.is_empty() && outcome.elections.is_empty(),
             "the 3-5 band's absence from TPT is measured, so it proceeds rather than parking \
@@ -1240,6 +1398,50 @@ mod tests {
         );
         assert_eq!(outcome.omitted, vec![super::age_range_id(1)]);
         assert!(outcome.is_publishable());
+    }
+
+    /// The seam a live cross-list crosses. `tam-marketplace-tpt` refuses a
+    /// grade whose native is not slug-shaped, because a foreign marketplace's
+    /// own identifier posted into `taxonomyTags` writes that number into the
+    /// seller's listing verbatim. The identifier is chosen here, so the shape
+    /// is asserted here, on both the direction that resolves and the one that
+    /// asks.
+    #[test]
+    fn a_tes_grade_reaching_tpt_arrives_under_a_slug_the_adapter_will_post() {
+        let crosswalk = crosswalk();
+        let resolving = into_tpt(&crosswalk, InventoryId::TesUs, "23");
+        let resolved: Vec<&str> = resolving
+            .resolved
+            .iter()
+            .filter_map(|path| path.native_id.as_deref())
+            .collect();
+        assert_eq!(
+            resolved,
+            vec!["6th-grade"],
+            "US 6th grade is year group 23, which the pairing table names TPT grade 8, whose \
+             facet the capture keys `6th-grade`"
+        );
+
+        let electing = into_tpt(&crosswalk, InventoryId::TesGb, "4");
+        let [election] = electing.elections.as_slice() else {
+            panic!("the 11-14 band covers three TPT grades and asks which");
+        };
+        let ElectionTrigger::Narrow { candidates, .. } = &election.trigger else {
+            panic!("a band covering several TPT grades is a Narrow trigger");
+        };
+        let offered: Vec<&str> = candidates
+            .iter()
+            .filter_map(|path| path.native_id.as_deref())
+            .collect();
+        assert_eq!(offered, vec!["6th-grade", "7th-grade", "8th-grade"]);
+
+        for native in resolved.into_iter().chain(offered) {
+            assert!(
+                is_tag_slug(native),
+                "{native:?} fails the adapter's slug-shape guard, so answering the election \
+                 with it would refuse the upload rather than publish it"
+            );
+        }
     }
 
     #[test]
