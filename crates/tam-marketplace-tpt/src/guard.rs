@@ -17,12 +17,13 @@ const FORBIDDEN: [&str; 4] = ["payout", "hyperwallet", "bank", "SellerPayoutPref
 /// `include_str!` pairs because the contents must be readable without a
 /// filesystem: the gated lane and the nix sandbox run the same test, and
 /// `std::fs::read_to_string` is banned crate-wide besides.
-const SOURCES: [(&str, &str); 11] = [
+const SOURCES: [(&str, &str); 12] = [
     ("lib.rs", include_str!("lib.rs")),
     ("classify.rs", include_str!("classify.rs")),
     ("endpoints.rs", include_str!("endpoints.rs")),
     ("flows.rs", include_str!("flows.rs")),
     ("form.rs", include_str!("form.rs")),
+    ("identity.rs", include_str!("identity.rs")),
     ("live.rs", include_str!("live.rs")),
     ("read_model.rs", include_str!("read_model.rs")),
     ("s3.rs", include_str!("s3.rs")),

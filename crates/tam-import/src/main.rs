@@ -4,8 +4,12 @@
 //! the broker socket first; the endpoint it prints is the base URL here), so
 //! this process never holds a marketplace credential.
 //!
-//! Usage: tam-import <db-url> <org-hex> <gateway-base> <kek-path> \
-//!            <store-root> <manifest.json|discover> [measure]
+//! Usage: tam-import <db-url> <org-hex> <gateway-base> <lease-token> \
+//!            <kek-path> <store-root> <manifest.json|discover> [measure]
+//!
+//! `lease-token` is the bearer credential the broker prints beside the
+//! endpoint. Every request on a lease carries it or is refused, because the
+//! gateway's loopback listener is reachable by any process on the host.
 //!
 //! The manifest is a JSON array of { "resource": <numeric id>,
 //! "files": ["/path/to/original", ...] }, taking the file bytes from disk,
@@ -218,10 +222,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_url = arguments.first().ok_or("missing db url")?;
     let org = org_from_hex(arguments.get(1).ok_or("missing org hex")?)?;
     let gateway = arguments.get(2).ok_or("missing gateway base url")?;
-    let kek_path = arguments.get(3).ok_or("missing kek path")?;
-    let store_root = arguments.get(4).ok_or("missing object-store root")?;
+    let lease_token = arguments.get(3).ok_or("missing lease token")?;
+    let kek_path = arguments.get(4).ok_or("missing kek path")?;
+    let store_root = arguments.get(5).ok_or("missing object-store root")?;
     let mode = arguments
-        .get(5)
+        .get(6)
         .ok_or("missing manifest path, or the discover keyword in its place")?;
     let discovering = mode == "discover";
 
@@ -266,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let adapter = TesAdapter::new(
         source,
-        GatewayTransport::new(gateway.clone())?,
+        GatewayTransport::new(gateway.clone(), lease_token)?,
         NoImportFiles,
     )?;
     let run = ImportRun {
@@ -320,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return record_and_report(&run, totals).await;
     }
 
-    if arguments.get(6).map(String::as_str) == Some("measure") {
+    if arguments.get(7).map(String::as_str) == Some("measure") {
         let mut totals = MeasureTotals::default();
         for row in manifest.rows() {
             match measure_one(&run, row.resource).await {

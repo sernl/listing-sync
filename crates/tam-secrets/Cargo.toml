@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 chacha20poly1305 = "0.10"
 rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = { workspace = true }
 tam-types = { path = "../tam-types" }
 zeroize = { version = "1", features = ["derive"] }
 

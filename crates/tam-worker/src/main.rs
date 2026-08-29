@@ -9,36 +9,31 @@
 //! will submit, and the M1d driver runs the machine against that adapter
 //! with the fenced attempt and the read-back verification it was built with.
 //!
-//! The two live marketplaces reach their credential by different routes and
-//! that asymmetry is deliberate. Tes rides the broker's gateway, so this
-//! process never holds a Tes credential. Tpt rides a direct transport,
-//! because the broker's allow-list is five Tes path prefixes over one
-//! hardcoded upstream and the S3 signing-oracle upload cannot be proxied
-//! through it — so Phase 3 configures a founder-exported cookie jar and an
-//! authorship attestation at this process boundary, and the vault's `tpt`
-//! connection row functions as the queue gate rather than as the credential.
-//! That split is interim and its production answer is founder-gated; see
-//! `docs/design/decisions.md`.
+//! Both live marketplaces reach their credential the same way, and that
+//! symmetry is the point. Tes and Tpt each lease a gateway endpoint from the
+//! broker per item, with the seller cookie injected server-side, so this
+//! process holds no marketplace credential at any point and a compromised
+//! worker can use the connections it leased without being able to exfiltrate
+//! one.
 //!
-//! A process-global credential speaks for exactly one seller, and the lease
-//! scan does not: `LeaseRepo::acquire` reads across organisations under
-//! BYPASSRLS, so a second tenant's Tpt items would otherwise be driven
-//! against whichever account the configured jar holds — writing one
-//! seller's listings into another's store, and reading `Absent` from the
-//! wrong catalogue, which severs a mapping whose listing is still live.
-//! `TAM_TPT_ORG` names the organisation the jar belongs to, and every Tpt
-//! item from any other organisation is refused with its lease left to
-//! expire. Lifting the pin means per-organisation custody, which is the
-//! founder-gated question rather than a configuration change.
+//! Tpt's bucket hops are the one exception and are not an exception to that
+//! rule: the three-step upload leaves this process directly because those
+//! hops carry an S3 signature rather than the session, and the transport's
+//! host assertion refuses a session-authenticated request to the bucket and a
+//! signed one to the marketplace origin. Proxying them would send the
+//! seller's Tpt cookie to Amazon and buy nothing. This is the production
+//! answer `docs/design/decisions.md` recommended over both keeping a
+//! configured file jar and giving the broker a hand-me-the-cookie operation.
+//!
+//! The authorship attestation travels with the connection rather than with
+//! the process, for the same reason the credential does: a process-global
+//! attestation speaks for exactly one seller while `LeaseRepo::acquire` reads
+//! across organisations under BYPASSRLS, so the worker would otherwise attest
+//! one seller's authorship on another's listing. The broker's link step seals
+//! it onto the connection row and `AuthorshipRepo` reads it back per item.
 //!
 //! Usage: tam-worker <engine-database-url> <worker-name> <broker-socket> \
 //!            <kek-path> <store-root> [poll-ms]
-//!
-//! Environment: `TAM_TPT_COOKIE_JAR` is a Netscape cookie jar path,
-//! `TAM_TPT_AUTHORSHIP` is `name|epoch_millis`, and `TAM_TPT_ORG` is the
-//! hyphenated id of the organisation the jar belongs to. The three are
-//! required together; without any one of them, Tpt items are refused and
-//! their leases left to expire.
 
 #![forbid(unsafe_code)]
 
@@ -51,15 +46,17 @@ use tam_engine::broker_client::{request_lease, LeasePurpose};
 use tam_engine::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
-use tam_marketplace_tes::{GatewayTransport, TesAdapter};
-use tam_marketplace_tpt::{AuthorshipDeclaration, ReqwestTransport, TptAdapter, TptSession};
+use tam_marketplace_tes::{GatewayTransport as TesGatewayTransport, TesAdapter};
+use tam_marketplace_tpt::{
+    AuthorshipDeclaration, GatewayTransport as TptGatewayTransport, TptAdapter,
+};
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    BlobRepo, ElectionRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo, LeasedItem,
+    AuthorshipRepo, BlobRepo, ElectionRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo, LeasedItem,
     PipelineFileSource, RateBudgetRepo, WriteAttemptRepo,
 };
-use tam_types::{FailureCode, FailureDetail, Marketplace, OrgId, Timestamp};
+use tam_types::{FailureCode, FailureDetail, Marketplace, Timestamp};
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_POLL_MS: u64 = 5_000;
@@ -126,102 +123,6 @@ impl OncePerPass {
     }
 }
 
-/// What the worker sends to Tpt, read once at this process boundary.
-///
-/// Both halves are required and both are checked here rather than at the
-/// write: `TptAdapter::update` opens with `self.attestation()?` exactly as
-/// `submit` does, so a revise needs the declaration no less than a create,
-/// and a missing one refuses with `UploadRejected`, which the machine settles
-/// `Failed`. Refusing the item up front leaves the lease to expire instead,
-/// which is the stall bias.
-///
-/// `org` is the third half: the jar is one seller's, and the lease scan is
-/// cross-tenant, so the organisation it belongs to has to be stated for the
-/// worker to know which items it may drive with it.
-struct TptCredential {
-    org: OrgId,
-    session: TptSession,
-    authorship: AuthorshipDeclaration,
-}
-
-impl TptCredential {
-    /// Whether a leased item's organisation is the one this jar belongs to.
-    /// Any other would be driven against the wrong seller's account.
-    fn speaks_for(&self, org: OrgId) -> bool {
-        self.org == org
-    }
-}
-
-/// The jar, the attestation and the organisation they belong to, or nothing.
-///
-/// `AuthorshipDeclaration::attested` is the only constructor and it names the
-/// seller and the instant they attested; minting the instant from this
-/// process's own clock would be this worker attesting on a seller's behalf,
-/// so the instant is configured beside the name and never derived.
-fn load_tpt_credential() -> Option<TptCredential> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the worker is the configuration boundary: the Tpt cookie jar path enters the process here and nowhere else"
-    )]
-    let jar_path = std::env::var("TAM_TPT_COOKIE_JAR").ok()?;
-    let mut jar = String::new();
-    if let Err(error) =
-        std::fs::File::open(&jar_path).and_then(|mut file| file.read_to_string(&mut jar).map(drop))
-    {
-        eprintln!("tam-worker: TAM_TPT_COOKIE_JAR is unreadable, Tpt items refused: {error}");
-        return None;
-    }
-    let session = match TptSession::from_netscape_jar(&jar) {
-        Ok(session) => session,
-        Err(error) => {
-            eprintln!("tam-worker: TAM_TPT_COOKIE_JAR is unparseable, Tpt items refused: {error}");
-            return None;
-        }
-    };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the worker is the configuration boundary: the Tpt authorship attestation enters the process here and nowhere else"
-    )]
-    let raw = std::env::var("TAM_TPT_AUTHORSHIP").ok()?;
-    let Some(authorship) = parse_authorship(&raw) else {
-        eprintln!("tam-worker: TAM_TPT_AUTHORSHIP is not \"name|epoch_millis\", Tpt items refused");
-        return None;
-    };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the worker is the configuration boundary: the organisation the Tpt jar belongs to enters the process here and nowhere else"
-    )]
-    let raw_org = std::env::var("TAM_TPT_ORG").ok()?;
-    let Some(org) = parse_org(&raw_org) else {
-        eprintln!("tam-worker: TAM_TPT_ORG is not a hyphenated organisation id, Tpt items refused");
-        return None;
-    };
-    Some(TptCredential {
-        org,
-        session,
-        authorship,
-    })
-}
-
-/// The organisation a process-global jar speaks for. Unset is not a default
-/// of "all of them": `load_tpt_credential` returns nothing without it, so an
-/// unpinned worker drives no Tpt items at all.
-fn parse_org(raw: &str) -> Option<OrgId> {
-    tam_types::Uuid::parse_hyphenated(raw.trim()).map(OrgId)
-}
-
-fn parse_authorship(raw: &str) -> Option<AuthorshipDeclaration> {
-    let (name, at) = raw.split_once('|')?;
-    let name = name.trim();
-    if name.is_empty() {
-        return None;
-    }
-    Some(AuthorshipDeclaration::attested(
-        name.to_owned(),
-        Timestamp(at.trim().parse().ok()?),
-    ))
-}
-
 struct Pump {
     pool: sqlx::PgPool,
     leases: LeaseRepo,
@@ -231,11 +132,9 @@ struct Pump {
     broker_socket: std::path::PathBuf,
     kek: Kek,
     store_root: std::path::PathBuf,
-    tpt: Option<TptCredential>,
+    authorship: AuthorshipRepo,
     cancel: CancellationToken,
     unadapted_said: OncePerPass,
-    tpt_unconfigured_said: OncePerPass,
-    tpt_foreign_org_said: OncePerPass,
 }
 
 /// What one run needs beyond its adapter. A struct because `drive` would
@@ -358,7 +257,7 @@ impl Pump {
                 self.drive(work, &adapter).await;
             }
             Marketplace::Tpt => {
-                let Some(adapter) = self.tpt_adapter(work.worker, item) else {
+                let Some(adapter) = self.tpt_adapter(work.worker, item).await else {
                     return;
                 };
                 self.drive(work, &adapter).await;
@@ -380,7 +279,7 @@ impl Pump {
         &self,
         worker: &str,
         item: &LeasedItem,
-    ) -> Option<TesAdapter<GatewayTransport, PipelineFileSource<LocalObjectStore>>> {
+    ) -> Option<TesAdapter<TesGatewayTransport, PipelineFileSource<LocalObjectStore>>> {
         let connection = match self.leases.connection_for(item.org, item.inventory).await {
             Ok(Some(connection)) => connection,
             Ok(None) => {
@@ -410,7 +309,7 @@ impl Pump {
                 return None;
             }
         };
-        let transport = match GatewayTransport::new(gateway.endpoint.clone()) {
+        let transport = match TesGatewayTransport::new(gateway.endpoint.clone(), &gateway.token) {
             Ok(transport) => transport,
             Err(error) => {
                 eprintln!("tam-worker {worker}: transport build failed: {error}");
@@ -433,48 +332,85 @@ impl Pump {
     /// remains the queue gate, and `gate_connection` flipping it to
     /// `needs_reauth` still stops Tpt items even though its stored secret was
     /// never the one sent.
-    fn tpt_adapter(
+    /// Tpt leases the broker's gateway exactly as Tes does: the endpoint is
+    /// minted per item with the seller cookie and the mirrored CSRF header
+    /// injected server-side, so this process holds no Tpt credential either.
+    ///
+    /// The bucket hops still leave directly, which is what makes the lease
+    /// possible at all — they carry an S3 signature rather than the session,
+    /// and `GatewayTransport`'s host assertion refuses the crossing in both
+    /// directions.
+    ///
+    /// The attestation is read per item rather than configured, because the
+    /// lease scan is cross-tenant: an attestation held by the process would
+    /// name one seller on every tenant's listings. An item whose connection
+    /// carries none is refused here rather than at the write — `submit` and
+    /// `update` both open with `self.attestation()?` and answer a missing one
+    /// with `UploadRejected`, which the machine settles `Failed`, where
+    /// refusing up front leaves the lease to expire instead, which is the
+    /// stall bias.
+    async fn tpt_adapter(
         &self,
         worker: &str,
         item: &LeasedItem,
-    ) -> Option<TptAdapter<ReqwestTransport, PipelineFileSource<LocalObjectStore>, SleepingPause>>
+    ) -> Option<TptAdapter<TptGatewayTransport, PipelineFileSource<LocalObjectStore>, SleepingPause>>
     {
-        let Some(credential) = self.tpt.as_ref() else {
-            if self.tpt_unconfigured_said.first() {
+        let connection = match self.leases.connection_for(item.org, item.inventory).await {
+            Ok(Some(connection)) => connection,
+            Ok(None) => {
                 eprintln!(
-                    "tam-worker {worker}: no Tpt cookie jar, authorship attestation or \
-                     organisation configured, Tpt leases left to expire"
+                    "tam-worker {worker}: no linked connection for {:?}, lease left to expire",
+                    item.inventory
                 );
+                return None;
             }
-            return None;
+            Err(error) => {
+                eprintln!("tam-worker {worker}: connection lookup failed: {error}");
+                return None;
+            }
         };
-        // The credential is this process's, the lease scan is every
-        // tenant's. Driving another organisation's item with it would write
-        // that seller's listing into this one's store, and a removal would
-        // read absence from the wrong catalogue and sever a mapping whose
-        // listing is still live.
-        if !credential.speaks_for(item.org) {
-            if self.tpt_foreign_org_said.first() {
+        let attestation = match self
+            .authorship
+            .for_connection(item.org, Marketplace::Tpt)
+            .await
+        {
+            Ok(Some(record)) => AuthorshipDeclaration::attested(record.name, record.attested_at),
+            Ok(None) => {
                 eprintln!(
-                    "tam-worker {worker}: the Tpt credential is pinned to organisation {}, \
-                     so items belonging to any other are refused and their leases left to \
-                     expire",
-                    credential.org.0.to_hyphenated()
+                    "tam-worker {worker}: the Tpt connection carries no authorship \
+                     attestation, so the lease is left to expire rather than writing \
+                     a listing nobody attested to"
                 );
+                return None;
             }
-            return None;
-        }
-        let transport = match ReqwestTransport::new(&credential.session) {
+            Err(error) => {
+                eprintln!("tam-worker {worker}: authorship lookup failed: {error}");
+                return None;
+            }
+        };
+        let gateway = match request_lease(
+            &self.broker_socket,
+            item.org,
+            connection,
+            Marketplace::Tpt,
+            LeasePurpose::Pump,
+        )
+        .await
+        {
+            Ok(lease) => lease,
+            Err(error) => {
+                eprintln!("tam-worker {worker}: broker lease refused: {error}");
+                return None;
+            }
+        };
+        let transport = match TptGatewayTransport::new(gateway.endpoint.clone(), &gateway.token) {
             Ok(transport) => transport,
             Err(error) => {
                 eprintln!("tam-worker {worker}: Tpt transport build failed: {error}");
                 return None;
             }
         };
-        Some(
-            TptAdapter::new(transport, self.files(item), SleepingPause)
-                .attesting(credential.authorship.clone()),
-        )
+        Some(TptAdapter::new(transport, self.files(item), SleepingPause).attesting(attestation))
     }
 
     fn files(&self, item: &LeasedItem) -> PipelineFileSource<LocalObjectStore> {
@@ -576,10 +512,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     eprintln!("tam-worker {worker_name}: item pump live, maintenance every {poll_ms}ms");
 
-    let tpt = load_tpt_credential();
-    if tpt.is_none() {
-        eprintln!("tam-worker {worker_name}: no Tpt credential configured; Tes items only");
-    }
     let pump = Pump {
         pool: pool.clone(),
         leases: LeaseRepo::new(pool.clone()),
@@ -589,11 +521,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         broker_socket,
         kek,
         store_root,
-        tpt,
+        authorship: AuthorshipRepo::new(pool.clone()),
         cancel: cancel.clone(),
         unadapted_said: OncePerPass::new(),
-        tpt_unconfigured_said: OncePerPass::new(),
-        tpt_foreign_org_said: OncePerPass::new(),
     };
 
     tokio::pin!(ctrl_c);
@@ -606,8 +536,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
         pump.unadapted_said.reset();
-        pump.tpt_unconfigured_said.reset();
-        pump.tpt_foreign_org_said.reset();
         let now = WallClock.now();
         let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
         match leases.expire_and_steal(now, attempts_max).await {
@@ -656,90 +584,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_authorship, parse_org, OncePerPass, TptCredential};
-    use tam_marketplace_tpt::{AuthorshipDeclaration, TptSession};
-    use tam_types::{OrgId, Timestamp, Uuid};
-
-    const PINNED: OrgId = OrgId(Uuid([0xAA; 16]));
-    const OTHER: OrgId = OrgId(Uuid([0xBB; 16]));
-
-    fn credential(org: OrgId) -> TptCredential {
-        let jar = ".teacherspayteachers.com\tTRUE\t/\tTRUE\t0\tcsrfToken\tdeadbeef\n";
-        TptCredential {
-            org,
-            session: TptSession::from_netscape_jar(jar).expect("the fixture jar parses"),
-            authorship: AuthorshipDeclaration::attested(
-                "A. Seller".to_owned(),
-                Timestamp(1_724_889_600_000),
-            ),
-        }
-    }
-
-    /// The lease scan is cross-tenant and the jar is one seller's, so the
-    /// organisation is what decides whether an item may be driven at all.
-    /// Without this the second tenant to link a Tpt connection has its
-    /// listings written into the first tenant's store.
-    #[test]
-    fn a_tpt_credential_speaks_only_for_the_organisation_it_is_pinned_to() {
-        let credential = credential(PINNED);
-        assert!(
-            credential.speaks_for(PINNED),
-            "the organisation the jar belongs to is admitted"
-        );
-        assert!(
-            !credential.speaks_for(OTHER),
-            "any other organisation is refused; driving its item would write one seller's \
-             listing into another's account, and a removal would read absence from the \
-             wrong catalogue and sever a mapping whose listing is still live"
-        );
-    }
-
-    #[test]
-    fn an_organisation_pin_is_a_hyphenated_id_or_nothing() {
-        assert_eq!(
-            parse_org("  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa  "),
-            Some(PINNED),
-            "the configured form parses, surrounding whitespace included"
-        );
-        for raw in ["", "not-an-id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "*"] {
-            assert_eq!(
-                parse_org(raw),
-                None,
-                "refusing every Tpt item is the honest answer to {raw:?}; an unparseable \
-                 pin must never widen into 'any organisation'"
-            );
-        }
-    }
-
-    #[test]
-    fn an_attestation_names_the_seller_and_the_instant_they_attested() {
-        let parsed =
-            parse_authorship("A. Seller|1724889600000").expect("the configured form parses");
-        assert_eq!(
-            (parsed.attested_by(), parsed.attested_at()),
-            ("A. Seller", Timestamp(1_724_889_600_000)),
-            "both halves travel; the instant is configured rather than derived, because \
-             minting it from this process's clock would be the worker attesting for a seller"
-        );
-    }
-
-    #[test]
-    fn a_half_written_attestation_is_no_attestation() {
-        for raw in [
-            "A. Seller",
-            "A. Seller|",
-            "A. Seller|not-an-instant",
-            "|1724889600000",
-            "   |1724889600000",
-        ] {
-            assert_eq!(
-                parse_authorship(raw),
-                None,
-                "refusing Tpt items is the honest answer to {raw:?}; defaulting either half \
-                 would put a declaration on the wire nobody made"
-            );
-        }
-    }
+    use super::OncePerPass;
 
     #[test]
     fn a_once_per_pass_refusal_speaks_once_and_again_after_the_reset() {

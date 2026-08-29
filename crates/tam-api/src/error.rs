@@ -57,13 +57,19 @@ pub enum APIErrorCode {
     DuplicateSyncItem,
     ResourceMissing,
     BrokerUnavailable,
+    /// Another organisation already holds the marketplace account this link
+    /// names. Deliberately says nothing about which one: the client renders
+    /// the marketplace and no more, because a code that identified the holder
+    /// would turn the exclusivity constraint into a directory of every seller
+    /// on the platform.
+    PlatformAccountAlreadyLinked,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -73,6 +79,7 @@ impl APIErrorCode {
         Self::DuplicateSyncItem,
         Self::ResourceMissing,
         Self::BrokerUnavailable,
+        Self::PlatformAccountAlreadyLinked,
         Self::Internal,
     ];
 
@@ -88,6 +95,7 @@ impl APIErrorCode {
             Self::DuplicateSyncItem => "duplicate_sync_item",
             Self::ResourceMissing => "resource_missing",
             Self::BrokerUnavailable => "broker_unavailable",
+            Self::PlatformAccountAlreadyLinked => "platform_account_already_linked",
             Self::Internal => "internal",
         }
     }
@@ -304,6 +312,7 @@ mod tests {
                 | APIErrorCode::DuplicateSyncItem
                 | APIErrorCode::ResourceMissing
                 | APIErrorCode::BrokerUnavailable
+                | APIErrorCode::PlatformAccountAlreadyLinked
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

@@ -346,9 +346,127 @@ pub fn open_bytes(kek: &Kek, aad: &[u8], sealed: &Sealed) -> Result<Vec<u8>, Ope
     plaintext
 }
 
+/// Domain separation for the account-digest pepper: this label and no other
+/// use of the key-encryption key produce this subkey. The pepper is a one-way
+/// function of the KEK, so a leaked pepper does not yield the KEK and cannot
+/// open a single sealed credential.
+const ACCOUNT_DIGEST_LABEL: &[u8] = b"tam:platform-account-digest:v1";
+
+/// Separates the marketplace ordinal from the account reference so that
+/// `(marketplace, account_ref)` has exactly one encoding. Without it, two
+/// distinct pairs could concatenate to the same bytes and collide into one
+/// exclusivity lock.
+const FIELD_SEPARATOR: u8 = 0x1f;
+
+/// The SHA-256 block size, which is what RFC 2104 pads the key to.
+const HMAC_BLOCK: usize = 64;
+
+/// HMAC-SHA-256, RFC 2104, over the `sha2` this workspace already pins.
+///
+/// Written out rather than pulled from a MAC crate because the construction
+/// is short, fully specified, and pinned here by the RFC 4231 vectors; adding
+/// a dependency to the one crate that holds key material is a larger decision
+/// than the twenty lines it saves.
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+
+    let mut padded = [0u8; HMAC_BLOCK];
+    if key.len() > HMAC_BLOCK {
+        padded[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        padded[..key.len()].copy_from_slice(key);
+    }
+    let mut inner_pad = [0x36u8; HMAC_BLOCK];
+    let mut outer_pad = [0x5cu8; HMAC_BLOCK];
+    for ((inner, outer), key_byte) in inner_pad
+        .iter_mut()
+        .zip(outer_pad.iter_mut())
+        .zip(padded.iter())
+    {
+        *inner ^= *key_byte;
+        *outer ^= *key_byte;
+    }
+    let inner = Sha256::new()
+        .chain_update(inner_pad)
+        .chain_update(message)
+        .finalize();
+    let outer = Sha256::new()
+        .chain_update(outer_pad)
+        .chain_update(inner)
+        .finalize();
+    padded.zeroize();
+    inner_pad.zeroize();
+    outer_pad.zeroize();
+    outer.into()
+}
+
+/// A stable, non-reversible name for the marketplace account a connection
+/// speaks for.
+///
+/// Global exclusivity is enforced on this value rather than on the account
+/// reference itself, so a database dump names no seller's storefront and no
+/// two tenants' rows can be correlated by eye. Recovering an identifier from a
+/// digest, or confirming a guessed one, needs the key-encryption key, which
+/// lives only in the broker process — the same boundary the credential vault
+/// already sits behind.
+///
+/// Rotating the KEK rotates the pepper and therefore every digest: stored rows
+/// keep their uniqueness locks and stop matching anything freshly computed, so
+/// re-claiming each connection is part of a KEK rotation rather than a
+/// separate incident.
+#[must_use]
+pub fn account_digest(kek: &Kek, marketplace: Marketplace, account_ref: &str) -> [u8; 32] {
+    let mut pepper = hmac_sha256(&kek.0, ACCOUNT_DIGEST_LABEL);
+    let mut message = Vec::with_capacity(account_ref.len() + 2);
+    message.push(marketplace_ordinal(marketplace));
+    message.push(FIELD_SEPARATOR);
+    message.extend_from_slice(account_ref.as_bytes());
+    let digest = hmac_sha256(&pepper, &message);
+    pepper.zeroize();
+    digest
+}
+
+/// One nibble as a lowercase hex character.
+///
+/// Total by construction: every caller masks to four bits, so no value above
+/// fifteen reaches it and there is no error case to represent.
+fn hex_digit(nibble: u8) -> char {
+    if nibble < 10 {
+        char::from(b'0' + nibble)
+    } else {
+        char::from(b'a' + nibble - 10)
+    }
+}
+
+/// Lowercase hex, written a nibble at a time rather than a `format!` per byte.
+#[must_use]
+pub fn hex_encode(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(hex_digit(byte >> 4));
+        encoded.push(hex_digit(byte & 0x0f));
+    }
+    encoded
+}
+
+/// A fresh random token, hex-encoded, for the per-lease bearer credential.
+///
+/// Sourced from the same `OsRng` the nonces and data-encryption keys come
+/// from, so the lease token is no weaker than the envelope it guards.
+#[must_use]
+pub fn random_token() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = hex_encode(&bytes);
+    bytes.zeroize();
+    token
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{open, seal, AadContext, Kek, OpenError, Secret};
+    use super::{
+        account_digest, hmac_sha256, open, random_token, seal, AadContext, Kek, OpenError, Secret,
+    };
     use tam_types::{ConnectionId, Marketplace, OrgId, Uuid};
 
     fn kek(seed: u8) -> Kek {
@@ -464,6 +582,111 @@ mod tests {
             open_bytes(&kek, &aad_b.encode(), &sealed).err(),
             Some(super::OpenError::Authentication),
             "a blob object lifted into another tenant fails authentication"
+        );
+    }
+
+    /// RFC 4231's own vectors, so the MAC is pinned to the standard rather
+    /// than to itself. Without these, a transposed constant would produce a
+    /// self-consistent function that is not HMAC and every digest built on it
+    /// would be silently non-standard.
+    use super::hex_encode as hex;
+
+    #[test]
+    fn hmac_matches_rfc_4231_case_1() {
+        assert_eq!(
+            hex(&hmac_sha256(&[0x0b; 20], b"Hi There")),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+            "HMAC-SHA-256 must reproduce RFC 4231 test case 1"
+        );
+    }
+
+    #[test]
+    fn hmac_matches_rfc_4231_case_2() {
+        assert_eq!(
+            hex(&hmac_sha256(b"Jefe", b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+            "HMAC-SHA-256 must reproduce RFC 4231 test case 2"
+        );
+    }
+
+    #[test]
+    fn hmac_matches_rfc_4231_case_6_where_the_key_exceeds_the_block() {
+        assert_eq!(
+            hex(&hmac_sha256(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            )),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
+            "a key longer than the block must be hashed first, per RFC 2104"
+        );
+    }
+
+    #[test]
+    fn a_digest_is_stable_for_the_same_account_under_the_same_key() {
+        let first = account_digest(&kek(0x07), Marketplace::Tpt, "900000001");
+        let second = account_digest(&kek(0x07), Marketplace::Tpt, "900000001");
+        assert_eq!(
+            first, second,
+            "the exclusivity lock is the digest, so the same account must digest identically \
+             or a relink would collide with itself"
+        );
+    }
+
+    #[test]
+    fn the_same_account_reference_on_two_marketplaces_digests_differently() {
+        let tpt = account_digest(&kek(0x07), Marketplace::Tpt, "12345");
+        let tes = account_digest(&kek(0x07), Marketplace::Tes, "12345");
+        assert_ne!(
+            tpt, tes,
+            "the index is (marketplace, digest), but a shared digest would still let one \
+             marketplace's account reference be recognised in another's rows"
+        );
+    }
+
+    #[test]
+    fn the_field_separator_stops_a_concatenation_collision() {
+        let split_one = account_digest(&kek(0x07), Marketplace::Tpt, "1\u{1f}23");
+        let split_two = account_digest(&kek(0x07), Marketplace::Tpt, "1\u{1f}2\u{1f}3");
+        assert_ne!(
+            split_one, split_two,
+            "two distinct account references must not encode to the same message"
+        );
+    }
+
+    #[test]
+    fn rotating_the_key_rotates_the_digest() {
+        assert_ne!(
+            account_digest(&kek(0x07), Marketplace::Tpt, "900000001"),
+            account_digest(&kek(0x08), Marketplace::Tpt, "900000001"),
+            "the pepper derives from the KEK, so a rotation must invalidate stored digests \
+             rather than silently keeping them valid under a retired key"
+        );
+    }
+
+    #[test]
+    fn the_pepper_is_not_the_key_itself() {
+        let key = kek(0x09);
+        let digest = account_digest(&key, Marketplace::Tpt, "900000001");
+        assert_ne!(
+            digest.as_slice(),
+            &[0x09; 32],
+            "a digest that exposed the key-encryption key would make every stored row's \
+             pepper an oracle for the vault"
+        );
+    }
+
+    #[test]
+    fn two_lease_tokens_differ_and_are_full_length() {
+        let first = random_token();
+        let second = random_token();
+        assert_eq!(
+            first.len(),
+            64,
+            "32 random bytes hex-encode to 64 characters"
+        );
+        assert_ne!(
+            first, second,
+            "a lease token that repeated would let a retired lease's holder ride a new one"
         );
     }
 

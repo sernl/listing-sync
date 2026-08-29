@@ -20,8 +20,8 @@ use tam_storage::{
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
-    CanonicalTermId, ConnectionId, InventoryId, MappingId, Marketplace, OrgId, PriceIntent,
-    ProductId, ScanOutcome, Timestamp, Uuid,
+    CanonicalTermId, ConnectionId, ConnectionStatus, InventoryId, MappingId, Marketplace, OrgId,
+    PriceIntent, ProductId, ScanOutcome, Timestamp, Uuid,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -282,7 +282,13 @@ pub struct ConnectionsView {
 pub struct ConnectionView {
     pub id: ConnectionId,
     pub marketplace: Marketplace,
+    /// The stored link state, unchanged. Kept beside `status` rather than
+    /// replaced by it: the two answer different questions, and an operator
+    /// reading this resource still needs the row's own state.
     pub state: String,
+    /// Whether the connection is actually carrying work, which `state` alone
+    /// cannot say. This is the field the client renders.
+    pub status: ConnectionStatus,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -291,8 +297,9 @@ pub(crate) async fn list_connections(
     State(state): State<AppState>,
     context: OrgContext,
 ) -> Result<Json<ConnectionsView>, APIError> {
+    let now = (state.wall)();
     let rows = ConnectionRepo::new(state.pool.clone())
-        .list(context.org)
+        .list(context.org, now)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     Ok(Json(ConnectionsView {
@@ -302,6 +309,7 @@ pub(crate) async fn list_connections(
                 id: row.id,
                 marketplace: row.marketplace,
                 state: row.state,
+                status: row.status,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
             })
@@ -333,9 +341,43 @@ enum BrokerAnswer {
     },
     Error {
         detail: String,
+        #[serde(default)]
+        code: Option<BrokerErrorCode>,
     },
     #[serde(other)]
     Unexpected,
+}
+
+/// The machine-readable half of a broker error, mirrored from the broker's
+/// own protocol module because that module is private to the privilege
+/// boundary.
+///
+/// `Unrecognised` is the point of the type: a broker newer than this build
+/// must be able to name a fault this build does not know, and the answer to
+/// one is the internal path rather than a deserialisation failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BrokerErrorCode {
+    PlatformAccountAlreadyLinked,
+    #[serde(other)]
+    Unrecognised,
+}
+
+/// The API code a broker fault surfaces as.
+///
+/// Only faults the seller can act on cross as themselves; everything else
+/// stays internal, because the broker's own words describe a privilege
+/// boundary the client has no business reading.
+fn broker_fault(state: &AppState, detail: &str, code: Option<BrokerErrorCode>) -> APIError {
+    match code {
+        Some(BrokerErrorCode::PlatformAccountAlreadyLinked) => APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new(detail)
+                .code(APIErrorCode::PlatformAccountAlreadyLinked)
+                .kind(APIErrorKind::Validation),
+        ),
+        Some(BrokerErrorCode::Unrecognised) | None => state.internal(detail),
+    }
 }
 
 pub(crate) async fn revoke_connection(
@@ -380,7 +422,7 @@ pub(crate) async fn revoke_connection(
             connections,
             elapsed_ms,
         })),
-        Ok(BrokerAnswer::Error { detail }) => Err(state.internal(&detail)),
+        Ok(BrokerAnswer::Error { detail, code }) => Err(broker_fault(&state, &detail, code)),
         Ok(BrokerAnswer::Unexpected) | Err(_) => {
             Err(state.internal("the broker answered something unexpected"))
         }

@@ -30,9 +30,10 @@ use tam_taxonomy::listing::{project_listing, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
 use tam_taxonomy::TES_MAIN_AGE_RANGES;
 use tam_types::{
-    CanonicalTermId, ContentHash, CurrencyRule, FileId, FileKind, FileRole, ImportedPrice,
+    Actor, CanonicalTermId, ContentHash, CurrencyRule, FileId, FileKind, FileRole, ImportedPrice,
     ImportedTerm, InventoryId, JobEventPayload, JobId, ListingCopy, MappingId, Money, OrgId,
-    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, TermKind, Timestamp, Title, Uuid,
+    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, SystemComponent, TermKind,
+    Timestamp, Title, Uuid,
 };
 
 /// The import never uploads, so its adapter's file source is a refusal.
@@ -222,12 +223,14 @@ pub async fn record_drain_report<A: FirstPartyExport>(
             job,
             inventory: run.source,
             at: run.now,
+            actor: Actor::System(SystemComponent::Import),
         },
         &[],
+        // The import command runs unattended against an export; nothing in
+        // an ImportRun names a person, so it names itself instead.
     )
     .await?;
     jobs.record_event(
-        run.org,
         &EventScope {
             org: run.org,
             job,
@@ -244,6 +247,7 @@ pub async fn record_drain_report<A: FirstPartyExport>(
             items_already_open: wire(totals.items_already_open),
         },
         run.now,
+        Actor::System(SystemComponent::Import),
     )
     .await?;
     Ok(job)

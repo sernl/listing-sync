@@ -67,9 +67,9 @@ use tam_storage::{
     ProductRepo, SessionRepo, TaxonomyRepo,
 };
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, CurrencyRule, FileId, FileKind, FileRole,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, CurrencyRule, FileId, FileKind, FileRole,
     InventoryId, JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule,
-    ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
+    ProductFile, ProductId, ScanOutcome, SystemComponent, Timestamp, Title, Uuid,
 };
 
 const USAGE: &str = "usage: live_provision create <db-url> <inventory> <kek-path> <store-root> \
@@ -549,7 +549,12 @@ async fn enqueue_one(
     JobRepo::new(pool.clone())
         .enqueue(
             ORG,
-            &NewJob { job, inventory, at },
+            &NewJob {
+                job,
+                inventory,
+                at,
+                actor: Actor::System(SystemComponent::Worker),
+            },
             &[NewJobItem {
                 item,
                 mapping,

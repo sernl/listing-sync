@@ -1,5 +1,5 @@
 //! The request handler: one connection, one request, one response, holding
-//! the vault, the leased gateways and the upstream base. Errors become an
+//! the vault, the leased gateways and the upstream bases. Errors become an
 //! Error response rather than a panic, because the broker must stay up.
 
 use std::collections::HashMap;
@@ -8,16 +8,39 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::gateway::{self, Gateway};
-use crate::protocol::{LeasePurpose, Request, Response};
-use crate::vault::Vault;
+use crate::gateway::{self, Gateway, LeaseGateway, SessionSink};
+use crate::protocol::{Authorship as WireAuthorship, ErrorCode, LeasePurpose, Request, Response};
+use crate::vault::{Authorship, LinkRequest, Vault, VaultError};
 use tam_secrets::Secret;
-use tam_types::{ConnectionId, OrgId};
+use tam_types::{ConnectionId, Marketplace, OrgId};
 
 /// How long a lease's gateway lives before it is aborted. A judgement: long
 /// enough for one item's flow, short enough that an abandoned lease frees its
 /// listener; ordinary const beside its caller.
 const LEASE_TTL_MS: i64 = 10 * 60 * 1000;
+
+/// Where each marketplace's session hops go.
+///
+/// One base per marketplace rather than one per process: a Tpt lease proxying
+/// to the Tes origin would send the seller's Tpt cookie to a host that has no
+/// business receiving it, and a single base made that a configuration mistake
+/// rather than an impossible one.
+pub(crate) struct Upstreams {
+    pub(crate) tes: String,
+    pub(crate) tpt: String,
+}
+
+impl Upstreams {
+    /// `None` for a marketplace with no connector, which is a lease that
+    /// cannot be opened rather than one pointed at a default.
+    fn base(&self, marketplace: Marketplace) -> Option<&str> {
+        match marketplace {
+            Marketplace::Tes => Some(&self.tes),
+            Marketplace::Tpt => Some(&self.tpt),
+            Marketplace::Etsy => None,
+        }
+    }
+}
 
 /// One lease's whole identity: which tenant's connection, on which
 /// marketplace, for which process. The four travel together because the
@@ -29,19 +52,79 @@ struct LeaseFor {
     purpose: LeasePurpose,
 }
 
+/// The vault, seen by a gateway as somewhere to put a renewal.
+///
+/// The gateway holds this rather than the vault itself so it can be driven by
+/// a recording double in its own tests; here the renewal is sealed under the
+/// same tenant context the credential was sealed in.
+struct VaultSink {
+    vault: Arc<Vault>,
+    org: OrgId,
+    connection: ConnectionId,
+    marketplace: Marketplace,
+}
+
+impl SessionSink for VaultSink {
+    fn reseal<'a>(
+        &'a self,
+        cookie_header: String,
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            // A failed reseal loses the renewal and nothing else: the lease
+            // keeps working on the jar it holds, and the stored copy stays at
+            // its previous value. Reported rather than propagated, because
+            // failing the seller's request over a custody bookkeeping write
+            // would trade a working hop for a lost one.
+            if let Err(error) = self
+                .vault
+                .reseal(
+                    self.org,
+                    self.connection,
+                    self.marketplace,
+                    Secret::new(cookie_header),
+                )
+                .await
+            {
+                eprintln!("tam-session-broker: a session renewal could not be resealed: {error}");
+            }
+        })
+    }
+}
+
 pub(crate) struct Broker {
-    vault: Vault,
-    upstream_base: String,
+    vault: Arc<Vault>,
+    upstreams: Upstreams,
     gateways: Mutex<HashMap<(OrgId, ConnectionId, LeasePurpose), Gateway>>,
     root: CancellationToken,
 }
 
+/// An error response carrying the machine-readable code where the fault is one
+/// a caller can act on.
+fn failed(error: &VaultError) -> Response {
+    let code = match error {
+        VaultError::AccountAlreadyLinked(_) => Some(ErrorCode::PlatformAccountAlreadyLinked),
+        VaultError::Db(_)
+        | VaultError::Seal
+        | VaultError::Open(_)
+        | VaultError::NoSecret
+        | VaultError::NotClaimable => None,
+    };
+    Response::Error {
+        detail: error.to_string(),
+        code,
+    }
+}
+
+fn refused(detail: String) -> Response {
+    Response::Error { detail, code: None }
+}
+
 impl Broker {
     #[must_use]
-    pub(crate) fn new(vault: Vault, upstream_base: String, root: CancellationToken) -> Arc<Self> {
+    pub(crate) fn new(vault: Vault, upstreams: Upstreams, root: CancellationToken) -> Arc<Self> {
         Arc::new(Self {
-            vault,
-            upstream_base,
+            vault: Arc::new(vault),
+            upstreams,
             gateways: Mutex::new(HashMap::new()),
             root,
         })
@@ -54,16 +137,42 @@ impl Broker {
                 connection,
                 marketplace,
                 cookie_header,
+                authorship,
+            } => {
+                let declared = authorship.map(Authorship::from);
+                match self
+                    .vault
+                    .link(LinkRequest {
+                        org,
+                        connection,
+                        marketplace,
+                        secret: Secret::new(cookie_header),
+                        authorship: declared.as_ref(),
+                    })
+                    .await
+                {
+                    Ok(()) => Response::Linked,
+                    Err(error) => failed(&error),
+                }
+            }
+            Request::Claim {
+                org,
+                connection,
+                marketplace,
+                account_ref,
             } => match self
                 .vault
-                .link(org, connection, marketplace, Secret::new(cookie_header))
+                .claim(org, connection, marketplace, &account_ref)
                 .await
             {
-                Ok(()) => Response::Linked,
-                Err(error) => Response::Error {
-                    detail: error.to_string(),
-                },
+                Ok(()) => Response::Claimed,
+                Err(error) => failed(&error),
             },
+            Request::Refresh {
+                org,
+                connection,
+                marketplace,
+            } => self.refresh(org, connection, marketplace).await,
             Request::Lease {
                 org,
                 connection,
@@ -88,13 +197,51 @@ impl Broker {
                         connections: count,
                         elapsed_ms: 0,
                     },
-                    Err(error) => Response::Error {
-                        detail: error.to_string(),
-                    },
+                    Err(error) => failed(&error),
                 }
             }
             Request::RevokeAll => self.revoke_all().await,
             Request::Health => Response::Healthy,
+        }
+    }
+
+    /// Drives the marketplace's renewal route with the sealed jar. The lease
+    /// gateway absorbs renewals that arrive alongside item work; this is the
+    /// same absorption on a connection nobody is currently driving, which is
+    /// where a session that is used rarely would otherwise expire.
+    async fn refresh(
+        &self,
+        org: OrgId,
+        connection: ConnectionId,
+        marketplace: Marketplace,
+    ) -> Response {
+        let Some(base) = self.upstreams.base(marketplace) else {
+            return refused(format!(
+                "{marketplace:?} has no upstream to refresh against"
+            ));
+        };
+        let secret = match self.vault.open_secret(org, connection, marketplace).await {
+            Ok(secret) => secret,
+            Err(error) => return failed(&error),
+        };
+        let sink = VaultSink {
+            vault: Arc::clone(&self.vault),
+            org,
+            connection,
+            marketplace,
+        };
+        match gateway::refresh_session(base, marketplace, &secret, &sink).await {
+            Ok(upstream_status) => Response::Refreshed { upstream_status },
+            Err(error) => {
+                // A refresh that could not be made is not evidence the session
+                // is dead, so the counter advances and the state does not.
+                if let Err(recorded) = self.vault.record_refresh_failure(org, connection).await {
+                    eprintln!(
+                        "tam-session-broker: the refresh failure could not be recorded: {recorded}"
+                    );
+                }
+                refused(error.to_string())
+            }
         }
     }
 
@@ -105,17 +252,34 @@ impl Broker {
             marketplace,
             purpose,
         } = *request;
+        let Some(base) = self.upstreams.base(marketplace) else {
+            return refused(format!("{marketplace:?} has no connector to lease"));
+        };
+        let base = base.to_owned();
         let secret = match self.vault.open_secret(org, connection, marketplace).await {
             Ok(secret) => secret,
-            Err(error) => {
-                return Response::Error {
-                    detail: error.to_string(),
-                }
-            }
+            Err(error) => return failed(&error),
         };
-        match gateway::spawn(self.upstream_base.clone(), secret, &self.root).await {
+        let sink: Arc<dyn SessionSink> = Arc::new(VaultSink {
+            vault: Arc::clone(&self.vault),
+            org,
+            connection,
+            marketplace,
+        });
+        match gateway::spawn(
+            LeaseGateway {
+                upstream_base: base,
+                marketplace,
+                cookie: secret,
+                sink,
+            },
+            &self.root,
+        )
+        .await
+        {
             Ok(gateway) => {
                 let endpoint = gateway.endpoint.clone();
+                let token = gateway.token.clone();
                 self.abort_one(org, connection, purpose).await;
                 self.gateways
                     .lock()
@@ -123,12 +287,11 @@ impl Broker {
                     .insert((org, connection, purpose), gateway);
                 Response::Leased {
                     endpoint,
+                    token,
                     expires_ms: now_ms + LEASE_TTL_MS,
                 }
             }
-            Err(error) => Response::Error {
-                detail: error.to_string(),
-            },
+            Err(error) => refused(error.to_string()),
         }
     }
 
@@ -175,9 +338,18 @@ impl Broker {
                 connections: count,
                 elapsed_ms: now_ms_from(&self.root).saturating_sub(start),
             },
-            Err(error) => Response::Error {
-                detail: error.to_string(),
-            },
+            Err(error) => failed(&error),
+        }
+    }
+}
+
+/// Bridges the wire shape to the vault's, so the protocol module stays the
+/// only place the wire names live.
+impl From<WireAuthorship> for Authorship {
+    fn from(wire: WireAuthorship) -> Self {
+        Self {
+            name: wire.name,
+            attested_at_ms: wire.attested_at_ms,
         }
     }
 }

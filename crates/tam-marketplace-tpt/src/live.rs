@@ -295,10 +295,14 @@ fn envelope(hop: Hop, method: Method) -> Vec<(reqwest::header::HeaderName, &'sta
 /// The browser envelope for one session request. Session-authenticated hops
 /// alone: the bucket sees the identity headers of the bare client and nothing
 /// naming the marketplace.
+/// `csrf_token` is absent exactly when the session is held by the broker's
+/// lease gateway: the double submit is derived from the jar, this process
+/// never sees the jar, and the gateway mirrors the cookie on its behalf.
+/// Sending a placeholder would put two `x-csrf-token` headers on the wire.
 fn apply_session_envelope(
     builder: reqwest::RequestBuilder,
     request: &HttpRequest,
-    csrf_token: &str,
+    csrf_token: Option<&str>,
 ) -> reqwest::RequestBuilder {
     let shape = hop(request);
     let builder = envelope(shape, request.method)
@@ -307,9 +311,11 @@ fn apply_session_envelope(
             carried.header(name, value)
         });
     if shape.is_xhr() {
-        builder
-            .header(static_name(CSRF_HEADER), csrf_token)
-            .header(static_name(REQUESTED_WITH_HEADER), "XMLHttpRequest")
+        let builder = builder.header(static_name(REQUESTED_WITH_HEADER), "XMLHttpRequest");
+        match csrf_token {
+            Some(token) => builder.header(static_name(CSRF_HEADER), token),
+            None => builder,
+        }
     } else {
         builder
     }
@@ -431,51 +437,137 @@ fn project_headers(headers: &reqwest::header::HeaderMap) -> Vec<(ResponseHeader,
     projected
 }
 
+/// Rewrites a marketplace-origin url onto a leased loopback endpoint, leaving
+/// every other url alone — which is every bucket url, because those must not
+/// be proxied through a cookie-injecting gateway.
+fn rebase(url: &str, base: &str) -> String {
+    match url.strip_prefix(ORIGIN) {
+        Some(path) => format!("{base}{path}"),
+        None => url.to_owned(),
+    }
+}
+
+/// The one send path both transports drive.
+///
+/// `csrf_token` and `session_base` are what separate them: a direct transport
+/// holds the jar and mirrors its own token against the real origin, and a
+/// gateway-fronted one holds neither and points its session hops at the lease.
+///
+/// Every shape decision — the host assertion, the hop envelope, the gateway
+/// service marker — is taken against the canonical url and before any
+/// rebasing. Taken after, they would be taken against a loopback address that
+/// matches no endpoint predicate and neither host, which would quietly turn
+/// the host assertion into a no-op.
+async fn send_shaped(
+    session: &reqwest::Client,
+    bare: &reqwest::Client,
+    request: HttpRequest,
+    csrf_token: Option<&str>,
+    session_base: Option<&str>,
+) -> Result<HttpResponse, TransportError> {
+    let route = route(&request)?;
+    let session_authenticated = route == Route::Session;
+    let client = if session_authenticated { session } else { bare };
+    let is_gateway_service = endpoints::is_gateway(&request.url);
+    let url = match session_base {
+        Some(endpoint) if session_authenticated => rebase(&request.url, endpoint),
+        Some(_) | None => request.url.clone(),
+    };
+    let builder = match request.method {
+        Method::Get => client.get(&url),
+        Method::Post => client.post(&url),
+        Method::Put => client.put(&url),
+        Method::Delete => client.delete(&url),
+    };
+    let builder = if session_authenticated {
+        apply_session_envelope(builder, &request, csrf_token)
+    } else {
+        builder
+    };
+    let builder = if is_gateway_service {
+        builder.header(static_name(GATEWAY_VERSION_HEADER), GATEWAY_VERSION)
+    } else {
+        builder
+    };
+    let builder = apply_auth(builder, &request.auth);
+    let builder = apply_body(builder, request.body, session_authenticated)?;
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| classify_reqwest(&error))?;
+    let status = response.status().as_u16();
+    let headers = project_headers(response.headers());
+    // `.bytes()` not `.text()`: text decodes lossily and would silently
+    // corrupt any non-UTF-8 payload.
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| TransportError::AfterSend {
+            detail: error.to_string(),
+        })?;
+    Ok(HttpResponse {
+        status,
+        body: body.to_vec(),
+        headers,
+    })
+}
+
 impl Transport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
-        let route = route(&request)?;
-        let client = match route {
-            Route::Session => &self.session,
-            Route::Bare => &self.bare,
-        };
-        let builder = match request.method {
-            Method::Get => client.get(&request.url),
-            Method::Post => client.post(&request.url),
-            Method::Put => client.put(&request.url),
-            Method::Delete => client.delete(&request.url),
-        };
-        let session_authenticated = route == Route::Session;
-        let builder = if session_authenticated {
-            apply_session_envelope(builder, &request, &self.csrf_token)
-        } else {
-            builder
-        };
-        let builder = if endpoints::is_gateway(&request.url) {
-            builder.header(static_name(GATEWAY_VERSION_HEADER), GATEWAY_VERSION)
-        } else {
-            builder
-        };
-        let builder = apply_auth(builder, &request.auth);
-        let builder = apply_body(builder, request.body, session_authenticated)?;
-        let response = builder
-            .send()
-            .await
-            .map_err(|error| classify_reqwest(&error))?;
-        let status = response.status().as_u16();
-        let headers = project_headers(response.headers());
-        // `.bytes()` not `.text()`: text decodes lossily and would silently
-        // corrupt any non-UTF-8 payload.
-        let body = response
-            .bytes()
-            .await
-            .map_err(|error| TransportError::AfterSend {
-                detail: error.to_string(),
-            })?;
-        Ok(HttpResponse {
-            status,
-            body: body.to_vec(),
-            headers,
+        send_shaped(
+            &self.session,
+            &self.bare,
+            request,
+            Some(&self.csrf_token),
+            None,
+        )
+        .await
+    }
+}
+
+/// The gateway-facing transport: no cookie and no CSRF token of its own, both
+/// injected by the broker's lease gateway, with session hops rebased onto the
+/// leased loopback endpoint.
+///
+/// The bucket hops still leave this process directly, and that is the whole
+/// reason a Tpt lease is possible at all: they carry an `S3SigV2` signature
+/// rather than the session, so proxying them would send the seller's
+/// marketplace cookie to Amazon and buy nothing. `route` keeps that split
+/// honest — it runs against the canonical url, so a session-authenticated
+/// request to the bucket and a signed one to the marketplace are both refused
+/// before either leaves, exactly as on the direct transport.
+pub struct GatewayTransport {
+    session: reqwest::Client,
+    bare: reqwest::Client,
+    base: String,
+}
+
+impl GatewayTransport {
+    /// `lease_token` is the bearer credential the broker minted for this
+    /// lease. Without it every proxied hop is refused 401, because a loopback
+    /// listener is otherwise reachable by any process on the host.
+    pub fn new(base: String, lease_token: &str) -> Result<Self, TransportBuildError> {
+        let mut headers = bare_headers();
+        headers.insert(
+            static_name(SEC_FETCH_SITE_HEADER),
+            reqwest::header::HeaderValue::from_static(SAME_ORIGIN),
+        );
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {lease_token}"))
+                .map_err(|error| TransportBuildError(error.to_string()))?,
+        );
+        Ok(Self {
+            session: build_client(headers)?,
+            bare: build_client(bare_headers())?,
+            base,
         })
+    }
+}
+
+impl Transport for GatewayTransport {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        send_shaped(&self.session, &self.bare, request, None, Some(&self.base)).await
     }
 }
 
@@ -732,7 +824,7 @@ mod tests {
             Method::Delete => client.delete(&request.url),
         };
         let builder = if request.auth.is_session() {
-            super::apply_session_envelope(builder, &request, "deadbeef")
+            super::apply_session_envelope(builder, &request, Some("deadbeef"))
         } else {
             builder
         };

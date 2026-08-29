@@ -259,8 +259,20 @@ pub struct GatewayTransport {
 }
 
 impl GatewayTransport {
-    pub fn new(base: String) -> Result<Self, TransportBuildError> {
+    /// `lease_token` is the bearer credential the broker minted for this
+    /// lease. It is a client-wide default header rather than a per-request
+    /// one because every request this transport makes goes to the lease and
+    /// nowhere else; without it each is refused 401, since the gateway's
+    /// loopback listener is reachable by any process on the host.
+    pub fn new(base: String, lease_token: &str) -> Result<Self, TransportBuildError> {
+        let mut headers = bare_headers();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {lease_token}"))
+                .map_err(|error| TransportBuildError(error.to_string()))?,
+        );
         let inner = reqwest::Client::builder()
+            .default_headers(headers)
             .timeout(core::time::Duration::from_secs(30))
             .connect_timeout(core::time::Duration::from_secs(10))
             .build()

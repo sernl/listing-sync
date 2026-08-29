@@ -59,9 +59,10 @@ async fn linked_connection(
     connections: &ConnectionRepo,
     org: OrgId,
     marketplace: Marketplace,
+    now: Timestamp,
 ) -> Option<ConnectionId> {
     connections
-        .list(org)
+        .list(org, now)
         .await
         .ok()?
         .into_iter()
@@ -160,7 +161,7 @@ async fn drain_one(
     request: Uuid,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let marketplace = source.marketplace();
-    let Some(connection) = linked_connection(connections, org, marketplace).await else {
+    let Some(connection) = linked_connection(connections, org, marketplace, now()).await else {
         requests
             .record_failure(org, request, "no linked connection for the source", now())
             .await?;
@@ -178,7 +179,7 @@ async fn drain_one(
     .await?;
     let adapter = TesAdapter::new(
         source,
-        GatewayTransport::new(lease.endpoint.clone())?,
+        GatewayTransport::new(lease.endpoint.clone(), &lease.token)?,
         NoImportFiles,
     )?;
     let run = ImportRun {
