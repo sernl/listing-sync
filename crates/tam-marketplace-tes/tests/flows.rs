@@ -5,7 +5,7 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
-use tam_marketplace::transport::{FilePart, HttpResponse};
+use tam_marketplace::transport::{FilePart, HttpResponse, RequestBody};
 use tam_marketplace::{
     AdapterError, AgeSpan, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource,
     FileSourceError, FormId, LifecycleTransition, ListingLocator, ListingState, MarketplaceAdapter,
@@ -71,7 +71,7 @@ fn sample_listing() -> TesListing {
         age_channel: tam_marketplace_tes::endpoints::TesAges::Ranges(vec![4]),
         ages: vec![11, 12],
         main_type: Some(99_009),
-        main_age: 4,
+        main_age: Some(4),
         pricing: TesPricing::Free(FreeLicence::CcBy),
     }
 }
@@ -493,6 +493,50 @@ fn an_html_body_is_refused_rather_than_posted_under_the_markdown_declaration() {
         detail.0.contains("Markdown") && detail.0.contains("Html"),
         "the refusal names both formats, got {}",
         detail.0
+    );
+}
+
+/// P.1. A 16+-only declaration derives no age span — closing the half-open
+/// band would need an upper age nobody has measured — and the pair used to go
+/// out as an empty `ages` list beside `mainAge: 0`, which names age zero as
+/// surely as `mainType: 0` named a real resource type. The registry declares
+/// both optional, so both keys are absent until the supervised capture says
+/// what the wire wants there.
+#[test]
+fn an_underivable_age_span_omits_the_pair_rather_than_stating_age_zero() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let mut listing = projected(PriceIntent::Free);
+    listing.ages = None;
+    let fields = adapter
+        .project_fields(&listing)
+        .expect("an underivable span is not a refusal; the grade ids still project");
+    let grades: Value =
+        serde_json::from_str(&entry(&fields, FieldKey::Grades)).expect("grades are JSON");
+    assert!(
+        grades.get("ages").is_none() && grades.get("mainAge").is_none(),
+        "neither half of the pair is invented, got {grades}"
+    );
+
+    let spanless = TesListing {
+        ages: vec![],
+        main_age: None,
+        ..sample_listing()
+    };
+    let RequestBody::Json(body) = endpoints::set_metadata_request(DRAFT, &spanless).body else {
+        panic!("the draft metadata is a JSON post");
+    };
+    assert!(
+        body.get("ages").is_none() && body.get("mainAge").is_none(),
+        "and the wire carries neither, got {body}"
+    );
+    assert!(
+        body.get("ageRanges").is_some(),
+        "the declaration itself still travels: the bands are what the seller stated"
     );
 }
 

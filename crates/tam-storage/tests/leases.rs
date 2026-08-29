@@ -336,6 +336,55 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
     );
 }
 
+/// The unparker's give-up arm settles the item, and the row it writes must be
+/// readable afterwards.
+///
+/// `job_item` carries no CHECK on `failure_code`, so a spelling the codec does
+/// not know is written happily and then fails to decode forever; `items_page`
+/// collects the whole page into one `Result`, so a single such row turns every
+/// page of that job's items into a fault, for the job the seller is most
+/// likely to be inspecting. Reading back through the page is the assertion,
+/// because reading the column with raw SQL passes either way.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_gate_that_never_clears_settles_into_a_row_the_item_page_can_still_read(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC5, true).await;
+    let job = JobId(Uuid([0x59; 16]));
+    let item = enqueue_operation(&engine, &tenant, 0x59, 0x5A, ItemOperation::Create).await;
+    let leases = LeaseRepo::new(engine.clone());
+    park_leased(&leases, "w1", "reconciliation", Timestamp(T0.0 + 1_000)).await;
+
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 2_000), 1)
+            .await
+            .expect("the unparker runs"),
+        0,
+        "the give-up arm settles rather than resumes, so nothing is counted as revived"
+    );
+    let rows = JobReadRepo::new(app.clone())
+        .items_page(
+            tenant.org,
+            job,
+            tam_storage::ItemsPageParams {
+                cursor: None,
+                limit: 10,
+                outcome: None,
+            },
+        )
+        .await
+        .expect("the item page reads, which is the whole assertion");
+    let settled = rows
+        .iter()
+        .find(|row| row.item == item)
+        .expect("the given-up item is on the page");
+    assert_eq!(
+        (settled.outcome, settled.failure_code),
+        (Some(ItemOutcome::Skipped), Some(FailureCode::Other)),
+        "the give-up arm's code decodes back to the one the encoder wrote"
+    );
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn an_expired_challenge_park_is_left_where_the_driver_put_it(app: PgPool) {
     let engine = engine_pool(&app).await;

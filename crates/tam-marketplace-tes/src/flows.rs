@@ -461,7 +461,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             age_channel: TesAges::of(inventory, ids(&grades, TesAges::empty(inventory).field())),
             ages: ids(&grades, "ages"),
             main_type: taxonomy.get("mainType").and_then(Value::as_i64),
-            main_age: grades.get("mainAge").and_then(Value::as_i64).unwrap_or(0),
+            main_age: grades.get("mainAge").and_then(Value::as_i64),
             pricing,
         })
     }
@@ -544,12 +544,17 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 None => None,
             };
         let age_channel = TesAges::of(self.inventory, grade_ids);
-        let (ages, main_age): (Vec<i64>, i64) = match listing.ages {
+        // P.1. A grade set the declaration could not close -- the 16+ band is
+        // half-open, and closing it would need an upper age nobody has
+        // measured -- states no span rather than a zero. The pair is omitted
+        // from the wire the way `mainType` is, and the supervised capture is
+        // what will settle whether Tes wants something else there.
+        let (ages, main_age): (Vec<i64>, Option<i64>) = match listing.ages {
             Some(span) => (
                 (i64::from(span.low_years)..=i64::from(span.high_years)).collect(),
-                i64::from(span.low_years),
+                Some(i64::from(span.low_years)),
             ),
-            None => (Vec::new(), 0),
+            None => (Vec::new(), None),
         };
         Ok(FieldSet {
             entries: vec![
@@ -559,12 +564,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 (FieldKey::Taxonomy, taxonomy_entry(&categories, main_type)),
                 (
                     FieldKey::Grades,
-                    serde_json::json!({
-                        age_channel.field(): age_channel.ids(),
-                        "ages": ages,
-                        "mainAge": main_age
-                    })
-                    .to_string(),
+                    grades_entry(&age_channel, &ages, main_age),
                 ),
             ],
             files: listing.files.clone(),
@@ -1262,6 +1262,19 @@ fn native_of(natives: &[NativeAxis], axis: TermKind) -> Option<&str> {
 
 fn licence_from(natives: &[NativeAxis]) -> Option<&str> {
     native_of(natives, TermKind::Licence)
+}
+
+/// The `Grades` entry, carrying the age pair only where the declaration
+/// derived a span. Its absence is what the registry's `required: false` means,
+/// and it is what stops a 16+-only listing stating age zero.
+fn grades_entry(channel: &TesAges, ages: &[i64], main_age: Option<i64>) -> String {
+    let mut entry = serde_json::Map::new();
+    entry.insert(channel.field().to_owned(), serde_json::json!(channel.ids()));
+    if let Some(main_age) = main_age {
+        entry.insert("ages".to_owned(), serde_json::json!(ages));
+        entry.insert("mainAge".to_owned(), serde_json::json!(main_age));
+    }
+    Value::Object(entry).to_string()
 }
 
 /// The `Taxonomy` entry, carrying `mainType` only where the projection

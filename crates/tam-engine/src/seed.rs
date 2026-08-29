@@ -106,11 +106,16 @@ pub const AWAITING_COUNTERPART: &str = "awaiting_counterpart";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CounterpartState {
     Bound,
-    /// Still in flight: unbound, or a create that has not landed yet.
+    /// Still in flight: unbound, severed, or a create that has not landed
+    /// yet. Severed sits here rather than beside the terminal arm because a
+    /// severed mapping is exactly what a fresh create is admitted against --
+    /// `admission` says so -- so the paired create will land and bind it, and
+    /// calling it unreachable settles the waiting item skipped on whichever
+    /// of the two the lease order happened to pick first.
     Waiting,
-    /// Settled somewhere it will not leave. An ambiguous create is here
-    /// deliberately: nobody knows what it did, so a removal on the strength
-    /// of it would be a removal on the strength of a guess.
+    /// Settled somewhere it will not leave. An ambiguous create is here alone
+    /// and deliberately: nobody knows what it did, so a removal on the
+    /// strength of it would be a removal on the strength of a guess.
     Unreachable,
 }
 
@@ -131,10 +136,10 @@ async fn counterpart_binding(
         .find(|record| record.mapping.inventory == inventory);
     Ok(match found.as_ref().map(|record| &record.mapping.binding) {
         Some(Binding::Bound { .. }) => CounterpartState::Bound,
-        None | Some(Binding::Unbound | Binding::Creating { .. }) => CounterpartState::Waiting,
-        Some(Binding::Severed { .. } | Binding::AmbiguousCreate { .. }) => {
-            CounterpartState::Unreachable
+        None | Some(Binding::Unbound | Binding::Creating { .. } | Binding::Severed { .. }) => {
+            CounterpartState::Waiting
         }
+        Some(Binding::AmbiguousCreate { .. }) => CounterpartState::Unreachable,
     })
 }
 

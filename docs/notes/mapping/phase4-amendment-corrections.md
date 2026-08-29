@@ -99,6 +99,31 @@ residue for the reconciliation queue, while a year group no age band covers is
 a measured absence in a vocabulary held whole. Widening the shared type would
 invite seeding the first as the second.
 
+## P.1's election is deferred, and the wire stops inventing a value meanwhile
+
+P.1 settles two things: the bounds model states 16+ honestly, and a 16+-only
+grade set raises an election in which the seller states the target ages.
+The first landed. The second does not fit the election model as built, and the
+gap is structural rather than an omission.
+
+An `ElectionAnswer` names `VocabularyPath`s, and every trigger resolves to a
+set of them. "The target ages" is a year span, and Tes's own age vocabulary
+holds no bounded band above 16 — bands 1 to 5 stop at 14-16, band 6 is the
+half-open 16+ itself, and band 7 is the not-applicable sentinel. So there is no
+path the seller could name that answers the question, and raising a `Supply` or
+a `Narrow` over the bounded bands would offer a candidate set that cannot mean
+what it says. Delivering P.1's election therefore needs a new answer shape — a
+span rather than a path — which reaches the `election_item` CHECK, the trigger
+kind, the answer codec, the API and the client. That is a feature, and it is
+gated on the same supervised capture P.1 defers the wire question to.
+
+What landed instead is the half that needs no such decision: the wire stops
+inventing a value. `mainAge` and `ages` are both `required: false` in the
+registry, so an underivable span omits the pair exactly as an unprojected
+resource type omits `mainType` — D3's fix, applied to its twin. `ageRanges`
+still carries band 6, because the declaration is what the seller stated and it
+is true; what is absent is the number nobody measured.
+
 ## Migration numbering
 
 Phase 4's migrations do not start where the amendments' §A.6 table says,

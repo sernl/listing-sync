@@ -211,7 +211,12 @@ pub struct TesListing {
     pub age_channel: TesAges,
     pub ages: Vec<i64>,
     pub main_type: Option<i64>,
-    pub main_age: i64,
+    /// Absent where the grade declaration derived no age span. The registry
+    /// declares the field optional, and the only span a 16+-only declaration
+    /// could state is one nobody has measured an upper bound for, so the key
+    /// is omitted exactly as `main_type` is rather than sent as zero -- which
+    /// names age zero as surely as `mainType: 0` named a real resource type.
+    pub main_age: Option<i64>,
     pub pricing: TesPricing,
 }
 
@@ -304,7 +309,7 @@ pub fn probe_listing() -> TesListing {
         age_channel: TesAges::Ranges(vec![4]),
         ages: vec![11, 12, 13, 14],
         main_type: Some(99_009),
-        main_age: 4,
+        main_age: Some(4),
         pricing: TesPricing::Free(FreeLicence::CcBy),
     }
 }
@@ -330,9 +335,7 @@ fn metadata_body(listing: &TesListing) -> Value {
         "descriptionRawType": "md",
         "categories": categories,
         "ageRanges": listing.age_channel.ranges(),
-        "ages": listing.ages,
         "yearGroups": year_groups(&listing.age_channel),
-        "mainAge": listing.main_age,
         "licence": listing.pricing.licence().as_str(),
     });
     // The registry declares `mainType` optional, so an unprojected resource
@@ -340,6 +343,15 @@ fn metadata_body(listing: &TesListing) -> Value {
     // type and named one on every listing we ever created.
     if let Some(main_type) = listing.main_type {
         body["mainType"] = json!(main_type);
+    }
+    // The same rule for the age pair, which the registry also declares
+    // optional. A 16+-only declaration derives no span -- closing the band
+    // would need an upper age nobody has measured -- and the pair used to go
+    // out as an empty list beside `mainAge: 0`, which names age zero. The two
+    // keys travel together because they come from one derived span.
+    if let Some(main_age) = listing.main_age {
+        body["ages"] = json!(listing.ages);
+        body["mainAge"] = json!(main_age);
     }
     if let Some(price) = listing.pricing.price() {
         body["price"] = json!(price.minor_units());
@@ -365,13 +377,17 @@ pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
 /// The age range the publish body carries beside `mainAge`: the other range
 /// the draft declares. Absent from a draft declaring only its main one, and
 /// omitted rather than invented when there is none.
+///
+/// Absent too when the draft states no main age at all, because an additional
+/// age names what it is additional to.
 fn additional_age(listing: &TesListing) -> Option<i64> {
+    let main = listing.main_age?;
     listing
         .age_channel
         .ranges()
         .iter()
         .copied()
-        .find(|range| *range != listing.main_age)
+        .find(|range| *range != main)
 }
 
 #[must_use]
@@ -817,7 +833,7 @@ mod tests {
             age_channel: TesAges::Ranges(vec![3, 4]),
             ages: vec![11, 12],
             main_type: Some(99_009),
-            main_age: 4,
+            main_age: Some(4),
             pricing,
         }
     }

@@ -541,6 +541,46 @@ async fn a_removal_whose_counterpart_can_never_bind_stops_waiting(pool: PgPool) 
     );
 }
 
+/// A severed counterpart is waiting, not lost.
+///
+/// `admission` admits a fresh create against a severed mapping -- that is what
+/// re-creating a listing the seller deleted *is* -- so the paired create will
+/// land and bind it. Reading severed as unreachable settled the gated item
+/// skipped on whichever of the two the lease order happened to pick first, and
+/// the two are inserted with one `created_at` so the tie breaks on a random
+/// uuid: a publish-to-live on a re-created listing gave up on a coin flip.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_severed_counterpart_is_waited_for_rather_than_given_up_on(pool: PgPool) {
+    provision(
+        &pool,
+        true,
+        tam_domain::Binding::Severed {
+            was: tes(HELD),
+            noticed: NOW,
+            cause: tam_domain::SeverCause::RemovedBySeller,
+        },
+    )
+    .await;
+    let mut gated = leasing(tam_domain::ItemOperation::Publish {
+        to: tam_marketplace::ListingState::Live,
+    });
+    gated.requires_bound_on = Some(InventoryId::TesNz);
+    let outcome = prepare_item(&pool, &gated, NOW)
+        .await
+        .expect("the preparation runs");
+    assert!(
+        matches!(
+            outcome,
+            ItemPreparation::Blocked {
+                gate: tam_engine::seed::AWAITING_COUNTERPART,
+                ..
+            }
+        ),
+        "the create that re-makes the severed listing has not run yet, so the gate waits \
+         for it rather than settling the publish skipped"
+    );
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_removal_runs_once_its_counterpart_has_bound(pool: PgPool) {
     provision(

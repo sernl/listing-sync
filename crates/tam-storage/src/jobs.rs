@@ -871,7 +871,7 @@ impl LeaseRepo {
         // and the job it belongs to reads active forever.
         let exhausted = sqlx::query!(
             "UPDATE job_item \
-             SET state = 'settled', outcome = 'skipped', failure_code = 'other', \
+             SET state = 'settled', outcome = 'skipped', failure_code = $4, \
                  failure_detail = 'the gate ' || COALESCE(blocked_on, 'unknown') \
                      || ' did not clear within the attempt budget', \
                  blocked_on = NULL, park_expires_at = NULL, settled_at = $1 \
@@ -882,6 +882,12 @@ impl LeaseRepo {
             timestamp_to_db(now)?,
             &REVIVABLE_GATES.map(str::to_owned)[..],
             attempts_max,
+            // Bound through the encoder rather than spelled here. `job_item`
+            // carries no CHECK on the column, so a literal that drifts from
+            // the codec is written happily and then fails to decode forever
+            // -- and `items_page` collects into one Result, so a single such
+            // row makes every page of that job's items a fault.
+            failure_code_to_db(FailureCode::Other),
         )
         .fetch_all(&mut *tx)
         .await?;
