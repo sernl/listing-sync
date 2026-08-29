@@ -481,7 +481,22 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     ///
     /// A category the crosswalk left without a numeric id is refused: Tes
     /// addresses categories by number and there is nothing to send.
+    ///
+    /// So is a body in the other format. `metadata_body` posts
+    /// `descriptionRawType: "md"` unconditionally, so an HTML body sent here
+    /// reaches the seller's live listing as escaped markup nobody asked for.
+    /// Until the converter decision lands, a cross-format sync refuses rather
+    /// than corrupts, which is what the declaration exists to make possible.
     fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
+        if listing.body_format != CopyFormat::Markdown {
+            return Err(refused(format!(
+                "Tes posts its description as {:?} and this listing declares {:?}; the body \
+                 is refused rather than converted, because posting one format's bytes under \
+                 the other's declaration writes escaped markup into the seller's listing",
+                CopyFormat::Markdown,
+                listing.body_format,
+            )));
+        }
         let elected = licence_from(&listing.natives);
         let licence = match listing.price {
             PriceIntent::Free => elected

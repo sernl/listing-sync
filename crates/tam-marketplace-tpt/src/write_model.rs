@@ -17,7 +17,7 @@
 
 use serde_json::{json, Value};
 use tam_marketplace::{AdapterError, FieldSet, ProjectedListing};
-use tam_types::{FailureCode, FailureDetail, FieldKey, PriceIntent, Timestamp};
+use tam_types::{CopyFormat, FailureCode, FailureDetail, FieldKey, PriceIntent, Timestamp};
 
 use crate::form::{ThumbHandle, TptFormTokens};
 use crate::upload::ProcessedHandle;
@@ -719,7 +719,22 @@ fn is_tpt_tag_slug(native: &str) -> bool {
 /// A term the crosswalk left without a native id is refused. TPT addresses
 /// both shelves and tags by identifiers it issued, and there is nothing to
 /// send in place of one.
+///
+/// So is a body in the other format. TPT stores and returns its description
+/// as HTML, so Markdown posted here renders its `**bold**` and its `#`
+/// headings literally on the seller's live listing. Until the converter
+/// decision lands, a cross-format sync refuses rather than corrupts, which is
+/// what the declaration exists to make possible.
 pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
+    if listing.body_format != CopyFormat::Html {
+        return Err(refuse(format!(
+            "TPT stores and returns its description as {:?} and this listing declares {:?}; \
+             the body is refused rather than converted, because posting one format's bytes \
+             into the other's field renders the markup literally",
+            CopyFormat::Html,
+            listing.body_format,
+        )));
+    }
     let price = match listing.price {
         PriceIntent::Free => json!({ "free": true }),
         // The currency travels so a mismatch is visible to whatever compares
@@ -1227,6 +1242,29 @@ mod tests {
             body_format: CopyFormat::Html,
             natives: Vec::new(),
         }
+    }
+
+    /// O.16. TPT stores and returns its description as HTML, so a Markdown
+    /// body posted here renders its markup literally on the seller's live
+    /// listing. F3's settled interim is that the declaration refuses rather
+    /// than converting, and the refusal names both formats so the seller is
+    /// told what the mismatch was.
+    #[test]
+    fn a_markdown_body_is_refused_rather_than_posted_into_the_html_field() {
+        let refused = project_fields(&ProjectedListing {
+            body: "**bold** and a # heading".to_owned(),
+            body_format: CopyFormat::Markdown,
+            ..projected(PriceIntent::Free)
+        })
+        .expect_err("no converter is configured, so the cross-format body is refused");
+        let AdapterError::Rejected { detail, .. } = refused else {
+            panic!("a body the target cannot take is a rejection, got {refused:?}");
+        };
+        assert!(
+            detail.0.contains("Html") && detail.0.contains("Markdown"),
+            "the refusal names both formats, got {}",
+            detail.0
+        );
     }
 
     #[test]

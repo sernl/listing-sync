@@ -469,6 +469,33 @@ fn an_elected_creative_commons_licence_on_a_priced_listing_is_refused() {
     );
 }
 
+/// O.16's other half. `metadata_body` posts `descriptionRawType: "md"`
+/// unconditionally, so an HTML body — which is what every TPT-sourced product
+/// now carries, the import having stopped hardcoding markdown — would reach
+/// the seller's live Tes listing as escaped markup. F3's settled interim is
+/// that the declaration refuses rather than converting.
+#[test]
+fn an_html_body_is_refused_rather_than_posted_under_the_markdown_declaration() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let mut listing = projected(PriceIntent::Free);
+    listing.body = "<p>A pack.</p>".to_owned();
+    listing.body_format = CopyFormat::Html;
+    let refused = adapter.project_fields(&listing);
+    let Err(AdapterError::Rejected { detail, .. }) = refused else {
+        panic!("a body the target cannot take is a rejection, got {refused:?}");
+    };
+    assert!(
+        detail.0.contains("Markdown") && detail.0.contains("Html"),
+        "the refusal names both formats, got {}",
+        detail.0
+    );
+}
+
 /// D3. `mainType: 0` names a real Tes resource type, and it was on every
 /// listing we ever created. The axis is unrouted, so the key is absent.
 #[test]

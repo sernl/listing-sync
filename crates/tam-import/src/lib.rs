@@ -30,10 +30,9 @@ use tam_taxonomy::listing::{project_listing, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
 use tam_taxonomy::TES_MAIN_AGE_RANGES;
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, CurrencyRule, FileId, FileKind, FileRole,
-    ImportedPrice, ImportedTerm, InventoryId, JobEventPayload, JobId, ListingCopy, MappingId,
-    Money, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, TermKind,
-    Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CurrencyRule, FileId, FileKind, FileRole, ImportedPrice,
+    ImportedTerm, InventoryId, JobEventPayload, JobId, ListingCopy, MappingId, Money, OrgId,
+    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, TermKind, Timestamp, Title, Uuid,
 };
 
 /// The import never uploads, so its adapter's file source is a refusal.
@@ -530,8 +529,12 @@ where
         org: run.org,
         title: Title(listing.title.clone()),
         body: ListingCopy {
+            // The adapter that read the body declares its format; sniffing it
+            // back out of the bytes is exactly what the declaration exists to
+            // avoid, and hardcoding one stores every TPT product -- whose
+            // description is HTML -- as markdown.
             body: listing.body.clone(),
-            format: CopyFormat::Markdown,
+            format: listing.body_format,
         },
         payload,
         cover,
