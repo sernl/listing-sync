@@ -213,3 +213,81 @@ async fn the_measured_crosswalk_seeds_projects_and_drains(app: PgPool) {
         "the drain counters the kill gate reads reflect the run"
     );
 }
+
+const TPT_VOCABULARY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/design/data/tpt-vocabulary.json"
+));
+const TES_VOCABULARY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/design/data/tes-vocabulary.json"
+));
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_whole_grade_relation_survives_every_index_and_reseeds_as_a_no_op(app: PgPool) {
+    let crosswalk =
+        tam_taxonomy::grades::derive_grade_crosswalk(TPT_VOCABULARY, TES_VOCABULARY, T0)
+            .expect("the grade crosswalk derives");
+    let repo = TaxonomyRepo::new(app);
+
+    let report = repo
+        .seed(&crosswalk.terms, &crosswalk.edges)
+        .await
+        .expect("the grade relation seeds");
+    assert_eq!(
+        (report.terms_inserted, report.edges_inserted),
+        (
+            u64::try_from(crosswalk.terms.len()).expect("the term count fits"),
+            u64::try_from(crosswalk.edges.len()).expect("the edge count fits")
+        ),
+        "the reverse-Exact uniqueness index and the single-valued index both admit the \
+         derivation, which no pure test can establish"
+    );
+    assert_eq!(
+        report.ambiguous_terms, 0,
+        "no seeded term projects two ways"
+    );
+
+    let absences = repo
+        .seed_no_counterparts(&crosswalk.no_counterparts)
+        .await
+        .expect("the measured absences record");
+    assert_eq!(
+        absences.inserted,
+        u64::try_from(crosswalk.no_counterparts.len()).expect("the absence count fits")
+    );
+
+    let again = repo
+        .seed(&crosswalk.terms, &crosswalk.edges)
+        .await
+        .expect("the reseed runs");
+    assert_eq!(
+        (again.terms_inserted, again.edges_inserted),
+        (0, 0),
+        "deterministic ids make a re-run an explicit no-op even under an upsert"
+    );
+
+    let gb = repo
+        .edges_into(VocabularyId(InventoryId::TesGb, TermKind::Phase))
+        .await
+        .expect("the GB phase edges load");
+    assert_eq!(
+        gb.iter()
+            .filter(|edge| edge.kind == EdgeKind::Broader)
+            .count(),
+        27,
+        "the covering relation reads back whole"
+    );
+    let us = repo
+        .edges_into(VocabularyId(InventoryId::TesUs, TermKind::Phase))
+        .await
+        .expect("the US phase edges load");
+    assert_eq!(
+        us.iter()
+            .filter(|edge| edge.kind == EdgeKind::Narrower)
+            .count(),
+        27,
+        "a band holds one narrower edge per year group it covers, which the single-valued \
+         index would have collapsed to six"
+    );
+}

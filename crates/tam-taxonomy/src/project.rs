@@ -10,7 +10,9 @@ use tam_domain::equivalence::{
     AxisOutcome, Election, ElectionTrigger, Loss, PricingBranch, VocabularyGap,
 };
 use tam_domain::registry::{registry, AxisBinding, Cardinality};
-use tam_domain::{EdgeKind, ProjectionEdge, TermProjection, VocabularyId, VocabularyPath};
+use tam_domain::{
+    EdgeKind, GradeDeclaration, ProjectionEdge, TermProjection, VocabularyId, VocabularyPath,
+};
 use tam_types::{CanonicalTermId, InventoryId, ProductId};
 
 /// A term whose projection has no correct answer, carrying the projection so
@@ -131,6 +133,13 @@ pub struct AxisRequest<'a> {
     pub inventory: InventoryId,
     pub binding: AxisBinding,
     pub terms: &'a [CanonicalTermId],
+    /// The source-declared path each term was recognised from, parallel to
+    /// `terms`, and empty where the axis arrives as canonical ids alone.
+    ///
+    /// A `Narrow` election names the seller's own value and keys a standing
+    /// answer on that value's native id, so a term with no source path stays a
+    /// gap rather than becoming a question that cannot say what it is about.
+    pub sources: &'a [VocabularyPath],
     /// Which side of the free/paid gate the product sits on. A `Supply`
     /// question is unanswerable without it, because the branch decides which
     /// values the target will even accept.
@@ -159,20 +168,23 @@ pub fn project_axis(
         omitted: terms.omitted,
         ..AxisOutcome::default()
     };
-    for blocked in terms.blocked {
-        outcome.gaps.push(VocabularyGap {
-            term: blocked.term,
-            target,
-            projection: blocked.projection,
-        });
-    }
-
     let raise = |trigger| Election {
         product: request.product,
         inventory: request.inventory,
         axis: request.binding.axis,
         trigger,
     };
+    for blocked in terms.blocked {
+        match narrowing(&blocked, &request, edges) {
+            Some(trigger) => outcome.elections.push(raise(trigger)),
+            None => outcome.gaps.push(VocabularyGap {
+                term: blocked.term,
+                target,
+                projection: blocked.projection,
+            }),
+        }
+    }
+
     if let Some(trigger) =
         elect_over_cardinality(request.binding.cardinality, &mut outcome.resolved)
     {
@@ -183,6 +195,82 @@ pub fn project_axis(
         }));
     }
     outcome
+}
+
+/// A source value the relation places below several target values is a
+/// question rather than a gap.
+///
+/// One Tes GB age band covers several US year groups, which the seeded
+/// relation records as `Narrower` edges. `project` will never derive across
+/// them — inverting one restores the distinction the band dropped — so the
+/// term projects `Absent`, and calling that a vocabulary gap would ask the
+/// seller to author an equivalence that does not exist. What is missing is not
+/// an edge; it is which of the year groups this particular listing means.
+fn narrowing(
+    blocked: &BlockedTerm,
+    request: &AxisRequest<'_>,
+    edges: &[ProjectionEdge],
+) -> Option<ElectionTrigger> {
+    if !matches!(blocked.projection, TermProjection::Absent) {
+        return None;
+    }
+    let target = VocabularyId(request.inventory, request.binding.axis);
+    let index = request
+        .terms
+        .iter()
+        .position(|term| *term == blocked.term)?;
+    let from = request.sources.get(index)?.clone();
+    let candidates = distinct(
+        edges
+            .iter()
+            .filter(|edge| {
+                edge.kind == EdgeKind::Narrower
+                    && edge.from == blocked.term
+                    && edge.to.vocabulary == target
+            })
+            .map(|edge| &edge.to),
+    );
+    if candidates.is_empty() {
+        return None;
+    }
+    Some(ElectionTrigger::Narrow { from, candidates })
+}
+
+/// The grade axis enters as the source's own paths rather than as canonical
+/// ids, so it ingests before it projects.
+///
+/// A path the relation does not recognise is neither a gap nor a loss:
+/// `reconciliation_item.term` is `NOT NULL REFERENCES canonical_term`, so an
+/// unrecognised path cannot become a queue item at all, and calling it a loss
+/// would assert the target has no such field when the truth is that we do not
+/// know what the value is. It is carried out separately rather than dropped.
+#[must_use]
+pub fn ingest_grades(declaration: &GradeDeclaration, edges: &[ProjectionEdge]) -> GradeIngest {
+    let mut ingest = GradeIngest::default();
+    for path in &declaration.raw {
+        let recognised = match path.native_id.as_deref() {
+            Some(native) => ingest_by_native_id(native, path.vocabulary, edges),
+            None => self::ingest(path, edges),
+        };
+        match recognised {
+            Some(term) => {
+                ingest.terms.push(term);
+                ingest.sources.push(path.clone());
+            }
+            None => ingest.unrecognised.push(path.clone()),
+        }
+    }
+    ingest
+}
+
+/// What a grade declaration became: the terms the relation recognised, the
+/// source path each came from, and the paths it did not recognise at all.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GradeIngest {
+    pub terms: Vec<CanonicalTermId>,
+    /// Parallel to `terms`, so an election can name the seller's own value.
+    pub sources: Vec<VocabularyPath>,
+    pub unrecognised: Vec<VocabularyPath>,
 }
 
 /// Requiredness is read off the `NativeField` the binding names rather than
@@ -466,6 +554,7 @@ mod tests {
             inventory: InventoryId::TesNz,
             binding: binding(cardinality),
             terms,
+            sources: &[],
             pricing: PricingBranch::Free,
         }
     }

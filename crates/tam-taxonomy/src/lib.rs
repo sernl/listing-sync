@@ -14,7 +14,8 @@ pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
 pub use licences::{derive_licence_crosswalk, LicenceCrosswalk, LicenceError};
 pub use listing::{project_listing, ListingContext};
 pub use project::{
-    ingest, project, project_axis, project_terms, AxisRequest, BlockedTerm, TermsOutcome,
+    ingest, ingest_grades, project, project_axis, project_terms, AxisRequest, BlockedTerm,
+    GradeIngest, TermsOutcome,
 };
 pub use tes::{
     derive_crosswalk, derive_interval, parse_tree, Crosswalk, CrosswalkError, Mismatch,
