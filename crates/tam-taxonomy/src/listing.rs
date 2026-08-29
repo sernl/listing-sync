@@ -314,8 +314,10 @@ mod tests {
     use super::{project_listing, ListingContext};
     use tam_domain::equivalence::{
         ElectionAnswer, ElectionRule, ElectionTrigger, ElectionTriggerKind, Loss, PricingBranch,
+        SettledElection,
     };
     use tam_domain::registry::registry;
+    use tam_domain::ListingProjection;
     use tam_domain::{
         CanonicalTerm, Decider, EdgeKind, ProjectionBlocked, ProjectionEdge, RightsDeclaration,
         TermKind, VocabularyId, VocabularyPath,
@@ -330,6 +332,7 @@ mod tests {
     const MAPPING: MappingId = MappingId(Uuid([0x31; 16]));
     const TERM: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
     const GRADE: CanonicalTermId = CanonicalTermId(Uuid([0x79; 16]));
+    const RIGHT: CanonicalTermId = CanonicalTermId(Uuid([0x7B; 16]));
     const NOW: Timestamp = Timestamp(1_000);
 
     fn file(scan: ScanOutcome) -> ProductFile {
@@ -429,6 +432,36 @@ mod tests {
         }
     }
 
+    /// The value the seller named, in the shape the answer endpoint stores it.
+    /// `AnswerPath` defaults the target's own native id to absent, so an
+    /// answer given as segments alone -- which is what a client that names the
+    /// value rather than echoing the candidate's id sends -- round-trips
+    /// carrying none, and the token is the relation's to supply.
+    fn elected(token: &str) -> VocabularyPath {
+        VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Licence),
+            segments: vec![token.to_owned()],
+            native_id: None,
+        }
+    }
+
+    /// The target's own licence vocabulary as the relation holds it, which is
+    /// where an elected value's token is read back from.
+    fn licence_edges() -> Vec<ProjectionEdge> {
+        ["CC-BY", "CC-BY-SA", "TES-PAID"]
+            .into_iter()
+            .map(|token| ProjectionEdge {
+                from: RIGHT,
+                to: licence(InventoryId::TesNz, token),
+                kind: EdgeKind::Exact,
+                decided_by: Decider::Imported {
+                    source: "test".to_owned(),
+                },
+                decided_at: NOW,
+            })
+            .collect()
+    }
+
     /// The tenant's standing licence policy. Every fixture product below is
     /// `Unstated`, which Tes refuses -- so without a policy each of these
     /// tests would assert the licence election rather than what it is about.
@@ -449,11 +482,7 @@ mod tests {
             trigger_kind: ElectionTriggerKind::Supply,
             trigger_key: Some(pricing.as_str().to_owned()),
             answer: ElectionAnswer::Value {
-                path: VocabularyPath {
-                    vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Licence),
-                    segments: vec![token.to_owned()],
-                    native_id: Some(token.to_owned()),
-                },
+                path: elected(token),
             },
             decided_by: Decider::Imported {
                 source: "test".to_owned(),
@@ -539,14 +568,35 @@ mod tests {
         );
     }
 
+    /// The elected licence as the seam reads it: the value the seller named,
+    /// under the target's own token. `None` is what the Tes adapter refuses
+    /// as a projection carrying no licence at all.
+    fn elected_licence(projection: &ListingProjection) -> Option<String> {
+        projection
+            .natives
+            .iter()
+            .find(|(axis, _)| *axis == TermKind::Licence)
+            .expect("the elected licence travels labelled by the axis it answers")
+            .1
+            .native_id
+            .clone()
+    }
+
     /// The founder's do-not-re-ask requirement, as an assertion: two products
     /// under one standing rule raise nothing at all, and both carry the value
     /// the seller elected. A rule is consulted before anything is enqueued,
     /// so the common path writes no queue row.
+    ///
+    /// The rule is stored as the answer endpoint stores it, naming the value
+    /// and not the token, so this also asserts the second half: an answer that
+    /// resolves an election but reaches the seam without the target's own id
+    /// is refused there as a listing with no licence, which is the same
+    /// question standing under a different name.
     #[test]
     fn a_standing_rule_answers_the_licence_for_every_later_product() {
         let catalogue = terms();
-        let edges = [nz_edge()];
+        let mut edges = vec![nz_edge()];
+        edges.extend(licence_edges());
         let policy = licence_policy();
         for price in [PriceIntent::Free, PriceIntent::Free] {
             let projection = project_listing(
@@ -554,17 +604,48 @@ mod tests {
                 &ctx(&catalogue, &edges, &policy),
             )
             .expect("the standing rule answers the only question this product raised");
-            let (_, licence) = projection
-                .natives
-                .iter()
-                .find(|(axis, _)| *axis == TermKind::Licence)
-                .expect("the elected licence travels labelled by the axis it answers");
             assert_eq!(
-                licence.native_id.as_deref(),
+                elected_licence(&projection).as_deref(),
                 Some("CC-BY-SA"),
                 "and it travels as the target's own token, which is what the wire takes"
             );
         }
+    }
+
+    /// D1 and D5 of the cross-platform battery, which a TPT-sourced product
+    /// syncing to Tes runs every time: the licence is unstated, Tes requires
+    /// one, the seller answers the raised question for this product, and the
+    /// next projection of the same product must carry what they said.
+    ///
+    /// The answer settles the question -- that much a standing rule would do
+    /// too -- but a settled answer is read back from the queue row, where the
+    /// endpoint stored the value the seller named and no token. Resolving the
+    /// election while carrying no token leaves the seam refusing the listing
+    /// for want of a licence, so the item loops on an answered question.
+    #[test]
+    fn an_answered_licence_carries_the_targets_token_on_the_next_projection() {
+        let catalogue = terms();
+        let mut edges = vec![nz_edge()];
+        edges.extend(licence_edges());
+        let subject = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        let settled = [SettledElection {
+            product: subject.id,
+            inventory: InventoryId::TesNz,
+            axis: TermKind::Licence,
+            trigger_kind: ElectionTriggerKind::Supply,
+            trigger_key: Some(PricingBranch::Free.as_str().to_owned()),
+            chosen: vec![elected("CC-BY")],
+        }];
+        let mut context = ctx(&catalogue, &edges, &[]);
+        context.settled = &settled;
+        let projection = project_listing(&subject, &context)
+            .expect("the seller answered this product's own question, so nothing stands");
+        assert_eq!(
+            elected_licence(&projection).as_deref(),
+            Some("CC-BY"),
+            "the answer names the value and the relation names its token, so the seam \
+             receives a licence rather than refusing the listing for want of one"
+        );
     }
 
     #[test]

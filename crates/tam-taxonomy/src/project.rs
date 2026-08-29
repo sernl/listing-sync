@@ -217,16 +217,18 @@ pub fn project_axis(
     for election in core::mem::take(&mut outcome.elections) {
         let decided = settled_by(request.settled, &election)
             .and_then(|chosen| {
-                resolved_by(
+                resolved_against(
                     &election.trigger,
                     &ElectionAnswer::Ordering {
                         prefer: chosen.to_vec(),
                     },
+                    target,
+                    edges,
                 )
             })
             .or_else(|| {
                 satisfied_by(request.rules, &election)
-                    .and_then(|answer| resolved_by(&election.trigger, answer))
+                    .and_then(|answer| resolved_against(&election.trigger, answer, target, edges))
             });
         match decided {
             Some(paths) => {
@@ -393,6 +395,78 @@ pub fn ingest(path: &VocabularyPath, edges: &[ProjectionEdge]) -> Option<Canonic
     found
 }
 
+/// One stored answer read back against the target vocabulary it names.
+///
+/// The seller answers with a value, and `AnswerPath` makes the target's own
+/// native id optional, so an answer given as segments alone is stored and read
+/// back carrying none. That is not a token: `native_id` is a fact about the
+/// value's place in the target vocabulary rather than part of what the seller
+/// decided, so it is resolved from the relation here rather than stored beside
+/// the answer, which also keeps it current across a re-poll.
+///
+/// Two things depend on it. A supply answer resolves into a path the seam
+/// writes as the target's own id, and one without it reaches the adapter as a
+/// value the wire has no name for. And `resolved_by` checks every other
+/// trigger's answer against the candidate set by whole-path equality, which an
+/// answer missing the id its candidates carry can never satisfy -- so the
+/// question would stand however often it was answered.
+fn with_native_id(
+    path: &VocabularyPath,
+    target: VocabularyId,
+    edges: &[ProjectionEdge],
+) -> VocabularyPath {
+    if path.native_id.is_some() || path.vocabulary != target {
+        return path.clone();
+    }
+    let mut named = edges
+        .iter()
+        .filter(|edge| {
+            edge.kind == EdgeKind::Exact
+                && edge.to.vocabulary == target
+                && edge.to.segments == path.segments
+        })
+        .filter_map(|edge| edge.to.native_id.as_ref());
+    let Some(native) = named.next() else {
+        return path.clone();
+    };
+    // Two members under one path and different ids is a defect in the
+    // relation, and picking either would be us deciding which value the seller
+    // named. Left as it arrived, the axis refuses downstream rather than
+    // publishing a guess.
+    if named.any(|other| other != native) {
+        return path.clone();
+    }
+    VocabularyPath {
+        native_id: Some(native.clone()),
+        ..path.clone()
+    }
+}
+
+/// `resolved_by` over an answer whose paths have been read back against the
+/// target vocabulary first. Every consumption of a stored answer goes through
+/// here, so the two shapes the API accepts -- with the native id and without
+/// it -- resolve to the same value rather than only the first one working.
+fn resolved_against(
+    trigger: &ElectionTrigger,
+    answer: &ElectionAnswer,
+    target: VocabularyId,
+    edges: &[ProjectionEdge],
+) -> Option<Vec<VocabularyPath>> {
+    let named = match answer {
+        ElectionAnswer::Value { path } => ElectionAnswer::Value {
+            path: with_native_id(path, target, edges),
+        },
+        ElectionAnswer::Ordering { prefer } => ElectionAnswer::Ordering {
+            prefer: prefer
+                .iter()
+                .map(|path| with_native_id(path, target, edges))
+                .collect(),
+        },
+        ElectionAnswer::Delegate => ElectionAnswer::Delegate,
+    };
+    resolved_by(trigger, &named)
+}
+
 fn push_distinct(into: &mut Vec<VocabularyPath>, path: &VocabularyPath) {
     if !into.iter().any(|seen| seen == path) {
         into.push(path.clone());
@@ -464,7 +538,8 @@ pub fn ingest_by_native_id(
 mod tests {
     use super::{ingest, project, project_axis, project_terms, AxisRequest, BlockedTerm};
     use tam_domain::equivalence::{
-        AxisOutcome, ElectionTrigger, Loss, PricingBranch, VocabularyGap,
+        AxisOutcome, ElectionTrigger, ElectionTriggerKind, Loss, PricingBranch, SettledElection,
+        VocabularyGap,
     };
     use tam_domain::registry::{AxisBinding, Cardinality, CountCap, Delegation};
     use tam_domain::{
@@ -482,6 +557,15 @@ mod tests {
             vocabulary: TARGET,
             segments: vec![segment.to_owned()],
             native_id: None,
+        }
+    }
+
+    /// A vocabulary member as the relation holds one: the path and the
+    /// target's own id for it.
+    fn named(segment: &str, native: &str) -> VocabularyPath {
+        VocabularyPath {
+            native_id: Some(native.to_owned()),
+            ..path(segment)
         }
     }
 
@@ -718,6 +802,42 @@ mod tests {
                 from: vec![path("Maths"), path("Science")],
             },
             "the whole resolved set is the candidate list"
+        );
+    }
+
+    /// The seller answers by naming a value, and the answer endpoint stores
+    /// what they named without the target's own id for it. Every trigger but
+    /// `Supply` checks the answer against the candidate set by whole-path
+    /// equality, so an answer read back without the id its candidates carry
+    /// matches nothing, settles nothing, and leaves the question standing
+    /// however many times it is answered.
+    #[test]
+    fn an_answer_naming_a_value_without_its_id_settles_the_question_it_answers() {
+        let subjects = [TERM, OTHER];
+        let edges = [
+            edge(TERM, named("Maths", "7000001"), EdgeKind::Exact),
+            edge(OTHER, named("Science", "7000002"), EdgeKind::Exact),
+        ];
+        let settled = [SettledElection {
+            product: PRODUCT,
+            inventory: InventoryId::TesNz,
+            axis: TermKind::Subject,
+            trigger_kind: ElectionTriggerKind::ElectOne,
+            trigger_key: None,
+            chosen: vec![path("Science")],
+        }];
+        let mut ask = request(&subjects, Cardinality::One);
+        ask.settled = &settled;
+        let outcome = project_axis(ask, &edges, &[]);
+        assert!(
+            outcome.elections.is_empty(),
+            "the seller picked one of the two, so the axis has nothing left to ask"
+        );
+        assert_eq!(
+            outcome.resolved,
+            vec![named("Science", "7000002")],
+            "and what they picked travels under the target's own id, which the \
+             relation names and the answer never did"
         );
     }
 
