@@ -7,7 +7,10 @@
 //! per gap rather than one per product.
 
 use sqlx::PgPool;
-use tam_domain::{CanonicalTerm, Decider, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
+use tam_domain::{
+    CanonicalTerm, Decider, EdgeKind, NoCounterpart, ProjectionEdge, TermKind, VocabularyId,
+    VocabularyPath,
+};
 use tam_types::{CanonicalTermId, InventoryId, MappingId, OrgId, Timestamp, Uuid};
 
 use crate::codec::{
@@ -24,12 +27,28 @@ pub struct TaxonomyRepo {
 
 /// What a seed run did: inserted rows versus rows an earlier run already
 /// wrote. Deterministic canonical ids make the split meaningful.
+///
+/// `ambiguous_terms` is a defect figure rather than an outcome. The
+/// single-valued index makes two edges of one kind from one term into one
+/// vocabulary impossible, but one `Exact` and one `Broader` onto different
+/// paths still projects as `Ambiguous`, and that combination is reachable
+/// through the resolution API. Counting it here makes a treadmill a number the
+/// drain kill gate reads rather than a silent re-raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeedReport {
     pub terms_inserted: u64,
     pub terms_existing: u64,
     pub edges_inserted: u64,
     pub edges_existing: u64,
+    pub ambiguous_terms: u64,
+}
+
+/// What a no-counterpart seed run did. Separate from `SeedReport` because
+/// three of its four counts would be meaningless here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoCounterpartReport {
+    pub inserted: u64,
+    pub existing: u64,
 }
 
 /// What a raise did per cause: a new item, or a dedup hit on one already open.
@@ -75,6 +94,15 @@ impl TaxonomyRepo {
     /// Idempotent batch upsert of canonical terms and edges. Terms insert
     /// parents before children regardless of input order, because a topic
     /// row references its subject row.
+    ///
+    /// An upsert rather than an insert-or-ignore: a re-polled vocabulary
+    /// renames a target, and under `DO NOTHING` the renamed edge is a second
+    /// row beside the first rather than a replacement, which is the one input
+    /// the projection reads as `Ambiguous`. The conflict target is the
+    /// single-valued index, which excludes `narrower`, so a narrower edge
+    /// upserts on its own path instead: a band holds one narrower edge per
+    /// year group it covers, and collapsing those onto one key would erase the
+    /// candidate list an election is made of.
     pub async fn seed(
         &self,
         terms: &[CanonicalTerm],
@@ -86,51 +114,86 @@ impl TaxonomyRepo {
             terms_existing: 0,
             edges_inserted: 0,
             edges_existing: 0,
+            ambiguous_terms: 0,
         };
         let roots = terms.iter().filter(|term| term.parent.is_none());
         let children = terms.iter().filter(|term| term.parent.is_some());
         for term in roots.chain(children) {
-            let inserted = sqlx::query!(
+            let row = sqlx::query!(
                 "INSERT INTO canonical_term (id, kind, parent, label) \
-                 VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING",
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label, parent = EXCLUDED.parent \
+                 RETURNING (xmax = 0) AS \"inserted!\"",
                 uuid_to_db(term.id.0),
                 term_kind_to_db(term.kind),
                 term.parent.map(|parent| uuid_to_db(parent.0)),
                 term.label,
             )
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-            report.terms_inserted += inserted;
-            report.terms_existing += 1 - inserted;
+            .fetch_one(&mut *tx)
+            .await?;
+            report.terms_inserted += u64::from(row.inserted);
+            report.terms_existing += u64::from(!row.inserted);
         }
         for edge in edges {
-            let (decided_by, source, user, org) = decider_to_db(&edge.decided_by);
-            let VocabularyId(inventory, kind) = edge.to.vocabulary;
+            let inserted = upsert_edge(&mut tx, edge).await?;
+            report.edges_inserted += u64::from(inserted);
+            report.edges_existing += u64::from(!inserted);
+        }
+        let ambiguous = sqlx::query_scalar!(
+            "SELECT count(*) AS \"count!\" FROM ( \
+                 SELECT from_term FROM projection_edge WHERE kind <> 'narrower' \
+                 GROUP BY from_term, to_inventory, to_term_kind \
+                 HAVING count(DISTINCT to_segments) > 1 \
+             ) AS ambiguous"
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        report.ambiguous_terms = u64::try_from(ambiguous).unwrap_or(0);
+        tx.commit().await?;
+        Ok(report)
+    }
+
+    /// Records in bulk that terms have no counterpart in a target vocabulary.
+    ///
+    /// The tenant path (`resolve_no_counterpart`) answers one open queue item;
+    /// this is the seeder's path, for an omission a derivation computed rather
+    /// than one a seller declared. Without it the four TPT-only grades and the
+    /// two year groups no age band covers take the `Absent` branch instead of
+    /// the `omitted` branch and become a blocking queue item on every
+    /// cross-listing, which is the treadmill the kill gate watches for,
+    /// manufactured by the fix.
+    pub async fn seed_no_counterparts(
+        &self,
+        records: &[NoCounterpart],
+    ) -> Result<NoCounterpartReport, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        let mut report = NoCounterpartReport {
+            inserted: 0,
+            existing: 0,
+        };
+        for record in records {
+            let (decided_by, source, user, org) = decider_to_db(&record.decided_by);
+            let VocabularyId(inventory, kind) = record.target;
             let inserted = sqlx::query!(
-                "INSERT INTO projection_edge \
-                 (from_term, to_inventory, to_term_kind, to_segments, to_native_id, \
-                  kind, decided_by, decided_source, decided_user, decided_org, decided_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
-                 ON CONFLICT (from_term, to_inventory, to_term_kind, to_segments, kind) \
-                 DO NOTHING",
-                uuid_to_db(edge.from.0),
+                "INSERT INTO projection_no_counterpart \
+                 (term, to_inventory, to_term_kind, decided_by, decided_source, \
+                  decided_user, decided_org, decided_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (term, to_inventory, to_term_kind) DO NOTHING",
+                uuid_to_db(record.term.0),
                 inventory_to_db(inventory),
                 term_kind_to_db(kind),
-                &edge.to.segments,
-                edge.to.native_id.as_deref(),
-                edge_kind_to_db(edge.kind),
                 decided_by,
                 source,
                 user,
                 org,
-                timestamp_to_db(edge.decided_at)?,
+                timestamp_to_db(record.decided_at)?,
             )
             .execute(&mut *tx)
             .await?
             .rows_affected();
-            report.edges_inserted += inserted;
-            report.edges_existing += 1 - inserted;
+            report.inserted += inserted;
+            report.existing += 1 - inserted;
         }
         tx.commit().await?;
         Ok(report)
@@ -442,4 +505,78 @@ impl TaxonomyRepo {
             })
             .collect()
     }
+}
+
+/// One edge, upserted against whichever key its own kind makes it unique
+/// under. An `Exact` or `Broader` edge is single-valued per (term,
+/// vocabulary), so its label is refreshed in place; a `Narrower` edge is one
+/// of several from that term into that vocabulary, so its own path is the key
+/// and the set is added to rather than replaced.
+async fn upsert_edge(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    edge: &ProjectionEdge,
+) -> Result<bool, StorageError> {
+    let (decided_by, source, user, org) = decider_to_db(&edge.decided_by);
+    let VocabularyId(inventory, kind) = edge.to.vocabulary;
+    let inventory = inventory_to_db(inventory);
+    let term_kind = term_kind_to_db(kind);
+    let edge_kind = edge_kind_to_db(edge.kind);
+    let from = uuid_to_db(edge.from.0);
+    let at = timestamp_to_db(edge.decided_at)?;
+    let native = edge.to.native_id.as_deref();
+    let inserted = match edge.kind {
+        EdgeKind::Narrower => {
+            sqlx::query!(
+                "INSERT INTO projection_edge \
+                 (from_term, to_inventory, to_term_kind, to_segments, to_native_id, \
+                  kind, decided_by, decided_source, decided_user, decided_org, decided_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 ON CONFLICT (from_term, to_inventory, to_term_kind, to_segments, kind) \
+                 DO UPDATE SET to_native_id = EXCLUDED.to_native_id \
+                 RETURNING (xmax = 0) AS \"inserted!\"",
+                from,
+                inventory,
+                term_kind,
+                &edge.to.segments,
+                native,
+                edge_kind,
+                decided_by,
+                source,
+                user,
+                org,
+                at,
+            )
+            .fetch_one(&mut **tx)
+            .await?
+            .inserted
+        }
+        EdgeKind::Exact | EdgeKind::Broader => {
+            sqlx::query!(
+                "INSERT INTO projection_edge \
+                 (from_term, to_inventory, to_term_kind, to_segments, to_native_id, \
+                  kind, decided_by, decided_source, decided_user, decided_org, decided_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 ON CONFLICT (from_term, to_inventory, to_term_kind, kind) \
+                 WHERE kind <> 'narrower' \
+                 DO UPDATE SET to_segments = EXCLUDED.to_segments, \
+                               to_native_id = EXCLUDED.to_native_id \
+                 RETURNING (xmax = 0) AS \"inserted!\"",
+                from,
+                inventory,
+                term_kind,
+                &edge.to.segments,
+                native,
+                edge_kind,
+                decided_by,
+                source,
+                user,
+                org,
+                at,
+            )
+            .fetch_one(&mut **tx)
+            .await?
+            .inserted
+        }
+    };
+    Ok(inserted)
 }

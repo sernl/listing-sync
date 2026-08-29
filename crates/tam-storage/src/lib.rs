@@ -37,7 +37,9 @@ pub use mapping::{MappingHead, MappingRecord, MappingRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{SessionIdentity, SessionRepo, SessionToken};
-pub use taxonomy::{DrainStats, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo};
+pub use taxonomy::{
+    DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo,
+};
 
 use sqlx::{Postgres, Transaction};
 use tam_types::OrgId;

@@ -81,6 +81,20 @@ pub struct ProjectionEdge {
     pub decided_at: Timestamp,
 }
 
+/// The durable record that a term genuinely has no counterpart in a target
+/// vocabulary, which turns `Absent` from a publish blocker into an omission.
+///
+/// The tenant path answers one open queue item at a time; this is the shape a
+/// derivation emits in bulk, for an omission it computed rather than one a
+/// seller declared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoCounterpart {
+    pub term: CanonicalTermId,
+    pub target: VocabularyId,
+    pub decided_by: Decider,
+    pub decided_at: Timestamp,
+}
+
 /// The result of projecting one canonical term into one target vocabulary.
 /// `Absent` is a first-class answer and never silently becomes a default term.
 #[derive(Debug, Clone, PartialEq, Eq)]

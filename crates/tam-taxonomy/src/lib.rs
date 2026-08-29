@@ -4,10 +4,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod grades;
+pub mod licences;
 pub mod listing;
 pub mod project;
 pub mod tes;
 
+pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
+pub use licences::{derive_licence_crosswalk, LicenceCrosswalk, LicenceError};
 pub use listing::{project_listing, ListingContext};
 pub use project::{
     ingest, project, project_axis, project_terms, AxisRequest, BlockedTerm, TermsOutcome,

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM ( SELECT from_term FROM projection_edge WHERE kind <> 'narrower' GROUP BY from_term, to_inventory, to_term_kind HAVING count(DISTINCT to_segments) > 1 ) AS ambiguous",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9d2618d2136d336ddb928edca42dd61a8125173a89e8513e0e77a47a7ab23605"
+}

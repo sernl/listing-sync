@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO projection_edge (from_term, to_inventory, to_term_kind, to_segments, to_native_id, kind, decided_by, decided_source, decided_user, decided_org, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (from_term, to_inventory, to_term_kind, to_segments, kind) DO UPDATE SET to_native_id = EXCLUDED.to_native_id RETURNING (xmax = 0) AS \"inserted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inserted!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "TextArray",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2c029578931da895c0370eb1c2cbfa7d812f06c49913118ca8f6a7556a39055a"
+}

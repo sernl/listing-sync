@@ -8,8 +8,8 @@ mod common;
 
 use sqlx::PgPool;
 use tam_domain::{
-    Binding, CanonicalTerm, Decider, EdgeKind, FieldPolicies, FieldPolicy, Mapping, ProjectionEdge,
-    PublishMode, TermKind, VocabularyId, VocabularyPath,
+    Binding, CanonicalTerm, Decider, EdgeKind, FieldPolicies, FieldPolicy, Mapping, NoCounterpart,
+    ProjectionEdge, PublishMode, TermKind, VocabularyId, VocabularyPath,
 };
 use tam_marketplace::RemoteLifecycle;
 use tam_storage::{DrainStats, MappingRepo, ProductRepo, RaiseScope, StorageError, TaxonomyRepo};
@@ -358,5 +358,115 @@ async fn the_queue_is_tenant_isolated(app: PgPool) {
         repo.drain_stats(org_b).await.expect("org-b stats"),
         DrainStats::default(),
         "the counters are tenant-scoped"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_repolled_label_replaces_the_edge_it_renames_rather_than_shadowing_it(app: PgPool) {
+    let repo = TaxonomyRepo::new(app);
+    let first = gb_edge(SUBJECT, &["Maths for early years"], "1000454");
+    repo.seed(&[subject_term()], &[first])
+        .await
+        .expect("the first seed runs");
+
+    let renamed = gb_edge(SUBJECT, &["Maths for the early years"], "1000454");
+    let second = repo
+        .seed(&[subject_term()], &[renamed])
+        .await
+        .expect("the reseed runs");
+    assert_eq!(
+        (second.edges_inserted, second.edges_existing),
+        (0, 1),
+        "the renamed edge replaces its predecessor rather than joining it"
+    );
+    assert_eq!(
+        second.ambiguous_terms, 0,
+        "under DO NOTHING the renamed edge would be a second row and the term would \
+         project ambiguously"
+    );
+
+    let edges = repo
+        .edges_into(VocabularyId(InventoryId::TesGb, TermKind::Subject))
+        .await
+        .expect("the GB subject edges load");
+    assert_eq!(edges.len(), 1, "one edge, carrying the new label");
+    assert_eq!(edges[0].to.segments, vec!["Maths for the early years"]);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_term_holds_several_narrower_edges_into_one_vocabulary(app: PgPool) {
+    let repo = TaxonomyRepo::new(app);
+    let narrower = |segments: &[&str], native: &str| ProjectionEdge {
+        kind: EdgeKind::Narrower,
+        ..edge(SUBJECT, InventoryId::TesUs, segments, native)
+    };
+    let report = repo
+        .seed(
+            &[subject_term()],
+            &[narrower(&["Third"], "20"), narrower(&["Fourth"], "21")],
+        )
+        .await
+        .expect("the seed runs");
+    assert_eq!(
+        report.edges_inserted, 2,
+        "a broader source value names several narrower targets, which is what the seller \
+         is asked to choose between"
+    );
+    assert_eq!(
+        report.ambiguous_terms, 0,
+        "narrower edges never participate in a projection, so they cannot make one ambiguous"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_seeder_records_a_measured_absence_in_bulk_and_idempotently(app: PgPool) {
+    let repo = TaxonomyRepo::new(app);
+    repo.seed(&[subject_term(), topic_term()], &[])
+        .await
+        .expect("the terms seed");
+    let records = [
+        NoCounterpart {
+            term: SUBJECT,
+            target: VocabularyId(InventoryId::Tpt, TermKind::Subject),
+            decided_by: Decider::Imported {
+                source: "test fixture".to_owned(),
+            },
+            decided_at: T0,
+        },
+        NoCounterpart {
+            term: TOPIC,
+            target: VocabularyId(InventoryId::Tpt, TermKind::Topic),
+            decided_by: Decider::Imported {
+                source: "test fixture".to_owned(),
+            },
+            decided_at: T0,
+        },
+    ];
+    let first = repo
+        .seed_no_counterparts(&records)
+        .await
+        .expect("the absences record");
+    assert_eq!((first.inserted, first.existing), (2, 0));
+    let second = repo
+        .seed_no_counterparts(&records)
+        .await
+        .expect("the reseed runs");
+    assert_eq!(
+        (second.inserted, second.existing),
+        (0, 2),
+        "a global seed of the same absence is an explicit no-op"
+    );
+
+    let recorded = repo
+        .no_counterparts_into(InventoryId::Tpt)
+        .await
+        .expect("the absences load");
+    assert_eq!(
+        recorded,
+        vec![
+            (SUBJECT, VocabularyId(InventoryId::Tpt, TermKind::Subject)),
+            (TOPIC, VocabularyId(InventoryId::Tpt, TermKind::Topic)),
+        ],
+        "the projection reads these as omissions rather than raising a queue item per product"
     );
 }
