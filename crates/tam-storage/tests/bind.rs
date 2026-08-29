@@ -12,7 +12,7 @@ use tam_domain::{
     Binding, CanonicalProduct, DeclarationSource, FieldPolicies, FieldPolicy, GradeDeclaration,
     ItemOperation, ItemOutcome, JobItemId, Mapping, PublishMode, Verification,
 };
-use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
+use tam_marketplace::{IdempotencyKey, ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, ItemVerdict, JobRepo,
     LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, StorageError,
@@ -35,6 +35,10 @@ const MAPPING: MappingId = MappingId(Uuid([0xC4; 16]));
 const RIVAL: MappingId = MappingId(Uuid([0xC5; 16]));
 const RIVAL_JOB: JobId = JobId(Uuid([0xCC; 16]));
 const RIVAL_ITEM: JobItemId = JobItemId(Uuid([0xCD; 16]));
+const WAITING_JOB: JobId = JobId(Uuid([0xE1; 16]));
+const WAITING_ITEM: JobItemId = JobItemId(Uuid([0xE2; 16]));
+const BYSTANDER_JOB: JobId = JobId(Uuid([0xE4; 16]));
+const BYSTANDER_ITEM: JobItemId = JobItemId(Uuid([0xE5; 16]));
 const PRODUCT: u8 = 0xC6;
 const RIVAL_PRODUCT: u8 = 0xD0;
 
@@ -892,5 +896,124 @@ async fn a_committed_create_records_the_lifecycle_it_landed_in(app: PgPool) {
         ("live", false),
         "a bind that keeps ignoring the lifecycle columns leaves every published listing \
          reading 'absent', which is what makes a later removal state the wrong route"
+    );
+}
+
+/// The publish half of one live intent, parked exactly as the worker parks it
+/// when it leases before the create it publishes.
+async fn park_a_waiting_publish(
+    engine: &PgPool,
+    job: JobId,
+    item: JobItemId,
+    mapping: MappingId,
+    key: u8,
+) -> Result<(), StorageError> {
+    JobRepo::new(engine.clone())
+        .enqueue(
+            ORG,
+            &NewJob {
+                job,
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            &[NewJobItem {
+                item,
+                mapping,
+                idempotency_key: IdempotencyKey(Uuid([key; 16])),
+                operation: ItemOperation::Publish {
+                    to: ListingState::Live,
+                },
+                requires_bound_on: Some(InventoryId::TesGb),
+            }],
+        )
+        .await?;
+    sqlx::query(
+        "UPDATE job_item SET state = 'parked_live', blocked_on = $2, \
+                park_expires_at = now() + interval '24 hours' \
+         WHERE org_id = $1 AND id = $3",
+    )
+    .bind(db_uuid(ORG.0))
+    .bind(tam_storage::AWAITING_COUNTERPART)
+    .bind(db_uuid(item.0))
+    .execute(engine)
+    .await?;
+    Ok(())
+}
+
+async fn gate_of(
+    engine: &PgPool,
+    item: JobItemId,
+) -> Result<(String, Option<String>), sqlx::Error> {
+    sqlx::query_as("SELECT state, blocked_on FROM job_item WHERE org_id = $1 AND id = $2")
+        .bind(db_uuid(ORG.0))
+        .bind(db_uuid(item.0))
+        .fetch_one(engine)
+        .await
+}
+
+/// The binding releases what was waiting for it, in the transaction that
+/// wrote it.
+///
+/// A live intent lowers to a create and a publish sharing one `created_at`,
+/// so `acquire`'s FIFO tie-breaks on a fresh uuid and the publish leases first
+/// about half the time. It parks on `awaiting_counterpart`, and the only thing
+/// that cleared that gate was the twenty-four-hour park expiry -- for a create
+/// that landed seconds later. The revive is keyed on the product and the
+/// inventory the waiter named, so a bystander waiting on another product stays
+/// parked.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_landing_revives_the_item_that_waited_for_it(app: PgPool) {
+    let engine = engine_pool(&app).await.expect("the engine role connects");
+    let lease = seeded_lease(&app, &engine)
+        .await
+        .expect("the fixture seeds")
+        .expect("the create leases");
+    park_a_waiting_publish(&engine, WAITING_JOB, WAITING_ITEM, MAPPING, 0xE3)
+        .await
+        .expect("the publish parks on its counterpart");
+    seed_rival_mapping(&app)
+        .await
+        .expect("a second product seeds");
+    park_a_waiting_publish(&engine, BYSTANDER_JOB, BYSTANDER_ITEM, RIVAL, 0xE6)
+        .await
+        .expect("another product's publish parks too");
+
+    assert_eq!(
+        land(&engine, &lease, MAPPING, Some(tes(LANDED)), LANDED_AT)
+            .await
+            .expect("the create settles"),
+        BindDisposition::Bound,
+    );
+
+    assert_eq!(
+        gate_of(&engine, WAITING_ITEM)
+            .await
+            .expect("the waiting item reads"),
+        ("queued".to_owned(), None),
+        "the publish is queued by the binding rather than by the clock"
+    );
+    assert_eq!(
+        gate_of(&engine, BYSTANDER_ITEM)
+            .await
+            .expect("the bystander reads"),
+        (
+            "parked_live".to_owned(),
+            Some(tam_storage::AWAITING_COUNTERPART.to_owned())
+        ),
+        "another product's counterpart is not this binding's to release"
+    );
+
+    let resumed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM job_event \
+         WHERE org_id = $1 AND job_item_id = $2 AND kind = 'ItemResumed'",
+    )
+    .bind(db_uuid(ORG.0))
+    .bind(db_uuid(WAITING_ITEM.0))
+    .fetch_one(&engine)
+    .await
+    .expect("the ledger reads");
+    assert_eq!(
+        resumed, 1,
+        "the ledger says why a parked item is running again"
     );
 }

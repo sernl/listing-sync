@@ -100,7 +100,10 @@ pub enum ItemPreparation {
 }
 
 /// The gate's own park reason, which reaches the ledger and the job report.
-pub const AWAITING_COUNTERPART: &str = "awaiting_counterpart";
+/// Re-exported rather than restated: `REVIVABLE_GATES` and the bind's own
+/// revive both read this string, and a second spelling of it is a park
+/// nothing ever wakes.
+pub use tam_storage::AWAITING_COUNTERPART;
 
 /// What the counterpart's own mapping says about whether this item may run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

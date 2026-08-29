@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item ji SET state = 'queued', blocked_on = NULL, park_expires_at = NULL FROM mapping waiting, mapping landed WHERE ji.org_id = $1 AND waiting.org_id = $1 AND waiting.id = ji.mapping_id AND landed.org_id = $1 AND landed.id = $2 AND waiting.product_id = landed.product_id AND ji.state = 'parked_live' AND ji.blocked_on = $3 AND ji.requires_bound_on = landed.inventory RETURNING ji.org_id, ji.job_id, ji.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1310edafa7959d93cd165c0438f6f2a3208860c9671ee06be194b5d875814c3a"
+}

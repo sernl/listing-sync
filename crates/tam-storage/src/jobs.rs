@@ -379,14 +379,29 @@ pub async fn append_event(
 /// ledger to explain it. `blocked_on` is what tells the two apart: these are
 /// written by the seed gate, and a challenge park writes the challenge's own
 /// debug form.
-pub const REVIVABLE_GATES: [&str; 6] = [
+pub const REVIVABLE_GATES: [&str; 10] = [
     "reconciliation",
     "election",
     "currency_unknown",
     "cover_missing",
     "scan_incomplete",
-    "awaiting_counterpart",
+    AWAITING_COUNTERPART,
+    // The four `admission` writes. They are here for the give-up arm rather
+    // than for the revive: the arm filters on this same list, so a gate
+    // outside it parks for a day, re-parks forever and never settles, and
+    // the job it belongs to reads active with no event and no seller
+    // notification ever. Reviving them costs one lease a day until the
+    // attempt budget runs out, which is what makes the give-up reachable.
+    "binding",
+    "unbound",
+    "subject_diverged",
+    "lifecycle_diverged",
 ];
+
+/// The gate a counterpart-bound item waits on. Stated here because both the
+/// gate that writes it and the revive that clears it read it, and a second
+/// spelling of it is a park nothing ever wakes.
+pub const AWAITING_COUNTERPART: &str = "awaiting_counterpart";
 
 /// The gap queue's revive. Keyed on the gate rather than on the mapping,
 /// because one `reconciliation_item` row stands for every product that hit
@@ -445,6 +460,55 @@ pub async fn revive_on(
         uuid_to_db(org.0),
         uuid_to_db(mapping.0),
         gate,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let revived = revived(rows.into_iter().map(|row| (row.org_id, row.job_id, row.id)));
+    record_resumptions(tx, &revived, at).await?;
+    Ok(count_of(&revived))
+}
+
+/// The binding's own revive: every item of this tenant waiting for this
+/// product to be bound on this inventory, released by the binding rather than
+/// by the clock.
+///
+/// The two items a live intent lowers to share a `created_at`, so `acquire`'s
+/// FIFO tie-breaks on a fresh uuid and roughly half of publish-to-live
+/// enqueues lease the publish first. It parks on `awaiting_counterpart`, and
+/// until this existed only the day-long park expiry cleared it -- a seller
+/// who asked for a live listing got one the next day, for a create that
+/// landed seconds later. A migrate's removal waits on the same gate.
+///
+/// Keyed on the product and the inventory rather than on the mapping,
+/// because the waiter is a different mapping: `requires_bound_on` names the
+/// inventory whose binding it waits for, and `counterpart_binding` resolves
+/// that to the product's mapping there. The publish that waits on its own
+/// create is the degenerate case of the same join and needs no second rule.
+///
+/// Pinned like the other two revives: `job_item` carries FORCE ROW LEVEL
+/// SECURITY, so an unpinned `tam_app` update reports its miss as `Ok(0)`.
+pub async fn revive_counterparts(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    bound: MappingId,
+    at: Timestamp,
+) -> Result<u64, StorageError> {
+    pin_org(tx, org).await?;
+    let rows = sqlx::query!(
+        "UPDATE job_item ji \
+         SET state = 'queued', blocked_on = NULL, park_expires_at = NULL \
+         FROM mapping waiting, mapping landed \
+         WHERE ji.org_id = $1 \
+           AND waiting.org_id = $1 AND waiting.id = ji.mapping_id \
+           AND landed.org_id = $1 AND landed.id = $2 \
+           AND waiting.product_id = landed.product_id \
+           AND ji.state = 'parked_live' \
+           AND ji.blocked_on = $3 \
+           AND ji.requires_bound_on = landed.inventory \
+         RETURNING ji.org_id, ji.job_id, ji.id",
+        uuid_to_db(org.0),
+        uuid_to_db(bound.0),
+        AWAITING_COUNTERPART,
     )
     .fetch_all(&mut **tx)
     .await?;
@@ -1303,6 +1367,16 @@ impl WriteAttemptRepo {
                 }
             }
         };
+        // The gate's answer arrives here or a day later. An item waiting on
+        // this product's binding is queued by the binding itself, in the
+        // transaction that wrote it, so the park expiry stays the backstop it
+        // was meant to be rather than the only way out.
+        if matches!(
+            disposition,
+            BindDisposition::Bound | BindDisposition::AlreadyBound
+        ) {
+            revive_counterparts(&mut tx, lease.org, mapping, at).await?;
+        }
         tx.commit().await?;
         Ok(disposition)
     }
