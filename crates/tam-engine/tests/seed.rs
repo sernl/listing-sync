@@ -389,10 +389,11 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
         grades.get("ageRanges").is_none(),
         "posting a year group under ageRanges would be a wrong field, not a wrong label"
     );
-    assert_eq!(
-        grades["ages"],
-        serde_json::json!([5, 6, 7]),
-        "the derived interval expands into the ages list"
+    assert!(
+        grades.get("ages").is_none() && grades.get("mainAge").is_none(),
+        "both derived age fields belong to the ageRanges vocabulary -- mainAge names one of \
+         the seven GB bands rather than an age in years -- so a year-group listing states \
+         neither rather than filling them from a table that does not address it: {grades}"
     );
     assert_eq!(seed.fields.files, vec![FileId(Uuid([0x21; 16]))]);
 }
