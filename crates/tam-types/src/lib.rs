@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod natives;
+
 use serde::{Deserialize, Serialize};
 
 /// Stands in for the `uuid` crate's type. On the wire it is the canonical

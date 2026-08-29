@@ -17,7 +17,8 @@
 
 use pulldown_cmark::{html::push_html, Options, Parser};
 use serde_json::{json, Value};
-use tam_marketplace::{AdapterError, FieldSet, ProjectedListing};
+use tam_marketplace::{AdapterError, FieldSet, NativeTerm, ProjectedListing};
+use tam_types::natives::is_tpt_tag_slug;
 use tam_types::{
     CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, InventoryId, PriceIntent,
     Timestamp,
@@ -687,24 +688,64 @@ fn refuse(detail: String) -> AdapterError {
     }
 }
 
-/// The shape TPT issues a taxonomy-tag identifier in: lowercase ASCII letters,
-/// digits and hyphens, and never digits alone — `4th-grade`, `homeschool` and
-/// `pdf` across the read capture, against the numeric ids TPT uses for seller
-/// shelves.
+/// A tag-bearing axis, named for the refusals it raises. TPT's registry binds
+/// every equivalence axis to `taxonomyTags`, so each of these is the same flat
+/// slug namespace and none of them is addressed by a number; the two exist
+/// separately only so a refusal names the field the seller sees.
+#[derive(Debug, Clone, Copy)]
+enum TagAxis {
+    /// Subjects and topics, which [`ProjectedListing::taxonomy`] carries.
+    Taxonomy,
+    /// Grades, which TPT files in that same flat namespace.
+    Grade,
+}
+
+impl TagAxis {
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Taxonomy => "taxonomy",
+            Self::Grade => "grade",
+        }
+    }
+}
+
+/// One axis's terms as `taxonomyTags` members, or a refusal naming the first
+/// term that is not one.
 ///
-/// This is a provenance test rather than a vocabulary. Grade paths are
-/// re-labelled to the target inventory without being crosswalked, so a Tes
-/// year group reaches this adapter still carrying its own identifier — `2` —
-/// and a tag posted under it is garbage in a live listing. Translating one
-/// marketplace's grades into another's is the M6-deferred import-run
-/// generalisation, and until it lands an identifier TPT cannot have issued is
-/// refused rather than guessed at.
-fn is_tpt_tag_slug(native: &str) -> bool {
-    !native.is_empty()
-        && native.bytes().any(|byte| !byte.is_ascii_digit())
-        && native
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+/// Every axis runs the same guard because every axis lands in the same field.
+/// The identifier is the whole of what TPT is given — the slugs carry no axis
+/// on the wire — so an identifier this marketplace did not issue cannot be
+/// told apart from one it did once it is posted, and
+/// [`is_tpt_tag_slug`] is the only thing standing between a foreign
+/// crosswalk id and a live listing tagged with it.
+///
+/// A term is refused rather than dropped. A partial post is a listing the
+/// seller did not author and did not see refused, which is worse than no post
+/// at all.
+fn tag_slugs(terms: &[NativeTerm], axis: TagAxis) -> Result<Vec<String>, AdapterError> {
+    let mut slugs = Vec::with_capacity(terms.len());
+    for term in terms {
+        let native = term.native_id.as_deref().ok_or_else(|| {
+            refuse(format!(
+                "the TPT {} term {:?} carries no native identifier, and TPT addresses its \
+                 taxonomy tags by identifiers it issued",
+                axis.noun(),
+                term.segments
+            ))
+        })?;
+        if !is_tpt_tag_slug(native) {
+            return Err(refuse(format!(
+                "the TPT {} term {:?} carries the native identifier {native:?}, which is not \
+                 the slug shape TPT issues its taxonomy tags in; a term projected from another \
+                 marketplace keeps that marketplace's own identifier, and posting it here would \
+                 write it into the listing verbatim",
+                axis.noun(),
+                term.segments
+            )));
+        }
+        slugs.push(native.to_owned());
+    }
+    Ok(slugs)
 }
 
 /// The extensions the Markdown rendering runs under: CommonMark, plus the two
@@ -745,19 +786,27 @@ fn body_as_html(body: &str, format: CopyFormat) -> String {
 }
 
 /// TPT's own wire shape, rendered here rather than in the engine that seeds
-/// the item. A taxonomy term whose native id parses as a number is a seller
-/// shelf — TPT addresses `categories` by numeric id — and one whose native id
-/// is a slug is a `taxonomyTags` member; the two are told apart by the shape
-/// of the id because that is the only thing that distinguishes them on TPT's
-/// own wire.
+/// the item. Every axis TPT binds lands in `taxonomyTags`, so every projected
+/// term is a slug and each one is checked against [`is_tpt_tag_slug`] before
+/// it is posted: subjects and topics off `taxonomy`, grades off `grades`, one
+/// guard between them.
 ///
-/// Grades are projected into the same flat slug list. TPT has no grades
+/// Grades are projected into that same flat slug list. TPT has no grades
 /// field: `4th-grade` arrives in `taxonomyTags` beside `math` and `pdf`,
 /// undifferentiated, which is what the field registry records.
 ///
+/// `categories` stays in the entry and stays empty. It addresses the seller's
+/// own shelves by numeric id, the registry binds no equivalence axis to it,
+/// and no crosswalk edge can therefore target one — so a numeric id arriving
+/// on a projected axis is a foreign identifier rather than a shelf, and
+/// routing it by the shape of the number is how a Tes topic id becomes a
+/// live TPT listing filed under whatever shelf happens to carry that number.
+/// A seller-chosen shelf reaches the wire through [`TptListing::category_ids`]
+/// on a listing built directly, which is where a seller's own choice belongs.
+///
 /// A term the crosswalk left without a native id is refused. TPT addresses
-/// both shelves and tags by identifiers it issued, and there is nothing to
-/// send in place of one.
+/// its tags by identifiers it issued, and there is nothing to send in place
+/// of one.
 ///
 /// A body in the other format is not refused; it is rendered. TPT stores and
 /// returns its description as HTML, so a Tes-sourced Markdown body posted
@@ -804,42 +853,8 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
             })
         }
     };
-    let mut tags: Vec<String> = Vec::new();
-    let mut categories: Vec<String> = Vec::new();
-    for term in &listing.taxonomy {
-        let native = term.native_id.as_deref().ok_or_else(|| {
-            refuse(format!(
-                "the TPT taxonomy term {:?} carries no native identifier, and TPT addresses both \
-                 its shelves and its tags by identifiers it issued",
-                term.segments
-            ))
-        })?;
-        if native.parse::<u64>().is_ok() {
-            categories.push(native.to_owned());
-        } else {
-            tags.push(native.to_owned());
-        }
-    }
-    let mut grades: Vec<String> = Vec::new();
-    for term in &listing.grades {
-        let native = term.native_id.as_deref().ok_or_else(|| {
-            refuse(format!(
-                "the TPT grade term {:?} carries no native identifier; grades ride the flat \
-                 taxonomy-tag namespace and are addressed by slug",
-                term.segments
-            ))
-        })?;
-        if !is_tpt_tag_slug(native) {
-            return Err(refuse(format!(
-                "the TPT grade term {:?} carries the native identifier {native:?}, which is not \
-                 the slug shape TPT issues its taxonomy tags in; a grade projected from another \
-                 marketplace keeps that marketplace's own identifier, and posting it here would \
-                 write it into the listing verbatim",
-                term.segments
-            )));
-        }
-        grades.push(native.to_owned());
-    }
+    let tags = tag_slugs(&listing.taxonomy, TagAxis::Taxonomy)?;
+    let grades = tag_slugs(&listing.grades, TagAxis::Grade)?;
     Ok(FieldSet {
         // TPT's own wire is HTML and the projection above renders anything
         // else into it, so the declaration the seam carries is a fact of this
@@ -851,7 +866,7 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
             (FieldKey::Price, price.to_string()),
             (
                 FieldKey::Taxonomy,
-                json!({ "tags": tags, "categories": categories }).to_string(),
+                json!({ "tags": tags, "categories": [] }).to_string(),
             ),
             (FieldKey::Grades, json!({ "tags": grades }).to_string()),
         ],
@@ -1288,8 +1303,8 @@ mod tests {
                     segments: vec!["Math".to_owned()],
                 },
                 NativeTerm {
-                    native_id: Some("1361944".to_owned()),
-                    segments: vec!["My shelf".to_owned()],
+                    native_id: Some("fractions".to_owned()),
+                    segments: vec!["Math".to_owned(), "Fractions".to_owned()],
                 },
             ],
             grades: vec![NativeTerm {
@@ -1435,13 +1450,18 @@ mod tests {
             listing_from_field_set(&fields).expect("the submit parses its own projection");
         assert_eq!(
             listing.taxonomy_tags,
-            vec!["math".to_owned(), "4th-grade".to_owned()],
+            vec![
+                "math".to_owned(),
+                "fractions".to_owned(),
+                "4th-grade".to_owned()
+            ],
             "grades ride the flat tag namespace, appended after the subject tags"
         );
-        assert_eq!(
-            listing.category_ids,
-            vec!["1361944".to_owned()],
-            "a numeric native id is a seller shelf, which is the only thing TPT numbers"
+        assert!(
+            listing.category_ids.is_empty(),
+            "the seller's shelves are not a crosswalked axis, so a projection names none, \
+             got {:?}",
+            listing.category_ids
         );
         assert_eq!(fields.files.len(), 1, "the file list crosses untouched");
     }
@@ -1624,6 +1644,76 @@ mod tests {
             listing.taxonomy_tags.contains(&"4th-grade".to_owned()),
             "the refusal is about provenance, not about grades, got {:?}",
             listing.taxonomy_tags
+        );
+    }
+
+    /// The generalisation of the grade guard. `taxonomyTags` is one flat
+    /// namespace, so a subject and a grade are the same kind of thing on the
+    /// wire and a foreign identifier on either is the same defect; the axis
+    /// that carried it is named because that is what the seller sees.
+    #[test]
+    fn a_subject_identifier_tpt_never_issued_is_refused_rather_than_posted_as_a_tag() {
+        let mut listing = projected(PriceIntent::Free);
+        // A Tes topic id, which is what a Tes-to-TPT subject edge would carry
+        // if it were seeded against the wrong half of the source vocabulary.
+        listing.taxonomy.push(NativeTerm {
+            native_id: Some("1000448".to_owned()),
+            segments: vec!["Mathematics".to_owned(), "Algebra".to_owned()],
+        });
+        let refused = project_fields(&listing);
+        let Err(AdapterError::Rejected { code, detail }) = refused else {
+            panic!("a foreign subject identifier must not reach the wire, got {refused:?}");
+        };
+        assert_eq!(code, FailureCode::UploadRejected);
+        assert!(
+            detail.0.contains("taxonomy")
+                && detail.0.contains("Algebra")
+                && detail.0.contains("1000448")
+                && detail.0.contains("slug shape"),
+            "the refusal names the axis, the term, the identifier and the provenance gap, \
+             got {detail:?}"
+        );
+    }
+
+    /// A number is not the only foreign shape. Tes addresses its licences by
+    /// hyphenated upper-case tokens, which look like slugs and are not ones,
+    /// and TPT's tag namespace is lower case throughout its 358 facets.
+    #[test]
+    fn a_foreign_token_shaped_like_a_slug_is_refused_on_a_projected_axis() {
+        let mut listing = projected(PriceIntent::Free);
+        listing.taxonomy.push(NativeTerm {
+            native_id: Some("TES-PAID".to_owned()),
+            segments: vec!["Teaching Resource Licence".to_owned()],
+        });
+        let refused = project_fields(&listing);
+        let Err(AdapterError::Rejected { detail, .. }) = refused else {
+            panic!("a Tes token must not reach TPT's tag namespace, got {refused:?}");
+        };
+        assert!(
+            detail.0.contains("TES-PAID") && detail.0.contains("slug shape"),
+            "the refusal names the token and the provenance gap, got {detail:?}"
+        );
+    }
+
+    /// The counterpart of the two refusals: the slugs TPT keys its own facets
+    /// by cross untouched, and none of them is diverted into the shelf field.
+    #[test]
+    fn tpt_issued_slugs_project_into_the_flat_tag_namespace_and_nowhere_else() {
+        let fields = project_fields(&projected(PriceIntent::Free)).expect("it projects");
+        let listing = listing_from_field_set(&fields).expect("it parses back");
+        assert_eq!(
+            listing.taxonomy_tags,
+            vec![
+                "math".to_owned(),
+                "fractions".to_owned(),
+                "4th-grade".to_owned()
+            ],
+            "every projected term is a taxonomy tag, whichever axis carried it"
+        );
+        assert!(
+            listing.category_ids.is_empty(),
+            "and none of them is filed as a seller shelf, got {:?}",
+            listing.category_ids
         );
     }
 

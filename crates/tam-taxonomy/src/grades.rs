@@ -692,6 +692,7 @@ mod tests {
         DeclarationSource, EdgeKind, GradeDeclaration, TermKind, TermProjection, VocabularyId,
         VocabularyPath,
     };
+    use tam_types::natives::is_tpt_tag_slug;
     use tam_types::{InventoryId, ProductId, Timestamp, Uuid};
 
     const TPT: &str = include_str!("../../../docs/design/data/tpt-vocabulary.json");
@@ -1073,17 +1074,6 @@ mod tests {
         out
     }
 
-    /// The shape `tam-marketplace-tpt`'s `is_tpt_tag_slug` admits, restated
-    /// because that crate sits above this one and the identifier is chosen
-    /// here. A native this rejects is refused on the way to a live listing.
-    fn is_tag_slug(native: &str) -> bool {
-        !native.is_empty()
-            && native.bytes().any(|byte| !byte.is_ascii_digit())
-            && native
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    }
-
     /// TPT addresses a grade twice over and by different identifiers: the
     /// create form's selector takes the `legacyId`, and the product's own wire
     /// takes the `taxonomyTags` slug. The path is the wire's, so every edge
@@ -1119,7 +1109,7 @@ mod tests {
                 "legacyId {legacy}'s slug and label are one facet's, not two joins'"
             );
             assert!(
-                is_tag_slug(native),
+                is_tpt_tag_slug(native),
                 "{native:?} fails the adapter's slug-shape guard and would be refused rather                  than posted"
             );
         }
@@ -1437,7 +1427,7 @@ mod tests {
 
         for native in resolved.into_iter().chain(offered) {
             assert!(
-                is_tag_slug(native),
+                is_tpt_tag_slug(native),
                 "{native:?} fails the adapter's slug-shape guard, so answering the election \
                  with it would refuse the upload rather than publish it"
             );

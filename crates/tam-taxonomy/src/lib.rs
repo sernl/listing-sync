@@ -8,6 +8,7 @@ pub mod grades;
 pub mod licences;
 pub mod listing;
 pub mod project;
+pub mod provenance;
 pub mod tes;
 
 pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
@@ -17,6 +18,7 @@ pub use project::{
     ingest, ingest_grades, project, project_axis, project_terms, AxisRequest, BlockedTerm,
     GradeIngest, TermsOutcome,
 };
+pub use provenance::{check_native_ids, ForeignNativeId, ForeignNativeIds};
 pub use tes::{
     derive_crosswalk, derive_interval, parse_tree, Crosswalk, CrosswalkError, Mismatch,
     MismatchReason, Residue, ResidueNode, TesAgeRange, TesSubject, TesTopic, TesTree,

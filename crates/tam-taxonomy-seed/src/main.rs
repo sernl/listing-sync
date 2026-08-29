@@ -4,6 +4,11 @@
 //! canonical ids make a re-run an explicit no-op, reported as existing rather
 //! than re-inserted.
 //!
+//! Every derivation's edges pass `check_native_ids` before any of them is
+//! written. A native identifier the target marketplace did not issue is a
+//! wrong tag on a live listing, and this is the last point at which it can be
+//! caught over the whole relation rather than one cross-listing at a time.
+//!
 //! Usage: tam-taxonomy-seed <db-url> <gb.json> <nz.json> <tpt-vocab.json> <tes-vocab.json>
 //!
 //! The last two arguments are optional. Without them the run seeds the
@@ -18,6 +23,7 @@ use std::io::Read as _;
 use tam_storage::TaxonomyRepo;
 use tam_taxonomy::grades::derive_grade_crosswalk;
 use tam_taxonomy::licences::derive_licence_crosswalk;
+use tam_taxonomy::provenance::check_native_ids;
 use tam_taxonomy::tes::{derive_crosswalk, parse_tree};
 use tam_types::Timestamp;
 
@@ -55,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nz = parse_tree(&read_file(nz_path)?)?;
     let at = wall_now()?;
     let crosswalk = derive_crosswalk(&gb, &nz, at)?;
+    check_native_ids(&crosswalk.edges)?;
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -77,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ambiguous = report.ambiguous_terms;
     if let Some((tpt_json, tes_json)) = vocabularies {
         let grades = derive_grade_crosswalk(&tpt_json, &tes_json, at)?;
+        check_native_ids(&grades.edges)?;
         let seeded = repo.seed(&grades.terms, &grades.edges).await?;
         let absences = repo.seed_no_counterparts(&grades.no_counterparts).await?;
         eprintln!(
@@ -98,6 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let licences = derive_licence_crosswalk(&tes_json, at)?;
+        check_native_ids(&licences.edges)?;
         let seeded = repo.seed(&licences.terms, &licences.edges).await?;
         ambiguous = seeded.ambiguous_terms;
         eprintln!(
