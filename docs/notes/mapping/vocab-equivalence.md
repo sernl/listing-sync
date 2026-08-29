@@ -125,7 +125,8 @@ Tes-only: `authority`, the awarding body, 23 values, where TPT has no exam-board
 
 ## Suggested build order
 
-1. Grades against US year groups: a 19 by 30 table with 16 exact rows and 4 explicit no-counterpart entries. The cheapest and highest-confidence axis, and it unblocks any US-to-US migration.
+1. Grades against US year groups: a 19 by 30 table with 15 exact rows and 4 explicit no-counterpart entries. The cheapest and highest-confidence axis, and it unblocks any US-to-US migration.
+   The count was 16 here and 15 above, which cannot both be right against 19 TPT grades; recomputed from the two polled vocabularies it is 15 exact pairs and 4 no-counterparts, and every one of the 15 Tes US `yearGroups` rows is used exactly once.
 2. Resource type: 71 to 9, hand-written, with Other (99006) as the documented fallback.
 3. Licence policy: not a table but a decision procedure with a required seller input on the TPT-to-Tes free-product branch. Worth settling before any bulk migration runs.
 4. Subject crosswalk: the expensive one. Build it against Tes `mapTo` ids and TPT `legacyId`, root level first, accepting that topic-level coverage will be partial for a long time.

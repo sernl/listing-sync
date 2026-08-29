@@ -59,3 +59,20 @@ The M1 kill gate is the test of the assumption: if the share of canonical terms 
 `Decider` is `Imported { source } | Human { user, org }` and a model variant is deliberately absent.
 The decision record confines models to listing copy and selector rediscovery, and a wrong edge is invisible, durable and applies to every future product carrying the term, which is a different risk profile from a wrong sentence the seller reads before accepting it.
 Spelling is not a transform either, because an edge points at a `VocabularyPath` carrying the target vocabulary's own label, so US spelling is already in the data; normalising spelling is a candidate generator for a human to confirm and must never become an edge on its own.
+
+## What a projection could not settle
+
+A projection into one target either resolves a value or it does not, and the ways it does not are four rather than one.
+
+A *gap* is a missing equivalence between two vocabularies, which is a question the founder answers once: the answer is a durable edge and every later product carrying that term finds it waiting.
+An *election* is a decision the source data cannot supply and no edge can settle — the target requires a value the source never carried, or takes one where several resolved, or has a measured cap smaller than the resolved set, or the source value is broader than any single target value and the target takes several.
+A *loss* is a value that existed on the source and has no field on the target at all; it is disclosed against the mapping and never blocks, because there is no question to ask.
+An *unrecognised* value is a source path the relation has never seen, which is neither of the first two: the queue's key references a canonical term, so an unrecognised path cannot become a queue item, and calling it a loss would claim knowledge of the target we do not have.
+
+The distinction between a gap and an election is the distinction between a fact about two vocabularies and a decision about one product.
+The first deduplicates and drains; the second cannot, so its reuse is a standing rule the seller states once and the raise path consults before it enqueues anything.
+A cap overflow is never a truncation: the resolved set goes into the election whole, so no partially-narrowed set exists for a caller to publish by accident.
+
+Delegation is declared per axis and per field.
+An axis the seller has opted into best-fit for resolves without asking; an axis declared non-delegable does not, whatever the seller opted into, because issuing a rights grant on their behalf is not a preference we can be given.
+That refusal is enforced twice — by the rule's own constructor and by a database CHECK — because the first passes for anything that writes the row directly.

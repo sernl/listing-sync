@@ -354,3 +354,20 @@ Every schema change that alters an existing shape is expand, backfill, switch an
 A migration never ships with the code depending on it, because a row written by an older or newer deployment is a live case during every rollout.
 Locking behaviour is checked against the deployed PostgreSQL major version rather than recalled, and migrations are tested against a production-shaped snapshot restored by the backup drill, which is close to free because that drill has to exist anyway.
 Offline query metadata is checked into the repository with a flake check asserting it is current, so a schema change that breaks a query fails at build time rather than at the first request.
+
+## The decision surface and the read leg
+
+`election_rule` and `election_item` are the seller's decision surface, in two tables because the two questions have two keys: a rule is a policy per (inventory, axis, trigger kind, trigger key) and an item is one product's open question.
+The item's dedup index is partial on the open state and includes the trigger key, so a product whose price flips free to paid does not keep the stale free-branch question and have the seller answer a Creative Commons value for a paid listing — the one combination Tes refuses.
+A CHECK refuses a rule that delegates a legal axis, stated over a set of axis values rather than one, so adding a second non-delegable axis has to extend the list.
+The engine may raise an item and read a rule; it may never settle an item or author a rule, which mirrors the reconciliation grant exactly and is asserted rather than reviewed.
+
+`mapping_loss` records what a projection could not carry, against the mapping it happened on.
+`tam_app` has no UPDATE or DELETE on it: a loss is a fact about a write that happened, and a fact the seller can edit is not a disclosure.
+
+`sync_request` and `sync_request_resource` hold a sync's read leg, which is not a ledger item because the item pump is deliberately adapter-free and a job carries one inventory.
+The resource row carries the product and mapping its canonicalisation produced, written in the same transaction that marks it done, because the import is not internally atomic and mints a fresh product id on every pass — so without the breadcrumb a redrained request inserts a duplicate no unique index refuses.
+Neither table carries an engine grant: the drain runs under the tenant's own role, which has forced row-level security.
+
+`job_item.requires_bound_on` names an inventory whose binding this item waits on, and `mapping.sever_generation` counts how many times a mapping's listing has been severed.
+The first is what keeps a migrate's removal from running before its counterpart exists; the second enters a create's intent digest so a migrate-back is a fresh idempotency key while an ordinary re-sync of unchanged content stays the no-op the content-addressed key was built for.

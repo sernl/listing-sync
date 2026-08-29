@@ -289,3 +289,44 @@ Neither is implemented in Phase 3.
 `sha2` is hoisted to `[workspace.dependencies]` and TPT's write evidence now carries a `response_body_digest` on every cell, including the pre-existing `submit`.
 The digest is the write-evidence contract, TPT is the adapter most likely to produce ambiguous write evidence — a scraped form and bounce semantics — and an asymmetry where only one adapter answers the contract erodes it.
 No new crate enters the closure: `sha2` was already a direct dependency of `tam-marketplace-tes`.
+
+## Phase 4 mapping and orchestration, settled 2026-08-29
+
+A projection that cannot carry a value fails in four ways with four remedies, so the outcome names four things apart rather than flattening them into one error.
+A *gap* is a question about a vocabulary pair: answering it writes a durable edge and every later product finds it waiting, which is what makes that queue drain.
+An *election* is a question about one product against one target — which licence this seller grants, which of the year groups a band covers this listing means — and it cannot deduplicate across products, so its reuse mechanism is a standing rule rather than an index.
+A *loss* is not a question at all: it is disclosed and never blocks, because a Tes licence going to a platform with no licence field has no possible answer and raising it would create a queue that never drains.
+An *unrecognised* source value is none of the three, because the reconciliation queue's own key references a canonical term, so a value the relation has never seen cannot become a queue item and calling it a loss would assert the target has no such field when the truth is that we do not know what the value is.
+
+The two queues are two tables because they have two keys.
+`reconciliation_item` deduplicates on the vocabulary pair while open, which collapses a five-hundred-product batch into one question; an election's key is the product, so the same index would collapse the wrong thing, and a supply or over-cap question names no single term to key on at all.
+The reuse mechanism for elections is a standing rule the seller states once, consulted before anything is enqueued, which is what reconciles "anything unclear is the seller's decision" with "a decided equivalence does not re-ask on the next product".
+
+Equivalence scope splits by kind.
+Vocabulary-level equivalences stay global, because a TPT fourth grade being a Tes year group is a fact about the world, and making it tenant-scoped would have every seller re-answer the same crosswalk — which is the treadmill the M1 kill gate exists to detect.
+Seller elections are tenant-scoped, because a legal and presentational choice is theirs alone.
+
+The licence is never delegable.
+Tes binds it and requires it, TPT declares no licence axis at all, and that single absence is the legal exemplar declared as data.
+A rule delegating a licence to best fit is refused by the domain's own constructor and again by a database CHECK, because the domain check alone passes for anything that writes the row directly.
+A Tes-to-TPT licence drop is a surfaced loss and never a silent one; a TPT-to-Tes create with no stated licence raises an election and blocks, where before it published under CC-BY — a perpetual irrevocable grant the seller never chose.
+
+A migrate's removal waits on a predicate about the world rather than on another item.
+`Binding::Bound` is written only from the driver's own verification read, so "the counterpart exists and we saw it" is exactly what the gate asks, and a dependency on a specific item would strand the removal the first time a failed create was re-run as a different job.
+The unsafe direction — source gone, target absent — is therefore unreachable, and the failure mode is a duplicate.
+The gate also has a terminal arm, because a parked item is invisible to every existing reaper and would otherwise cycle park to queue to park forever with the job reading active.
+
+The read leg of a sync runs as `tam_app` in its own process.
+It has forced row-level security, so it pins one organisation per request and cannot read two tenants' rows in one statement — a stronger tenancy posture than the item pump's cross-tenant scan.
+The alternative was granting the engine authorship of the catalogue, which is what the grant enumeration exists to prevent.
+The consequence is that Phase 4 adds no engine grant on any catalogue table and `sync_request` needs none at all; the only new engine grants in the milestone mirror the existing reconciliation one exactly.
+The cost is named rather than hidden: this process is the second holder of the TPT cookie jar, and it applies the same one-tenant pin the worker does.
+
+A publish is its own operation because the pair is otherwise unconstructible.
+Both adapters create a draft, so reaching live from nothing is two writes, and the second cannot name its subject when the seller asks for it — the create binds that id minutes later.
+This reopens a shape Phase 3 closed on purpose and the cost is stated there; the alternative was making the seller's one action two round trips for every new listing.
+
+Three things implementation found that the plan had wrong, recorded so they are not rediscovered.
+Narrowing `projection_edge`'s primary key would have forbidden the very relation the grade axis needs — one band covers eight year groups — so the single-valued rule is a partial unique index excluding narrower edges, which delivers the stated purpose exactly and over-delivers nothing.
+Two CHECKs govern `job_item.operation`, not one, and widening only the shape constraint admits a value the value list still refuses.
+A grade path the relation does not recognise is now carried out as unrecognised rather than relabelled into the target vocabulary and posted, which means a product whose grades were never seeded publishes with no grades until the seeder has run: the one place the fix trades a wrong value for an absent one.
