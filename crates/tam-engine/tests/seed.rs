@@ -1041,3 +1041,246 @@ async fn a_licence_dropped_into_tpt_is_recorded_against_the_mapping_that_dropped
         "a measured absence is disclosed, never asked: no edge could answer it"
     );
 }
+
+/// The engine connects as its own role; the per-test database name comes from
+/// the app pool. `acquire` is a cross-tenant scan and `job_item` carries
+/// FORCE ROW LEVEL SECURITY, so the app role sees an empty queue.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn engine_pool(app: &PgPool) -> PgPool {
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(app)
+        .await
+        .expect("the database name is readable");
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&format!(
+            "postgres://tam_engine:tam_engine_dev@127.0.0.1:5433/{database}"
+        ))
+        .await
+        .expect("the engine role connects to the test database")
+}
+
+/// The tenant's linked connection, without which `acquire`'s candidate CTE
+/// matches nothing and the queue reads empty for a reason the test is not
+/// about.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn link_connection(app: &PgPool) {
+    let mut tx = app.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+         VALUES ($1, $2, 'tes', 'linked', now(), now())",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(Uuid([0xC8; 16]).0))
+    .execute(&mut *tx)
+    .await
+    .expect("the connection links");
+    tx.commit().await.expect("the link commits");
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn gate_of(engine: &PgPool, item: tam_domain::JobItemId) -> (String, Option<String>) {
+    sqlx::query_as("SELECT state, blocked_on FROM job_item WHERE org_id = $1 AND id = $2")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+        .bind(uuid::Uuid::from_bytes(item.0 .0))
+        .fetch_one(engine)
+        .await
+        .expect("the item reads")
+}
+
+/// The whole publish-to-live ordering, in the order that used to lose.
+///
+/// One live intent lowers to a create and a publish inserted with the job's
+/// single `created_at`, so `acquire`'s FIFO tie-breaks on the item id and
+/// roughly half of all publish-to-live enqueues lease the publish first. Here
+/// the ids make that half deterministic. The publish then parks on
+/// `awaiting_counterpart` — which is right, and used to be the end of it: the
+/// two answer-driven revives were wired to the reconciliation and election
+/// gates, the bind path called neither, and the twenty-four-hour park expiry
+/// was the only thing that ever cleared it. The create lands seconds later.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: PgPool) {
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
+    link_connection(&pool).await;
+    let engine = engine_pool(&pool).await;
+
+    // The lowering is the API's own, so the pair under test is the pair a
+    // seller's one live request actually produces.
+    let seeds = tam_storage::JobReadRepo::new(pool.clone())
+        .mapping_seeds(ORG, InventoryId::TesNz, &[MAPPING])
+        .await
+        .expect("the seed reads");
+    let [seed] = seeds.as_slice() else {
+        panic!("one mapping, one seed: {seeds:?}");
+    };
+    let operations = tam_storage::lower(
+        tam_marketplace::ListingState::Live,
+        InventoryId::TesNz,
+        seed,
+    )
+    .expect("an unbound mapping lowers");
+    let job = JobId(Uuid([0x42; 16]));
+    // The publish takes the lower id, so the tie-break the queue makes at
+    // random is made here on purpose.
+    let ids = [
+        tam_domain::JobItemId(Uuid([0x20; 16])),
+        tam_domain::JobItemId(Uuid([0x10; 16])),
+    ];
+    let items: Vec<tam_storage::NewJobItem> = operations
+        .iter()
+        .zip(ids)
+        .map(|(operation, item)| tam_storage::NewJobItem {
+            item,
+            mapping: seed.mapping,
+            idempotency_key: derive_idempotency_key(
+                ORG,
+                InventoryId::TesNz,
+                seed.product,
+                1,
+                tam_storage::intent_digest(
+                    operation,
+                    job,
+                    &seed.payload_hashes,
+                    seed.sever_generation,
+                ),
+            ),
+            requires_bound_on: tam_storage::requires_bound_on(operation, InventoryId::TesNz),
+            operation: operation.clone(),
+        })
+        .collect();
+    tam_storage::JobRepo::new(engine.clone())
+        .enqueue(
+            ORG,
+            &tam_storage::NewJob {
+                job,
+                inventory: InventoryId::TesNz,
+                at: NOW,
+            },
+            &items,
+        )
+        .await
+        .expect("the live intent enqueues");
+
+    let leases = tam_storage::LeaseRepo::new(engine.clone());
+    let publish = leases
+        .acquire("w1", NOW, 600)
+        .await
+        .expect("the scan runs")
+        .expect("an item leases");
+    assert_eq!(
+        (publish.item, publish.requires_bound_on),
+        (ids[1], Some(InventoryId::TesNz)),
+        "the publish leased first, which is the half of the coin flip this test is about"
+    );
+
+    let outcome = prepare_item(&pool, &publish, NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Blocked { gate, .. } = outcome else {
+        panic!("a publish whose create has not landed has nothing to name");
+    };
+    assert_eq!(gate, tam_storage::AWAITING_COUNTERPART);
+    leases
+        .park(&publish.lease_ref(), gate, Timestamp(NOW.0 + 86_400_000))
+        .await
+        .expect("the publish parks");
+
+    let create = leases
+        .acquire("w1", NOW, 600)
+        .await
+        .expect("the scan runs")
+        .expect("the create leases next");
+    assert_eq!(create.item, ids[0]);
+    let attempts = tam_storage::WriteAttemptRepo::new(engine.clone());
+    let attempt = attempts
+        .open(
+            &create.lease_ref(),
+            MAPPING,
+            &tam_storage::AttemptIntent {
+                body: serde_json::json!({}),
+                hash: vec![0x01],
+            },
+            NOW,
+        )
+        .await
+        .expect("the attempt opens");
+    assert_eq!(
+        attempts
+            .settle(
+                &create.lease_ref(),
+                tam_storage::AttemptRef {
+                    attempt,
+                    mapping: MAPPING
+                },
+                &tam_storage::AttemptVerdict {
+                    state: "committed".to_owned(),
+                    failure_code: None,
+                    landing: tam_storage::LandingEffect::Landed {
+                        id: tes(HELD),
+                        lifecycle: tam_marketplace::RemoteLifecycle::Draft,
+                    },
+                },
+                NOW,
+            )
+            .await
+            .expect("the create settles"),
+        tam_storage::BindDisposition::Bound,
+    );
+
+    assert_eq!(
+        gate_of(&engine, ids[1]).await,
+        ("queued".to_owned(), None),
+        "the binding woke the publish; before this it waited out the full day"
+    );
+    leases
+        .settle(
+            &create.lease_ref(),
+            &tam_storage::ItemVerdict {
+                outcome: tam_domain::ItemOutcome::Succeeded,
+                failure_code: None,
+                failure_detail: None,
+            },
+            NOW,
+        )
+        .await
+        .expect("the create's item settles");
+
+    let woken = leases
+        .acquire("w1", NOW, 600)
+        .await
+        .expect("the scan runs")
+        .expect("the revived publish leases");
+    assert_eq!(woken.item, ids[1]);
+    let ItemPreparation::Ready { operation, .. } = prepare_item(&pool, &woken, NOW)
+        .await
+        .expect("the preparation runs")
+    else {
+        panic!("the counterpart is bound, so the publish is ready");
+    };
+    assert_eq!(
+        operation,
+        tam_domain::ItemOperation::Revise {
+            subject: tes(HELD),
+            transition: tam_marketplace::LifecycleTransition {
+                from: tam_marketplace::ListingState::Draft,
+                to: tam_marketplace::ListingState::Live,
+            },
+        },
+        "the publish names the listing the create bound, which is the whole reason the \
+         pair is two items rather than one"
+    );
+}

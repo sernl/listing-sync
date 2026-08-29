@@ -96,8 +96,8 @@ Deferred post-battery: the battery observes the same property live, against a re
 
 *Missing and weakened tests from the §I/§O plan* — note, `crates/tam-taxonomy/src/listing.rs:316`, partially fixed.
 O.1's wedge half (a source-declared licence surviving a standing rule into the field set), K.5's two-caller broker lease test, and O.16 are absent.
-O.7's `requires_bound_on` half is now asserted on the drain path by slice two's live-intent test and remains unasserted on the API path.
-Deferred post-battery: these are coverage rather than defects, each one already having a named specification to land against.
+O.7 is no longer count-only: slice two asserts the lowered operation sequence and `requires_bound_on` on the drain path, and the ordering test drives the whole pair through the ledger — publish leases first, parks on its counterpart, the create binds, the binding wakes it, and the revived publish resolves its subject from what the create bound.
+Deferred post-battery: the rest are coverage rather than defects, each one already having a named specification to land against.
 
 *The half-declared-rights test passes on a NOT NULL violation, never reaching `product_rights_total`* — note, `crates/tam-storage/tests/tenancy.rs:196`.
 The INSERT omits `body_format`, which 0022 makes NOT NULL, so the statement fails on 23502 and the test would stay green if the CHECK were deleted.
