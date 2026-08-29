@@ -431,15 +431,24 @@ const fn seller_event_topic(event: SellerEvent) -> &'static str {
 ///
 /// Three rather than five: the streak advances once per lease, so this is
 /// three separate sessions against the marketplace before the connection
-/// rather than the moment is blamed, and it stays clear of the bound below.
+/// rather than the moment is blamed.
+///
+/// It is not the only thing that ends the streak. `attempt_count` is the
+/// item's whole history — never reset, advanced by every expired lease and
+/// every park revive — so an item that arrives here already near
+/// `ATTEMPTS_MAX` has fewer leases left than this bound needs.
+/// [`preflight_failed`] ends the streak early in that case rather than
+/// letting the attempt reaper settle it `failed`/`Other`.
 pub const PREFLIGHT_FAILURES_MAX: u32 = 3;
 
-/// The preflight bound has to be reached first, or `expire_and_steal` settles
-/// the item `failed`/`Other` on the attempt budget and the seller reads a
-/// generic failure for a connection that only needed re-linking.
+/// What this states is only that a *fresh* item can reach the streak bound at
+/// all: an item admitted at `attempt_count` zero has `ATTEMPTS_MAX` leases and
+/// spends one per failure. It states nothing about an item that has already
+/// spent some of them — that race is decided in [`preflight_failed`], which
+/// reads the item's actual `attempt_count`, rather than here.
 const _: () = assert!(
     PREFLIGHT_FAILURES_MAX < tam_limits::job::ATTEMPTS_MAX,
-    "the preflight streak must run out before the attempt budget does"
+    "an item admitted with no attempts behind it must be able to reach the streak bound"
 );
 
 /// Drives one leased item to a terminal state, a park, or abandonment.
@@ -923,25 +932,39 @@ async fn rate_refused_before_the_write(
     })
 }
 
-/// The preflight answered something other than drift. Below the bound this
-/// is the stall bias as it always was — abandon, let the lease expire, let
-/// the stealer requeue. At the bound the same answer arriving for the third
-/// consecutive lease is evidence about the connection rather than about the
-/// moment, so the item stops waiting for a session that is not coming.
+/// The preflight answered something other than drift. While the item can
+/// still afford to try again this is the stall bias as it always was —
+/// abandon, let the lease expire, let the stealer requeue.
+///
+/// Two things end that. The streak reaching [`PREFLIGHT_FAILURES_MAX`] is the
+/// evidential one: the same answer across that many separate leases is about
+/// the connection rather than about the moment. The item running out of
+/// attempt budget is the arithmetic one, and it is why this reads
+/// `attempt_count` rather than trusting the constants to order themselves.
+/// `attempt_count` is prior history this run did not choose — never reset,
+/// advanced by every expired lease and every park revive — so an item can
+/// arrive here with one lease left and no way to reach the streak bound.
+/// Abandoning on that last lease hands it to `expire_and_steal`, which
+/// settles it `failed`/`Other` with a null detail, no gate and no re-link
+/// prompt, and the next item then repeats the whole wedge. The cause is known
+/// either way, so settling early with the outcome that names it is the honest
+/// answer rather than a guess.
 ///
 /// Gate first, settle second. The gate is what stops this tenant's remaining
 /// items each repeating the whole streak against the same dead credential;
 /// settling alone would clear one item and hand the wedge to the next. The
 /// item settles `Blocked` rather than `Failed` because nothing was refused —
 /// no write was ever attempted — and `SessionExpired` beside a sentence the
-/// seller can act on is what the report renders.
+/// seller can act on is what the report renders. `Blocked` is also what the
+/// fleet breaker counts, so a marketplace-wide preflight outage reaches it.
 ///
 /// Blaming the connection can be wrong: a marketplace having a bad hour fails
 /// the preflight indeterminately too, and its seller is then asked to re-link
-/// a credential that was never broken. That is the cheap error of the two.
-/// Re-linking costs one seller one minute and the gate lifts; the alternative
-/// spends every item in the queue on the same twenty-five minutes of dead
-/// leases and settles them all `failed`/`Other`.
+/// a credential that was never broken. The arithmetic arm widens that a
+/// little, because an item at its last attempt is gated on a shorter streak.
+/// It stays the cheap error of the two. Re-linking costs one seller one
+/// minute and the gate lifts; the alternative spends every item in the queue
+/// on the same dead leases and settles them all `failed`/`Other`.
 async fn preflight_failed(
     ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
     lease: &LeasedItem,
@@ -950,7 +973,12 @@ async fn preflight_failed(
 ) -> Result<RunVerdict, EngineError> {
     let lease_ref = lease.lease_ref();
     let streak = ctx.leases.preflight_failed(&lease_ref).await?;
-    if streak < PREFLIGHT_FAILURES_MAX {
+    // The reaper's own predicate, read against the value `acquire` returned:
+    // nothing moves `attempt_count` during a run, so this is exactly what
+    // `expire_and_steal` will test when this lease expires.
+    let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
+    let last_attempt = lease.attempt_count.saturating_add(1) >= attempts_max;
+    if streak < PREFLIGHT_FAILURES_MAX && !last_attempt {
         return Ok(RunVerdict::Abandoned {
             reason: format!("preflight failed transiently: {error:?}"),
         });
@@ -970,10 +998,15 @@ async fn preflight_failed(
     let verdict = ItemVerdict {
         outcome: ItemOutcome::Blocked,
         failure_code: Some(FailureCode::SessionExpired),
-        failure_detail: Some(tam_types::FailureDetail(format!(
-            "this marketplace connection needs re-linking: {streak} checks in a row could \
-             not be completed before writing"
-        ))),
+        // The streak is deliberately not quoted here. It reads 1 or 2 when
+        // the attempt budget is what ended the run, so a sentence built on it
+        // would tell the seller a number that is about our own bookkeeping.
+        // `job_item.preflight_failures` holds the count for whoever needs it.
+        failure_detail: Some(tam_types::FailureDetail(
+            "this marketplace connection needs re-linking: the checks made before writing \
+             could not be completed"
+                .to_owned(),
+        )),
     };
     ctx.leases.settle(&lease_ref, &verdict, at).await?;
     record_event(
@@ -1133,6 +1166,60 @@ async fn record_action(
         at,
     )
     .await
+}
+
+/// The adapter refused to render the projection, before any lease was spent
+/// on a write.
+///
+/// The refusal is deterministic. `seed_from_projection` has one fallible
+/// step, `project_fields`, which is a pure function of the projected listing;
+/// that listing is rebuilt from the same durable `projection_edge` rows and
+/// the same stored election answers on every lease, so an identical refusal
+/// is what the next attempt gets. Abandoning it holds the organisation's one
+/// live lease for the whole lease TTL, repeats for the attempt budget, and
+/// then settles the item `Failed`/`Other` with no detail at all -- discarding
+/// the one sentence the adapter composed that tells the seller which term
+/// cannot be posted and why.
+///
+/// So it settles here exactly as the same `AdapterError::Rejected` settles
+/// when it arrives one step later from a submit: the closed code and the
+/// adapter's own text cross into the item verdict, `LeaseRepo::settle`
+/// releases the lease and runs `settle_if_complete` for the job, and the
+/// `ItemSettled` event lands. There is no attempt row to settle beside it,
+/// because nothing was ever sent.
+///
+/// Every other seed error abandons, which is the stall bias unchanged. The
+/// remaining `AdapterError` variants report a marketplace's answer to a
+/// request, and a pure projection makes no request: none of them is
+/// reachable from this step today, and were one to become so, waiting is the
+/// conservative reading of an error whose determinism is not established.
+pub async fn seed_refused(
+    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    lease: &LeasedItem,
+    error: &EngineError,
+    at: Timestamp,
+) -> Result<RunVerdict, EngineError> {
+    let EngineError::Projection(AdapterError::Rejected { code, detail }) = error else {
+        return Ok(RunVerdict::Abandoned {
+            reason: format!("the seed failed and may yet succeed: {error:?}"),
+        });
+    };
+    let verdict = ItemVerdict {
+        outcome: ItemOutcome::Failed,
+        failure_code: Some(*code),
+        failure_detail: Some(detail.clone()),
+    };
+    ctx.leases.settle(&lease.lease_ref(), &verdict, at).await?;
+    record_event(
+        ctx,
+        lease,
+        &JobEventPayload::ItemSettled {
+            outcome: format!("{:?}", ItemOutcome::Failed),
+        },
+        at,
+    )
+    .await?;
+    Ok(RunVerdict::Settled(ItemOutcome::Failed))
 }
 
 async fn notify(

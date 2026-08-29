@@ -765,3 +765,91 @@ async fn a_healthy_preflight_wipes_the_streak(app: PgPool) {
         "nothing reached the bound, so the connection was never blamed"
     );
 }
+
+/// `attempt_count` is prior history this run did not choose: nothing resets
+/// it, and every expired lease and every park revive advances it. An item
+/// that arrives near `ATTEMPTS_MAX` therefore has fewer leases left than the
+/// streak bound needs, and abandoning on the last one hands it to
+/// `expire_and_steal`, which settles it `failed`/`Other` with a null detail,
+/// no gate and no re-link prompt — leaving the next item to repeat the wedge.
+/// Seeded at three so the reaper's predicate fires on the second lease, with
+/// the streak still at two: the outcome has to be decided by the item's real
+/// budget rather than by the two constants happening to be ordered.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_item_out_of_attempt_budget_still_settles_on_the_connection(app: PgPool) {
+    let adapter =
+        ScriptedAdapter::answering(Ok(landed_evidence())).with_preflight_script(vec![Err(
+            AdapterError::Ambiguous(AmbiguityCause::ReadBackIndeterminate),
+        )]);
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    sqlx::query("UPDATE job_item SET attempt_count = 3")
+        .execute(&engine)
+        .await
+        .expect("the item takes its history");
+    let leases = LeaseRepo::new(engine.clone());
+
+    let first = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        T0,
+    )
+    .await;
+    assert!(
+        matches!(first, RunVerdict::Abandoned { .. }),
+        "a fourth attempt is still affordable, so the stall bias holds: {first:?}"
+    );
+    let at = requeue(&leases, T0).await;
+    let second = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        at,
+    )
+    .await;
+    assert_eq!(
+        second,
+        RunVerdict::Settled(ItemOutcome::Blocked),
+        "the fifth is the last one, and spending it on an abandon buys a failed/Other \
+         settlement instead of a re-link the seller can act on"
+    );
+
+    let settled: (String, Option<String>, Option<String>, Option<String>, i32) = sqlx::query_as(
+        "SELECT state, outcome, failure_code, failure_detail, preflight_failures \
+         FROM job_item LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the item row reads");
+    assert_eq!(
+        (
+            settled.0.as_str(),
+            settled.1.as_deref(),
+            settled.2.as_deref()
+        ),
+        ("settled", Some("blocked"), Some("SessionExpired")),
+        "the connection-health outcome wins the race it used to lose"
+    );
+    assert!(
+        settled.4 < i32::try_from(PREFLIGHT_FAILURES_MAX).unwrap_or(i32::MAX),
+        "the streak never reached its bound, so what settled this item was the attempt \
+         budget: {}",
+        settled.4
+    );
+    let detail = settled.3.expect("a blocked item states why");
+    assert!(
+        detail.contains("re-linking"),
+        "the report needs a sentence the seller can act on: {detail}"
+    );
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "needs_reauth",
+        "and the gate goes up, or the tenant's next item spends its budget the same way"
+    );
+}

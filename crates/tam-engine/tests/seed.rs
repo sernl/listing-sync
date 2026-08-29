@@ -16,12 +16,13 @@ use tam_domain::equivalence::{
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
+use tam_engine::driver::{seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_from_projection, ItemPreparation};
 use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
 use tam_marketplace_tes::TesAdapter;
-use tam_storage::{ElectionRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
+use tam_storage::{ElectionRepo, LeaseRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
 use tam_types::{
     CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole, InventoryId,
     JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
@@ -1283,5 +1284,205 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
         },
         "the publish names the listing the create bound, which is the whole reason the \
          pair is two items rather than one"
+    );
+}
+
+/// A clock that does not move, so a settle and the scan that follows it are
+/// provably the same instant: an item that leases here does so because the
+/// mutex was released and not because a lease expired.
+struct FixedClock;
+
+impl NowSource for FixedClock {
+    fn now(&self) -> Timestamp {
+        NOW
+    }
+}
+
+/// The NZ subject edge as the reconciliation queue's own resolution writes
+/// it: the segments a human named, and no native id, because the answer
+/// endpoint defaults it to absent and the shipped client sends none.
+fn unaddressed_edge() -> ProjectionEdge {
+    ProjectionEdge {
+        from: SUBJECT,
+        to: VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Subject),
+            segments: vec!["Maths for early years".to_owned()],
+            native_id: None,
+        },
+        kind: EdgeKind::Exact,
+        decided_by: Decider::Human {
+            user: UserId(Uuid([0x61; 16])),
+            org: ORG,
+        },
+        decided_at: NOW,
+    }
+}
+
+const REFUSING_JOB: JobId = JobId(Uuid([0x62; 16]));
+const FIRST_ITEM: tam_domain::JobItemId = tam_domain::JobItemId(Uuid([0x63; 16]));
+const SECOND_ITEM: tam_domain::JobItemId = tam_domain::JobItemId(Uuid([0x64; 16]));
+
+/// The whole fixture the refusal test drives: the mapping projects, its NZ
+/// subject path carries no id Tes can address, and two items sit behind the
+/// organisation's one live lease.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn provision_refusing_queue(app: &PgPool, engine: &PgPool) {
+    provision(app, false, tam_domain::Binding::Unbound).await;
+    TaxonomyRepo::new(app.clone())
+        .seed(&[], &[unaddressed_edge()])
+        .await
+        .expect("the founder's own resolution seeds");
+    link_connection(app).await;
+    tam_storage::JobRepo::new(engine.clone())
+        .enqueue(
+            ORG,
+            &tam_storage::NewJob {
+                job: REFUSING_JOB,
+                inventory: InventoryId::TesNz,
+                at: NOW,
+            },
+            &[
+                tam_storage::NewJobItem {
+                    item: FIRST_ITEM,
+                    mapping: MAPPING,
+                    idempotency_key: tam_marketplace::IdempotencyKey(Uuid([0x66; 16])),
+                    operation: tam_domain::ItemOperation::Create,
+                    requires_bound_on: None,
+                },
+                tam_storage::NewJobItem {
+                    item: SECOND_ITEM,
+                    mapping: MAPPING,
+                    idempotency_key: tam_marketplace::IdempotencyKey(Uuid([0x67; 16])),
+                    operation: tam_domain::ItemOperation::Create,
+                    requires_bound_on: None,
+                },
+            ],
+        )
+        .await
+        .expect("the job enqueues");
+}
+
+/// One lease, one projection, one refusal: the sequence the worker runs, up
+/// to and including what it does with the error.
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "allow-expect-in-tests and allow-panic-in-tests reach #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn refuse_one(app: &PgPool, engine: &PgPool, leases: &LeaseRepo) -> (LeasedItem, RunVerdict) {
+    let held = leases
+        .acquire("seed-refusal-test", NOW, 600)
+        .await
+        .expect("the scan runs")
+        .expect("an item leases");
+    let ItemPreparation::Ready {
+        projected: Some(projected),
+        ..
+    } = prepare_item(app, &held, NOW).await.expect("it prepares")
+    else {
+        panic!("the mapping projects; it is the rendering that refuses");
+    };
+    let adapter = TesAdapter::new(
+        InventoryId::TesNz,
+        CassetteTransport::new(Cassette {
+            interactions: vec![],
+        }),
+        NoFiles,
+    )
+    .expect("a Tes inventory");
+    let error = seed_from_projection(&adapter, &held, &projected)
+        .expect_err("a path Tes cannot address is refused rather than rendered");
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let ctx = DriverContext {
+        adapter: &adapter,
+        leases,
+        halts: &tam_storage::HaltRepo::new(engine.clone()),
+        attempts: &tam_storage::WriteAttemptRepo::new(engine.clone()),
+        budgets: &tam_storage::RateBudgetRepo::new(engine.clone()),
+        pool: engine,
+        clock: &FixedClock,
+        cancel: &cancel,
+        pause: &tam_marketplace::InstantPause,
+    };
+    let verdict = seed_refused(&ctx, &held, &error, NOW)
+        .await
+        .expect("the settle runs");
+    (held, verdict)
+}
+
+/// M2. `project_fields` is the only fallible step in the seed, and it is a
+/// pure function of a projection rebuilt from the same durable rows every
+/// lease — so its refusal is permanent. Abandoning it held this
+/// organisation's one live lease for the whole TTL, five times over, and
+/// then settled the item with no detail at all. It settles here instead,
+/// carrying the sentence the adapter wrote.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_projection_the_adapter_refuses_settles_the_item_rather_than_holding_the_queue(
+    app: PgPool,
+) {
+    let engine = engine_pool(&app).await;
+    provision_refusing_queue(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let (first, verdict) = refuse_one(&app, &engine, &leases).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(tam_domain::ItemOutcome::Failed),
+        "a refusal the adapter will repeat is an answer, not something to wait on"
+    );
+
+    let settled: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT state, outcome, failure_code, failure_detail FROM job_item WHERE id = $1",
+    )
+    .bind(uuid::Uuid::from_bytes(first.item.0 .0))
+    .fetch_one(&engine)
+    .await
+    .expect("the item row reads back");
+    assert_eq!(
+        (
+            settled.0.as_str(),
+            settled.1.as_deref(),
+            settled.2.as_deref()
+        ),
+        ("settled", Some("failed"), Some("UploadRejected")),
+        "the closed code crosses into the ledger exactly as a submit-time rejection's does"
+    );
+    let detail = settled.3.expect("the refusal's own sentence is recorded");
+    assert!(
+        detail.contains("numeric id"),
+        "the seller reads why the term cannot be posted, not an empty failure_detail: {detail}"
+    );
+
+    // The same instant, no expiry, no stealer: the mutex is free because the
+    // item settled rather than because a lease ran out.
+    let (second, verdict) = refuse_one(&app, &engine, &leases).await;
+    assert_ne!(
+        second.item, first.item,
+        "the organisation's queue moved on within the same scan"
+    );
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(tam_domain::ItemOutcome::Failed)
+    );
+
+    // The job carries no state column: it settles by emitting its own event,
+    // once, when the last item goes terminal.
+    let settled: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT kind, payload FROM job_event WHERE job_id = $1 AND kind = 'JobSettled'",
+    )
+    .bind(uuid::Uuid::from_bytes(REFUSING_JOB.0 .0))
+    .fetch_all(&engine)
+    .await
+    .expect("the job events read back");
+    let [(_, payload)] = settled.as_slice() else {
+        panic!("every item terminal settles the job exactly once, got {settled:?}");
+    };
+    assert_eq!(
+        (payload["failed"].as_u64(), payload["succeeded"].as_u64()),
+        (Some(2), Some(0)),
+        "and the tally the seller reads counts both refusals: {payload}"
     );
 }

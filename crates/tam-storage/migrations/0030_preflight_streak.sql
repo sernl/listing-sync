@@ -13,8 +13,12 @@
 -- state "the last N preflights in a row failed", which is the predicate that
 -- separates a sick connection from an unlucky moment. This column advances on
 -- each indeterminate preflight and returns to zero on the first healthy one.
--- The driver's bound sits strictly below `job::ATTEMPTS_MAX` so the item
--- reaches the connection-health outcome before `expire_and_steal` settles it
--- `failed`/`Other`, which names nothing a seller can act on.
+--
+-- The two counters are not ordered by their constants and the driver does not
+-- pretend they are. An item arrives with whatever `attempt_count` its history
+-- left it, so it can have fewer leases remaining than the streak bound needs;
+-- the driver reads the reaper's own predicate against this item's value and
+-- ends the streak early when that is the last lease, rather than abandoning
+-- into a `failed`/`Other` settlement that names nothing a seller can act on.
 
 ALTER TABLE job_item ADD COLUMN preflight_failures int NOT NULL DEFAULT 0;

@@ -48,7 +48,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tam_domain::{ItemOperation, ItemOutcome};
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::{request_lease, LeasePurpose};
-use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
+use tam_engine::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
 use tam_marketplace_tes::{GatewayTransport, TesAdapter};
@@ -497,18 +497,6 @@ impl Pump {
             operation,
             projected,
         } = work;
-        // A removal renders nothing, so it never reaches the adapter's
-        // projection: the listing is being taken down rather than described.
-        let seed = match projected.map_or_else(
-            || Ok(seed_for_removal(item, operation)),
-            |projected| seed_from_projection(adapter, item, projected),
-        ) {
-            Ok(seed) => seed,
-            Err(error) => {
-                eprintln!("tam-worker {worker}: seed failed, lease left to expire: {error}");
-                return;
-            }
-        };
         let ctx = DriverContext {
             adapter,
             leases: &self.leases,
@@ -520,7 +508,20 @@ impl Pump {
             cancel: &self.cancel,
             pause: &SleepingPause,
         };
-        match run_item(&ctx, item, seed).await {
+        // A removal renders nothing, so it never reaches the adapter's
+        // projection: the listing is being taken down rather than described.
+        let seeded = projected.map_or_else(
+            || Ok(seed_for_removal(item, operation)),
+            |projected| seed_from_projection(adapter, item, projected),
+        );
+        // Both arms answer the same way, so a refusal the adapter raised
+        // before the write settles the item through the path a refusal
+        // raised during one already takes.
+        let outcome = match seeded {
+            Ok(seed) => run_item(&ctx, item, seed).await,
+            Err(error) => seed_refused(&ctx, item, &error, ctx.clock.now()).await,
+        };
+        match outcome {
             Ok(RunVerdict::Settled(outcome)) => {
                 eprintln!(
                     "tam-worker {worker}: item {:?} settled {outcome:?}",
