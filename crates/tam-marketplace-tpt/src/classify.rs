@@ -177,6 +177,81 @@ fn denial(status: u16, body: &str) -> AdapterError {
     }
 }
 
+/// How much of a body is examined for an interstitial. A bundle is
+/// arbitrarily large and decoding all of it to look for `<html` would copy
+/// the whole file; a page that is not the file declares itself in its first
+/// bytes.
+const INTERSTITIAL_HEAD_BYTES: usize = 2048;
+
+/// The four bytes every ZIP archive opens with.
+const ZIP_MAGIC: [u8; 4] = *b"PK\x03\x04";
+
+/// Classifies a download, whose payload is bytes rather than JSON.
+///
+/// The positive assertion is the archive's own magic, and it is load-bearing
+/// rather than belt-and-braces: an ungated download answers a sign-in page
+/// with status 200, so a status check alone would hand an HTML document to
+/// the importer and store it as the seller's product. What arrives without
+/// that magic is not the file, whatever the status said.
+///
+/// The gate is a Cloudflare browser clearance rather than a lapsed session --
+/// the 2026-08-29 probe met it with a jar that authenticates every read and
+/// every write this crate makes -- so a re-auth is the wrong remedy and the
+/// refusal says so instead of reporting `SessionExpired`.
+pub fn classify_read_bytes(response: &HttpResponse) -> Result<&[u8], AdapterError> {
+    match response.status {
+        200 => {
+            if response.body.starts_with(&ZIP_MAGIC) {
+                return Ok(&response.body);
+            }
+            let head = response
+                .body
+                .get(..INTERSTITIAL_HEAD_BYTES)
+                .unwrap_or(&response.body);
+            let text = String::from_utf8_lossy(head);
+            if looks_like_challenge(&text) {
+                return Err(AdapterError::Challenge(
+                    ChallengeKind::JavaScriptInterstitial,
+                ));
+            }
+            Err(uncleared_download(&format!(
+                "the download answered 200 with {} rather than an archive",
+                if looks_like_signin(&text) {
+                    "a sign-in page"
+                } else {
+                    "something that is not one"
+                }
+            )))
+        }
+        401 | 403 => Err(denial(response.status, &response.text())),
+        429 => Err(AdapterError::RateLimited { retry_after: None }),
+        404 => Err(AdapterError::Rejected {
+            code: FailureCode::PreconditionElementAbsent,
+            detail: detail(response.status, &response.text()),
+        }),
+        _ => Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate,
+        )),
+    }
+}
+
+/// The refusal a download meets when the session is not cleared for it.
+///
+/// Named rather than folded into `SessionExpired` because the two call for
+/// different remedies and the probe separated them: the same cookie jar that
+/// met this authenticates the GraphQL reads with `isProductAuthor: true` and
+/// carries the entire write path. What it lacks is the browser clearance the
+/// document navigation is gated on, which no credential refresh mints.
+pub fn uncleared_download(what: &str) -> AdapterError {
+    AdapterError::Rejected {
+        code: FailureCode::ChallengePresented,
+        detail: FailureDetail(format!(
+            "{what}; the TPT download route is gated on a browser-session clearance this \
+             cookie jar does not carry, which is not a condition re-authenticating clears"
+        )),
+    }
+}
+
 /// A rendered form page, which is the sole source of the write path's tokens.
 ///
 /// A scrape failure is reported as schema drift rather than as a transport or

@@ -533,6 +533,89 @@ pub fn is_product_form(url: &str) -> bool {
         })
 }
 
+/// The route the product page's Download control points at. The control is a
+/// plain `<a href target="_blank">` reading `Product.downloadurl` verbatim
+/// from the page's own SSR state, with no minted token, no nonce and no XHR,
+/// so a server-side caller reproduces it as an ordinary document navigation.
+const DOWNLOAD_PREFIX: &str = "/Download/";
+
+/// The origin's sign-in gate, which is where a download redirects when the
+/// session is not cleared for it.
+const AUTHORIZATION_PATH: &str = "/Request-Authorization";
+
+/// The seller's own copy of one of their products.
+///
+/// `downloadurl` is `/Download/{canonicalSlug}-{id}`, and the slug is
+/// decorative here as it is on `/Product/{slug}-{id}`: the trailing number is
+/// the identifier. It is threaded anyway because the catalogue read carries
+/// it, and reproducing the url the page itself renders costs nothing; whether
+/// the id alone resolves is unprobed.
+#[must_use]
+pub fn download_bundle_request(canonical_slug: &str, product: ProductId) -> HttpRequest {
+    HttpRequest::get(format!(
+        "{ORIGIN}{DOWNLOAD_PREFIX}{canonical_slug}-{}",
+        product.0
+    ))
+}
+
+/// True where a URL addresses the download route, which is how the live
+/// transport gives this hop the document-navigation envelope the browser
+/// sends it under rather than the fetch envelope every other bodyless GET
+/// gets.
+#[must_use]
+pub fn is_download_path(url: &str) -> bool {
+    url.starts_with(ORIGIN)
+        && url
+            .get(ORIGIN.len()..)
+            .is_some_and(|rest| rest.starts_with(DOWNLOAD_PREFIX))
+}
+
+/// Where a download's redirect points, which decides whether there is a
+/// second hop to make.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadRedirect {
+    /// The origin's own sign-in gate. A 2026-08-29 live probe met this with a
+    /// jar that authenticates the GraphQL reads and the whole write path, so
+    /// the download is gated on something those are not.
+    Authorization,
+    /// Elsewhere on the origin, which a session request may follow.
+    SameOrigin(String),
+    /// Off the origin, which no capture shows. The session must not follow
+    /// it: the transport refuses a session request to any other host, and
+    /// that rule is what keeps the seller's cookies on the marketplace.
+    OffOrigin(String),
+}
+
+/// Reads a redirect's `Location` against the origin. A relative location is
+/// resolved against it, an absolute one on the origin is kept, and anything
+/// else is off-origin -- including a protocol-relative `//host/path`, which
+/// is a different host wearing a leading slash.
+#[must_use]
+pub fn download_redirect(location: &str) -> DownloadRedirect {
+    let path = if location.starts_with("//") {
+        return DownloadRedirect::OffOrigin(location.to_owned());
+    } else if location.starts_with('/') {
+        location
+    } else if let Some(rest) = location.strip_prefix(ORIGIN) {
+        rest
+    } else {
+        return DownloadRedirect::OffOrigin(location.to_owned());
+    };
+    if path.starts_with(AUTHORIZATION_PATH) {
+        DownloadRedirect::Authorization
+    } else {
+        DownloadRedirect::SameOrigin(format!("{ORIGIN}{path}"))
+    }
+}
+
+/// The second hop of a download, where the first answered a redirect that
+/// stays on the origin. Session-authenticated like the first, because it is
+/// the same origin and the same navigation.
+#[must_use]
+pub fn download_redirect_request(url: String) -> HttpRequest {
+    HttpRequest::get(url)
+}
+
 /// Percent-encodes one `application/x-www-form-urlencoded` component. The
 /// unreserved set is RFC 3986's; a space becomes `+`, which is the one place
 /// form encoding departs from percent encoding.

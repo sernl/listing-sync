@@ -15,7 +15,9 @@
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tam_marketplace::transport::{HttpRequest, HttpResponse, RequestBody, Transport};
+use tam_marketplace::transport::{
+    HttpRequest, HttpResponse, RequestBody, ResponseHeader, Transport,
+};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
     FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, ListingState,
@@ -29,8 +31,8 @@ use tam_types::{
 
 use crate::classify::{
     classify_edit_submit, classify_form_page, classify_graphql_read, classify_pre_write_transport,
-    classify_queue_poll, classify_s3, classify_submit, classify_text_hop, classify_transport,
-    classify_xhr_json, part_etag, queue_job, SubmitLanding,
+    classify_queue_poll, classify_read_bytes, classify_s3, classify_submit, classify_text_hop,
+    classify_transport, classify_xhr_json, part_etag, queue_job, uncleared_download, SubmitLanding,
 };
 use crate::endpoints::{
     self, AllTimeMetric, FormTarget, ResolvedStatsQuery, SignedS3Call, UploadReservation,
@@ -51,15 +53,6 @@ use crate::write_model::{
 /// continue. The walk ends when it has collected `totalResultsCount` rows;
 /// this cap only bounds a walk whose end never arrives.
 pub const CATALOGUE_PAGE_MAX: u32 = 200;
-
-/// The capability the one remaining deferred method reports: no capture
-/// contains a TPT file download, so the read has nothing to reproduce.
-///
-/// `fetch_for_import` was deferred beside it because `ImportedListing` was
-/// Tes-shaped — licence tokens, GBP, age ranges — where TPT's model is flat
-/// taxonomy tags with no licence. The generalised shape landed, so the read
-/// is implemented rather than deferred.
-pub const BUNDLE_DOWNLOAD: &str = "tpt.download_resource_bundle";
 
 /// The single TPT inventory, per the design's canonical inventory table.
 pub struct TptAdapter<T, F, P> {
@@ -766,6 +759,94 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
 }
 
 impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
+    /// The seller's own copy of one of their products: the bytes behind the
+    /// Download control on its product page.
+    ///
+    /// Two hops. The catalogue read names the product's `canonicalSlug`,
+    /// which is what `downloadurl` is built from, and the download itself is
+    /// a session-authenticated document navigation to `/Download/{slug}-{id}`
+    /// -- a plain anchor on the page, with no minted token to reproduce.
+    ///
+    /// The redirect is followed explicitly rather than by the client, whose
+    /// policy is `none` so the write path can read a product id out of a
+    /// submit's `Location`. That is the better arrangement here too: a signed
+    /// second hop stays visible in the cassette instead of disappearing
+    /// inside reqwest, and an off-origin one is refused rather than followed,
+    /// which is what keeps the seller's cookies on the marketplace.
+    ///
+    /// What is live-proven and what is not, stated plainly. The entry point,
+    /// the identifier and the payload's declared shape are read from a
+    /// capture of the product page. The download hop itself is not: a
+    /// 2026-08-29 probe of the founder's own product answered `302` to the
+    /// sign-in gate for a cookie jar that authenticates every GraphQL read
+    /// and the entire write path, and navigation headers did not change it.
+    /// So this route is gated on a browser clearance a server-side jar does
+    /// not hold, TPT-as-source sync ships on the operator-manifest path
+    /// instead, and what is written here is the flow as the wire format
+    /// determines it -- correct the moment a session carries that clearance,
+    /// and refusing legibly until then.
+    pub async fn download_resource_bundle(
+        &self,
+        reason: &FetchReason,
+        id: ProductId,
+    ) -> Result<Vec<u8>, AdapterError> {
+        if !matches!(reason, FetchReason::FirstPartyExport { .. }) {
+            return Err(not_first_party("file download"));
+        }
+        let body = self.read(endpoints::product_by_id_request(id)).await?;
+        let page =
+            read_model::parse_catalogue_page(&body).map_err(|error| AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(error.to_string()),
+            })?;
+        let entry = page
+            .entries
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| AdapterError::Rejected {
+                code: FailureCode::PreconditionElementAbsent,
+                detail: FailureDetail(format!(
+                    "product {} is not in the seller's own catalogue, and this read downloads \
+                     nothing else",
+                    id.0
+                )),
+            })?;
+        let first = self
+            .send(endpoints::download_bundle_request(
+                &entry.canonical_slug,
+                id,
+            ))
+            .await?;
+        let response = match first.header(ResponseHeader::Location) {
+            None => first,
+            Some(location) => match endpoints::download_redirect(location) {
+                endpoints::DownloadRedirect::Authorization => {
+                    return Err(uncleared_download(
+                        "the download redirected to the sign-in gate",
+                    ))
+                }
+                // No capture carries a signed hop, so its shape is unknown;
+                // what is known is that it would leave the origin, and the
+                // transport refuses a session request to any other host.
+                // Inventing the request that would satisfy it is not a
+                // substitute for capturing one.
+                endpoints::DownloadRedirect::OffOrigin(url) => {
+                    return Err(AdapterError::Rejected {
+                        code: FailureCode::UnexpectedOrigin,
+                        detail: FailureDetail(format!(
+                            "the download redirected off the origin to {url:?}; no capture \
+                             carries a signed download hop, so what it needs is unknown"
+                        )),
+                    })
+                }
+                endpoints::DownloadRedirect::SameOrigin(url) => {
+                    self.send(endpoints::download_redirect_request(url)).await?
+                }
+            },
+        };
+        classify_read_bytes(&response).map(<[u8]>::to_vec)
+    }
+
     /// The first-party import read: the seller's own product whole, through
     /// the query the edit form itself issues. Refuses any reason but
     /// `FirstPartyExport`, because this is the tier-one capability.
@@ -1215,12 +1296,10 @@ impl<T: Transport, F: FileSource, P: Pause> FirstPartyExport for TptAdapter<T, F
 
     fn download_resource_bundle(
         &self,
-        _reason: &FetchReason,
-        _id: ProductId,
+        reason: &FetchReason,
+        id: ProductId,
     ) -> impl core::future::Future<Output = Result<Vec<u8>, AdapterError>> + Send {
-        core::future::ready(Err(AdapterError::Uncaptured {
-            capability: BUNDLE_DOWNLOAD,
-        }))
+        Self::download_resource_bundle(self, reason, id)
     }
 
     fn fetch_for_import(

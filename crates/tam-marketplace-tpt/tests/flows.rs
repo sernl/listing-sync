@@ -14,7 +14,7 @@
 
 use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
-use tam_marketplace::transport::HttpResponse;
+use tam_marketplace::transport::{HttpResponse, ResponseHeader};
 use tam_marketplace::{
     AdapterError, CanaryGrant, FetchReason, FileContent, FileSource, FileSourceError,
     FirstPartyExport, ListingState, RemoteListingId,
@@ -402,30 +402,212 @@ fn a_statistics_read_without_the_export_capability_is_refused() {
     );
 }
 
+/// The product and slug every download test uses. Both are synthetic: no
+/// seller owns this id, and the slug names no real resource. What is the
+/// capture's own here is the url shape and the archive's leading bytes.
+const DOWNLOADED: ProductId = ProductId(90_000_042);
+const DOWNLOADED_SLUG: &str = "Sample-Fractions-Pack-90000042";
+
+/// A synthetic archive. Only its first four bytes matter to the classifier,
+/// and those four are what every ZIP opens with.
+fn archive() -> Vec<u8> {
+    let mut bytes = b"PK\x03\x04".to_vec();
+    bytes.extend_from_slice(b"synthetic archive body");
+    bytes
+}
+
+fn catalogue_row() -> Value {
+    json!([{
+        "id": DOWNLOADED.0.to_string(),
+        "price": "$4.00",
+        "canonicalSlug": DOWNLOADED_SLUG,
+    }])
+}
+
+/// The read that names the slug the download url is built from.
+fn slug_read(response: HttpResponse) -> Vec<Interaction> {
+    vec![
+        Interaction {
+            request: endpoints::product_by_id_request(DOWNLOADED),
+            response: ok(&page(&catalogue_row(), 1, 1, 1)),
+        },
+        Interaction {
+            request: endpoints::download_bundle_request(DOWNLOADED_SLUG, DOWNLOADED),
+            response,
+        },
+    ]
+}
+
+/// G-O3. The download is the product page's own control reproduced: the
+/// catalogue read names the slug, and the archive comes back from
+/// `/Download/{slug}-{id}` under the session.
+///
+/// Cassette-verified, and live-unverified on purpose. A 2026-08-29 probe of
+/// the founder's own product met a redirect to the sign-in gate with a jar
+/// that authenticates every other hop this crate makes, so no live run can
+/// witness this path until a session carries the browser clearance it is
+/// gated on.
 #[test]
-fn the_one_deferred_capability_reports_itself_as_uncaptured() {
+fn the_download_fetches_the_sellers_own_archive_through_the_page_control() {
     let adapter = adapter(
         Cassette {
-            interactions: vec![],
+            interactions: slug_read(HttpResponse::plain(200, archive())),
         },
-        2,
+        1,
     );
     let bundle = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
         &adapter,
         &export(),
-        ProductId(12_854_712),
-    ));
+        DOWNLOADED,
+    ))
+    .expect("the recorded download yields the archive");
+    assert_eq!(bundle, archive(), "the bytes cross untouched");
     assert_eq!(
-        bundle,
-        Err(AdapterError::Uncaptured {
-            capability: tam_marketplace_tpt::flows::BUNDLE_DOWNLOAD,
-        }),
-        "no capture contains a TPT download, and an absent capability is not a refusal"
+        adapter.transport().remaining(),
+        0,
+        "two hops and no others: the slug read and the download itself"
+    );
+}
+
+/// The reason an archive is asserted positively rather than inferred from a
+/// status. An ungated download answers a sign-in page at 200, and a status
+/// check alone would hand that HTML to the importer and store it as the
+/// seller's product.
+#[test]
+fn a_sign_in_page_answering_two_hundred_is_not_a_bundle() {
+    let page = b"<html><head><title>Sign In</title></head><body>sign-in</body></html>".to_vec();
+    let adapter = adapter(
+        Cassette {
+            interactions: slug_read(HttpResponse::plain(200, page)),
+        },
+        1,
+    );
+    let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &adapter,
+        &export(),
+        DOWNLOADED,
+    ));
+    let Err(AdapterError::Rejected { code, detail }) = refused else {
+        panic!("a page where the archive should be is a rejection, got {refused:?}");
+    };
+    assert_eq!(
+        code,
+        FailureCode::ChallengePresented,
+        "the gate is a browser clearance, not a lapsed session, so the remedy named is not \
+         a re-auth"
+    );
+    assert!(
+        detail.0.contains("clearance"),
+        "and the refusal says what the session is missing, got {}",
+        detail.0
+    );
+}
+
+/// The condition the live probe actually met: a 302 to the sign-in gate, for
+/// a jar that reads and writes everything else.
+#[test]
+fn a_download_redirected_to_the_sign_in_gate_names_the_clearance_it_needs() {
+    let redirect = HttpResponse {
+        status: 302,
+        body: Vec::new(),
+        headers: vec![(
+            ResponseHeader::Location,
+            "/Request-Authorization?authModal=login".to_owned(),
+        )],
+    };
+    let adapter = adapter(
+        Cassette {
+            interactions: slug_read(redirect),
+        },
+        1,
+    );
+    let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &adapter,
+        &export(),
+        DOWNLOADED,
+    ));
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: FailureCode::ChallengePresented,
+                ..
+            })
+        ),
+        "the 2026-08-29 probe met exactly this, and it is not a condition a credential \
+         refresh clears: {refused:?}"
     );
     assert_eq!(
         adapter.transport().remaining(),
         0,
-        "a deferred capability sends nothing"
+        "and the gate is read from the redirect rather than followed"
+    );
+}
+
+/// A redirect off the origin is refused rather than followed. No capture
+/// carries a signed download hop, so its shape is unknown; the transport
+/// would refuse a session request to another host anyway, and inventing the
+/// request that satisfies one is not a substitute for capturing it.
+#[test]
+fn a_download_redirected_off_the_origin_refuses_rather_than_guessing_the_hop() {
+    let redirect = HttpResponse {
+        status: 302,
+        body: Vec::new(),
+        headers: vec![(
+            ResponseHeader::Location,
+            "https://files.example.invalid/signed/object.zip".to_owned(),
+        )],
+    };
+    let adapter = adapter(
+        Cassette {
+            interactions: slug_read(redirect),
+        },
+        1,
+    );
+    let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &adapter,
+        &export(),
+        DOWNLOADED,
+    ));
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: FailureCode::UnexpectedOrigin,
+                ..
+            })
+        ),
+        "an uncaptured signed hop is named, not improvised: {refused:?}"
+    );
+}
+
+/// The same gate every other first-party read answers to.
+#[test]
+fn a_download_under_any_other_reason_sends_nothing() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        1,
+    );
+    let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &adapter,
+        &FetchReason::StructuralProbe {
+            grant: CanaryGrant {
+                inventory: InventoryId::Tpt,
+                decided_at: Timestamp(0),
+            },
+        },
+        DOWNLOADED,
+    ));
+    assert!(
+        matches!(refused, Err(AdapterError::Rejected { .. })),
+        "a file download is justified only by the first-party-export capability, got {refused:?}"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "and nothing left before the refusal"
     );
 }
 

@@ -139,9 +139,17 @@ pub const fn uncaptured_transition(
 /// Which capture a sync's *source* read is waiting on, if any.
 ///
 /// The same registry as the transition table above and the reason the sync
-/// endpoint can refuse before the drain leases anything: only Tes has a
-/// captured seller download, so a request naming any other source is one the
-/// drain could pick up every poll and never serve.
+/// endpoint can refuse before the drain leases anything: a request naming a
+/// source whose download the drain cannot perform is one it could pick up
+/// every poll and never serve.
+///
+/// TPT stays listed although its download is now implemented, because the
+/// route is gated on a browser clearance a server-side cookie jar does not
+/// hold -- a 2026-08-29 probe met the sign-in gate with a jar that
+/// authenticates every other TPT hop. Until a session carries that clearance
+/// TPT-as-source sync runs on the operator-manifest path, and admitting the
+/// request here would promise a drain that refuses. Removing the row is a
+/// founder decision that a live download witnesses.
 #[must_use]
 pub const fn uncaptured_source(inventory: InventoryId) -> Option<&'static str> {
     match inventory {

@@ -249,11 +249,14 @@ impl Hop {
 }
 
 /// Which shape a session request wears. The destination decides a navigation,
-/// because both form urls are navigated to and posted to alike; the body
-/// decides the rest, because the XHR hops are exactly the ones carrying a
-/// JSON or a urlencoded payload.
+/// because both form urls are navigated to and posted to alike and so is the
+/// download, whose control is an anchor the browser follows as a document;
+/// the body decides the rest, because the XHR hops are exactly the ones
+/// carrying a JSON or a urlencoded payload. Without the download's own arm a
+/// bodyless GET falls to `Fetch` and goes out under `sec-fetch-dest: empty`,
+/// which is not what the capture shows the browser sending.
 fn hop(request: &HttpRequest) -> Hop {
-    if endpoints::is_product_form(&request.url) {
+    if endpoints::is_product_form(&request.url) || endpoints::is_download_path(&request.url) {
         Hop::Navigation
     } else {
         match request.body {

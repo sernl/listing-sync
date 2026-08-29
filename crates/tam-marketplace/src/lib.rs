@@ -372,8 +372,9 @@ pub enum AdapterError {
     NotSent(ConnectFailure),
     /// A capability the adapter does not have because no capture settles it.
     /// Distinct from `Rejected`: the marketplace refused nothing, there was
-    /// nothing to send. The TPT file download and TPT import canonicalisation
-    /// are today's members, both on the M7 plan's deferred list.
+    /// nothing to send. No adapter method reports this today; the TPT file
+    /// download and its import canonicalisation, the two that did, are both
+    /// implemented.
     Uncaptured {
         capability: &'static str,
     },

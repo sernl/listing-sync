@@ -344,3 +344,25 @@ A TPT read whose amount is rendered with anything but a dollar sign is refused r
 A projection into TPT carrying a price in another currency is refused at `project_fields`, exactly as the Tes adapter refuses a dollar price into its GB inventory: TPT's wire carries a bare amount, so a pound price would sell the resource at that many dollars.
 A seller converting a GBP listing states the target USD price through the pricing election; no exchange rate is invented anywhere in this system.
 
+## The TPT download, built from the wire format and gated live, 2026-08-29
+
+G-O3 asked what TPT answers when the seller downloads their own product. The founder's capture missed the hop itself — a `target="_blank"` download needs DevTools "Preserve log" — but it settled everything around it, and an orchestrator probe settled the rest.
+
+The entry point is `GET {ORIGIN}/Download/{canonicalSlug}-{id}`, read from `Product.downloadurl` in the product page's own SSR state.
+The control is a plain anchor with no minted token, no nonce and no XHR, so it reproduces as an ordinary session-authenticated document navigation.
+The product id is the identifier and the slug is decorative, as it is on `/Product/{slug}-{id}`; there is no asset id anywhere in the capture, and the payload is declared ZIP, which is the shape the importer already names every bundle.
+
+The probe found the route gated.
+A live fetch of the founder's own product answered `302` to `/Request-Authorization?authModal=login` for a cookie jar that authenticates the GraphQL reads — with `isProductAuthor: true` on that very product — and the entire Phase 3 write path.
+Navigation headers did not change it.
+The jar lacks `cf_clearance`, which the browser capture carries, so the document navigation is gated on a Cloudflare browser clearance where the XHR API path is not.
+
+The decision is to build the capability and leave the sync gate closed.
+`download_resource_bundle` is implemented from the wire format with a cassette for each answer it can meet, including the sign-in page a 200 can carry, which is why the archive is asserted positively by its own magic rather than inferred from a status.
+`uncaptured_source` still names TPT, so `POST /{v}/sync` refuses TPT as a source and the drain never leases a request it cannot serve; TPT-as-source sync ships on the operator-manifest path.
+Removing that row is a founder decision, and what would justify it is a live download — from a session carrying the clearance, or a finding that the route is browser-only.
+
+Two things are deliberately not invented.
+An off-origin redirect is refused rather than followed: no capture carries a signed hop, and the transport refuses a session request to any host but the origin, which is the rule that keeps the seller's cookies on the marketplace.
+And the refusal for the gate is its own condition rather than `SessionExpired`, because the same jar that meets it authenticates everything else, so re-authenticating is the wrong remedy to send an operator after.
+
