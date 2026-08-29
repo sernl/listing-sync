@@ -269,3 +269,97 @@ async fn a_resumed_migrate_removes_every_source_it_canonicalised(pool: PgPool) {
         "the removal job carries every source the request canonicalised"
     );
 }
+
+/// A sync asking for a live listing enqueues the publish the intent means.
+///
+/// The drain used to mint `ItemOperation::Create` whatever the request said.
+/// Both adapters create a draft, so a seller who asked for `live` got one:
+/// the request settled `enqueued`, the job settled succeeded, and nothing
+/// anywhere said the listing was not live. The lowering is the API's own, so
+/// the two enqueue paths agree on what `live` means.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_live_sync_enqueues_the_create_and_the_publish_it_gates(pool: PgPool) {
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+        .execute(&pool)
+        .await
+        .expect("the org seeds");
+    let requests = SyncRequestRepo::new(pool.clone());
+    requests
+        .create(
+            ORG,
+            &NewSyncRequest {
+                id: REQUEST,
+                source: SOURCE,
+                target: TARGET,
+                disposition: Disposition::Sync,
+                intent: SyncIntent::Live,
+                requested_at: NOW,
+                locators: vec!["303".to_owned()],
+            },
+        )
+        .await
+        .expect("the request writes");
+    let (product, mapping) = seed(&pool, 0x03).await;
+    requests
+        .record_canonicalised(
+            ORG,
+            &Canonicalised {
+                request: REQUEST,
+                ordinal: 0,
+                product,
+                mapping,
+                source: tes(303),
+                source_state: Some(ListingState::Live),
+            },
+        )
+        .await
+        .expect("the breadcrumb writes");
+
+    let adapter = NeverRead;
+    let run = tam_import::ImportRun {
+        pool: pool.clone(),
+        kek: Kek::from_bytes(&[0x11; 32]).expect("a well-formed kek"),
+        store_root: std::path::PathBuf::from("/nonexistent"),
+        adapter: &adapter,
+        org: ORG,
+        source: SOURCE,
+        target: TARGET,
+        now: NOW,
+    };
+    let report = drain_request(
+        &requests,
+        &run,
+        REQUEST,
+        &FetchReason::FirstPartyExport { inventory: SOURCE },
+    )
+    .await
+    .expect("the drain runs");
+    let create_job = report.create_job.expect("a sync mints a write job");
+
+    // Pinned, because `job_item` carries FORCE ROW LEVEL SECURITY and the
+    // test pool is `tam_app`: an unpinned read is a clean empty one.
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    let rows = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT operation, requires_bound_on FROM job_item \
+         WHERE org_id = $1 AND job_id = $2 ORDER BY operation",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(create_job.0))
+    .fetch_all(&mut *tx)
+    .await
+    .expect("the job's items read");
+    assert_eq!(
+        rows,
+        vec![
+            ("create".to_owned(), None),
+            ("publish".to_owned(), Some("tes_nz".to_owned())),
+        ],
+        "live is a create and a publish, and the publish waits for the create's own binding"
+    );
+}

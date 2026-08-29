@@ -23,9 +23,9 @@ use tam_marketplace::{
     FetchReason, FirstPartyExport, ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_storage::{
-    job_request_key, Canonicalised, Disposition, Enqueued, JobReadRepo, JobRepo, MappingRepo,
-    NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, SyncResourceRecord,
-    CREATE_LEG, REMOVE_LEG,
+    job_request_key, lower, requires_bound_on, Canonicalised, Disposition, Enqueued, JobReadRepo,
+    JobRepo, LoweringRefusal, MappingRepo, NewJob, NewJobItem, StorageError, SyncIntent,
+    SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
 };
 use tam_types::{InventoryId, JobId, MappingId, OrgId, Uuid};
 
@@ -47,6 +47,9 @@ pub enum DrainError {
     Import(ImportError),
     /// The seller addressed a listing in a way the source cannot resolve.
     Locator(String),
+    /// The request's stated intent has no lowering against the mapping the
+    /// canonicalisation just minted.
+    Lowering(LoweringRefusal),
 }
 
 impl core::fmt::Display for DrainError {
@@ -55,6 +58,7 @@ impl core::fmt::Display for DrainError {
             Self::Storage(error) => write!(f, "storage: {error}"),
             Self::Import(error) => write!(f, "import: {error:?}"),
             Self::Locator(detail) => write!(f, "locator: {detail}"),
+            Self::Lowering(refusal) => write!(f, "lowering: {refusal}"),
         }
     }
 }
@@ -257,6 +261,14 @@ where
 /// creation a replay of the first, returning the first job with `replay:
 /// true` and dropping the second job's items with no error anywhere. The
 /// removal would never exist and the migrate would silently become a sync.
+///
+/// The request's stated intent is lowered here through the same table
+/// `POST /{v}/jobs` lowers through, because a create is only what `draft`
+/// means. Both adapters create a draft, so `live` is a create and a publish
+/// gated on the create's own binding; minting the create alone left a seller
+/// who asked for a live listing with a draft, a request that settled
+/// `enqueued` and a job that settled succeeded, with nothing anywhere saying
+/// the listing is not live.
 async fn enqueue_create<A>(
     run: &ImportRun<'_, A>,
     record: &SyncRequestRecord,
@@ -269,27 +281,33 @@ where
         .mapping_seeds(run.org, record.target, mappings)
         .await?;
     let job = JobId(fresh_uuid());
-    let items: Vec<NewJobItem> = seeds
-        .iter()
-        .map(|seed| NewJobItem {
-            item: JobItemId(fresh_uuid()),
-            mapping: seed.mapping,
-            idempotency_key: derive_idempotency_key(
-                run.org,
-                record.target,
-                seed.product,
-                INTENT_VERSION,
-                tam_storage::job_reads::intent_digest(
-                    &ItemOperation::Create,
-                    job,
-                    &seed.payload_hashes,
-                    seed.sever_generation,
+    let to = match record.intent {
+        SyncIntent::Draft => ListingState::Draft,
+        SyncIntent::Live => ListingState::Live,
+    };
+    let mut items: Vec<NewJobItem> = Vec::new();
+    for seed in &seeds {
+        for operation in lower(to, record.target, seed).map_err(DrainError::Lowering)? {
+            items.push(NewJobItem {
+                item: JobItemId(fresh_uuid()),
+                mapping: seed.mapping,
+                idempotency_key: derive_idempotency_key(
+                    run.org,
+                    record.target,
+                    seed.product,
+                    INTENT_VERSION,
+                    tam_storage::job_reads::intent_digest(
+                        &operation,
+                        job,
+                        &seed.payload_hashes,
+                        seed.sever_generation,
+                    ),
                 ),
-            ),
-            operation: ItemOperation::Create,
-            requires_bound_on: None,
-        })
-        .collect();
+                requires_bound_on: requires_bound_on(&operation, record.target),
+                operation,
+            });
+        }
+    }
     let created = JobRepo::new(run.pool.clone())
         .create_with_request_key(
             run.org,

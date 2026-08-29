@@ -11,7 +11,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::idempotency::derive_idempotency_key;
-use tam_marketplace::{LifecycleTransition, ListingState, RemoteListingId};
+use tam_marketplace::ListingState;
 use tam_storage::{
     intent_digest, Disposition, EventRow, ItemCounts, ItemRow, ItemsPageParams, JobReadRepo,
     JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest, StorageError,
@@ -504,13 +504,12 @@ fn parse_intent(raw: Option<&str>) -> Result<Intent, APIError> {
     }
 }
 
-/// The lowering table: a seller's stated intent plus the mapping's own
-/// binding and lifecycle, into the items that realise it.
+/// The lowering, as `tam-storage` states it once for both enqueue paths, with
+/// its refusals rendered as the validation answers they are.
 ///
-/// Every row is decided from two stored columns and the target's captured
-/// capabilities. Nothing here reads a marketplace, and nothing guesses: a
-/// lifecycle the bind never wrote is refused rather than assumed, because the
-/// API would otherwise have to assert a `from` it does not know.
+/// The intent reaches it as the state the seller asked for rather than as a
+/// second intent enum: `Draft` and `Live` are exactly `ListingState`, and one
+/// vocabulary is one fewer thing to keep in step.
 fn lower(
     intent: Intent,
     inventory: InventoryId,
@@ -520,83 +519,7 @@ fn lower(
         Intent::Draft => ListingState::Draft,
         Intent::Live => ListingState::Live,
     };
-    match seed.binding_state.as_str() {
-        // Nothing exists yet, so live is two writes: both adapters create a
-        // draft, and the publish names whatever the create bound.
-        "unbound" | "severed" => Ok(match intent {
-            Intent::Draft => vec![ItemOperation::Create],
-            Intent::Live => vec![ItemOperation::Create, ItemOperation::Publish { to }],
-        }),
-        "bound" => {
-            let from = match seed.lifecycle_state.as_str() {
-                "draft" => ListingState::Draft,
-                "live" => ListingState::Live,
-                // Every mapping written before the bind recorded a lifecycle
-                // reads 'absent', and the moderation states no write
-                // addresses say nothing either. Refused with the remedy
-                // named rather than lowered against a guess.
-                _ => {
-                    return Err(validation(
-                        "this listing's state is unknown; verify it first",
-                    ))
-                }
-            };
-            // Tes implements only the two transitions out of draft. Without
-            // this the seller gets a 202, then an item that settles skipped
-            // with a code that says nothing about why -- on three of five
-            // inventories. TPT serves all four.
-            if let Some(capability) = uncaptured_transition(inventory, from, to) {
-                return Err(validation(&format!(
-                    "{inventory:?} has no captured {capability}, so this edit cannot be \
-                     attempted yet"
-                )));
-            }
-            Ok(vec![ItemOperation::Revise {
-                subject: subject_of(seed)?,
-                transition: LifecycleTransition { from, to },
-            }])
-        }
-        // A create in flight, or one whose outcome nobody knows. Either way
-        // there is no binding to lower against and enqueuing a second write
-        // would be a write on the strength of a guess.
-        _ => Err(validation(
-            "this mapping has a create in flight; wait for it to settle",
-        )),
-    }
-}
-
-/// The subject a bound mapping's revise addresses. `mapping_seeds` carries
-/// the binding's spelling and not its id, so the id is read where the row
-/// already has to be hydrated -- and a bound row without one is a corrupt
-/// row rather than a seller error.
-fn subject_of(seed: &MappingSeed) -> Result<RemoteListingId, APIError> {
-    seed.subject
-        .clone()
-        .ok_or_else(|| validation("this mapping reads bound but names no listing; verify it first"))
-}
-
-/// Which transition this inventory has no capture for, if any. A registry
-/// lookup rather than a new concept: the adapters already refuse these with
-/// the capability named, and refusing at the API means the seller is told
-/// before an item is enqueued rather than after it settles.
-const fn uncaptured_transition(
-    inventory: InventoryId,
-    from: ListingState,
-    to: ListingState,
-) -> Option<&'static str> {
-    match (inventory, from, to) {
-        (
-            InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz,
-            ListingState::Live,
-            ListingState::Live,
-        ) => Some("tes.edit_published"),
-        (
-            InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz,
-            ListingState::Live,
-            ListingState::Draft,
-        ) => Some("tes.unpublish"),
-        _ => None,
-    }
+    tam_storage::lower(to, inventory, seed).map_err(|refusal| validation(&refusal.to_string()))
 }
 
 pub(crate) async fn create_job(
@@ -648,12 +571,7 @@ pub(crate) async fn create_job(
                     INTENT_VERSION,
                     intent_digest(&operation, job, &seed.payload_hashes, seed.sever_generation),
                 ),
-                // A publish must not run before the create it publishes has
-                // bound. FIFO within the job usually gets that right and does
-                // not when the create parks on an election and the publish
-                // leases first.
-                requires_bound_on: matches!(operation, ItemOperation::Publish { .. })
-                    .then_some(body.inventory),
+                requires_bound_on: tam_storage::requires_bound_on(&operation, body.inventory),
                 operation,
             });
         }

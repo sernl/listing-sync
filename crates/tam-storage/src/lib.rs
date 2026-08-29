@@ -14,6 +14,7 @@ mod codec;
 pub mod connections;
 pub mod job_reads;
 pub mod jobs;
+pub mod lowering;
 mod mapping;
 mod product;
 pub mod pruning;
@@ -32,6 +33,9 @@ pub use jobs::{
     InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef,
     LeaseRepo, LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage,
     OutboxRepo, RateBudgetRepo, WriteAttemptRepo, REVIVABLE_GATES,
+};
+pub use lowering::{
+    lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
