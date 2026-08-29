@@ -208,6 +208,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                 },
                 price: tam_types::PriceIntent::Free,
                 rights: tam_domain::RightsDeclaration::Unstated,
+                native_residue: vec![],
             },
             T0,
         )

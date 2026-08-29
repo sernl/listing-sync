@@ -227,6 +227,7 @@ mod tests {
             },
             price,
             rights: tam_domain::RightsDeclaration::Unstated,
+            native_residue: vec![],
         }
     }
 

@@ -234,6 +234,7 @@ fn fixture_product(
         },
         price: PriceIntent::Free,
         rights: tam_domain::RightsDeclaration::Unstated,
+        native_residue: vec![],
     }
 }
 

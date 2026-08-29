@@ -127,6 +127,7 @@ async fn provision_lifecycle(
         },
         price: PriceIntent::Free,
         rights: tam_domain::RightsDeclaration::Unstated,
+        native_residue: vec![],
     };
     ProductRepo::new(pool.clone())
         .insert(ORG, &product, NOW)

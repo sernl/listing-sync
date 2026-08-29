@@ -131,6 +131,19 @@ pub enum Currency {
     Usd,
 }
 
+impl Currency {
+    /// The ISO 4217 code, which is what a marketplace renders and what an
+    /// import records as the denomination it read. Distinct from the storage
+    /// encoding in `tam-storage`, which is a column value and not a wire one.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Gbp => "GBP",
+            Self::Usd => "USD",
+        }
+    }
+}
+
 /// How an inventory decides the currency a price is denominated in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CurrencyRule {
@@ -342,6 +355,72 @@ pub enum LengthUnit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListingCopy {
     pub body: String,
+}
+
+/// How a listing body is written. Declared rather than sniffed: guessing a
+/// body's format from its bytes is how a listing acquires escaped markup
+/// nobody asked for, which `write_model.rs` already ruled out on the TPT
+/// side. A projection whose source and target disagree refuses rather than
+/// converting, so a mismatch is a named refusal and never a silent
+/// corruption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CopyFormat {
+    Markdown,
+    Html,
+}
+
+/// A source value as an import read yields it, before the relation has been
+/// consulted.
+///
+/// The kind is optional because TPT's 358 facets arrive in one flat namespace
+/// and which axis a slug answers is a fact of the seeded relation, not of the
+/// array it came out of. Forcing an unclassified slug to some existing kind
+/// would be worse than holding it kind-less: a value mislabelled `Topic` is
+/// *projected* as a topic rather than named as a loss, which defeats the
+/// purpose of keeping it at all.
+///
+/// `VocabularyPath` stays the typed-axis form and is recovered from one of
+/// these only once a kind is known, which is the pure upgrade with no data
+/// migration the model promises.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedTerm {
+    pub inventory: InventoryId,
+    pub kind: Option<TermKind>,
+    pub segments: Vec<String>,
+    pub native_id: Option<String>,
+}
+
+/// The price as the source stated it, before any currency is claimed.
+///
+/// The denomination is the source's own marker and may be a symbol rather
+/// than a code: TPT renders a bare `$` on a New Zealand store, and a
+/// `symbol == "$" => Usd` rule would put an unmeasured currency inside
+/// `Money`, where it is indistinguishable from a measured one and the parity
+/// and price-floor guards then compare across the wrong denomination.
+/// Resolution happens only where `CurrencyRule::Fixed` states the answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportedPrice {
+    Free,
+    Paid {
+        minor_units: i64,
+        denomination: String,
+    },
+}
+
+/// The axes an equivalence relates. Here rather than in `tam-domain` because
+/// the adapter seam names one too: an imported term crosses in
+/// `tam-marketplace`, and `tam-domain` depends on that crate rather than the
+/// reverse, so the shared axis label has to sit in the crate both depend on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TermKind {
+    Subject,
+    Topic,
+    ResourceType,
+    Phase,
+    /// A rights grant. An axis like the others in the relation and unlike
+    /// them in one respect the registry carries rather than this enum: no
+    /// opt-in delegates it to a computation.
+    Licence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

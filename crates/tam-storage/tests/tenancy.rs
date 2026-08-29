@@ -102,6 +102,7 @@ fn sample_product(org: OrgId) -> CanonicalProduct {
                 native_id: Some("CC-BY-SA".to_owned()),
             },
         },
+        native_residue: vec![],
     }
 }
 

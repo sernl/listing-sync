@@ -44,6 +44,7 @@ pub(crate) fn minimal_product() -> CanonicalProduct {
         },
         price: PriceIntent::Free,
         rights: tam_domain::RightsDeclaration::Unstated,
+        native_residue: vec![],
     }
 }
 

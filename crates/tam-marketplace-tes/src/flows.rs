@@ -20,8 +20,8 @@ use tam_marketplace::{
     RemovalPlan, RevisePlan, SubmitEvidence,
 };
 use tam_types::{
-    ContentHash, CurrencyRule, FailureCode, FailureDetail, FieldKey, InventoryId, Money, OrgId,
-    PriceIntent, Timestamp,
+    ContentHash, CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, ImportedPrice,
+    ImportedTerm, InventoryId, Money, OrgId, PriceIntent, TermKind, Timestamp,
 };
 
 use crate::classify::{
@@ -892,7 +892,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        let category_native_ids = state
+        let category_native_ids: Vec<String> = state
             .get("categories")
             .and_then(Value::as_array)
             .map(|entries| {
@@ -903,21 +903,131 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                     .collect()
             })
             .unwrap_or_default();
+
+        let inventory = self.inventory;
+        let term = |kind: Option<TermKind>, native: &str| ImportedTerm {
+            inventory,
+            kind,
+            segments: vec![native.to_owned()],
+            native_id: Some(native.to_owned()),
+        };
+        let mut native: Vec<ImportedTerm> = category_native_ids
+            .iter()
+            .map(|id| term(Some(TermKind::Subject), id))
+            .collect();
+        // The country fork: the uploader takes `ageRanges` for GB and
+        // `yearGroups` everywhere else, so exactly one of the two answers the
+        // phase axis on any given resource. The other is not a second phase
+        // channel — its ids belong to a different vocabulary and mixing them
+        // would ask `derive_interval` to read a year group off the age table
+        // — so whatever the unused field carries travels untagged.
+        //
+        // The registry records the same fork on `equivalence_axes`; this is
+        // the adapter's own statement of its wire, restated rather than
+        // imported because the pure core depends on this crate and not the
+        // other way round.
+        let (phase_field, other_field) = match inventory {
+            InventoryId::TesGb => ("ageRanges", "yearGroups"),
+            InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy | InventoryId::Tpt => {
+                ("yearGroups", "ageRanges")
+            }
+        };
+        for phase in string_list(state.get(phase_field)) {
+            native.push(term(Some(TermKind::Phase), &phase));
+        }
+        for stray in string_list(state.get(other_field)) {
+            native.push(term(None, &stray));
+        }
+        // The curriculum orientation answers no axis this model types, so it
+        // travels untagged rather than being filed under a kind it does not
+        // mean.
+        for orientation in string_list(state.get("curriculum")) {
+            native.push(term(None, &orientation));
+        }
+
+        let licence = state.get("licence").and_then(Value::as_str);
+        let rights = licence.map(|token| term(Some(TermKind::Licence), token));
+        let price = self.import_price(licence, state.get("price").and_then(Value::as_f64))?;
+
         Ok(ImportedListing {
             remote: RemoteListingId::Tes {
                 url: format!("https://www.tes.com/teaching-resource/-{}", id.0),
             },
             title,
             body,
-            licence: state
-                .get("licence")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            price: state.get("price").and_then(Value::as_f64),
-            category_native_ids,
-            age_range_native_ids: string_list(state.get("ageRanges")),
-            year_groups: string_list(state.get("yearGroups")),
-            curriculum: string_list(state.get("curriculum")),
+            // The adapter posts `descriptionRawType: "md"` on every write and
+            // the vocabulary catalogue records the field as Markdown, so this
+            // is a read of a declared format rather than a guess about bytes.
+            body_format: CopyFormat::Markdown,
+            native,
+            rights,
+            price,
+            // A missing `draft` key reads as live, exactly as `read_back`
+            // does with the same key, so the state is read rather than
+            // assumed on every Tes resource.
+            state: Some(
+                if state.get("draft").and_then(Value::as_bool) == Some(true) {
+                    ListingState::Draft
+                } else {
+                    ListingState::Live
+                },
+            ),
+        })
+    }
+
+    /// The price as Tes states it, with the currency taken from the
+    /// inventory's own rule rather than from the number.
+    ///
+    /// Tes gates the write on the licence — a Creative Commons value with a
+    /// price is refused and a paid one without is too — so the licence is
+    /// what says whether the number means anything, and an unrecognised token
+    /// refuses rather than being read as free.
+    fn import_price(
+        &self,
+        licence: Option<&str>,
+        price: Option<f64>,
+    ) -> Result<ImportedPrice, AdapterError> {
+        let Some(token) = licence else {
+            return Ok(ImportedPrice::Free);
+        };
+        let Some(known) = endpoints::ReadLicence::from_token(token) else {
+            return Err(refused(format!(
+                "unrecognised licence {token:?}; refusing to guess whether this is paid"
+            )));
+        };
+        if !known.is_paid() {
+            return Ok(ImportedPrice::Free);
+        }
+        let value = price.ok_or_else(|| {
+            refused(format!(
+                "{token} requires a price and the resource carried none"
+            ))
+        })?;
+        let pence = (value * 100.0).round();
+        if !(0.0..=1_000_000_000.0).contains(&pence) {
+            return Err(refused(format!(
+                "price {value} is outside the representable range"
+            )));
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "rounded and range-checked immediately above; the cast is the conversion"
+        )]
+        let minor_units = pence as i64;
+        Ok(ImportedPrice::Paid {
+            minor_units,
+            // Every Tes inventory is CurrencyRule::Fixed, so the denomination
+            // is a fact of the inventory rather than of the number. The write
+            // side already mints from the same rule.
+            denomination: match self.inventory.currency_rule() {
+                CurrencyRule::Fixed(currency) => currency.code().to_owned(),
+                CurrencyRule::SellerScoped | CurrencyRule::Unmeasured => {
+                    return Err(refused(
+                        "a paid Tes resource needs a fixed currency and this inventory                          declares none"
+                            .to_owned(),
+                    ))
+                }
+            },
         })
     }
 }

@@ -23,6 +23,17 @@ impl ProductId {
     }
 }
 
+/// The import addresses a catalogue row by its numeric id, and TPT's own
+/// handle is unsigned, so the conversion is fallible rather than lossy: a
+/// negative id is a corrupt manifest row and says so.
+impl TryFrom<i64> for ProductId {
+    type Error = core::num::TryFromIntError;
+
+    fn try_from(id: i64) -> Result<Self, Self::Error> {
+        u64::try_from(id).map(Self)
+    }
+}
+
 impl core::fmt::Display for ProductId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)

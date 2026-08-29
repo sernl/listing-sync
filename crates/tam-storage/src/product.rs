@@ -11,8 +11,8 @@ use tam_domain::{
     TermKind, VocabularyId, VocabularyPath,
 };
 use tam_types::{
-    CanonicalTermId, FileId, FileRole, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId,
-    Timestamp, Title,
+    CanonicalTermId, FileId, FileRole, ImportedTerm, OrgId, PayloadSet, PriceIntent, ProductFile,
+    ProductId, Timestamp, Title,
 };
 
 use crate::codec::{
@@ -127,6 +127,26 @@ impl ProductRepo {
 
         insert_grades(&mut tx, org_db, product_db, &product.grades).await?;
 
+        for (index, term) in product.native_residue.iter().enumerate() {
+            let position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
+                reason: format!("residue position {index} exceeds the column range"),
+            })?;
+            sqlx::query!(
+                "INSERT INTO native_residue \
+                 (org_id, product_id, position, inventory, term_kind, segments, native_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                org_db,
+                product_db,
+                position,
+                inventory_to_db(term.inventory),
+                term.kind.map(term_kind_to_db),
+                &term.segments,
+                term.native_id.as_deref(),
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
         tx.commit().await?;
         Ok(())
     }
@@ -207,8 +227,24 @@ impl ProductRepo {
         .fetch_all(&mut *tx)
         .await?;
 
+        let residue = sqlx::query_as!(
+            ResidueRow,
+            "SELECT inventory, term_kind, segments, native_id \
+             FROM native_residue \
+             WHERE org_id = $1 AND product_id = $2 \
+             ORDER BY position",
+            org_db,
+            product_db,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+
         tx.commit().await?;
 
+        let native_residue = residue
+            .into_iter()
+            .map(decode_residue)
+            .collect::<Result<Vec<_>, _>>()?;
         let (payload, cover, previews) = partition_files(files)?;
         let subjects = terms
             .into_iter()
@@ -234,6 +270,7 @@ impl ProductRepo {
                 grades,
                 price,
                 rights,
+                native_residue,
             },
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),
@@ -526,6 +563,29 @@ struct PathRow {
     term_kind: String,
     segments: Vec<String>,
     native_id: Option<String>,
+}
+
+/// The kind is nullable here and not on `PathRow`: a grade declaration is a
+/// phase by construction, while a residue value's axis is exactly what is not
+/// known about it.
+struct ResidueRow {
+    inventory: String,
+    term_kind: Option<String>,
+    segments: Vec<String>,
+    native_id: Option<String>,
+}
+
+fn decode_residue(row: ResidueRow) -> Result<ImportedTerm, StorageError> {
+    Ok(ImportedTerm {
+        inventory: inventory_from_db(&row.inventory)?,
+        kind: row
+            .term_kind
+            .as_deref()
+            .map(term_kind_from_db)
+            .transpose()?,
+        segments: row.segments,
+        native_id: row.native_id,
+    })
 }
 
 fn decode_file(row: FileRow) -> Result<(FileRole, ProductFile), StorageError> {

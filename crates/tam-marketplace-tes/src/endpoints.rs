@@ -44,6 +44,75 @@ impl TesLicence {
     }
 }
 
+/// Every licence `RefdataStore.licences` holds, which is the read side and a
+/// strict superset of [`TesLicence`], the writable four.
+///
+/// `GET /api/refdata/v2/licences` returns the first five and omits the legacy
+/// pair; the editor rewrites `TES-V1` and `TES-V2` to `CC-BY-SA` on load, so
+/// both read back on older resources and neither is offered on write.
+/// `TES-PAID-SCHOOL` is the school tier, real on read and not something this
+/// adapter writes. An import that models four of seven refuses three real
+/// licences as unrecognised and drops the seller's grant on the floor.
+///
+/// Restated here rather than imported from the registry: the pure core must
+/// not depend on an adapter crate, so the dependency runs the other way and
+/// this is the adapter's own transcription. `the_seven_tokens_agree_with_the_polled_vocabulary`
+/// binds it to the JSON rather than trusting it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadLicence {
+    CcBy,
+    CcByNd,
+    CcBySa,
+    TesPaid,
+    TesPaidSchool,
+    TesV1,
+    TesV2,
+}
+
+impl ReadLicence {
+    pub const ALL: [Self; 7] = [
+        Self::CcBy,
+        Self::CcByNd,
+        Self::CcBySa,
+        Self::TesPaid,
+        Self::TesPaidSchool,
+        Self::TesV1,
+        Self::TesV2,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CcBy => "CC-BY",
+            Self::CcByNd => "CC-BY-ND",
+            Self::CcBySa => "CC-BY-SA",
+            Self::TesPaid => "TES-PAID",
+            Self::TesPaidSchool => "TES-PAID-SCHOOL",
+            Self::TesV1 => "TES-V1",
+            Self::TesV2 => "TES-V2",
+        }
+    }
+
+    /// `None` rather than a guess: an unlisted token is a licence this
+    /// adapter has never seen, and reading it as free would state a rights
+    /// grant nobody made.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|row| row.as_str() == token)
+    }
+
+    /// Whether the licence gates the write on a price. The API refuses a
+    /// Creative Commons value with a price and refuses a paid one without,
+    /// so this is the branch a price intent is read off.
+    #[must_use]
+    pub const fn is_paid(self) -> bool {
+        match self {
+            Self::TesPaid | Self::TesPaidSchool => true,
+            Self::CcBy | Self::CcByNd | Self::CcBySa | Self::TesV1 | Self::TesV2 => false,
+        }
+    }
+}
+
 /// The three Creative Commons licences, which are the free tier: the API
 /// refuses a price against one of them and refuses `TES-PAID` without one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -561,10 +630,83 @@ pub fn parse_download_manifest(body: &Value, id: DraftId) -> Result<String, Down
 mod tests {
     use super::{
         parse_catalogue_page, parse_download_manifest, parse_presign, CataloguePageError,
-        DownloadManifestError, DraftId, FreeLicence, NotAPrice, PresignParseError, TesLicence,
-        TesListing, TesPrice, TesPricing,
+        DownloadManifestError, DraftId, FreeLicence, NotAPrice, PresignParseError, ReadLicence,
+        TesLicence, TesListing, TesPrice, TesPricing,
     };
     use base64::Engine;
+
+    /// The read side is a transcription of a polled vocabulary, so it is
+    /// checked against that vocabulary rather than trusted. The paid/free
+    /// semantics live in the JSON and in a prose comment and in no
+    /// consultable type, which is exactly the condition under which a
+    /// transcription drifts.
+    #[test]
+    fn the_seven_tokens_agree_with_the_polled_vocabulary() {
+        let vocabulary: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/design/data/tes-vocabulary.json"
+        ))
+        .expect("the polled vocabulary parses");
+        let options = vocabulary["licences"]["options"]
+            .as_object()
+            .expect("licences.options is an object");
+        assert_eq!(
+            options.len(),
+            ReadLicence::ALL.len(),
+            "RefdataStore holds seven rows and the adapter models all seven; the four-value \
+             record refused three real licences as unrecognised"
+        );
+        for licence in ReadLicence::ALL {
+            let row = options
+                .get(licence.as_str())
+                .unwrap_or_else(|| panic!("{} is a polled row", licence.as_str()));
+            assert_eq!(
+                row["paid"].as_bool(),
+                Some(licence.is_paid()),
+                "{} classifies as the poll recorded it, and the price gate reads off this",
+                licence.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unlisted_token_is_unrecognised_rather_than_free() {
+        assert_eq!(
+            ReadLicence::from_token("CC-BY-NC"),
+            None,
+            "reading an unknown licence as free would state a rights grant nobody made"
+        );
+        assert_eq!(
+            ReadLicence::from_token("TES-PAID-SCHOOL"),
+            Some(ReadLicence::TesPaidSchool),
+            "the school tier is real on read even though this adapter never writes it"
+        );
+    }
+
+    #[test]
+    fn the_writable_four_are_a_subset_of_the_seven_the_store_holds() {
+        for writable in [
+            TesLicence::CcBy,
+            TesLicence::CcBySa,
+            TesLicence::CcByNd,
+            TesLicence::TesPaid,
+        ] {
+            assert!(
+                ReadLicence::from_token(writable.as_str()).is_some(),
+                "{} is written by this adapter and must read back",
+                writable.as_str()
+            );
+        }
+        assert_eq!(
+            ReadLicence::ALL
+                .into_iter()
+                .filter(|licence| licence.is_paid())
+                .map(ReadLicence::as_str)
+                .collect::<Vec<_>>(),
+            vec!["TES-PAID", "TES-PAID-SCHOOL"],
+            "the two paid tiers are the ones that gate the write on a price"
+        );
+    }
+
     use serde_json::json;
     use tam_marketplace::transport::RequestBody;
 

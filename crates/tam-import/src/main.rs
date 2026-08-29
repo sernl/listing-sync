@@ -78,7 +78,8 @@ async fn import_and_report<A: FirstPartyExport>(
     entry: &ImportEntry,
     totals: &mut DrainTotals,
 ) where
-    A::Resource: From<i64>,
+    A::Resource: TryFrom<i64>,
+    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
 {
     match import_one(run, entry).await {
         Ok(report) => {

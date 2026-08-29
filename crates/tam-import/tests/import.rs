@@ -27,12 +27,16 @@ const TOPIC: CanonicalTermId = CanonicalTermId(Uuid([0x78; 16]));
 const NOW: Timestamp = Timestamp(1_000);
 
 fn draft_body(resource: i64) -> String {
-    serde_json::json!({
+    draft_body_licensed(resource, "CC-BY", serde_json::Value::Null)
+}
+
+fn draft_body_licensed(resource: i64, licence: &str, price: serde_json::Value) -> String {
+    let mut body = serde_json::json!({
         "id": resource,
         "title": "Fractions practice",
         "descriptionRaw": "A worksheet.",
         "descriptionRawType": "markdown",
-        "licence": "CC-BY",
+        "licence": licence,
         "categories": [{ "id": 1_000_454 }, { "id": 1_000_732 }],
         "ageRanges": [2],
         "yearGroups": ["year-2"],
@@ -40,21 +44,35 @@ fn draft_body(resource: i64) -> String {
         "mainAge": 6,
         "mainType": 1,
         "ages": [5, 6, 7]
-    })
-    .to_string()
+    });
+    if !price.is_null() {
+        body["price"] = price;
+    }
+    body.to_string()
+}
+
+fn adapter_for(resource: i64) -> TesAdapter<CassetteTransport, NoImportFiles> {
+    adapter_licensed(resource, "CC-BY", serde_json::Value::Null)
 }
 
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-fn adapter_for(resource: i64) -> TesAdapter<CassetteTransport, NoImportFiles> {
+fn adapter_licensed(
+    resource: i64,
+    licence: &str,
+    price: serde_json::Value,
+) -> TesAdapter<CassetteTransport, NoImportFiles> {
     let cassette = Cassette {
         interactions: vec![Interaction {
             request: HttpRequest::get(format!(
                 "https://www.tes.com/api/v2/resources/{resource}/draft"
             )),
-            response: HttpResponse::plain(200, draft_body(resource).into_bytes()),
+            response: HttpResponse::plain(
+                200,
+                draft_body_licensed(resource, licence, price).into_bytes(),
+            ),
         }],
     };
     TesAdapter::new(
@@ -232,7 +250,104 @@ async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
         "the interval derives from the measured table"
     );
     assert!(product.cover.is_some(), "the pipeline generated the cover");
-    assert_eq!(report.curriculum, vec!["English".to_owned()]);
+    assert_eq!(
+        product.rights,
+        tam_domain::RightsDeclaration::Declared {
+            source: tam_domain::VocabularyPath {
+                vocabulary: tam_domain::VocabularyId(
+                    InventoryId::TesGb,
+                    tam_domain::TermKind::Licence
+                ),
+                segments: vec!["CC-BY".to_owned()],
+                native_id: Some("CC-BY".to_owned()),
+            },
+        },
+        "the import read the licence and discarded it before this; the grant is the seller's \
+         and now travels with the product"
+    );
+    assert_eq!(
+        product
+            .native_residue
+            .iter()
+            .filter_map(|term| term.native_id.clone())
+            .collect::<Vec<_>>(),
+        vec!["year-2".to_owned(), "English".to_owned()],
+        "a GB resource answers the phase axis from ageRanges, so the yearGroups value and \
+         the curriculum orientation are values in axes this model does not type, kept \
+         verbatim rather than filed under a kind they do not mean"
+    );
+    assert_eq!(
+        report.curriculum,
+        vec!["English".to_owned()],
+        "the operator-facing column is derived from the residue by membership in the \
+         twelve-value orientation vocabulary, not carried as its own field"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_three_licences_the_import_used_to_refuse_now_import(pool: PgPool) {
+    seed(&pool, true).await;
+    // TES-PAID-SCHOOL, TES-V1 and TES-V2 are real rows the store holds and
+    // the adapter modelled four of seven, so each of these was a silent
+    // per-listing drop that the drain totals concealed: import_and_report
+    // prints the failure and continues.
+    for (resource, licence, price, expected) in [
+        (
+            13_000_001_i64,
+            "TES-V1",
+            serde_json::Value::Null,
+            PriceIntent::Free,
+        ),
+        (
+            13_000_002,
+            "TES-V2",
+            serde_json::Value::Null,
+            PriceIntent::Free,
+        ),
+        (
+            13_000_003,
+            "TES-PAID-SCHOOL",
+            serde_json::json!(4.5),
+            PriceIntent::Paid(
+                tam_types::Money::new(450, tam_types::Currency::Gbp)
+                    .expect("450 pence is a positive amount"),
+            ),
+        ),
+    ] {
+        let adapter = adapter_licensed(resource, licence, price);
+        let run = run_for(
+            pool.clone(),
+            &adapter,
+            store_root(&format!("lic-{licence}")),
+        );
+        let entry = ImportEntry {
+            resource,
+            files: vec![NamedBytes {
+                name: "worksheet.pdf".to_owned(),
+                bytes: pdf(),
+            }],
+        };
+        let report = import_one(&run, &entry)
+            .await
+            .unwrap_or_else(|error| panic!("{licence} imports rather than being dropped: {error}"));
+        let product = ProductRepo::new(pool.clone())
+            .get(ORG, report.product)
+            .await
+            .expect("the product reads back")
+            .expect("the product exists");
+        assert_eq!(
+            product.product.price, expected,
+            "{licence} classifies from the polled paid flag rather than from a four-value \
+             transcription"
+        );
+        assert!(
+            matches!(
+                product.product.rights,
+                tam_domain::RightsDeclaration::Declared { .. }
+            ),
+            "{licence} is the seller's grant and travels with the product"
+        );
+    }
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

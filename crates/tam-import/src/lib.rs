@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 use sqlx::PgPool;
+use tam_domain::registry::{registry, NativeVocabulary};
 use tam_marketplace::{
     AdapterError, FetchReason, FileContent, FileSource, FileSourceError, FirstPartyExport,
 };
@@ -28,9 +29,9 @@ use tam_taxonomy::listing::{project_listing, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
 use tam_taxonomy::TES_MAIN_AGE_RANGES;
 use tam_types::{
-    CanonicalTermId, ContentHash, Currency, FileId, FileKind, FileRole, InventoryId,
-    JobEventPayload, JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent,
-    ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CurrencyRule, FileId, FileKind, FileRole, ImportedPrice,
+    ImportedTerm, InventoryId, JobEventPayload, JobId, ListingCopy, MappingId, Money, OrgId,
+    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, TermKind, Timestamp, Title, Uuid,
 };
 
 /// The import never uploads, so its adapter's file source is a refusal.
@@ -61,11 +62,14 @@ pub struct NamedBytes {
 
 /// Everything an import run holds constant across entries. The adapter seam
 /// is the capability — the run reads through `FirstPartyExport` rather than
-/// one marketplace's client — but the run's own vocabulary is still
-/// Tes-shaped: it labels grades from `TES_MAIN_AGE_RANGES`, decodes Tes
-/// licence tokens into a price intent, mints GBP, and addresses resources
-/// numerically through `A::Resource: From<i64>`. Generalising the run is
-/// M7's, with the second platform's import.
+/// one marketplace's client — and the run's own vocabulary now is too: the
+/// adapter states its own price intent, its own rights and its own axis
+/// tagging, and the run consumes `ImportedListing` without knowing which
+/// marketplace filled it.
+///
+/// Resources are addressed numerically through `A::Resource: TryFrom<i64>`,
+/// fallibly because TPT's product handle is unsigned and a catalogue row
+/// whose id will not fit is a named failure rather than a panic.
 pub struct ImportRun<'a, A: FirstPartyExport> {
     pub pool: PgPool,
     pub kek: Kek,
@@ -100,6 +104,21 @@ pub enum ImportError {
     Storage(StorageError),
     NoPayload,
     Price(String),
+    /// A catalogue row whose numeric id this marketplace's own resource
+    /// handle cannot hold. TPT addresses a product by an unsigned id, so the
+    /// conversion is fallible and the failure names the row rather than
+    /// panicking on it.
+    Resource(String),
+    /// A paid listing on an inventory whose currency nobody has measured.
+    /// Named apart from `Price` because it is not a malformed number: the
+    /// source states an amount and renders a symbol, and reading that symbol
+    /// as a currency would put an unmeasured denomination inside `Money`
+    /// where nothing downstream can tell it from a measured one. The mirror
+    /// of `ProjectionBlocked::CurrencyUnknown` on the read side, and removed
+    /// by a probe rather than by a guess.
+    CurrencyUnknown {
+        inventory: InventoryId,
+    },
 }
 
 impl core::fmt::Display for ImportError {
@@ -110,6 +129,11 @@ impl core::fmt::Display for ImportError {
             Self::Storage(error) => write!(f, "storage: {error}"),
             Self::NoPayload => f.write_str("the entry carried no ingestable payload"),
             Self::Price(detail) => write!(f, "price: {detail}"),
+            Self::Resource(detail) => write!(f, "resource: {detail}"),
+            Self::CurrencyUnknown { inventory } => write!(
+                f,
+                "currency: {inventory:?} denominates prices per seller and none is measured"
+            ),
         }
     }
 }
@@ -274,7 +298,8 @@ pub async fn measure_one<A: FirstPartyExport>(
     resource: i64,
 ) -> Result<MeasureReport, ImportError>
 where
-    A::Resource: From<i64>,
+    A::Resource: TryFrom<i64>,
+    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
 {
     let listing = run
         .adapter
@@ -282,12 +307,14 @@ where
             &FetchReason::FirstPartyExport {
                 inventory: run.source,
             },
-            resource.into(),
+            resource
+                .try_into()
+                .map_err(|error| ImportError::Resource(format!("{resource}: {error}")))?,
         )
         .await?;
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
     let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, &listing).await?;
-    let terms_seen = listing.category_native_ids.len();
+    let terms_seen = listing.native_ids(TermKind::Subject).len();
     let terms_mapped = subjects.len();
 
     let terms = taxonomy.terms().await?;
@@ -341,7 +368,7 @@ where
 
     Ok(MeasureReport {
         resource,
-        title: listing.title,
+        title: listing.title.clone(),
         terms_seen,
         terms_mapped,
         unmapped_native_ids: unmapped,
@@ -371,7 +398,7 @@ async fn inbound_subjects(
         .await?;
     let mut subjects: Vec<CanonicalTermId> = Vec::new();
     let mut unmapped: Vec<String> = Vec::new();
-    for native in &listing.category_native_ids {
+    for native in &listing.native_ids(TermKind::Subject) {
         let found = ingest_by_native_id(
             native,
             tam_domain::VocabularyId(source, tam_domain::TermKind::Subject),
@@ -398,17 +425,20 @@ pub async fn import_one<A: FirstPartyExport>(
     entry: &ImportEntry,
 ) -> Result<ImportRowReport, ImportError>
 where
-    A::Resource: From<i64>,
+    A::Resource: TryFrom<i64>,
+    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
 {
-    let listing = run
-        .adapter
-        .fetch_for_import(
-            &FetchReason::FirstPartyExport {
-                inventory: run.source,
-            },
-            entry.resource.into(),
-        )
-        .await?;
+    let listing =
+        run.adapter
+            .fetch_for_import(
+                &FetchReason::FirstPartyExport {
+                    inventory: run.source,
+                },
+                entry.resource.try_into().map_err(|error| {
+                    ImportError::Resource(format!("{}: {error}", entry.resource))
+                })?,
+            )
+            .await?;
 
     // Files through the pipeline: every guard M1f built applies to an import
     // exactly as to an upload. The first entry's cover becomes the product's.
@@ -466,14 +496,14 @@ where
     // below covers every term that does.
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
     let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, &listing).await?;
-    let terms_seen = listing.category_native_ids.len();
+    let terms_seen = listing.native_ids(TermKind::Subject).len();
     let terms_mapped = subjects.len();
 
     // Grades verbatim: the declared age-range ids as paths, the label looked
     // up from the measured table where it exists, the interval derived only
     // when every declared range is bounded.
     let grade_paths: Vec<tam_domain::VocabularyPath> = listing
-        .age_range_native_ids
+        .native_ids(TermKind::Phase)
         .iter()
         .map(|native| {
             let label = TES_MAIN_AGE_RANGES
@@ -495,7 +525,9 @@ where
         raw: grade_paths,
     };
 
-    let price = price_intent(listing.licence.as_deref(), listing.price)?;
+    let price = resolve_price(run.source, &listing.price)?;
+    let rights = rights_from(&listing);
+    let native_residue = residue_of(&listing);
 
     let product_id = ProductId(fresh_uuid());
     let product = tam_domain::CanonicalProduct {
@@ -511,7 +543,8 @@ where
         subjects,
         grades,
         price,
-        rights: tam_domain::RightsDeclaration::Unstated,
+        rights,
+        native_residue,
     };
     ProductRepo::new(run.pool.clone())
         .insert(run.org, &product, run.now)
@@ -634,45 +667,111 @@ where
         resource: entry.resource,
         product: product_id,
         mapping: mapping_id,
-        title: listing.title,
+        title: listing.title.clone(),
         terms_seen,
         terms_mapped,
         unmapped_native_ids: unmapped,
-        curriculum: listing.curriculum,
+        curriculum: curriculum_of(&listing),
         raised,
         projectable,
         blocked_by,
     })
 }
 
-/// Tes prices are the licence split the spike measured: a Creative Commons
-/// licence is free, `TES-PAID` carries a decimal price in account currency.
-fn price_intent(licence: Option<&str>, price: Option<f64>) -> Result<PriceIntent, ImportError> {
-    match licence {
-        None => Ok(PriceIntent::Free),
-        Some(cc) if cc.starts_with("CC-") => Ok(PriceIntent::Free),
-        Some("TES-PAID") => {
-            let value = price
-                .ok_or_else(|| ImportError::Price("TES-PAID without a price value".to_owned()))?;
-            let pence = (value * 100.0).round();
-            if !(0.0..=1_000_000_000.0).contains(&pence) {
-                return Err(ImportError::Price(format!(
-                    "price {value} is outside the representable range"
-                )));
-            }
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "rounded and range-checked immediately above; the cast is the conversion"
-            )]
-            let minor = pence as i64;
-            Money::new(minor, Currency::Gbp)
-                .map(PriceIntent::Paid)
-                .map_err(|error| ImportError::Price(error.to_string()))
-        }
-        Some(other) => Err(ImportError::Price(format!(
-            "unrecognised licence {other:?}; refusing to guess whether this is paid"
-        ))),
+/// The price the source stated, denominated where the inventory's own rule
+/// states the currency and blocked where it does not.
+///
+/// This is not the licence decoder it replaces. Which licences are paid is
+/// the source marketplace's own fact and belongs in its adapter, which is
+/// where the seven-row table now lives; what remains here is resolving a
+/// stated amount against the inventory's currency rule.
+///
+/// A seller-scoped inventory renders a bare symbol — TPT's captured product
+/// shows `$` on a New Zealand store — and reading that as USD would put an
+/// unmeasured currency inside `Money`, where it is indistinguishable from a
+/// measured one and the parity and price-floor guards compare across the
+/// wrong denomination. `CurrencyUnknown` is the designed answer and the
+/// variant's own doc says a probe removes it, not a guess.
+fn resolve_price(source: InventoryId, price: &ImportedPrice) -> Result<PriceIntent, ImportError> {
+    let ImportedPrice::Paid {
+        minor_units,
+        denomination,
+    } = price
+    else {
+        return Ok(PriceIntent::Free);
+    };
+    let CurrencyRule::Fixed(currency) = source.currency_rule() else {
+        return Err(ImportError::CurrencyUnknown { inventory: source });
+    };
+    if currency.code() != denomination {
+        return Err(ImportError::Price(format!(
+            "{source:?} fixes {} and the source read {denomination:?}",
+            currency.code()
+        )));
     }
+    Money::new(*minor_units, currency)
+        .map(PriceIntent::Paid)
+        .map_err(|error| ImportError::Price(error.to_string()))
+}
+
+/// D4: the grant the source stated, kept as the source's own value. Read and
+/// discarded before this existed, which is why every product before it reads
+/// back `Unstated`.
+fn rights_from(listing: &tam_marketplace::ImportedListing) -> tam_domain::RightsDeclaration {
+    listing
+        .rights
+        .as_ref()
+        .map_or(tam_domain::RightsDeclaration::Unstated, |term| {
+            tam_domain::RightsDeclaration::Declared {
+                source: tam_domain::VocabularyPath {
+                    vocabulary: tam_domain::VocabularyId(term.inventory, TermKind::Licence),
+                    segments: term.segments.clone(),
+                    native_id: term.native_id.clone(),
+                },
+            }
+        })
+}
+
+/// Every source value in an axis this model does not type, kept verbatim so a
+/// round trip back to the source loses nothing and a projection into a
+/// platform without the field can name what it dropped.
+fn residue_of(listing: &tam_marketplace::ImportedListing) -> Vec<ImportedTerm> {
+    listing
+        .native
+        .iter()
+        .filter(|term| term.kind.is_none())
+        .cloned()
+        .collect()
+}
+
+/// The operator-facing curriculum column, derived from the residue rather
+/// than carried as its own field. `curriculum` is a read-only native field
+/// with a twelve-value closed vocabulary and no axis of its own, so it
+/// arrives untagged and is recognised by its membership.
+fn curriculum_of(listing: &tam_marketplace::ImportedListing) -> Vec<String> {
+    let Some(NativeVocabulary::Closed(known)) = registry(listing_inventory(listing))
+        .native("curriculum")
+        .map(|field| field.vocabulary)
+    else {
+        return Vec::new();
+    };
+    listing
+        .native
+        .iter()
+        .filter(|term| term.kind.is_none())
+        .filter_map(|term| term.native_id.clone())
+        .filter(|value| known.contains(&value.as_str()))
+        .collect()
+}
+
+/// Which inventory's registry describes the values a listing carried. Every
+/// term a read yields names its own inventory, and a listing that carried
+/// none has no residue to classify.
+fn listing_inventory(listing: &tam_marketplace::ImportedListing) -> InventoryId {
+    listing
+        .native
+        .first()
+        .map_or(InventoryId::TesGb, |term| term.inventory)
 }
 
 /// Row identity, minted at the import boundary.
@@ -683,3 +782,65 @@ fn fresh_uuid() -> Uuid {
 /// The blake3 content hash type is re-exported for the binary's manifest
 /// handling; nothing else here is marketplace-shaped.
 pub type PayloadHash = ContentHash;
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_price, ImportError};
+    use tam_types::{Currency, ImportedPrice, InventoryId, Money, PriceIntent};
+
+    fn paid(minor_units: i64, denomination: &str) -> ImportedPrice {
+        ImportedPrice::Paid {
+            minor_units,
+            denomination: denomination.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_fixed_inventory_denominates_a_price_from_its_own_rule() {
+        assert_eq!(
+            resolve_price(InventoryId::TesGb, &paid(450, "GBP")).ok(),
+            Money::new(450, Currency::Gbp).ok().map(PriceIntent::Paid),
+            "the write side already mints from currency_rule, and the read side agrees"
+        );
+        assert_eq!(
+            resolve_price(InventoryId::TesUs, &paid(450, "USD")).ok(),
+            Money::new(450, Currency::Usd).ok().map(PriceIntent::Paid),
+            "TesUs fixes USD; a rule that said Tes mints GBP would be wrong here"
+        );
+    }
+
+    #[test]
+    fn a_seller_scoped_inventory_refuses_rather_than_reading_a_symbol_as_a_currency() {
+        // The captured TPT product renders a bare `$` on a New Zealand store.
+        // A symbol-to-currency rule would put an unmeasured currency inside
+        // Money, where it is indistinguishable from a measured one and the
+        // parity and price-floor guards then compare across the wrong
+        // denomination.
+        let refused = resolve_price(InventoryId::Tpt, &paid(495, "$"));
+        assert!(
+            matches!(refused, Err(ImportError::CurrencyUnknown { inventory }) if inventory == InventoryId::Tpt),
+            "a seller-scoped currency is unmeasured, and the variant's own doc says a probe \
+             removes it rather than a guess"
+        );
+    }
+
+    #[test]
+    fn a_free_listing_needs_no_currency_at_all() {
+        assert_eq!(
+            resolve_price(InventoryId::Tpt, &ImportedPrice::Free).ok(),
+            Some(PriceIntent::Free),
+            "the currency gate applies to a price, and a free listing has none"
+        );
+    }
+
+    #[test]
+    fn a_denomination_the_inventory_does_not_fix_is_refused() {
+        assert!(
+            matches!(
+                resolve_price(InventoryId::TesGb, &paid(450, "USD")),
+                Err(ImportError::Price(_))
+            ),
+            "reading a USD price into a GBP-fixed inventory would silently redenominate it"
+        );
+    }
+}

@@ -21,24 +21,19 @@ use tam_marketplace::{
 };
 use tam_types::{
     AttemptId, CanonicalTermId, ConnectionId, ContentHash, FailureCode, FailureDetail,
-    FieldMismatch, FileId, InventoryId, ListingCopy, LogicalInstant, MappingId, OrgId, PayloadSet,
-    PriceIntent, PriceRule, ProductFile, ProductId, Timestamp, Title, UserId, Uuid,
+    FieldMismatch, FileId, ImportedTerm, InventoryId, ListingCopy, LogicalInstant, MappingId,
+    OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, Timestamp, Title, UserId,
+    Uuid,
 };
+
+/// The axis vocabulary lives in `tam-types` because the adapter seam names it
+/// too: `ImportedTerm` crosses in `tam-marketplace`, which this crate depends
+/// on rather than the other way round. Re-exported here because the taxonomy
+/// hub is where it is reasoned about.
+pub use tam_types::TermKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobItemId(pub Uuid);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TermKind {
-    Subject,
-    Topic,
-    ResourceType,
-    Phase,
-    /// A rights grant. An axis like the others in the relation and unlike
-    /// them in one respect the registry carries rather than this enum: no
-    /// opt-in delegates it to a computation.
-    Licence,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalTerm {
@@ -322,6 +317,14 @@ pub struct CanonicalProduct {
     pub grades: GradeDeclaration,
     pub price: PriceIntent,
     pub rights: RightsDeclaration,
+    /// Source values in axes this model does not yet type, kept verbatim.
+    ///
+    /// Two jobs: a round trip back to the source platform loses nothing, and
+    /// a projection into a platform that has no such field can name what it
+    /// dropped rather than reducing the founder's tag-flattening requirement
+    /// to a log line. Adding an axis later is a pure upgrade — values move
+    /// out of residue into a typed axis with no data migration.
+    pub native_residue: Vec<ImportedTerm>,
 }
 
 /// The per-inventory rendering of a canonical product. Derived, never authored,

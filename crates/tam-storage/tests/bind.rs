@@ -80,6 +80,7 @@ fn product(seed: u8) -> CanonicalProduct {
         },
         price: PriceIntent::Free,
         rights: tam_domain::RightsDeclaration::Unstated,
+        native_residue: vec![],
     }
 }
 

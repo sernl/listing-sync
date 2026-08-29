@@ -14,9 +14,9 @@ pub mod idempotency;
 pub mod transport;
 
 use tam_types::{
-    AttemptId, ConnectionId, ContentHash, FailureCode, FailureDetail, FieldKey, FieldMismatch,
-    FileId, InventoryId, LogicalInstant, Marketplace, MismatchClass, OrgId, PriceIntent, Timestamp,
-    Uuid,
+    AttemptId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail, FieldKey,
+    FieldMismatch, FileId, ImportedPrice, ImportedTerm, InventoryId, LogicalInstant, Marketplace,
+    MismatchClass, OrgId, PriceIntent, TermKind, Timestamp, Uuid,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -576,17 +576,57 @@ pub struct RemovalPlan {
 /// verbatim marketplace vocabulary for canonicalisation, no interpretation.
 /// Read only under [`FetchReason::FirstPartyExport`]; the adapter refuses
 /// any other reason.
+///
+/// One shape serves both sources. The per-axis field lists it used to carry
+/// were Tes's own wire names, so a second platform had nowhere to put its
+/// values; `native` is every source value in the source's own vocabulary,
+/// tagged with an axis where the adapter knows one and left untagged where it
+/// does not, which is the honest state of eight of TPT's twelve facet
+/// categories.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedListing {
     pub remote: RemoteListingId,
     pub title: String,
     pub body: String,
-    pub licence: Option<String>,
-    pub price: Option<f64>,
-    pub category_native_ids: Vec<String>,
-    pub age_range_native_ids: Vec<String>,
-    pub year_groups: Vec<String>,
-    pub curriculum: Vec<String>,
+    pub body_format: CopyFormat,
+    /// Every value the read carried, verbatim. What used to be `licence`,
+    /// `category_native_ids`, `age_range_native_ids`, `year_groups` and
+    /// `curriculum`, plus everything a second platform carries that no Tes
+    /// field name covers.
+    pub native: Vec<ImportedTerm>,
+    /// The grant the source stated, as the source stated it. Read and
+    /// discarded before this existed, which is the defect it repairs.
+    pub rights: Option<ImportedTerm>,
+    pub price: ImportedPrice,
+    /// Which side of the draft line the source sits on, read rather than
+    /// assumed. `None` means the read did not carry it — the honest state of
+    /// every TPT capture on file. A migrate's removal names this value, so
+    /// `None` refuses at the API rather than defaulting: a removal must never
+    /// carry a lifecycle nobody has observed.
+    pub state: Option<ListingState>,
+}
+
+impl ImportedListing {
+    /// The source's own values on one axis, in read order. An untagged term
+    /// answers no axis and is therefore in no axis's list.
+    #[must_use]
+    pub fn axis(&self, kind: TermKind) -> Vec<&ImportedTerm> {
+        self.native
+            .iter()
+            .filter(|term| term.kind == Some(kind))
+            .collect()
+    }
+
+    /// The wire tokens on one axis, which is what the taxonomy relation joins
+    /// on. A term with no native id contributes nothing, because the id is
+    /// what the join needs.
+    #[must_use]
+    pub fn native_ids(&self, kind: TermKind) -> Vec<String> {
+        self.axis(kind)
+            .into_iter()
+            .filter_map(|term| term.native_id.clone())
+            .collect()
+    }
 }
 
 /// The tier-one capability as a seam: the marketplace's own reads of the
