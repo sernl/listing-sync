@@ -24,7 +24,7 @@ use tam_marketplace::{
 };
 use tam_storage::{
     ElectionRepo, LeasedItem, LossScope, MappingRepo, ProductRepo, RaiseReport, RaiseScope,
-    StorageError, TaxonomyRepo,
+    StorageError, TaxonomyRepo, ELECTION,
 };
 use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
 use tam_types::{AttemptId, InventoryId, OrgId, Timestamp, Uuid};
@@ -397,13 +397,17 @@ pub async fn prepare_item(
             // the same reason the reconciliation items above are: this is
             // where the projection discovers them, and a question discovered
             // and not recorded is a park with nothing behind it.
-            elections
+            let elected = elections
                 .raise(lease.org, lease.mapping, &raised_elections, now)
                 .await?;
-            let gate = if gaps.is_empty() && !raised_elections.is_empty() {
-                "election"
+            // The report is the gate's own, not the other gate's. The worker
+            // re-checks an election park against it -- a raise that minted
+            // nothing is a question already answered, and requeueing on that
+            // would spin rather than progress.
+            let (gate, raised) = if gaps.is_empty() && !raised_elections.is_empty() {
+                (ELECTION, elected)
             } else {
-                "reconciliation"
+                ("reconciliation", raised)
             };
             return Ok(ItemPreparation::Blocked { gate, raised });
         }

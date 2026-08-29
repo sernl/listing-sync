@@ -26,7 +26,7 @@ use crate::codec::{
     decider_from_db, decider_to_db, inventory_from_db, inventory_to_db, term_kind_from_db,
     term_kind_to_db, timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db,
 };
-use crate::jobs::revive_on;
+use crate::jobs::{revive_on, ELECTION};
 use crate::taxonomy::RaiseReport;
 use crate::{pin_org, StorageError};
 
@@ -236,14 +236,7 @@ impl ElectionRepo {
         }
         let revived = match row.raised_by {
             Some(mapping) => {
-                revive_on(
-                    &mut tx,
-                    org,
-                    MappingId(uuid_from_db(mapping)),
-                    "election",
-                    at,
-                )
-                .await?
+                revive_on(&mut tx, org, MappingId(uuid_from_db(mapping)), ELECTION, at).await?
             }
             None => 0,
         };
@@ -252,6 +245,55 @@ impl ElectionRepo {
             revived,
             promoted: promote.is_some(),
         })
+    }
+
+    /// Requeues an item parked on the election gate when nothing is left open
+    /// to answer.
+    ///
+    /// The park is not the raise. `prepare_item` commits the raise in its own
+    /// transaction and returns `Blocked`; the worker parks the item in a
+    /// separate statement afterwards, and in that window the item is still
+    /// `leased`. An answer arriving there finds `revive_on`'s
+    /// `state = 'parked_live'` predicate matching nothing, reports
+    /// `revived: 0`, and the park that follows has nothing left to clear it,
+    /// so the seller waits out the full day after deciding.
+    ///
+    /// Called after the park rather than before it, which is what makes it
+    /// total: an answer landing before this read is seen by it, and one
+    /// landing after it finds the item parked and revives it itself. Both
+    /// orders end with the item queued, and a double revive is a no-op
+    /// because the requeue is predicated on the parked state.
+    ///
+    /// Counted over the mapping's own product and inventory rather than over
+    /// `raised_by`, because that is what the projection re-raises: an
+    /// election minted under an earlier mapping generation asks the same
+    /// question about the same listing.
+    pub async fn revive_if_answered(
+        &self,
+        org: OrgId,
+        mapping: MappingId,
+        at: Timestamp,
+    ) -> Result<u64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let open = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "open!" FROM election_item e
+               JOIN mapping m
+                 ON m.org_id = e.org_id AND m.product_id = e.product_id
+                AND m.inventory = e.inventory
+               WHERE e.org_id = $1 AND m.id = $2 AND e.state = 'open'"#,
+            uuid_to_db(org.0),
+            uuid_to_db(mapping.0),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if open > 0 {
+            tx.commit().await?;
+            return Ok(0);
+        }
+        let revived = revive_on(&mut tx, org, mapping, ELECTION, at).await?;
+        tx.commit().await?;
+        Ok(revived)
     }
 
     /// Every question this product's seller has already settled, in the form

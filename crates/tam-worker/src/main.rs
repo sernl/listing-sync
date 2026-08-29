@@ -56,8 +56,8 @@ use tam_marketplace_tpt::{AuthorshipDeclaration, ReqwestTransport, TptAdapter, T
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    BlobRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo, LeasedItem, PipelineFileSource,
-    RateBudgetRepo, WriteAttemptRepo,
+    BlobRepo, ElectionRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo, LeasedItem,
+    PipelineFileSource, RateBudgetRepo, WriteAttemptRepo,
 };
 use tam_types::{FailureCode, FailureDetail, Marketplace, OrgId, Timestamp};
 use tokio_util::sync::CancellationToken;
@@ -249,6 +249,41 @@ struct Drive<'a> {
 }
 
 impl Pump {
+    /// Closes the window between raising an election and parking on it.
+    ///
+    /// `prepare_item` commits the raise in its own transaction and returns
+    /// `Blocked`; the park is a separate statement here. An answer arriving
+    /// in between finds the item still `leased`, so the answer's own revive
+    /// matches nothing and reports `revived: 0`, and the park that follows
+    /// has nothing left to clear it -- the seller waits the full day after
+    /// deciding, which is the latency the answer-driven revive exists to
+    /// remove. Verifying after the park rather than before it makes the
+    /// check total: either this read sees the answer, or the answer sees the
+    /// parked row.
+    ///
+    /// Only when the raise minted something. A projection blocking on a
+    /// question the seller has already answered raises nothing, and
+    /// requeueing on that would re-project, re-block, re-park and re-check
+    /// without bound; parking it for the day is the honest outcome until the
+    /// answer itself is made to apply.
+    async fn revive_if_answered_meanwhile(&self, worker: &str, item: &LeasedItem, now: Timestamp) {
+        match ElectionRepo::new(self.pool.clone())
+            .revive_if_answered(item.org, item.mapping, now)
+            .await
+        {
+            Ok(0) => {}
+            Ok(_) => eprintln!(
+                "tam-worker {worker}: item {:?} was answered while it was being parked, and \
+                 is queued rather than waiting out the park",
+                item.item
+            ),
+            Err(error) => eprintln!(
+                "tam-worker {worker}: the post-park election re-check failed, so the item \
+                 waits out its park: {error}"
+            ),
+        }
+    }
+
     /// Drives one leased item to wherever it goes; every refusal path leaves
     /// the lease to expire into the stealer, which is the stall bias.
     async fn pump_item(&self, worker: &str, item: &LeasedItem) {
@@ -261,11 +296,20 @@ impl Pump {
             Ok(ItemPreparation::Blocked { gate, raised }) => {
                 let until = Timestamp(now.0.saturating_add(BLOCKED_PARK_MS));
                 match self.leases.park(&item.lease_ref(), gate, until).await {
-                    Ok(()) => eprintln!(
-                        "tam-worker {worker}: item {:?} parked on {gate} \
-                         ({} item(s) raised, {} already open)",
-                        item.item, raised.new, raised.already_open
-                    ),
+                    Ok(()) => {
+                        eprintln!(
+                            "tam-worker {worker}: item {:?} parked on {gate} \
+                             ({} item(s) raised, {} already open)",
+                            item.item, raised.new, raised.already_open
+                        );
+                        // Only an election park, and only when the raise
+                        // minted something: a projection blocking on a
+                        // question already answered raises nothing, and
+                        // requeueing on that would spin.
+                        if gate == tam_storage::ELECTION && raised.new > 0 {
+                            self.revive_if_answered_meanwhile(worker, item, now).await;
+                        }
+                    }
                     Err(error) => {
                         eprintln!("tam-worker {worker}: park failed: {error}");
                     }

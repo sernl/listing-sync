@@ -408,7 +408,7 @@ pub async fn append_event(
 /// debug form.
 pub const REVIVABLE_GATES: [&str; 10] = [
     "reconciliation",
-    "election",
+    ELECTION,
     "currency_unknown",
     "cover_missing",
     "scan_incomplete",
@@ -429,6 +429,11 @@ pub const REVIVABLE_GATES: [&str; 10] = [
 /// gate that writes it and the revive that clears it read it, and a second
 /// spelling of it is a park nothing ever wakes.
 pub const AWAITING_COUNTERPART: &str = "awaiting_counterpart";
+
+/// The gate an open seller election writes, for the same reason: the
+/// projection that raises it, the answer that clears it and the worker's
+/// own re-check after parking all name it.
+pub const ELECTION: &str = "election";
 
 /// The gap queue's revive. Keyed on the gate rather than on the mapping,
 /// because one `reconciliation_item` row stands for every product that hit

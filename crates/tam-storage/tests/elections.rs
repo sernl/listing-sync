@@ -15,11 +15,15 @@ use tam_domain::{
     Binding, Decider, FieldPolicies, FieldPolicy, Mapping, PublishMode, TermKind, VocabularyId,
     VocabularyPath,
 };
-use tam_marketplace::RemoteLifecycle;
-use tam_storage::{ElectionRepo, LossScope, MappingRepo, NewAnswer, ProductRepo, StorageError};
+use tam_domain::{ItemOperation, JobItemId};
+use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
+use tam_storage::{
+    ElectionRepo, JobRepo, LossScope, MappingRepo, NewAnswer, NewJob, NewJobItem, ProductRepo,
+    StorageError,
+};
 use tam_types::{
-    AttemptId, CanonicalTermId, InventoryId, MappingId, OrgId, PriceIntent, PriceRule, Timestamp,
-    Uuid,
+    AttemptId, CanonicalTermId, InventoryId, JobId, MappingId, OrgId, PriceIntent, PriceRule,
+    Timestamp, Uuid,
 };
 
 use common::{minimal_product, seed_org_a, ORG_A};
@@ -404,4 +408,178 @@ async fn a_loss_is_recorded_per_attempt_and_the_api_role_cannot_erase_it(app: Pg
              {statement}"
         );
     }
+}
+
+const JOB: JobId = JobId(Uuid([0x41; 16]));
+const ITEM: JobItemId = JobItemId(Uuid([0x42; 16]));
+
+/// One item on the fixture mapping, in whatever state the caller needs it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn item_in(app: &PgPool, mapping: MappingId, state: &str, gate: Option<&str>) {
+    JobRepo::new(app.clone())
+        .enqueue(
+            ORG_A,
+            &NewJob {
+                job: JOB,
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            &[NewJobItem {
+                item: ITEM,
+                mapping,
+                idempotency_key: IdempotencyKey(Uuid([0x43; 16])),
+                operation: ItemOperation::Create,
+                requires_bound_on: None,
+            }],
+        )
+        .await
+        .expect("the fixture job enqueues");
+    set_item(app, state, gate).await;
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn set_item(app: &PgPool, state: &str, gate: Option<&str>) {
+    let mut tx = app.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "UPDATE job_item SET state = $2, blocked_on = $3, \
+                park_expires_at = CASE WHEN $3 IS NULL THEN NULL ELSE now() + interval '1 day' END, \
+                lease_owner = CASE WHEN $2 = 'leased' THEN 'fixture' END, \
+                lease_expires_at = CASE WHEN $2 = 'leased' THEN now() + interval '10 minutes' END \
+         WHERE org_id = $1 AND id = $4",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(state)
+    .bind(gate)
+    .bind(uuid::Uuid::from_bytes(ITEM.0 .0))
+    .execute(&mut *tx)
+    .await
+    .expect("the item moves");
+    tx.commit().await.expect("the move commits");
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn gate_of(app: &PgPool) -> (String, Option<String>) {
+    let mut tx = app.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    let row =
+        sqlx::query_as("SELECT state, blocked_on FROM job_item WHERE org_id = $1 AND id = $2")
+            .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+            .bind(uuid::Uuid::from_bytes(ITEM.0 .0))
+            .fetch_one(&mut *tx)
+            .await
+            .expect("the item reads");
+    tx.commit().await.expect("the read commits");
+    row
+}
+
+/// An answer landing between the raise and the park does not strand the item.
+///
+/// `prepare_item` commits the raise in its own transaction and returns
+/// `Blocked`; the worker parks the item afterwards, and in that window the
+/// item is still `leased`. `revive_on` filters on `parked_live`, so the
+/// answer's own revive matched nothing and reported `revived: 0`, the park
+/// that followed had nothing left to clear it, and the seller waited out the
+/// full twenty-four hours after deciding -- which is exactly the latency the
+/// answer-driven revive exists to remove.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_answer_that_lands_before_the_park_still_releases_the_item(app: PgPool) {
+    let mapping = fixture(&app).await;
+    item_in(&app, mapping, "leased", None).await;
+    let repo = ElectionRepo::new(app.clone());
+    repo.raise(ORG_A, mapping, &[supply(PricingBranch::Free)], T0)
+        .await
+        .expect("the question raises");
+    let item = repo.open_items(ORG_A).await.expect("the queue reads")[0].id;
+
+    let report = repo
+        .answer(
+            ORG_A,
+            NewAnswer {
+                item,
+                paths: &[licence("CC-BY-SA")],
+                at: T0,
+                promote: None,
+            },
+        )
+        .await
+        .expect("the answer records");
+    assert_eq!(
+        report.revived, 0,
+        "the item is still leased, so the answer's own revive is the miss this closes"
+    );
+
+    // The worker parks a beat later, on an item whose question is already
+    // settled.
+    set_item(&app, "parked_live", Some("election")).await;
+    assert_eq!(
+        repo.revive_if_answered(ORG_A, mapping, T0)
+            .await
+            .expect("the post-park re-check runs"),
+        1,
+        "nothing is open, so the park has nothing to wait for"
+    );
+    assert_eq!(
+        gate_of(&app).await,
+        ("queued".to_owned(), None),
+        "the item runs again rather than waiting out the day"
+    );
+}
+
+/// The re-check leaves a park that is genuinely still waiting.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_park_with_a_question_still_open_is_left_alone(app: PgPool) {
+    let mapping = fixture(&app).await;
+    item_in(&app, mapping, "leased", None).await;
+    let repo = ElectionRepo::new(app.clone());
+    repo.raise(
+        ORG_A,
+        mapping,
+        &[supply(PricingBranch::Free), supply(PricingBranch::Paid)],
+        T0,
+    )
+    .await
+    .expect("both questions raise");
+    let item = repo.open_items(ORG_A).await.expect("the queue reads")[0].id;
+    repo.answer(
+        ORG_A,
+        NewAnswer {
+            item,
+            paths: &[licence("CC-BY-SA")],
+            at: T0,
+            promote: None,
+        },
+    )
+    .await
+    .expect("one of the two is answered");
+
+    set_item(&app, "parked_live", Some("election")).await;
+    assert_eq!(
+        repo.revive_if_answered(ORG_A, mapping, T0)
+            .await
+            .expect("the re-check runs"),
+        0,
+        "one question is still open, so the item is still waiting on the seller"
+    );
+    assert_eq!(
+        gate_of(&app).await,
+        ("parked_live".to_owned(), Some("election".to_owned())),
+    );
 }

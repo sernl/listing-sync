@@ -32,7 +32,7 @@ pub use jobs::{
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, CreatedJob, EventScope, HaltCause,
     HaltRepo, InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect,
     LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewJob, NewJobItem, NewOutboxMessage,
-    OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo, AWAITING_COUNTERPART,
+    OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo, AWAITING_COUNTERPART, ELECTION,
     REVIVABLE_GATES,
 };
 pub use lowering::{
