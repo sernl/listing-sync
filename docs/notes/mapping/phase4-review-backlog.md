@@ -5,7 +5,7 @@ title: Phase 4 review backlog
 The adversarial review of the full Phase 4 diff raised seventy findings, of which sixty-one survived verification.
 Two fix slices landed against them: slice one took the must-fix set (twenty-four findings, several of them the same defect reported by more than one reviewer), and slice two took the subset that blocks the live battery (eleven).
 The remaining twenty-six are accounted for here, so the deferral is a decision rather than an omission.
-Two of them are closed by this slice's own documentation work rather than deferred, which leaves twenty-four carried past the battery; the decision-record correction slice two made is recorded at the end for traceability.
+Two of them are closed by this slice's own documentation work rather than deferred, and one was promoted out of the deferral and fixed before the battery, which leaves twenty-three carried past it; the decision-record correction slice two made is recorded at the end for traceability.
 Each entry names the finding, its verified severity, where it lives, and why it is safe to carry.
 
 The two slices' scope, for reference.
@@ -29,9 +29,8 @@ Deferred post-battery: the battery submits well-formed rules, and the three are 
 ## Deferred: the taxonomy and the seeders
 
 *No band-to-TPT relation is seeded, so every GB-sourced product blocks on an unanswerable gap when cross-listed to TPT* — should-fix, `crates/tam-taxonomy/src/grades.rs:419`.
-`seed_bands` emits `Narrower` edges from each `ageRanges` band only into `TesUs` and `TesNz`, so a GB product's grades reach `(Tpt, Phase)` with neither an edge nor a `NoCounterpart` record and the item blocks on reconciliation.
-Deferred post-battery only if the battery's GB→TPT leg uses `yearGroups`-sourced products; a GB product carrying `ageRanges` bands blocks, and the remedy is either the missing `Narrower` edges or an explicit `NoCounterpart` into `(Tpt, Phase)`.
-This is the highest-risk entry in this file and the first the next slice should take.
+Promoted out of this file and fixed before the battery rather than after it: the deferral was conditional on the battery's GB→TPT leg using `yearGroups`-sourced products, and the founder's own catalogue is band-sourced, so every leg would have parked.
+`seed_bands` now relates each band into `(Tpt, Phase)` on the same covering measurement it uses for the year-group vocabularies, and records a no-counterpart for the one band that covers no TPT grade.
 
 *The import labels and age-derives `yearGroups` ids through the GB `ageRanges` table* — should-fix, `crates/tam-import/src/lib.rs:504`.
 The adapter now tags `yearGroups` as `TermKind::Phase` for TesUs and TesNz, and the label lookup and `derive_interval` still resolve every id against the seven-row GB `ageRanges` table, so an id in 1..7 matches the wrong row.

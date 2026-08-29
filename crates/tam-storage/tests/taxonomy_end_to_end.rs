@@ -290,4 +290,16 @@ async fn the_whole_grade_relation_survives_every_index_and_reseeds_as_a_no_op(ap
         "a band holds one narrower edge per year group it covers, which the single-valued \
          index would have collapsed to six"
     );
+    let tpt = repo
+        .edges_into(VocabularyId(InventoryId::Tpt, TermKind::Phase))
+        .await
+        .expect("the TPT phase edges load");
+    assert_eq!(
+        tpt.iter()
+            .filter(|edge| edge.kind == EdgeKind::Narrower)
+            .count(),
+        13,
+        "the band relation reaches TPT through the same index, so a GB band cross-lists as a \
+         question the seller can answer rather than a gap nobody can"
+    );
 }
