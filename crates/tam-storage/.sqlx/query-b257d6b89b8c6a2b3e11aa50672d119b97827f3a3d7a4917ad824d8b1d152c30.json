@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO sync_request (org_id, id, source, target, disposition, intent, state, requested_at) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7) ON CONFLICT (org_id, id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b257d6b89b8c6a2b3e11aa50672d119b97827f3a3d7a4917ad824d8b1d152c30"
+}

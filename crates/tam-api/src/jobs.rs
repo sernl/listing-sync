@@ -414,28 +414,21 @@ pub(crate) async fn create_sync_request(
         requested_at: (state.wall)(),
         locators: body.resources,
     };
-    let repo = SyncRequestRepo::new(state.pool.clone());
-    if let Some(existing) = repo
-        .get(context.org, key.0)
-        .await
-        .map_err(|error| storage_fault(&state, &error))?
-    {
-        return Ok((
-            StatusCode::OK,
-            Json(SyncRequestAck {
-                request: existing.id,
-            }),
-        )
-            .into_response());
-    }
-    repo.create(context.org, &new)
+    // The insert decides the replay, rather than a read the two submits then
+    // race: both saw no existing row, one INSERT won and the other violated
+    // the primary key, so the double-click this endpoint exists to absorb
+    // came back a fault. The request's identity is the key, so the ack is the
+    // same either way.
+    let written = SyncRequestRepo::new(state.pool.clone())
+        .create(context.org, &new)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(SyncRequestAck { request: key.0 }),
-    )
-        .into_response())
+    let status = if written {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(SyncRequestAck { request: key.0 })).into_response())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -636,6 +629,15 @@ pub(crate) async fn list_jobs(
     Query(params): Query<PageParams>,
 ) -> Result<Json<JobPage>, APIError> {
     let page = parse_page(&params)?;
+    // Refused rather than ignored. `outcome` is an item's, and this page
+    // carries jobs; accepting it here and dropping it returned a well-formed
+    // page of every job to a client the 422-on-typo behaviour had just told
+    // the parameter was honoured.
+    if page.outcome.is_some() {
+        return Err(validation(
+            "outcome is a filter on a job's items; ask for it on that job's items page",
+        ));
+    }
     let rows = JobReadRepo::new(state.pool.clone())
         .list_jobs(context.org, page.cursor, page.limit)
         .await

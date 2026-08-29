@@ -155,7 +155,14 @@ impl SyncRequestRepo {
 
     /// The request and its resources in one transaction, because a request
     /// with no resources is a request the drain would settle as finished.
-    pub async fn create(&self, org: OrgId, new: &NewSyncRequest) -> Result<(), StorageError> {
+    ///
+    /// Returns whether this call is the one that wrote it. The request's
+    /// identity is the seller's idempotency key, so a second submit under one
+    /// key is the retry the endpoint exists to absorb, and the conflict is
+    /// resolved here rather than by a read the caller then races: two submits
+    /// both saw no existing row and the loser's INSERT violated the primary
+    /// key, turning the double-click into a fault.
+    pub async fn create(&self, org: OrgId, new: &NewSyncRequest) -> Result<bool, StorageError> {
         if new.locators.is_empty() {
             return Err(StorageError::Inconsistent {
                 reason: "a sync request names at least one resource".to_owned(),
@@ -163,10 +170,11 @@ impl SyncRequestRepo {
         }
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        sqlx::query!(
+        let written = sqlx::query!(
             "INSERT INTO sync_request \
              (org_id, id, source, target, disposition, intent, state, requested_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)",
+             VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7) \
+             ON CONFLICT (org_id, id) DO NOTHING",
             uuid_to_db(org.0),
             uuid_to_db(new.id),
             inventory_to_db(new.source),
@@ -177,6 +185,12 @@ impl SyncRequestRepo {
         )
         .execute(&mut *tx)
         .await?;
+        if written.rows_affected() == 0 {
+            // The resources are the request's, so a replay writes none of
+            // them: appending them to the first submit's row would give it a
+            // second copy of every locator.
+            return Ok(false);
+        }
         for (ordinal, locator) in new.locators.iter().enumerate() {
             let ordinal = i32::try_from(ordinal).map_err(|_| StorageError::Inconsistent {
                 reason: "a sync request holds fewer resources than this".to_owned(),
@@ -194,7 +208,7 @@ impl SyncRequestRepo {
             .await?;
         }
         tx.commit().await?;
-        Ok(())
+        Ok(true)
     }
 
     pub async fn get(

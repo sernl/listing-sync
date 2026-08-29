@@ -258,3 +258,41 @@ async fn an_enqueued_request_names_the_job_it_produced(pool: PgPool) {
         "and a settled request is no longer the drain's work"
     );
 }
+
+/// A second submit under one key is the retry the endpoint absorbs, not a
+/// fault.
+///
+/// `create_sync_request` read the row first and inserted only on a miss, so
+/// two submits racing under one `Idempotency-Key` both saw no row: one INSERT
+/// won and the other violated `sync_request`'s primary key, surfacing as a
+/// 500 for exactly the double-click the key exists to make harmless. The
+/// insert now decides it, so there is nothing left to race.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_second_submit_under_one_key_replays_rather_than_faulting(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    let repo = SyncRequestRepo::new(pool);
+    assert!(
+        repo.create(ORG_A, &request_for(REQUEST, &["101", "202"]))
+            .await
+            .expect("the request writes"),
+        "the first submit is the one that wrote it"
+    );
+    assert!(
+        !repo
+            .create(ORG_A, &request_for(REQUEST, &["101", "202"]))
+            .await
+            .expect("the replay is not a fault"),
+        "the second submit reports that it wrote nothing"
+    );
+
+    let record = repo
+        .get(ORG_A, REQUEST)
+        .await
+        .expect("the request reads")
+        .expect("it exists");
+    assert_eq!(
+        record.resources.len(),
+        2,
+        "the replay writes no second copy of the seller's locators"
+    );
+}

@@ -680,3 +680,32 @@ async fn another_tenant_sees_no_job(pool: PgPool) {
         "a job is invisible across the tenant fence, not forbidden"
     );
 }
+
+/// An ignored filter must not read as an applied one.
+///
+/// `parse_page` is shared by the jobs list and the items page, and only the
+/// items page forwarded `outcome`. The list validated it -- refusing a typo
+/// with a 422 -- and then dropped it, so a client asking for its failures got
+/// a well-formed page of every job, having just been told the parameter was
+/// honoured.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_outcome_filter_on_the_jobs_list_is_refused_rather_than_dropped(pool: PgPool) {
+    provision(&pool).await;
+    let refused = call(
+        pool.clone(),
+        Method::GET,
+        "/v1/jobs?outcome=failed",
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let listed = call(pool, Method::GET, "/v1/jobs", &TOKEN_A, None, None).await;
+    assert_eq!(
+        listed.status,
+        StatusCode::OK,
+        "the page itself is unchanged; only the filter it never applied is refused"
+    );
+}
