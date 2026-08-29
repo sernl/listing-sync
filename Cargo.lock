@@ -2449,6 +2449,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-sync-worker"
+version = "0.0.0"
+dependencies = [
+ "sqlx",
+ "tam-domain",
+ "tam-engine",
+ "tam-import",
+ "tam-marketplace",
+ "tam-marketplace-tes",
+ "tam-marketplace-tpt",
+ "tam-secrets",
+ "tam-storage",
+ "tam-types",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "tam-taxonomy"
 version = "0.0.0"
 dependencies = [

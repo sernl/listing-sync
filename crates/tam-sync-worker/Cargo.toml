@@ -1,0 +1,28 @@
+[package]
+name    = "tam-sync-worker"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-domain = { path = "../tam-domain" }
+tam-engine = { path = "../tam-engine" }
+tam-import = { path = "../tam-import" }
+tam-marketplace = { path = "../tam-marketplace" }
+tam-marketplace-tes = { path = "../tam-marketplace-tes" }
+tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
+tam-secrets = { path = "../tam-secrets" }
+tam-storage = { path = "../tam-storage" }
+tam-types = { path = "../tam-types" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tam-marketplace = { path = "../tam-marketplace" }
+
+[features]
+pg-tests = []
+
+[lints]
+workspace = true

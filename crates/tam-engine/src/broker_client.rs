@@ -13,6 +13,26 @@ struct LeaseRequest {
     org: OrgId,
     connection: ConnectionId,
     marketplace: Marketplace,
+    purpose: &'static str,
+}
+
+/// Which process is asking. The broker keys a gateway on it, so the item pump
+/// and the canonicalisation drain hold separate sessions on the one Tes
+/// connection a tenant has rather than cancelling each other's mid-write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeasePurpose {
+    Pump,
+    Drain,
+}
+
+impl LeasePurpose {
+    #[must_use]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pump => "pump",
+            Self::Drain => "drain",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -52,12 +72,14 @@ pub async fn request_lease(
     org: OrgId,
     connection: ConnectionId,
     marketplace: Marketplace,
+    purpose: LeasePurpose,
 ) -> Result<GatewayLease, BrokerClientError> {
     let request = serde_json::to_string(&LeaseRequest {
         op: "lease",
         org,
         connection,
         marketplace,
+        purpose: purpose.as_str(),
     })
     .map_err(|error| BrokerClientError(error.to_string()))?;
     let stream = tokio::net::UnixStream::connect(socket)

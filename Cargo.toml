@@ -4,7 +4,7 @@ members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/
     "crates/tam-engine",
     "crates/tam-canary",
     "crates/tam-pipeline-worker",
-    "crates/tam-worker", "crates/tam-api", "crates/tam-server", "crates/tam-session-broker"]
+    "crates/tam-worker", "crates/tam-sync-worker", "crates/tam-api", "crates/tam-server", "crates/tam-session-broker"]
 
 # Pinned once for the crates that must agree on it. `sha2` produces the
 # `SubmitEvidence` body digest, which is the write-evidence contract every

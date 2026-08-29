@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sync_request SET state = 'enqueued', create_job_id = $3, remove_job_id = $4, settled_at = $5 WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b372946820eb81cf9a945cf9190c923347b1954e094db6f758431ac8b1a9ce47"
+}

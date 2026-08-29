@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT source, target, disposition, intent, state, create_job_id, remove_job_id, failure_detail, requested_at FROM sync_request WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "target",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "disposition",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "intent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "create_job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "remove_job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "failure_detail",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "requested_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "41002f144e4c30df02c900ddd0404318505b80a0a4ca997562ece573c01a3ba0"
+}

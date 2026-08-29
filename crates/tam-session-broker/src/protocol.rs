@@ -6,6 +6,21 @@
 use serde::{Deserialize, Serialize};
 use tam_types::{ConnectionId, Marketplace, OrgId};
 
+/// Which process a gateway belongs to. The broker holds one gateway per
+/// (tenant, connection, purpose), so the item pump and the sync drain can
+/// hold a session on the same connection at the same time without either
+/// cancelling the other's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeasePurpose {
+    /// The item pump, which writes. The default because it is the caller
+    /// that existed before there were two.
+    #[default]
+    Pump,
+    /// The canonicalisation drain, which only reads.
+    Drain,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum Request {
@@ -19,10 +34,20 @@ pub(crate) enum Request {
     },
     /// Open a lease: an authenticating gateway endpoint the worker drives,
     /// with the cookie injected server-side so the worker never sees it.
+    ///
+    /// `purpose` is part of the gateway's identity because there are now two
+    /// leasing processes. `connection_one_per_marketplace` means one Tes
+    /// connection per organisation, so a key of (org, connection) always
+    /// collides: the sync drain's lease would abort the item pump's gateway
+    /// mid-write, failing an in-flight submit at the transport or, worse,
+    /// landing between submit and verification and settling the create
+    /// ambiguous. Two purposes, two gateways, no eviction.
     Lease {
         org: OrgId,
         connection: ConnectionId,
         marketplace: Marketplace,
+        #[serde(default)]
+        purpose: LeasePurpose,
     },
     /// Revoke one connection: tombstone its ciphertext and revoke it.
     Revoke {

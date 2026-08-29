@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tam_domain::ItemOperation;
 use tam_engine::breaker::run_breaker;
-use tam_engine::broker_client::request_lease;
+use tam_engine::broker_client::{request_lease, LeasePurpose};
 use tam_engine::driver::{run_item, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
@@ -339,6 +339,7 @@ impl Pump {
             item.org,
             connection,
             Marketplace::Tes,
+            LeasePurpose::Pump,
         )
         .await
         {

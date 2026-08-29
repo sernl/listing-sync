@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::gateway::{self, Gateway};
-use crate::protocol::{Request, Response};
+use crate::protocol::{LeasePurpose, Request, Response};
 use crate::vault::Vault;
 use tam_secrets::Secret;
 use tam_types::{ConnectionId, OrgId};
@@ -19,10 +19,20 @@ use tam_types::{ConnectionId, OrgId};
 /// listener; ordinary const beside its caller.
 const LEASE_TTL_MS: i64 = 10 * 60 * 1000;
 
+/// One lease's whole identity: which tenant's connection, on which
+/// marketplace, for which process. The four travel together because the
+/// gateway map is keyed on three of them and the fourth opens the secret.
+struct LeaseFor {
+    org: OrgId,
+    connection: ConnectionId,
+    marketplace: tam_types::Marketplace,
+    purpose: LeasePurpose,
+}
+
 pub(crate) struct Broker {
     vault: Vault,
     upstream_base: String,
-    gateways: Mutex<HashMap<(OrgId, ConnectionId), Gateway>>,
+    gateways: Mutex<HashMap<(OrgId, ConnectionId, LeasePurpose), Gateway>>,
     root: CancellationToken,
 }
 
@@ -58,7 +68,19 @@ impl Broker {
                 org,
                 connection,
                 marketplace,
-            } => self.lease(org, connection, marketplace, now_ms).await,
+                purpose,
+            } => {
+                self.lease(
+                    &LeaseFor {
+                        org,
+                        connection,
+                        marketplace,
+                        purpose,
+                    },
+                    now_ms,
+                )
+                .await
+            }
             Request::Revoke { org, connection } => {
                 self.abort_gateway(org, connection).await;
                 match self.vault.revoke(org, connection).await {
@@ -76,13 +98,13 @@ impl Broker {
         }
     }
 
-    async fn lease(
-        &self,
-        org: OrgId,
-        connection: ConnectionId,
-        marketplace: tam_types::Marketplace,
-        now_ms: i64,
-    ) -> Response {
+    async fn lease(&self, request: &LeaseFor, now_ms: i64) -> Response {
+        let LeaseFor {
+            org,
+            connection,
+            marketplace,
+            purpose,
+        } = *request;
         let secret = match self.vault.open_secret(org, connection, marketplace).await {
             Ok(secret) => secret,
             Err(error) => {
@@ -94,11 +116,11 @@ impl Broker {
         match gateway::spawn(self.upstream_base.clone(), secret, &self.root).await {
             Ok(gateway) => {
                 let endpoint = gateway.endpoint.clone();
-                self.abort_gateway(org, connection).await;
+                self.abort_one(org, connection, purpose).await;
                 self.gateways
                     .lock()
                     .await
-                    .insert((org, connection), gateway);
+                    .insert((org, connection, purpose), gateway);
                 Response::Leased {
                     endpoint,
                     expires_ms: now_ms + LEASE_TTL_MS,
@@ -110,8 +132,31 @@ impl Broker {
         }
     }
 
+    /// Every purpose for one connection, which is what a revoke means: the
+    /// credential is gone, so no process may keep a session opened with it.
     async fn abort_gateway(&self, org: OrgId, connection: ConnectionId) {
-        if let Some(gateway) = self.gateways.lock().await.remove(&(org, connection)) {
+        let mut gateways = self.gateways.lock().await;
+        let keys: Vec<_> = gateways
+            .keys()
+            .filter(|(key_org, key_connection, _)| *key_org == org && *key_connection == connection)
+            .copied()
+            .collect();
+        for key in keys {
+            if let Some(gateway) = gateways.remove(&key) {
+                gateway.cancel.cancel();
+            }
+        }
+    }
+
+    /// One purpose's gateway, replaced by the lease that supersedes it. The
+    /// other purpose's stays up, which is the whole point of the key.
+    async fn abort_one(&self, org: OrgId, connection: ConnectionId, purpose: LeasePurpose) {
+        if let Some(gateway) = self
+            .gateways
+            .lock()
+            .await
+            .remove(&(org, connection, purpose))
+        {
             gateway.cancel.cancel();
         }
     }

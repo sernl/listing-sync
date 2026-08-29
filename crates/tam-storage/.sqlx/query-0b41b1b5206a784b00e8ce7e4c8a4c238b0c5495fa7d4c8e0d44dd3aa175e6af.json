@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sync_request SET state = $3, failure_detail = $4, settled_at = $5 WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b41b1b5206a784b00e8ce7e4c8a4c238b0c5495fa7d4c8e0d44dd3aa175e6af"
+}
