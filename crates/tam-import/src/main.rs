@@ -8,7 +8,14 @@
 //!            <store-root> <manifest.json|discover> [measure]
 //!
 //! The manifest is a JSON array of { "resource": <numeric id>,
-//! "files": ["/path/to/original", ...] }, taking the file bytes from disk.
+//! "files": ["/path/to/original", ...] }, taking the file bytes from disk,
+//! and means Tes GB into Tes NZ. Its directed form —
+//! { "source": .., "target": .., "rows": [..] } — states its own route, which
+//! is what lets this path carry a TPT source: the bytes are already on disk,
+//! so no seller-download capture is needed to run one. A TPT source needs
+//! `TAM_TPT_COOKIE_JAR`, because TPT rides a direct transport and skips the
+//! broker; discover and measure stay Tes's until TPT's catalogue walk is
+//! captured.
 //!
 //! `discover` in the manifest's place needs no manifest and no local files:
 //! it lists the seller's own catalogue, downloads each published resource's
@@ -28,15 +35,92 @@ use tam_import::{
     import_one, measure_one, record_drain_report, DrainTotals, ImportEntry, ImportRun,
     MeasureTotals, NamedBytes, NoImportFiles,
 };
-use tam_marketplace::{FetchReason, FirstPartyExport};
+use tam_marketplace::{FetchReason, FirstPartyExport, InstantPause};
 use tam_marketplace_tes::{DraftId, GatewayTransport, TesAdapter};
+use tam_marketplace_tpt::{ReqwestTransport, TptAdapter, TptSession};
 use tam_secrets::Kek;
-use tam_types::{InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{InventoryId, Marketplace, OrgId, Timestamp, Uuid};
 
 #[derive(Deserialize)]
 struct ManifestRow {
     resource: i64,
     files: Vec<String>,
+}
+
+/// The manifest, in either of its two shapes.
+///
+/// A bare array is the original one and still means Tes GB into Tes NZ. The
+/// directed form states its own source and target, which is what lets the
+/// operator path carry a TPT source: the bytes come from disk, so no seller
+/// download capture is needed to run one.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Manifest {
+    Rows(Vec<ManifestRow>),
+    Directed {
+        source: InventoryId,
+        target: InventoryId,
+        rows: Vec<ManifestRow>,
+    },
+}
+
+impl Manifest {
+    fn route(&self) -> (InventoryId, InventoryId) {
+        match self {
+            Self::Rows(_) => (InventoryId::TesGb, InventoryId::TesNz),
+            Self::Directed { source, target, .. } => (*source, *target),
+        }
+    }
+
+    fn rows(&self) -> &[ManifestRow] {
+        match self {
+            Self::Rows(rows) | Self::Directed { rows, .. } => rows,
+        }
+    }
+}
+
+/// The seller's own TPT credential, read here because this is the
+/// configuration boundary. TPT rides a direct transport and skips the broker
+/// entirely, so unlike a Tes source there is a secret to hold.
+fn tpt_session() -> Result<TptSession, Box<dyn std::error::Error>> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the operator import is the configuration boundary: the Tpt cookie jar path enters the process here and nowhere else"
+    )]
+    let jar_path =
+        std::env::var("TAM_TPT_COOKIE_JAR").map_err(|_| "a TPT source needs TAM_TPT_COOKIE_JAR")?;
+    let mut jar = String::new();
+    std::fs::File::open(&jar_path)?.read_to_string(&mut jar)?;
+    Ok(TptSession::from_netscape_jar(&jar)?)
+}
+
+/// The manifest drain, over whichever adapter the route named. Generic
+/// because the two sources differ in their transport and their credential
+/// and in nothing this loop does.
+async fn drain_manifest<A: FirstPartyExport>(
+    run: &ImportRun<'_, A>,
+    rows: &[ManifestRow],
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    A::Resource: TryFrom<i64>,
+    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
+{
+    let mut totals = DrainTotals::default();
+    for row in rows {
+        let mut files = Vec::new();
+        for path in &row.files {
+            files.push(NamedBytes {
+                name: path.clone(),
+                bytes: read_bytes(path)?,
+            });
+        }
+        let entry = ImportEntry {
+            resource: row.resource,
+            files,
+        };
+        import_and_report(run, &entry, &mut totals).await;
+    }
+    record_and_report(run, totals).await
 }
 
 fn read_bytes(path: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -141,18 +225,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("missing manifest path, or the discover keyword in its place")?;
     let discovering = mode == "discover";
 
-    let manifest: Vec<ManifestRow> = if discovering {
-        Vec::new()
+    let manifest: Manifest = if discovering {
+        Manifest::Rows(Vec::new())
     } else {
         serde_json::from_slice(&read_bytes(mode)?)?
     };
+    let (source, target) = manifest.route();
     let kek = Kek::from_bytes(&read_bytes(kek_path)?)?;
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(4)
         .connect(db_url)
         .await?;
+    // A TPT source takes the manifest path only. Its catalogue walk and its
+    // seller download are uncaptured, so discover and measure stay Tes's
+    // until those captures exist -- and the manifest already carries the
+    // bytes, which is why the two TPT-as-source runs in the battery are
+    // executable without them.
+    if source.marketplace() == Marketplace::Tpt {
+        if discovering {
+            return Err("a TPT source has no captured catalogue walk; use a manifest".into());
+        }
+        let session = tpt_session()?;
+        let adapter = TptAdapter::new(
+            ReqwestTransport::new(&session)?,
+            NoImportFiles,
+            InstantPause,
+        );
+        let run = ImportRun {
+            pool,
+            kek,
+            store_root: std::path::PathBuf::from(store_root),
+            adapter: &adapter,
+            org,
+            source,
+            target,
+            now: wall_now()?,
+        };
+        return drain_manifest(&run, manifest.rows()).await;
+    }
+
     let adapter = TesAdapter::new(
-        InventoryId::TesGb,
+        source,
         GatewayTransport::new(gateway.clone())?,
         NoImportFiles,
     )?;
@@ -162,8 +275,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store_root: std::path::PathBuf::from(store_root),
         adapter: &adapter,
         org,
-        source: InventoryId::TesGb,
-        target: InventoryId::TesNz,
+        source,
+        target,
         now: wall_now()?,
     };
 
@@ -209,7 +322,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if arguments.get(6).map(String::as_str) == Some("measure") {
         let mut totals = MeasureTotals::default();
-        for row in &manifest {
+        for row in manifest.rows() {
             match measure_one(&run, row.resource).await {
                 Ok(report) => {
                     totals.absorb(&report);
@@ -239,20 +352,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let mut totals = DrainTotals::default();
-    for row in manifest {
-        let mut files = Vec::new();
-        for path in &row.files {
-            files.push(NamedBytes {
-                name: path.clone(),
-                bytes: read_bytes(path)?,
-            });
-        }
-        let entry = ImportEntry {
-            resource: row.resource,
-            files,
-        };
-        import_and_report(&run, &entry, &mut totals).await;
-    }
-    record_and_report(&run, totals).await
+    drain_manifest(&run, manifest.rows()).await
 }

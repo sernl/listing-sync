@@ -2297,6 +2297,7 @@ dependencies = [
  "tam-domain",
  "tam-marketplace",
  "tam-marketplace-tes",
+ "tam-marketplace-tpt",
  "tam-pipeline",
  "tam-secrets",
  "tam-storage",

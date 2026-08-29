@@ -17,6 +17,7 @@ tam-marketplace-tes = { path = "../tam-marketplace-tes" }
 tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }
+tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
 tam-taxonomy = { path = "../tam-taxonomy" }
 tam-types = { path = "../tam-types" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
