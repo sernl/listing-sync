@@ -17,8 +17,8 @@
 
 use std::collections::HashMap;
 
-use tam_domain::equivalence::{Loss, VocabularyGap};
-use tam_domain::registry::{registry, truncate, FieldSpec};
+use tam_domain::equivalence::{Election, Loss, PricingBranch, VocabularyGap};
+use tam_domain::registry::{registry, truncate, AxisBinding, FieldSpec};
 use tam_domain::{
     CanonicalProduct, CanonicalTerm, ListingProjection, ProjectionBlocked, ProjectionEdge,
     TermKind, TermProjection, VocabularyId, VocabularyPath,
@@ -28,7 +28,55 @@ use tam_types::{
     Timestamp,
 };
 
-use crate::project::{broadening, project_terms};
+use crate::project::{ingest_grades, project_axis, AxisRequest};
+
+/// The axes this projection routes, and the reason the list is shorter than
+/// the registry's.
+///
+/// `Licence` is bound by every Tes inventory and is deliberately absent: its
+/// queue is the seller's election surface, and routing it before that surface
+/// exists would block every product whose rights are unstated on a gate with
+/// nowhere to record the question. `ResourceType` waits for the same reason
+/// its own crosswalk does.
+const ROUTED_AXES: [TermKind; 3] = [TermKind::Subject, TermKind::Topic, TermKind::Phase];
+
+fn routed_axes(inventory: InventoryId) -> impl Iterator<Item = AxisBinding> {
+    registry(inventory)
+        .equivalence_axes
+        .iter()
+        .copied()
+        .filter(|binding| ROUTED_AXES.contains(&binding.axis))
+}
+
+/// The vocabularies one inventory's routed axes name, independent of any
+/// product. The inbound half reads these too: an import ingests the source's
+/// own ids over the source's own relation.
+#[must_use]
+pub fn routed_vocabularies(inventory: InventoryId) -> Vec<VocabularyId> {
+    routed_axes(inventory)
+        .map(|binding| VocabularyId(inventory, binding.axis))
+        .collect()
+}
+
+/// Every vocabulary a projection into one inventory reads.
+///
+/// The target's own bound axes, plus the vocabularies the product's grade
+/// declaration names, because a grade ingests from the source's relation
+/// before it projects into the target's. Callers load edges for exactly these
+/// and no longer restate a two-kind list the registry already holds.
+#[must_use]
+pub fn projection_vocabularies(
+    inventory: InventoryId,
+    product: &CanonicalProduct,
+) -> Vec<VocabularyId> {
+    let mut wanted = routed_vocabularies(inventory);
+    for path in &product.grades.raw {
+        if !wanted.contains(&path.vocabulary) {
+            wanted.push(path.vocabulary);
+        }
+    }
+    wanted
+}
 
 /// Everything the projection decides over beyond the product itself: the
 /// tenant scope the raised items carry, the target, the instant, and the
@@ -51,33 +99,62 @@ pub fn project_listing(
     let kinds: HashMap<CanonicalTermId, TermKind> =
         ctx.terms.iter().map(|term| (term.id, term.kind)).collect();
 
-    // Gate one: taxonomy. Terms are projected per kind because a vocabulary
-    // is per (inventory, kind); blocked terms become the gaps the caller
-    // raises, deduplicated here on (term, kind) so one gap is one item.
+    // Gate one: the equivalence relation, one axis at a time, driven off the
+    // registry's own bindings rather than a second hardcoded list.
+    //
+    // Grades arrive as the source platform's own paths rather than as
+    // canonical ids, because `GradeDeclaration` keeps them verbatim so a round
+    // trip loses nothing, so the axis ingests before it projects. That ingest
+    // is the whole D1 fix: a grade now travels through the relation and
+    // reaches the target under the target vocabulary's own native id, where
+    // before it kept the source's id and only its vocabulary label changed.
+    let ingested = ingest_grades(&product.grades, ctx.edges);
+    let pricing = match product.price {
+        PriceIntent::Free => PricingBranch::Free,
+        PriceIntent::Paid(_) => PricingBranch::Paid,
+    };
+
     let mut included = Vec::new();
+    let mut grades = Vec::new();
     let mut loss: Vec<Loss> = Vec::new();
     let mut gaps: Vec<VocabularyGap> = Vec::new();
-    for kind in [TermKind::Subject, TermKind::Topic] {
+    let mut elections: Vec<Election> = Vec::new();
+    for binding in routed_axes(ctx.inventory) {
         let of_kind: Vec<CanonicalTermId> = product
             .subjects
             .iter()
             .copied()
-            .filter(|term| kinds.get(term) == Some(&kind))
+            .filter(|term| kinds.get(term) == Some(&binding.axis))
             .collect();
-        if of_kind.is_empty() {
+        let (terms, sources): (&[CanonicalTermId], &[VocabularyPath]) = match binding.axis {
+            TermKind::Phase => (&ingested.terms, &ingested.sources),
+            TermKind::Subject | TermKind::Topic | TermKind::ResourceType | TermKind::Licence => {
+                (&of_kind, &[])
+            }
+        };
+        if terms.is_empty() {
             continue;
         }
-        let vocabulary = VocabularyId(ctx.inventory, kind);
-        let outcome = project_terms(&of_kind, vocabulary, ctx.edges, ctx.no_counterparts);
-        included.extend(outcome.included);
-        loss.extend(outcome.loss.iter().filter_map(broadening));
-        for blocked in outcome.blocked {
-            gaps.push(VocabularyGap {
-                term: blocked.term,
-                target: vocabulary,
-                projection: blocked.projection,
-            });
+        let outcome = project_axis(
+            AxisRequest {
+                product: product.id,
+                inventory: ctx.inventory,
+                binding,
+                terms,
+                sources,
+                pricing,
+            },
+            ctx.edges,
+            ctx.no_counterparts,
+        );
+        if binding.axis == TermKind::Phase {
+            grades.extend(outcome.resolved);
+        } else {
+            included.extend(outcome.resolved);
         }
+        loss.extend(outcome.loss);
+        gaps.extend(outcome.gaps);
+        elections.extend(outcome.elections);
     }
     // A term the catalogue does not classify cannot be projected and cannot
     // be silently dropped: it blocks as its own queue item under the subject
@@ -91,11 +168,11 @@ pub fn project_listing(
             });
         }
     }
-    if !gaps.is_empty() {
+    if !gaps.is_empty() || !elections.is_empty() {
         return Err(ProjectionBlocked::Blocked {
             gaps,
-            elections: Vec::new(),
-            unrecognised: Vec::new(),
+            elections,
+            unrecognised: ingested.unrecognised,
         });
     }
 
@@ -123,20 +200,6 @@ pub fn project_listing(
             return Err(ProjectionBlocked::ScanIncomplete { file: file.id });
         }
     }
-
-    let grades: Vec<VocabularyPath> = product
-        .grades
-        .raw
-        .iter()
-        .map(|path| {
-            let VocabularyId(_, kind) = path.vocabulary;
-            VocabularyPath {
-                vocabulary: VocabularyId(ctx.inventory, kind),
-                segments: path.segments.clone(),
-                native_id: path.native_id.clone(),
-            }
-        })
-        .collect();
 
     let declared = &registry(ctx.inventory).canonical;
 
@@ -173,6 +236,7 @@ mod tests {
     const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
     const MAPPING: MappingId = MappingId(Uuid([0x31; 16]));
     const TERM: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
+    const GRADE: CanonicalTermId = CanonicalTermId(Uuid([0x79; 16]));
     const NOW: Timestamp = Timestamp(1_000);
 
     fn file(scan: ScanOutcome) -> ProductFile {
@@ -255,6 +319,22 @@ mod tests {
         }
     }
 
+    fn phase_edge(inventory: InventoryId, label: &str, native: &str) -> ProjectionEdge {
+        ProjectionEdge {
+            from: GRADE,
+            to: VocabularyPath {
+                vocabulary: VocabularyId(inventory, TermKind::Phase),
+                segments: vec![label.to_owned()],
+                native_id: Some(native.to_owned()),
+            },
+            kind: EdgeKind::Exact,
+            decided_by: Decider::Imported {
+                source: "test".to_owned(),
+            },
+            decided_at: NOW,
+        }
+    }
+
     fn ctx<'a>(terms: &'a [CanonicalTerm], edges: &'a [ProjectionEdge]) -> ListingContext<'a> {
         ListingContext {
             org: ORG,
@@ -282,15 +362,49 @@ mod tests {
             Some("7000001"),
             "the taxonomy landed in the target vocabulary"
         );
-        assert_eq!(
-            projection.grades[0].native_id.as_deref(),
-            Some("2"),
-            "grade native ids pass through: the age vocabulary is account-scoped"
+        assert!(
+            projection.grades.is_empty(),
+            "the relation holds no phase edge, so the GB band id is carried out as \
+             unrecognised rather than re-labelled into the NZ vocabulary, where 2 means \
+             Reception and not the 5-7 age band"
         );
+    }
+
+    #[test]
+    fn a_grade_reaches_the_target_under_the_targets_own_id_rather_than_the_sources() {
+        let catalogue = [
+            terms().remove(0),
+            CanonicalTerm {
+                id: GRADE,
+                kind: TermKind::Phase,
+                parent: None,
+                label: "Kindergarten".to_owned(),
+            },
+        ];
+        let edges = [
+            nz_edge(),
+            phase_edge(InventoryId::TesUs, "Kindergarten", "17"),
+            phase_edge(InventoryId::TesNz, "Kindergarten", "17"),
+        ];
+        let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        source.grades.raw = vec![VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::TesUs, TermKind::Phase),
+            segments: vec!["Kindergarten".to_owned()],
+            native_id: Some("17".to_owned()),
+        }];
+
+        let projection =
+            project_listing(&source, &ctx(&catalogue, &edges)).expect("the grade is mapped");
         assert_eq!(
             projection.grades[0].vocabulary,
             VocabularyId(InventoryId::TesNz, TermKind::Phase),
-            "the grade path is re-labelled to the target inventory"
+            "the grade lands in the target vocabulary"
+        );
+        assert_eq!(
+            projection.grades[0].native_id.as_deref(),
+            Some("17"),
+            "and it gets there by ingesting into a term and projecting out again, which is \
+             what makes the id the target's own rather than the source's"
         );
     }
 

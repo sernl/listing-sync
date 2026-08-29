@@ -320,20 +320,9 @@ where
     let terms = taxonomy.terms().await?;
     let kinds: std::collections::HashMap<CanonicalTermId, tam_domain::TermKind> =
         terms.iter().map(|term| (term.id, term.kind)).collect();
-    let mut target_edges = taxonomy
-        .edges_into(tam_domain::VocabularyId(
-            run.target,
-            tam_domain::TermKind::Subject,
-        ))
+    let target_edges = taxonomy
+        .edges_into_all(&tam_taxonomy::routed_vocabularies(run.target))
         .await?;
-    target_edges.extend(
-        taxonomy
-            .edges_into(tam_domain::VocabularyId(
-                run.target,
-                tam_domain::TermKind::Topic,
-            ))
-            .await?,
-    );
     let no_counterparts = taxonomy.no_counterparts_into(run.target).await?;
 
     let mut uncovered: Vec<CanonicalTermId> = Vec::new();
@@ -384,31 +373,26 @@ async fn inbound_subjects(
     source: InventoryId,
     listing: &tam_marketplace::ImportedListing,
 ) -> Result<(Vec<CanonicalTermId>, Vec<String>), ImportError> {
-    let subject_edges = taxonomy
-        .edges_into(tam_domain::VocabularyId(
-            source,
-            tam_domain::TermKind::Subject,
-        ))
+    // One slice over every vocabulary the source binds: `ingest_by_native_id`
+    // filters by vocabulary itself, so two reads of the same relation are two
+    // round trips for one answer.
+    let edges = taxonomy
+        .edges_into_all(&tam_taxonomy::routed_vocabularies(source))
         .await?;
-    let topic_edges = taxonomy
-        .edges_into(tam_domain::VocabularyId(
-            source,
-            tam_domain::TermKind::Topic,
-        ))
-        .await?;
+
     let mut subjects: Vec<CanonicalTermId> = Vec::new();
     let mut unmapped: Vec<String> = Vec::new();
     for native in &listing.native_ids(TermKind::Subject) {
         let found = ingest_by_native_id(
             native,
             tam_domain::VocabularyId(source, tam_domain::TermKind::Subject),
-            &subject_edges,
+            &edges,
         )
         .or_else(|| {
             ingest_by_native_id(
                 native,
                 tam_domain::VocabularyId(source, tam_domain::TermKind::Topic),
-                &topic_edges,
+                &edges,
             )
         });
         match found {
@@ -580,20 +564,9 @@ where
     // Project once, immediately: the gaps raise their items now, which is
     // what makes the import's own report the drain measurement.
     let terms = taxonomy.terms().await?;
-    let mut target_edges = taxonomy
-        .edges_into(tam_domain::VocabularyId(
-            run.target,
-            tam_domain::TermKind::Subject,
-        ))
+    let target_edges = taxonomy
+        .edges_into_all(&tam_taxonomy::projection_vocabularies(run.target, &product))
         .await?;
-    target_edges.extend(
-        taxonomy
-            .edges_into(tam_domain::VocabularyId(
-                run.target,
-                tam_domain::TermKind::Topic,
-            ))
-            .await?,
-    );
     let no_counterparts = taxonomy.no_counterparts_into(run.target).await?;
     let outcome = project_listing(
         &product,

@@ -68,7 +68,7 @@ fn sample_listing() -> TesListing {
         title: "Fractions pack".to_owned(),
         description_markdown: "A pack.".to_owned(),
         category_ids: vec![1_000_448],
-        age_range_ids: vec![4],
+        age_channel: tam_marketplace_tes::endpoints::TesAges::Ranges(vec![4]),
         ages: vec![11, 12],
         main_type: 99_009,
         main_age: 4,
@@ -1591,5 +1591,69 @@ fn a_delete_that_404s_is_evidence_for_the_poll_and_a_400_is_still_a_refusal() {
         ),
         "only the 404 moved: a refused delete is still a refusal, so this is not the \
          classifier being opened up: {refusal:?}"
+    );
+}
+
+/// The country fork on the write path. The uploader offers exactly one age
+/// field per country, and the two carry ids from different vocabularies, so
+/// posting a US year group under `ageRanges` is a wrong field rather than a
+/// wrong label: id 4 is the 11-14 band in one and 2nd grade in the other.
+#[test]
+fn a_non_gb_projection_posts_year_groups_and_a_gb_one_posts_age_ranges() {
+    let gb = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let gb_fields = gb
+        .project_fields(&projected(PriceIntent::Free))
+        .expect("a GB listing projects");
+    let gb_grades: Value =
+        serde_json::from_str(&entry(&gb_fields, FieldKey::Grades)).expect("the grades are JSON");
+    assert_eq!(gb_grades["ageRanges"], serde_json::json!([4]));
+    assert!(
+        gb_grades.get("yearGroups").is_none(),
+        "the GB channel names one field and does not mention the other"
+    );
+
+    let nz = TesAdapter::new(
+        InventoryId::TesNz,
+        CassetteTransport::new(Cassette {
+            interactions: vec![],
+        }),
+        StaticFiles(vec![]),
+    )
+    .expect("TesNz is a Tes inventory");
+    let nz_fields = nz
+        .project_fields(&projected(PriceIntent::Free))
+        .expect("an NZ listing projects");
+    let nz_grades: Value =
+        serde_json::from_str(&entry(&nz_fields, FieldKey::Grades)).expect("the grades are JSON");
+    assert_eq!(nz_grades["yearGroups"], serde_json::json!([4]));
+    assert!(
+        nz_grades.get("ageRanges").is_none(),
+        "and the year-group channel does not post an age range"
+    );
+}
+
+#[test]
+fn a_grade_without_a_numeric_id_is_refused_rather_than_dropped() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let mut listing = projected(PriceIntent::Free);
+    listing.grades.push(NativeTerm {
+        native_id: None,
+        segments: vec!["Key Stage 3".to_owned()],
+    });
+    let refused = adapter.project_fields(&listing);
+    assert!(
+        matches!(refused, Err(AdapterError::Rejected { .. })),
+        "publishing a listing with fewer grades than the seller authored, silently, is \
+         the failure this refusal exists to prevent: {refused:?}"
     );
 }

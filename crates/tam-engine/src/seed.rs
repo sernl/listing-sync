@@ -15,7 +15,7 @@
 
 use sqlx::PgPool;
 use tam_domain::{
-    Binding, ItemOperation, ProjectionBlocked, StepBudget, TermKind, VocabularyId, VocabularyPath,
+    Binding, ItemOperation, ProjectionBlocked, StepBudget, VocabularyId, VocabularyPath,
 };
 use tam_marketplace::{
     AgeSpan, CreateStrategy, FieldSet, FormId, ListingState, MarketplaceAdapter, NativeTerm,
@@ -24,7 +24,7 @@ use tam_marketplace::{
 use tam_storage::{
     LeasedItem, MappingRepo, ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
 };
-use tam_taxonomy::listing::{project_listing, ListingContext};
+use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
 use tam_types::{InventoryId, Timestamp};
 
 use crate::driver::{intent_as_json, EngineError, MachineSeed, VerifyPolicy};
@@ -210,14 +210,13 @@ pub async fn prepare_item(
 
     let taxonomy = TaxonomyRepo::new(pool.clone());
     let terms = taxonomy.terms().await?;
-    let mut edges = taxonomy
-        .edges_into(VocabularyId(lease.inventory, TermKind::Subject))
+    // Which vocabularies to load is the registry's answer, not a second
+    // hardcoded kind list: a target that binds a phase axis needs its phase
+    // edges, and the product's own grade declaration names the source
+    // vocabulary the grade ingests from before it projects.
+    let edges = taxonomy
+        .edges_into_all(&projection_vocabularies(lease.inventory, &product))
         .await?;
-    edges.extend(
-        taxonomy
-            .edges_into(VocabularyId(lease.inventory, TermKind::Topic))
-            .await?,
-    );
     let no_counterparts = taxonomy.no_counterparts_into(lease.inventory).await?;
 
     let projection = match project_listing(

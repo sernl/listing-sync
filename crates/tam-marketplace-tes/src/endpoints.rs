@@ -7,6 +7,7 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use tam_marketplace::transport::{FilePart, HttpRequest, RequestAuth};
+use tam_types::InventoryId;
 
 pub const ORIGIN: &str = "https://www.tes.com";
 
@@ -207,11 +208,77 @@ pub struct TesListing {
     pub title: String,
     pub description_markdown: String,
     pub category_ids: Vec<i64>,
-    pub age_range_ids: Vec<i64>,
+    pub age_channel: TesAges,
     pub ages: Vec<i64>,
     pub main_type: i64,
     pub main_age: i64,
     pub pricing: TesPricing,
+}
+
+/// The age channel one Tes inventory takes, as exactly one of two fields.
+///
+/// The uploader picks by country -- `ageResourceFieldName = country === "GB" ?
+/// "ageRanges" : "yearGroups"` -- and the two carry ids from different
+/// vocabularies, so a US year group posted in `ageRanges` is a wrong field
+/// rather than a wrong label: id 2 names the 5-7 age band in one and Reception
+/// in the other. Modelling the pair as one value is what stops the write path
+/// sending both or sending the wrong one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TesAges {
+    Ranges(Vec<i64>),
+    YearGroups(Vec<i64>),
+}
+
+impl TesAges {
+    /// The wire field name this channel answers.
+    #[must_use]
+    pub const fn field(&self) -> &'static str {
+        match self {
+            Self::Ranges(_) => "ageRanges",
+            Self::YearGroups(_) => "yearGroups",
+        }
+    }
+
+    #[must_use]
+    pub fn ids(&self) -> &[i64] {
+        match self {
+            Self::Ranges(ids) | Self::YearGroups(ids) => ids,
+        }
+    }
+
+    /// The channel the inventory binds, empty. The fork is stated once, here
+    /// and in the registry's `equivalence_axes`, and the adapter restates it
+    /// rather than importing it because the pure core depends on this crate.
+    #[must_use]
+    pub const fn empty(inventory: InventoryId) -> Self {
+        match inventory {
+            InventoryId::TesGb => Self::Ranges(Vec::new()),
+            InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy | InventoryId::Tpt => {
+                Self::YearGroups(Vec::new())
+            }
+        }
+    }
+
+    /// The same fork, carrying ids.
+    #[must_use]
+    pub const fn of(inventory: InventoryId, ids: Vec<i64>) -> Self {
+        match inventory {
+            InventoryId::TesGb => Self::Ranges(ids),
+            InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy | InventoryId::Tpt => {
+                Self::YearGroups(ids)
+            }
+        }
+    }
+
+    /// The age ranges alone. `mainAge` and the additional-range field are
+    /// concepts of the GB age table, so a year-group listing declares none.
+    #[must_use]
+    pub fn ranges(&self) -> &[i64] {
+        match self {
+            Self::Ranges(ids) => ids,
+            Self::YearGroups(_) => &[],
+        }
+    }
 }
 
 #[must_use]
@@ -234,7 +301,7 @@ pub fn probe_listing() -> TesListing {
         title: ZZ_TITLE_PREFIX.to_owned(),
         description_markdown: "Automated schema probe. **Delete me.**".to_owned(),
         category_ids: vec![1_000_448],
-        age_range_ids: vec![4],
+        age_channel: TesAges::Ranges(vec![4]),
         ages: vec![11, 12, 13, 14],
         main_type: 99_009,
         main_age: 4,
@@ -254,14 +321,17 @@ fn metadata_body(listing: &TesListing) -> Value {
         .iter()
         .map(|category| json!({ "id": category }))
         .collect();
+    // Exactly one of the two age fields carries ids and the other is empty,
+    // because the uploader offers exactly one by country. Sending a US year
+    // group in `ageRanges` would be a wrong field rather than a wrong label.
     let mut body = json!({
         "title": listing.title,
         "descriptionRaw": listing.description_markdown,
         "descriptionRawType": "md",
         "categories": categories,
-        "ageRanges": listing.age_range_ids,
+        "ageRanges": listing.age_channel.ranges(),
         "ages": listing.ages,
-        "yearGroups": [],
+        "yearGroups": year_groups(&listing.age_channel),
         "mainType": listing.main_type,
         "mainAge": listing.main_age,
         "licence": listing.pricing.licence().as_str(),
@@ -270,6 +340,13 @@ fn metadata_body(listing: &TesListing) -> Value {
         body["price"] = json!(price.minor_units());
     }
     body
+}
+
+fn year_groups(channel: &TesAges) -> &[i64] {
+    match channel {
+        TesAges::YearGroups(ids) => ids,
+        TesAges::Ranges(_) => &[],
+    }
 }
 
 #[must_use]
@@ -285,7 +362,8 @@ pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
 /// omitted rather than invented when there is none.
 fn additional_age(listing: &TesListing) -> Option<i64> {
     listing
-        .age_range_ids
+        .age_channel
+        .ranges()
         .iter()
         .copied()
         .find(|range| *range != listing.main_age)
@@ -631,7 +709,7 @@ mod tests {
     use super::{
         parse_catalogue_page, parse_download_manifest, parse_presign, CataloguePageError,
         DownloadManifestError, DraftId, FreeLicence, NotAPrice, PresignParseError, ReadLicence,
-        TesLicence, TesListing, TesPrice, TesPricing,
+        TesAges, TesLicence, TesListing, TesPrice, TesPricing,
     };
     use base64::Engine;
 
@@ -731,7 +809,7 @@ mod tests {
             title: "T".to_owned(),
             description_markdown: "D".to_owned(),
             category_ids: vec![1_000_448, 1_000_977],
-            age_range_ids: vec![3, 4],
+            age_channel: TesAges::Ranges(vec![3, 4]),
             ages: vec![11, 12],
             main_type: 99_009,
             main_age: 4,
@@ -873,7 +951,7 @@ mod tests {
             DraftId(7),
             &TesListing {
                 category_ids: Vec::new(),
-                age_range_ids: vec![4],
+                age_channel: TesAges::Ranges(vec![4]),
                 ..listing(TesPricing::Free(FreeLicence::CcByNd))
             },
         );

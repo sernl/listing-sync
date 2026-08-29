@@ -239,6 +239,21 @@ impl TaxonomyRepo {
             .collect()
     }
 
+    /// Every edge into several vocabularies at once, which is the shape a
+    /// projection actually needs: the caller asks the registry which axes the
+    /// target binds and which vocabularies the product's own declarations
+    /// name, rather than restating a hardcoded kind list beside every call.
+    pub async fn edges_into_all(
+        &self,
+        vocabularies: &[VocabularyId],
+    ) -> Result<Vec<ProjectionEdge>, StorageError> {
+        let mut edges = Vec::new();
+        for &vocabulary in vocabularies {
+            edges.extend(self.edges_into(vocabulary).await?);
+        }
+        Ok(edges)
+    }
+
     /// The no-counterpart records for one inventory, as the `(term,
     /// vocabulary)` pairs `project_terms` consumes.
     pub async fn no_counterparts_into(

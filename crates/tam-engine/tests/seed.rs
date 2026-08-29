@@ -41,6 +41,7 @@ const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
 const PRODUCT: ProductId = ProductId(Uuid([0x01; 16]));
 const MAPPING: MappingId = MappingId(Uuid([0x31; 16]));
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
+const GRADE: CanonicalTermId = CanonicalTermId(Uuid([0x79; 16]));
 const NOW: Timestamp = Timestamp(1_000);
 
 async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Binding) {
@@ -77,7 +78,24 @@ async fn provision_lifecycle(
         parent: None,
         label: "Maths for early years".to_owned(),
     }];
-    let mut edges = vec![edge(InventoryId::TesGb, "1000454")];
+    let terms = [
+        terms[0].clone(),
+        CanonicalTerm {
+            id: GRADE,
+            kind: TermKind::Phase,
+            parent: None,
+            label: "Kindergarten".to_owned(),
+        },
+    ];
+    // The grade axis is seeded on both sides deliberately: the product
+    // declares the source's own year-group path, and the projection reaches
+    // the target by ingesting it into a term and projecting out again, which
+    // is what makes the id the target's rather than the source's.
+    let mut edges = vec![
+        edge(InventoryId::TesGb, "1000454"),
+        phase_edge(InventoryId::TesUs, "17"),
+        phase_edge(InventoryId::TesNz, "17"),
+    ];
     if with_nz_edge {
         edges.push(edge(InventoryId::TesNz, "7000454"));
     }
@@ -116,12 +134,12 @@ async fn provision_lifecycle(
         subjects: vec![SUBJECT],
         grades: tam_domain::GradeDeclaration {
             source: tam_domain::DeclarationSource::Imported {
-                vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+                vocabulary: VocabularyId(InventoryId::TesUs, TermKind::Phase),
             },
             raw: vec![VocabularyPath {
-                vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
-                segments: vec!["5-7".to_owned()],
-                native_id: Some("2".to_owned()),
+                vocabulary: VocabularyId(InventoryId::TesUs, TermKind::Phase),
+                segments: vec!["Kindergarten".to_owned()],
+                native_id: Some("17".to_owned()),
             }],
             derived: Some(tam_domain::AgeInterval::new(5, 7).expect("a bounded range")),
         },
@@ -159,6 +177,22 @@ async fn provision_lifecycle(
         )
         .await
         .expect("the mapping inserts");
+}
+
+fn phase_edge(inventory: InventoryId, native: &str) -> ProjectionEdge {
+    ProjectionEdge {
+        from: GRADE,
+        to: VocabularyPath {
+            vocabulary: VocabularyId(inventory, TermKind::Phase),
+            segments: vec!["Kindergarten".to_owned()],
+            native_id: Some(native.to_owned()),
+        },
+        kind: EdgeKind::Exact,
+        decided_by: Decider::Imported {
+            source: "test fixture".to_owned(),
+        },
+        decided_at: NOW,
+    }
 }
 
 fn edge(inventory: InventoryId, native: &str) -> ProjectionEdge {
@@ -271,7 +305,16 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
     );
     let grades: serde_json::Value =
         serde_json::from_str(&entry(&seed, FieldKey::Grades)).expect("grades are JSON");
-    assert_eq!(grades["ageRanges"], serde_json::json!([2]));
+    assert_eq!(
+        grades["yearGroups"],
+        serde_json::json!([17]),
+        "an NZ resource takes year groups, and the id is the one the target vocabulary \
+         uses rather than the one the source declared"
+    );
+    assert!(
+        grades.get("ageRanges").is_none(),
+        "posting a year group under ageRanges would be a wrong field, not a wrong label"
+    );
     assert_eq!(
         grades["ages"],
         serde_json::json!([5, 6, 7]),

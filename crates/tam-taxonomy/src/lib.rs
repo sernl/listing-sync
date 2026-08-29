@@ -12,7 +12,7 @@ pub mod tes;
 
 pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
 pub use licences::{derive_licence_crosswalk, LicenceCrosswalk, LicenceError};
-pub use listing::{project_listing, ListingContext};
+pub use listing::{project_listing, projection_vocabularies, routed_vocabularies, ListingContext};
 pub use project::{
     ingest, ingest_grades, project, project_axis, project_terms, AxisRequest, BlockedTerm,
     GradeIngest, TermsOutcome,

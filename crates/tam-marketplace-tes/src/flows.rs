@@ -29,8 +29,8 @@ use crate::classify::{
     classify_transport, classify_write, classify_write_json, classify_write_status,
 };
 use crate::endpoints::{
-    self, CatalogueEntry, DraftId, FreeLicence, PresignedUpload, TesLicence, TesListing, TesPrice,
-    TesPricing,
+    self, CatalogueEntry, DraftId, FreeLicence, PresignedUpload, TesAges, TesLicence, TesListing,
+    TesPrice, TesPricing,
 };
 use crate::schema;
 
@@ -415,7 +415,10 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         }
     }
 
-    fn listing_from_field_set(fields: &FieldSet) -> Result<TesListing, AdapterError> {
+    fn listing_from_field_set(
+        inventory: InventoryId,
+        fields: &FieldSet,
+    ) -> Result<TesListing, AdapterError> {
         let entry = |key: FieldKey| -> Result<&str, AdapterError> {
             fields
                 .entries
@@ -452,7 +455,10 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             title: entry(FieldKey::Title)?.to_owned(),
             description_markdown: entry(FieldKey::Description)?.to_owned(),
             category_ids: ids(&taxonomy, "categories"),
-            age_range_ids: ids(&grades, "ageRanges"),
+            // The channel is the inventory's, and the seam's own JSON names
+            // it, so a read-back parses the field the write emitted rather
+            // than the one this country does not use.
+            age_channel: TesAges::of(inventory, ids(&grades, TesAges::empty(inventory).field())),
             ages: ids(&grades, "ages"),
             main_type: taxonomy
                 .get("mainType")
@@ -492,14 +498,20 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 unprojectable_category(format!("non-numeric Tes category id {native:?}"))
             })?);
         }
-        let mut age_ranges: Vec<i64> = Vec::new();
+        // Refused rather than skipped, exactly as the category loop above
+        // does. A grade the crosswalk left without a numeric id used to be
+        // dropped here, which published a listing carrying fewer grades than
+        // the seller authored and said nothing about it.
+        let mut grade_ids: Vec<i64> = Vec::new();
         for term in &listing.grades {
-            if let Some(native) = term.native_id.as_deref() {
-                if let Ok(id) = native.parse() {
-                    age_ranges.push(id);
-                }
-            }
+            let native = term.native_id.as_deref().ok_or_else(|| {
+                unprojectable_grade("a Tes grade path must carry its numeric id".to_owned())
+            })?;
+            grade_ids.push(native.parse().map_err(|_| {
+                unprojectable_grade(format!("non-numeric Tes grade id {native:?}"))
+            })?);
         }
+        let age_channel = TesAges::of(self.inventory, grade_ids);
         let (ages, main_age): (Vec<i64>, i64) = match listing.ages {
             Some(span) => (
                 (i64::from(span.low_years)..=i64::from(span.high_years)).collect(),
@@ -519,7 +531,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 (
                     FieldKey::Grades,
                     serde_json::json!({
-                        "ageRanges": age_ranges,
+                        age_channel.field(): age_channel.ids(),
                         "ages": ages,
                         "mainAge": main_age
                     })
@@ -584,7 +596,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         fields: FieldSet,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
-        let listing = Self::listing_from_field_set(&fields)?;
+        let listing = Self::listing_from_field_set(self.inventory, &fields)?;
         let mut contents = Vec::with_capacity(fields.files.len());
         for file in &fields.files {
             let content =
@@ -629,7 +641,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
         let id = Self::draft_id_from_locator(&ListingLocator::Durable(plan.subject))?;
-        let listing = Self::listing_from_field_set(&plan.fields)?;
+        let listing = Self::listing_from_field_set(self.inventory, &plan.fields)?;
         match (plan.transition.from, plan.transition.to) {
             // The metadata POST answers with JSON naming the draft, and
             // `post_metadata` asserts it: free evidence the write's own
@@ -1185,6 +1197,12 @@ fn refused(detail: String) -> AdapterError {
 /// numbers, so a term the crosswalk left without one is refused before an
 /// attempt is opened rather than sent as something else.
 fn unprojectable_category(detail: String) -> AdapterError {
+    refused(detail)
+}
+
+/// The same, for the age channel. The two are separate names because the two
+/// refusals name different fields to the seller.
+fn unprojectable_grade(detail: String) -> AdapterError {
     refused(detail)
 }
 
