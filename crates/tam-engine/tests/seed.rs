@@ -59,11 +59,23 @@ async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Bindi
 
 /// The same fixture with the mapping's recorded lifecycle stated, which is
 /// the half of `admission` every other fixture leaves incomparable.
+async fn provision_lifecycle(
+    pool: &PgPool,
+    with_nz_edge: bool,
+    binding: tam_domain::Binding,
+    lifecycle: tam_marketplace::RemoteLifecycle,
+) {
+    provision_undecided(pool, with_nz_edge, binding, lifecycle).await;
+    seed_licence_policy(pool).await;
+}
+
+/// The same fixture with no standing licence policy, so the licence axis
+/// raises the `Supply` election the tests about answering are about.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn provision_lifecycle(
+async fn provision_undecided(
     pool: &PgPool,
     with_nz_edge: bool,
     binding: tam_domain::Binding,
@@ -106,9 +118,29 @@ async fn provision_lifecycle(
         .seed(&terms, &edges)
         .await
         .expect("the crosswalk seeds");
-    // The seller's standing licence policy, without which every projection
-    // below parks on the licence election rather than reaching the gate the
-    // test is about.
+    let product = canonical_product(PRODUCT, 0x21);
+    ProductRepo::new(pool.clone())
+        .insert(ORG, &product, NOW)
+        .await
+        .expect("the product inserts");
+    MappingRepo::new(pool.clone())
+        .insert(
+            ORG,
+            &mapping_of(MAPPING, PRODUCT, binding, lifecycle),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+}
+
+/// The seller's standing licence policy, without which every projection parks
+/// on the licence election rather than reaching the gate the test is about.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_licence_policy(pool: &PgPool) {
     let elections = ElectionRepo::new(pool.clone());
     for inventory in [InventoryId::TesGb, InventoryId::TesNz] {
         let rule = ElectionRule::new(NewElectionRule {
@@ -118,11 +150,7 @@ async fn provision_lifecycle(
             trigger_kind: ElectionTriggerKind::Supply,
             trigger_key: Some(PricingBranch::Free.as_str().to_owned()),
             answer: ElectionAnswer::Value {
-                path: VocabularyPath {
-                    vocabulary: VocabularyId(inventory, TermKind::Licence),
-                    segments: vec!["CC-BY-SA".to_owned()],
-                    native_id: Some("CC-BY-SA".to_owned()),
-                },
+                path: licence_path(inventory, "CC-BY-SA"),
             },
             decided_by: Decider::Human {
                 user: UserId(Uuid([0x5E; 16])),
@@ -133,9 +161,23 @@ async fn provision_lifecycle(
         .expect("a licence value is a legal answer; only delegation is not");
         elections.upsert_rule(&rule).await.expect("the rule seeds");
     }
+}
 
-    let product = tam_domain::CanonicalProduct {
-        id: PRODUCT,
+fn licence_path(inventory: InventoryId, token: &str) -> VocabularyPath {
+    VocabularyPath {
+        vocabulary: VocabularyId(inventory, TermKind::Licence),
+        segments: vec![token.to_owned()],
+        native_id: Some(token.to_owned()),
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn canonical_product(id: ProductId, files: u8) -> tam_domain::CanonicalProduct {
+    tam_domain::CanonicalProduct {
+        id,
         org: ORG,
         title: Title("Fractions practice".to_owned()),
         body: ListingCopy {
@@ -144,7 +186,7 @@ async fn provision_lifecycle(
         },
         payload: PayloadSet::new(
             ProductFile {
-                id: FileId(Uuid([0x21; 16])),
+                id: FileId(Uuid([files; 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
                 hash: ContentHash([0x51; 32]),
@@ -154,7 +196,7 @@ async fn provision_lifecycle(
             vec![],
         ),
         cover: Some(ProductFile {
-            id: FileId(Uuid([0x22; 16])),
+            id: FileId(Uuid([files.wrapping_add(1); 16])),
             role: FileRole::Cover,
             kind: FileKind::Image,
             hash: ContentHash([0x52; 32]),
@@ -177,37 +219,33 @@ async fn provision_lifecycle(
         price: PriceIntent::Free,
         rights: tam_domain::RightsDeclaration::Unstated,
         native_residue: vec![],
-    };
-    ProductRepo::new(pool.clone())
-        .insert(ORG, &product, NOW)
-        .await
-        .expect("the product inserts");
-    MappingRepo::new(pool.clone())
-        .insert(
-            ORG,
-            &tam_domain::Mapping {
-                id: MAPPING,
-                org: ORG,
-                product: PRODUCT,
-                inventory: InventoryId::TesNz,
-                binding,
-                policies: tam_domain::FieldPolicies {
-                    title: tam_domain::FieldPolicy::Managed,
-                    description: tam_domain::FieldPolicy::Managed,
-                    price: tam_domain::FieldPolicy::Managed,
-                    taxonomy: tam_domain::FieldPolicy::Managed,
-                    grades: tam_domain::FieldPolicy::Managed,
-                    files: tam_domain::FieldPolicy::Managed,
-                },
-                price_rule: PriceRule::Explicit(PriceIntent::Free),
-                publish: tam_domain::PublishMode::DryRun,
-                lifecycle,
-            },
-            0,
-            NOW,
-        )
-        .await
-        .expect("the mapping inserts");
+    }
+}
+
+fn mapping_of(
+    id: MappingId,
+    product: ProductId,
+    binding: tam_domain::Binding,
+    lifecycle: tam_marketplace::RemoteLifecycle,
+) -> tam_domain::Mapping {
+    tam_domain::Mapping {
+        id,
+        org: ORG,
+        product,
+        inventory: InventoryId::TesNz,
+        binding,
+        policies: tam_domain::FieldPolicies {
+            title: tam_domain::FieldPolicy::Managed,
+            description: tam_domain::FieldPolicy::Managed,
+            price: tam_domain::FieldPolicy::Managed,
+            taxonomy: tam_domain::FieldPolicy::Managed,
+            grades: tam_domain::FieldPolicy::Managed,
+            files: tam_domain::FieldPolicy::Managed,
+        },
+        price_rule: PriceRule::Explicit(PriceIntent::Free),
+        publish: tam_domain::PublishMode::DryRun,
+        lifecycle,
+    }
 }
 
 fn phase_edge(inventory: InventoryId, native: &str) -> ProjectionEdge {
@@ -708,4 +746,185 @@ async fn a_severed_mapping_admits_a_fresh_create(pool: PgPool) {
     else {
         panic!("a severed mapping holds no listing, so a create has one to make");
     };
+}
+
+/// The seller's answer is what un-blocks the job. Without the settled queue
+/// reaching the projection, the revive the answer performs requeues an item
+/// that re-raises the identical question and parks again, so the decision
+/// surface would be inert and only a standing rule could ever release
+/// anything.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_answered_election_releases_the_item_it_parked(pool: PgPool) {
+    provision_undecided(
+        &pool,
+        true,
+        tam_domain::Binding::Unbound,
+        tam_marketplace::RemoteLifecycle::Absent,
+    )
+    .await;
+    let elections = ElectionRepo::new(pool.clone());
+    assert!(
+        matches!(
+            prepare_item(&pool, &lease(), NOW)
+                .await
+                .expect("the preparation runs"),
+            ItemPreparation::Blocked {
+                gate: "election",
+                ..
+            }
+        ),
+        "an unstated licence against a target that requires one is the seller's question"
+    );
+    let open = elections.open_items(ORG).await.expect("the queue reads");
+    let [question] = open.as_slice() else {
+        panic!("exactly one question, got {open:?}");
+    };
+    assert_eq!(question.axis, TermKind::Licence);
+
+    let report = elections
+        .answer(
+            ORG,
+            tam_storage::NewAnswer {
+                item: question.id,
+                paths: &[licence_path(InventoryId::TesNz, "CC-BY")],
+                at: NOW,
+                promote: None,
+            },
+        )
+        .await
+        .expect("the answer records");
+    assert!(
+        !report.promoted,
+        "an answer applies to this product alone until the seller says otherwise"
+    );
+
+    let ItemPreparation::Ready {
+        projected: Some(projected),
+        ..
+    } = prepare_item(&pool, &lease(), NOW)
+        .await
+        .expect("the preparation runs")
+    else {
+        panic!("the answered question no longer blocks");
+    };
+    assert_eq!(
+        projected
+            .natives
+            .iter()
+            .filter(|native| native.axis == TermKind::Licence)
+            .filter_map(|native| native.value.native_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec!["CC-BY"],
+        "the licence the projection carries is the one the seller named"
+    );
+    assert!(
+        elections
+            .open_items(ORG)
+            .await
+            .expect("the queue reads")
+            .is_empty(),
+        "and the re-projection asks nothing, where before it minted a duplicate open row \
+         on every pass"
+    );
+}
+
+/// Promotion is what reconciles "the seller decides" with "do not ask again":
+/// one answer, applied forward, and the next product never raises the question
+/// at all.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_answer_applied_to_the_future_settles_the_next_product_without_asking(pool: PgPool) {
+    provision_undecided(
+        &pool,
+        true,
+        tam_domain::Binding::Unbound,
+        tam_marketplace::RemoteLifecycle::Absent,
+    )
+    .await;
+    let elections = ElectionRepo::new(pool.clone());
+    prepare_item(&pool, &lease(), NOW)
+        .await
+        .expect("the preparation runs");
+    let open = elections.open_items(ORG).await.expect("the queue reads");
+    let [question] = open.as_slice() else {
+        panic!("exactly one question, got {open:?}");
+    };
+    let rule = ElectionRule::new(NewElectionRule {
+        org: ORG,
+        inventory: question.inventory,
+        axis: question.axis,
+        trigger_kind: question.trigger_kind,
+        trigger_key: question.trigger_key.clone(),
+        answer: ElectionAnswer::Value {
+            path: licence_path(InventoryId::TesNz, "CC-BY"),
+        },
+        decided_by: Decider::Human {
+            user: UserId(Uuid([0x5E; 16])),
+            org: ORG,
+        },
+        decided_at: NOW,
+    })
+    .expect("a licence value is a legal answer; only delegation is not");
+    let report = elections
+        .answer(
+            ORG,
+            tam_storage::NewAnswer {
+                item: question.id,
+                paths: &[licence_path(InventoryId::TesNz, "CC-BY")],
+                at: NOW,
+                promote: Some(&rule),
+            },
+        )
+        .await
+        .expect("the answer records");
+    assert!(report.promoted);
+    assert_eq!(
+        elections
+            .rules(ORG)
+            .await
+            .expect("the rules read")
+            .as_slice(),
+        &[rule],
+        "the standing rule lands in the same transaction the answer did"
+    );
+
+    let second_product = ProductId(Uuid([0x02; 16]));
+    let second_mapping = MappingId(Uuid([0x32; 16]));
+    ProductRepo::new(pool.clone())
+        .insert(ORG, &canonical_product(second_product, 0x23), NOW)
+        .await
+        .expect("the second product inserts");
+    MappingRepo::new(pool.clone())
+        .insert(
+            ORG,
+            &mapping_of(
+                second_mapping,
+                second_product,
+                tam_domain::Binding::Unbound,
+                tam_marketplace::RemoteLifecycle::Absent,
+            ),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the second mapping inserts");
+    let mut next = lease();
+    next.item = tam_domain::JobItemId(Uuid([0x43; 16]));
+    next.mapping = second_mapping;
+    assert!(
+        matches!(
+            prepare_item(&pool, &next, NOW)
+                .await
+                .expect("the preparation runs"),
+            ItemPreparation::Ready { .. }
+        ),
+        "the second product never asked, because the rule answered before the raise"
+    );
+    assert!(
+        elections
+            .open_items(ORG)
+            .await
+            .expect("the queue reads")
+            .is_empty(),
+        "five hundred listings must not ask the same question five hundred times"
+    );
 }

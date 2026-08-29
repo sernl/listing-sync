@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO election_item (org_id, id, product_id, inventory, axis, trigger_kind, trigger_key, raised_by, raised_at, state) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, 'open' WHERE NOT EXISTS ( SELECT 1 FROM election_item WHERE org_id = $1 AND product_id = $3 AND inventory = $4 AND axis = $5 AND trigger_kind = $6 AND trigger_key = $7 AND state = 'answered') ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5d58c6fb9c47c3093feb642df81062a1db38602e0479435aca348949cfb3eeb2"
+}

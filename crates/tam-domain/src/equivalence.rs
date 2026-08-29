@@ -442,6 +442,62 @@ pub fn resolved_by(
     }
 }
 
+/// One question this product already had answered, read back so a revived
+/// item resolves instead of asking it again.
+///
+/// Distinct from `ElectionRule` and not derivable from one: a rule is a policy
+/// the seller states over every future product, and an answer is what they
+/// said about this one. The queue's own settled rows are the durable record of
+/// the second, so a projection that consults only rules cannot see the answer
+/// that unparked it and re-raises the identical question forever.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledElection {
+    pub product: ProductId,
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub trigger_kind: ElectionTriggerKind,
+    pub trigger_key: Option<String>,
+    /// The values the seller named, in the order they named them. Read as an
+    /// `Ordering`, which is what makes one stored shape answer all four
+    /// triggers: a supply takes the first, an elect-one takes the first the
+    /// candidates still offer, an over-cap takes as many as the cap allows,
+    /// and a narrow takes every one the band still covers.
+    pub chosen: Vec<VocabularyPath>,
+}
+
+impl SettledElection {
+    /// Whether this settled row speaks to that election. The key is the
+    /// election's own dedup key, so an answer settles the question it was
+    /// asked about and never a neighbouring one -- a free-branch licence
+    /// answer does not settle the paid-branch question the price flip raised.
+    #[must_use]
+    pub fn answers(&self, election: &Election) -> bool {
+        self.product == election.product
+            && self.inventory == election.inventory
+            && self.axis == election.axis
+            && self.trigger_kind == election.trigger.kind()
+            && self.trigger_key == election.trigger.key()
+    }
+}
+
+/// What the seller already said about this very product, or `None` where they
+/// said nothing about this question.
+///
+/// Consulted before the standing rules, because an answer about this product
+/// is the more specific fact. In practice the two never disagree -- a rule
+/// that matches suppresses the raise, so the question is never asked and never
+/// answered -- and the order is stated rather than left to iteration.
+#[must_use]
+pub fn settled_by<'settled>(
+    settled: &'settled [SettledElection],
+    election: &Election,
+) -> Option<&'settled [VocabularyPath]> {
+    settled
+        .iter()
+        .find(|answer| answer.answers(election))
+        .map(|answer| answer.chosen.as_slice())
+}
+
 /// The first of the three idempotency mechanisms, and the only pure one: an
 /// election a standing rule answers is never enqueued at all, so the common
 /// path writes nothing.

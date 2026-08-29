@@ -39,7 +39,7 @@ pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{SessionIdentity, SessionRepo, SessionToken};
 pub mod elections;
 pub mod sync_requests;
-pub use elections::{AnswerReport, ElectionRepo, OpenElection};
+pub use elections::{AnswerReport, ElectionRepo, NewAnswer, OpenElection};
 pub use sync_requests::{
     job_request_key, Canonicalised, Disposition, Enqueued, NewSyncRequest, SyncIntent,
     SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,

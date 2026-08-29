@@ -17,7 +17,7 @@
 
 use sqlx::PgPool;
 use tam_domain::equivalence::{
-    Election, ElectionAnswer, ElectionRule, ElectionTriggerKind, NewElectionRule,
+    Election, ElectionAnswer, ElectionRule, ElectionTriggerKind, NewElectionRule, SettledElection,
 };
 use tam_domain::{TermKind, VocabularyId, VocabularyPath};
 use tam_types::{InventoryId, MappingId, OrgId, ProductId, Timestamp, Uuid};
@@ -55,6 +55,32 @@ pub struct OpenElection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnswerReport {
     pub revived: u64,
+    /// Whether the answer also became the tenant's standing rule. Reported
+    /// rather than assumed, because a surface that offered "apply to future"
+    /// and wrote nothing would be telling the seller they had answered once
+    /// for good when they had answered once.
+    pub promoted: bool,
+}
+
+/// One answer as the decision surface submits it: which question, the values
+/// the seller named, when, and the standing rule to write beside it where they
+/// said to apply it to everything after this.
+///
+/// Bundled because the arity would otherwise exceed the workspace argument
+/// limit, and because a promotion written in a second transaction is a
+/// promotion a crash can lose while the answer survives.
+pub struct NewAnswer<'a> {
+    pub item: Uuid,
+    pub paths: &'a [VocabularyPath],
+    pub at: Timestamp,
+    /// The rule to upsert in the same transaction that records the answer.
+    /// `None` keeps the decision to this one product, which is the default:
+    /// promotion is explicit, never inferred from the answer's shape.
+    ///
+    /// It arrives already constructed for the same reason `upsert_rule`'s does
+    /// — `ElectionRule::new` is the domain half of the legal backstop and this
+    /// must not be a second way in past it.
+    pub promote: Option<&'a ElectionRule>,
 }
 
 impl ElectionRepo {
@@ -64,11 +90,20 @@ impl ElectionRepo {
     }
 
     /// Raises one item per election, deduplicated against the open queue by
-    /// the partial unique index.
+    /// the partial unique index and against the settled queue by the answered
+    /// row itself.
     ///
     /// The rule check happens before this and is pure, so the common path
     /// writes nothing at all; what reaches here is what no standing answer
-    /// covers.
+    /// covers. The answered-row guard is the fence behind that: the partial
+    /// index spans open rows alone, so without it a question the seller has
+    /// already answered would mint a second open row on every re-projection
+    /// and the queue would grow one duplicate per pass. It is keyed on the
+    /// question rather than on the axis, so a price flip still asks the
+    /// paid-branch question the free-branch answer says nothing about.
+    ///
+    /// `already_open` therefore counts every election this raise minted no
+    /// row for, whether one was open or the seller had already settled it.
     pub async fn raise(
         &self,
         org: OrgId,
@@ -87,7 +122,12 @@ impl ElectionRepo {
                 "INSERT INTO election_item \
                  (org_id, id, product_id, inventory, axis, trigger_kind, trigger_key, \
                   raised_by, raised_at, state) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open') \
+                 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, 'open' \
+                 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM election_item \
+                     WHERE org_id = $1 AND product_id = $3 AND inventory = $4 \
+                       AND axis = $5 AND trigger_kind = $6 AND trigger_key = $7 \
+                       AND state = 'answered') \
                  ON CONFLICT DO NOTHING",
                 uuid_to_db(org.0),
                 uuid::Uuid::new_v4(),
@@ -150,10 +190,14 @@ impl ElectionRepo {
     pub async fn answer(
         &self,
         org: OrgId,
-        item: Uuid,
-        paths: &[VocabularyPath],
-        at: Timestamp,
+        new: NewAnswer<'_>,
     ) -> Result<AnswerReport, StorageError> {
+        let NewAnswer {
+            item,
+            paths,
+            at,
+            promote,
+        } = new;
         if paths.is_empty() {
             return Err(StorageError::Inconsistent {
                 reason: "an answered election names at least one value".to_owned(),
@@ -182,6 +226,14 @@ impl ElectionRepo {
         )
         .execute(&mut *tx)
         .await?;
+        if let Some(rule) = promote {
+            if rule.org != org {
+                return Err(StorageError::Inconsistent {
+                    reason: "a standing rule belongs to the tenant that answered".to_owned(),
+                });
+            }
+            write_rule(&mut tx, rule).await?;
+        }
         let revived = match row.raised_by {
             Some(mapping) => {
                 revive_on(
@@ -196,7 +248,52 @@ impl ElectionRepo {
             None => 0,
         };
         tx.commit().await?;
-        Ok(AnswerReport { revived })
+        Ok(AnswerReport {
+            revived,
+            promoted: promote.is_some(),
+        })
+    }
+
+    /// Every question this product's seller has already settled, in the form
+    /// `settled_by` reads.
+    ///
+    /// The projection's other half. `rules` answers what the seller stated as
+    /// a policy; this answers what they stated about this product, which is
+    /// what an answer on the decision surface is. Without it the revive the
+    /// answer performs requeues an item that re-raises the identical question
+    /// and parks again, so answering could never release anything.
+    pub async fn answered_for(
+        &self,
+        org: OrgId,
+        product: ProductId,
+    ) -> Result<Vec<SettledElection>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT inventory, axis, trigger_kind, trigger_key, answer \
+             FROM election_item \
+             WHERE org_id = $1 AND product_id = $2 AND state = 'answered' \
+             ORDER BY resolved_at, id",
+            uuid_to_db(org.0),
+            uuid_to_db(product.0),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                let inventory = inventory_from_db(&row.inventory)?;
+                let axis = term_kind_from_db(&row.axis)?;
+                Ok(SettledElection {
+                    product,
+                    inventory,
+                    axis,
+                    trigger_kind: trigger_kind_from_db(&row.trigger_kind)?,
+                    trigger_key: (!row.trigger_key.is_empty()).then_some(row.trigger_key),
+                    chosen: answered_paths(&row.answer, VocabularyId(inventory, axis))?,
+                })
+            })
+            .collect()
     }
 
     /// Withdraws a question nobody needs answered any more — the product's
@@ -279,38 +376,49 @@ impl ElectionRepo {
     pub async fn upsert_rule(&self, rule: &ElectionRule) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, rule.org).await?;
-        let (kind, paths) = encode_answer(&rule.answer);
-        let (decided_by, source, user, org_col) = decider_to_db(&rule.decided_by);
-        sqlx::query!(
-            "INSERT INTO election_rule \
-             (org_id, inventory, axis, trigger_kind, trigger_key, answer_kind, answer, \
-              decided_by, decided_source, decided_user, decided_org, decided_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-             ON CONFLICT (org_id, inventory, axis, trigger_kind, trigger_key) \
-             DO UPDATE SET answer_kind = EXCLUDED.answer_kind, answer = EXCLUDED.answer, \
-                           decided_by = EXCLUDED.decided_by, \
-                           decided_source = EXCLUDED.decided_source, \
-                           decided_user = EXCLUDED.decided_user, \
-                           decided_org = EXCLUDED.decided_org, \
-                           decided_at = EXCLUDED.decided_at",
-            uuid_to_db(rule.org.0),
-            inventory_to_db(rule.inventory),
-            term_kind_to_db(rule.axis),
-            rule.trigger_kind.as_str(),
-            rule.trigger_key.clone().unwrap_or_default(),
-            kind,
-            paths,
-            decided_by,
-            source,
-            user,
-            org_col,
-            timestamp_to_db(rule.decided_at)?,
-        )
-        .execute(&mut *tx)
-        .await?;
+        write_rule(&mut tx, rule).await?;
         tx.commit().await?;
         Ok(())
     }
+}
+
+/// The rule upsert itself, taking the transaction rather than opening one, so
+/// an answer that promotes writes both halves atomically and `upsert_rule`
+/// stays the one statement.
+async fn write_rule(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rule: &ElectionRule,
+) -> Result<(), StorageError> {
+    let (kind, paths) = encode_answer(&rule.answer);
+    let (decided_by, source, user, org_col) = decider_to_db(&rule.decided_by);
+    sqlx::query!(
+        "INSERT INTO election_rule \
+         (org_id, inventory, axis, trigger_kind, trigger_key, answer_kind, answer, \
+          decided_by, decided_source, decided_user, decided_org, decided_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+         ON CONFLICT (org_id, inventory, axis, trigger_kind, trigger_key) \
+         DO UPDATE SET answer_kind = EXCLUDED.answer_kind, answer = EXCLUDED.answer, \
+                       decided_by = EXCLUDED.decided_by, \
+                       decided_source = EXCLUDED.decided_source, \
+                       decided_user = EXCLUDED.decided_user, \
+                       decided_org = EXCLUDED.decided_org, \
+                       decided_at = EXCLUDED.decided_at",
+        uuid_to_db(rule.org.0),
+        inventory_to_db(rule.inventory),
+        term_kind_to_db(rule.axis),
+        rule.trigger_kind.as_str(),
+        rule.trigger_key.clone().unwrap_or_default(),
+        kind,
+        paths,
+        decided_by,
+        source,
+        user,
+        org_col,
+        timestamp_to_db(rule.decided_at)?,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// The domain constructor, re-exported at the storage boundary so a caller
@@ -414,8 +522,8 @@ fn decode_answer(
     }
 }
 
-/// The answered value of one settled item, for the decision surface's record
-/// of what the seller chose.
+/// The answered value of one settled item, decoded against the item's own
+/// `(inventory, axis)`.
 pub fn answered_paths(
     value: &serde_json::Value,
     vocabulary: VocabularyId,

@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inventory, axis, trigger_kind, trigger_key, answer FROM election_item WHERE org_id = $1 AND product_id = $2 AND state = 'answered' ORDER BY resolved_at, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "axis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "trigger_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "trigger_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "answer",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "293059b4a7444d3b4c0387a653f583d5430668496857ef90d98dd3fe8d907b95"
+}

@@ -7,8 +7,8 @@
 //! the distinction the edge dropped.
 
 use tam_domain::equivalence::{
-    resolved_by, satisfied_by, AxisOutcome, Election, ElectionRule, ElectionTrigger, Loss,
-    PricingBranch, VocabularyGap,
+    resolved_by, satisfied_by, settled_by, AxisOutcome, Election, ElectionAnswer, ElectionRule,
+    ElectionTrigger, Loss, PricingBranch, SettledElection, VocabularyGap,
 };
 use tam_domain::registry::{registry, AxisBinding, Cardinality};
 use tam_domain::{
@@ -149,6 +149,11 @@ pub struct AxisRequest<'a> {
     /// returned, so a question the seller has already answered as a policy is
     /// never asked a second time and never reaches the queue at all.
     pub rules: &'a [ElectionRule],
+    /// What this product's own settled questions were answered with. Without
+    /// it an answered election revives the item it parked, re-raises the
+    /// identical question and parks again, so the decision surface is inert
+    /// and only a standing rule can ever release anything.
+    pub settled: &'a [SettledElection],
 }
 
 /// Projects one whole axis into one target inventory, naming a gap, an
@@ -200,17 +205,30 @@ pub fn project_axis(
         }));
     }
 
-    // The standing rules answer last, over every election this axis raised,
-    // because a rule is a policy about a trigger rather than about the path
-    // that produced it. An answered election resolves into the same set the
-    // relation would have resolved into, so nothing downstream can tell a
-    // policy answer from a translated one -- which is the point: the seller
-    // decided once, and the decision is now data like any other.
+    // The seller's answers settle last, over every election this axis raised,
+    // because an answer is about a trigger rather than about the path that
+    // produced it. This product's own settled question comes before the
+    // standing policy, being the more specific fact. An answered election
+    // resolves into the same set the relation would have resolved into, so
+    // nothing downstream can tell a decided answer from a translated one --
+    // which is the point: the seller decided, and the decision is now data
+    // like any other.
     let mut standing = Vec::new();
     for election in core::mem::take(&mut outcome.elections) {
-        match satisfied_by(request.rules, &election)
-            .and_then(|answer| resolved_by(&election.trigger, answer))
-        {
+        let decided = settled_by(request.settled, &election)
+            .and_then(|chosen| {
+                resolved_by(
+                    &election.trigger,
+                    &ElectionAnswer::Ordering {
+                        prefer: chosen.to_vec(),
+                    },
+                )
+            })
+            .or_else(|| {
+                satisfied_by(request.rules, &election)
+                    .and_then(|answer| resolved_by(&election.trigger, answer))
+            });
+        match decided {
             Some(paths) => {
                 for path in &paths {
                     push_distinct(&mut outcome.resolved, path);
@@ -583,6 +601,7 @@ mod tests {
             sources: &[],
             pricing: PricingBranch::Free,
             rules: &[],
+            settled: &[],
         }
     }
 

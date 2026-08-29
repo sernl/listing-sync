@@ -17,7 +17,9 @@
 
 use std::collections::HashMap;
 
-use tam_domain::equivalence::{Election, ElectionRule, Loss, PricingBranch, VocabularyGap};
+use tam_domain::equivalence::{
+    Election, ElectionRule, Loss, PricingBranch, SettledElection, VocabularyGap,
+};
 use tam_domain::registry::{registry, truncate, AxisBinding, FieldSpec};
 use tam_domain::{
     CanonicalProduct, CanonicalTerm, ListingProjection, ProjectionBlocked, ProjectionEdge,
@@ -108,6 +110,10 @@ pub struct ListingContext<'a> {
     /// The tenant's standing election answers, so a decision already taken as
     /// a policy resolves here instead of being asked again.
     pub rules: &'a [ElectionRule],
+    /// The questions this product's own seller has already settled, so an
+    /// answer that revived a parked item resolves it rather than re-raising
+    /// the identical question.
+    pub settled: &'a [SettledElection],
 }
 
 pub fn project_listing(
@@ -181,6 +187,7 @@ pub fn project_listing(
                 sources,
                 pricing,
                 rules: ctx.rules,
+                settled: ctx.settled,
             },
             ctx.edges,
             ctx.no_counterparts,
@@ -436,6 +443,7 @@ mod tests {
             edges,
             no_counterparts: &[],
             rules,
+            settled: &[],
         }
     }
 
@@ -641,6 +649,7 @@ mod tests {
             edges: std::slice::from_ref(&etsy_edge),
             no_counterparts: &[],
             rules: &[],
+            settled: &[],
         };
         let paid = PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("a price"));
         let blocked = project_listing(
@@ -707,6 +716,7 @@ mod tests {
             edges: std::slice::from_ref(&etsy_edge),
             no_counterparts: &[],
             rules: &[],
+            settled: &[],
         };
         let long: String = std::iter::repeat_n('é', 200).collect();
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });

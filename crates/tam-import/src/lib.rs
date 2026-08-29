@@ -580,7 +580,11 @@ where
         .edges_into_all(&tam_taxonomy::projection_vocabularies(run.target, &product))
         .await?;
     let no_counterparts = taxonomy.no_counterparts_into(run.target).await?;
-    let rules = ElectionRepo::new(run.pool.clone()).rules(run.org).await?;
+    let elections = ElectionRepo::new(run.pool.clone());
+    let rules = elections.rules(run.org).await?;
+    // A freshly minted product has settled nothing, and the read is here
+    // anyway so the two projection sites stay one shape rather than two.
+    let settled = elections.answered_for(run.org, product_id).await?;
     let outcome = project_listing(
         &product,
         &ListingContext {
@@ -592,6 +596,7 @@ where
             edges: &target_edges,
             no_counterparts: &no_counterparts,
             rules: &rules,
+            settled: &settled,
         },
     );
     let (projectable, blocked_by, raised) = match outcome {

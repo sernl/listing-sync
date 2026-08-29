@@ -323,6 +323,14 @@ pub async fn prepare_item(
     let no_counterparts = taxonomy.no_counterparts_into(lease.inventory).await?;
     let elections = ElectionRepo::new(pool.clone());
     let rules = elections.rules(lease.org).await?;
+    // The seller's own settled questions, beside the standing policies. The
+    // answer that revived this item lives here and nowhere else, so a
+    // projection reading rules alone re-raises the identical question and
+    // parks again -- the decision surface would revive forever and release
+    // nothing.
+    let settled = elections
+        .answered_for(lease.org, mapping.mapping.product)
+        .await?;
 
     let projection = match project_listing(
         &product,
@@ -335,6 +343,7 @@ pub async fn prepare_item(
             edges: &edges,
             no_counterparts: &no_counterparts,
             rules: &rules,
+            settled: &settled,
         },
     ) {
         Ok(projection) => projection,

@@ -15,7 +15,8 @@ use tam_domain::equivalence::{
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
-    ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, MappingRepo, ProductRepo, TaxonomyRepo,
+    ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, MappingRepo, NewAnswer, OpenElection,
+    ProductRepo, TaxonomyRepo,
 };
 use tam_types::{
     CanonicalTermId, ConnectionId, InventoryId, MappingId, Marketplace, OrgId, PriceIntent,
@@ -771,6 +772,18 @@ pub struct AnswerBody {
     /// One path per answered value: one for a supply or a primary pick,
     /// several for a band the seller narrows to more than one year group.
     pub answers: Vec<AnswerPath>,
+    /// Whether this answer also becomes the tenant's standing rule, so every
+    /// later product with the same question resolves without asking.
+    ///
+    /// Explicit and defaulted off: promotion is the seller saying "always",
+    /// and inferring it from an answer's shape would turn one decision about
+    /// one listing into a policy over every listing after it. It applies only
+    /// to a question a rule can be keyed to — a supply keys on the pricing
+    /// branch and a narrow on the source value's own native id, while an
+    /// elect-one and an over-cap ask about one product's resolved set and
+    /// generalise to nothing.
+    #[serde(default)]
+    pub apply_to_future: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -785,6 +798,11 @@ pub struct AnswerAck {
     /// How many parked items the answer released, in the same transaction
     /// that recorded it.
     pub revived: u64,
+    /// Whether a standing rule was written beside the answer. Reported rather
+    /// than echoed back from the request: a seller who asked to apply the
+    /// answer to a question no rule can be keyed to is told the answer stayed
+    /// with this one product instead of being left to assume otherwise.
+    pub promoted: bool,
 }
 
 pub(crate) async fn answer_decision(
@@ -821,13 +839,76 @@ pub(crate) async fn answer_decision(
             "an answered value needs at least one path segment",
         ));
     }
+    let now = (state.wall)();
+    // Promotion is refused rather than silently keyless for the two triggers
+    // that carry no key: a keyless rule is stored with the `''` sentinel and
+    // would answer every future question on that axis from one product's own
+    // resolved set. `election_rule_trigger_key` states the same rule at the
+    // row, and this is the half that can say why.
+    let promote = match (body.apply_to_future, target.trigger_key.clone()) {
+        (true, Some(key)) => Some(standing_rule(&context, &target, key, &paths, now)?),
+        (true, None) | (false, _) => None,
+    };
     let report = repo
-        .answer(context.org, item_id, &paths, (state.wall)())
+        .answer(
+            context.org,
+            NewAnswer {
+                item: item_id,
+                paths: &paths,
+                at: now,
+                promote: promote.as_ref(),
+            },
+        )
         .await
         .map_err(|error| conflict_or_fault(&state, &error))?;
     Ok(Json(AnswerAck {
         revived: report.revived,
+        promoted: report.promoted,
     }))
+}
+
+/// The standing rule an answered election promotes to, built through
+/// `ElectionRule::new` so the legal backstop refuses a delegated licence here
+/// exactly as it does on the rule endpoint.
+///
+/// One named value is a `Value` and several are an `Ordering`, which is the
+/// same reading `resolved_by` gives the stored answer itself: a band narrowed
+/// to three year groups is a preference over three, not three separate rules.
+fn standing_rule(
+    context: &OrgContext,
+    target: &OpenElection,
+    trigger_key: String,
+    paths: &[VocabularyPath],
+    now: Timestamp,
+) -> Result<ElectionRule, APIError> {
+    let answer = match paths {
+        [path] => ElectionAnswer::Value { path: path.clone() },
+        several => ElectionAnswer::Ordering {
+            prefer: several.to_vec(),
+        },
+    };
+    ElectionRule::new(NewElectionRule {
+        org: context.org,
+        inventory: target.inventory,
+        axis: target.axis,
+        trigger_kind: target.trigger_kind,
+        trigger_key: Some(trigger_key),
+        answer,
+        decided_by: Decider::Human {
+            user: context.user,
+            org: context.org,
+        },
+        decided_at: now,
+    })
+    .map_err(|error| match error {
+        ElectionRuleError::NotDelegable(_) => validation(
+            "this axis is the seller's own: choosing a rights grant is issuing one, \
+             so no opt-in delegates it to a computation",
+        ),
+        ElectionRuleError::UnboundAxis => {
+            validation("this inventory declares no such equivalence axis")
+        }
+    })
 }
 
 pub(crate) async fn withdraw_decision(

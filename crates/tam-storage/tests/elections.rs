@@ -16,7 +16,7 @@ use tam_domain::{
     VocabularyPath,
 };
 use tam_marketplace::RemoteLifecycle;
-use tam_storage::{ElectionRepo, LossScope, MappingRepo, ProductRepo, StorageError};
+use tam_storage::{ElectionRepo, LossScope, MappingRepo, NewAnswer, ProductRepo, StorageError};
 use tam_types::{
     AttemptId, CanonicalTermId, InventoryId, MappingId, OrgId, PriceIntent, PriceRule, Timestamp,
     Uuid,
@@ -126,7 +126,15 @@ async fn answering_settles_the_item_and_a_second_answer_is_refused(app: PgPool) 
     let item = repo.open_items(ORG_A).await.expect("the queue reads")[0].id;
 
     let report = repo
-        .answer(ORG_A, item, &[licence("CC-BY-SA")], T0)
+        .answer(
+            ORG_A,
+            NewAnswer {
+                item,
+                paths: &[licence("CC-BY-SA")],
+                at: T0,
+                promote: None,
+            },
+        )
         .await
         .expect("the answer records");
     assert_eq!(
@@ -142,7 +150,16 @@ async fn answering_settles_the_item_and_a_second_answer_is_refused(app: PgPool) 
         .is_empty());
     assert!(
         matches!(
-            repo.answer(ORG_A, item, &[licence("CC-BY")], T0).await,
+            repo.answer(
+                ORG_A,
+                NewAnswer {
+                    item,
+                    paths: &[licence("CC-BY")],
+                    at: T0,
+                    promote: None,
+                },
+            )
+            .await,
             Err(StorageError::Inconsistent { .. })
         ),
         "two concurrent answers cannot both settle one question"
