@@ -306,6 +306,33 @@ async fn insert_job_item(
     Ok(())
 }
 
+/// Takes the per-organisation event lock without spending a sequence number.
+///
+/// The same row `allocate_org_seq` locks, held from wherever the caller needs
+/// serialisation to begin rather than from the append. A reader that decides
+/// something from a count and then appends on the strength of it has to take
+/// it before the count, or two transactions each read a snapshot without the
+/// other's uncommitted write and both decide not to append.
+async fn lock_org_counter(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+) -> Result<(), StorageError> {
+    let org_db = uuid_to_db(org.0);
+    sqlx::query!(
+        "INSERT INTO org_event_counter (org_id) VALUES ($1) ON CONFLICT (org_id) DO NOTHING",
+        org_db,
+    )
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query!(
+        "SELECT next_seq FROM org_event_counter WHERE org_id = $1 FOR UPDATE",
+        org_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Allocates the next `org_seq` by locking the per-organisation counter row.
 /// The lock is what serialises event appends within one organisation, which
 /// the conditional append below relies on: a second transaction evaluating
@@ -567,10 +594,20 @@ async fn record_resumptions(
 /// context. A job whose last item dies there would flip to `Settled` with no
 /// event to explain it.
 ///
-/// Idempotent at the database. `job_event` has no uniqueness on
-/// `(org_id, job_id, kind)`, so a duplicate would be accepted silently, and
-/// the only thing preventing two settles today is a tenant mutex the design
-/// elsewhere names as removable.
+/// Serialised per organisation before the count, not after it. The count
+/// decides whether to append and the append is conditional on the count, so
+/// under READ COMMITTED two transactions settling a job's last two items each
+/// saw the other's item unsettled, both returned early, and the job finished
+/// with no `JobSettled` and no seller notification at all --
+/// `job_item_one_live_lease_per_org` does not serialise them, because it
+/// covers the live states a parked row does not have and `revive_expired`
+/// settles parked rows from the maintenance loop. Taking the event lock first
+/// makes the second transaction's count run on a snapshot that includes the
+/// first's settle.
+///
+/// Idempotent at the database in the other direction too: `WHERE NOT EXISTS`
+/// with `job_event_one_settled_per_job` behind it, so a duplicate is refused
+/// by the index however the caller races.
 pub async fn settle_if_complete(
     tx: &mut Transaction<'_, Postgres>,
     org: OrgId,
@@ -579,6 +616,7 @@ pub async fn settle_if_complete(
 ) -> Result<bool, StorageError> {
     let org_db = uuid_to_db(org.0);
     let job_db = uuid_to_db(job.0);
+    lock_org_counter(tx, org).await?;
     let counts = sqlx::query!(
         r#"SELECT
              count(*) FILTER (WHERE state <> 'settled')          AS "unsettled!",
@@ -622,7 +660,8 @@ pub async fn settle_if_complete(
          WHERE NOT EXISTS ( \
              SELECT 1 FROM job_event \
              WHERE org_id = $1 AND job_id = $3 AND kind = $4 \
-         )",
+         ) \
+         ON CONFLICT DO NOTHING",
         org_db,
         seq,
         job_db,

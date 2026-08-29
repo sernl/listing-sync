@@ -16,9 +16,9 @@ use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_storage::{
-    revive_by_gap, revive_on, BudgetGrant, HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo,
-    LeaseRepo, MappingRepo, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo,
-    RateBudgetRepo, StorageError,
+    revive_by_gap, revive_on, settle_if_complete, BudgetGrant, HaltCause, HaltRepo, ItemVerdict,
+    JobReadRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
+    ProductRepo, RateBudgetRepo, StorageError,
 };
 use tam_types::{
     CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail, FileId,
@@ -1068,5 +1068,103 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
     assert_eq!(
         leased.operation, removal,
         "an item enqueued through the request-key path leases as what it was enqueued as"
+    );
+}
+
+/// One settler's own view of the job, taken with the item it settled already
+/// written and not yet committed -- which is what the other settler sees a
+/// snapshot of.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn settle_row(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, org: OrgId, item: JobItemId) {
+    sqlx::query(
+        "UPDATE job_item SET state = 'settled', outcome = 'succeeded', settled_at = now() \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(db_uuid(org.0))
+    .bind(db_uuid(item.0))
+    .execute(&mut **tx)
+    .await
+    .expect("the item settles");
+}
+
+/// The completeness count runs behind the organisation's event lock.
+///
+/// It used to run in front of it. `settle_if_complete` returns before
+/// `allocate_org_seq` when it counts an unsettled sibling, so two
+/// transactions settling a job's last two items each counted a snapshot
+/// without the other's uncommitted write, both returned early, and the job
+/// finished with every item settled, no `JobSettled` in the ledger and no
+/// `email.job_settled` for the seller -- while `phase_of` read it as settled.
+/// Two worker processes per tenant is the designed configuration, and
+/// `job_item_one_live_lease_per_org` does not serialise them: it covers the
+/// live states a parked row does not have, and `revive_expired` settles
+/// parked rows from the maintenance loop.
+///
+/// Witnessed rather than raced, so the assertion is deterministic: a third
+/// connection asking for the lock without waiting is refused for as long as
+/// the first settler's transaction is open, and being refused is precisely
+/// what makes the second settler's count see the first's settle.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_completeness_count_holds_the_organisation_event_lock(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xD5, true).await;
+    let job = JobId(Uuid([0x91; 16]));
+    let mut first = item(0x92);
+    first.mapping = tenant.mapping;
+    let mut second = item(0x93);
+    second.mapping = tenant.mapping;
+    JobRepo::new(engine.clone())
+        .enqueue(
+            tenant.org,
+            &NewJob {
+                job,
+                inventory: InventoryId::TesGb,
+                at: T0,
+            },
+            &[first, second],
+        )
+        .await
+        .expect("the two-item job enqueues");
+
+    let mut settler = engine.begin().await.expect("the first settler opens");
+    settle_row(&mut settler, tenant.org, JobItemId(Uuid([0x92; 16]))).await;
+    assert!(
+        !settle_if_complete(&mut settler, tenant.org, job, T0)
+            .await
+            .expect("the first settle runs"),
+        "a job with an unsettled sibling has not finished"
+    );
+
+    let refused =
+        sqlx::query("SELECT next_seq FROM org_event_counter WHERE org_id = $1 FOR UPDATE NOWAIT")
+            .bind(db_uuid(tenant.org.0))
+            .fetch_optional(&engine)
+            .await
+            .map(|_| ());
+    assert!(
+        refused.is_err(),
+        "a settler that decided nothing still holds the lock the other settler must take \
+         before its own count, or both count a snapshot missing the other's write: {refused:?}"
+    );
+    settler.commit().await.expect("the first settle commits");
+
+    let mut last = engine.begin().await.expect("the second settler opens");
+    settle_row(&mut last, tenant.org, JobItemId(Uuid([0x93; 16]))).await;
+    assert!(
+        settle_if_complete(&mut last, tenant.org, job, T0)
+            .await
+            .expect("the second settle runs"),
+        "the settler that takes the lock last is the one that finishes the job"
+    );
+    last.commit().await.expect("the second settle commits");
+
+    let kinds = event_kinds(&engine, tenant.org).await;
+    assert_eq!(
+        kinds.iter().filter(|kind| *kind == "JobSettled").count(),
+        1,
+        "exactly one, and never none"
     );
 }
