@@ -65,10 +65,10 @@ struct VaultSink {
 }
 
 impl SessionSink for VaultSink {
-    fn reseal<'a>(
-        &'a self,
+    fn reseal(
+        &self,
         cookie_header: String,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + 'a>> {
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             // A failed reseal loses the renewal and nothing else: the lease
             // keeps working on the jar it holds, and the stored copy stays at
@@ -86,6 +86,32 @@ impl SessionSink for VaultSink {
                 .await
             {
                 eprintln!("tam-session-broker: a session renewal could not be resealed: {error}");
+            }
+        })
+    }
+
+    fn record_verified(
+        &self,
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            if let Err(error) = self.vault.record_verified(self.org, self.connection).await {
+                eprintln!(
+                    "tam-session-broker: a proven-live session could not be recorded: {error}"
+                );
+            }
+        })
+    }
+
+    fn record_failure(
+        &self,
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            if let Err(error) = self
+                .vault
+                .record_refresh_failure(self.org, self.connection)
+                .await
+            {
+                eprintln!("tam-session-broker: a session failure could not be recorded: {error}");
             }
         })
     }
@@ -230,11 +256,14 @@ impl Broker {
             connection,
             marketplace,
         };
+        // `refresh_session` records the answer's own verdict — a non-2xx is
+        // evidence about the session and advances the counter there. Only a
+        // refresh that never reached the marketplace is recorded here, and it
+        // is deliberately the same counter: a refresh loop that could not run
+        // is a connection nobody has proved live, however innocent the cause.
         match gateway::refresh_session(base, marketplace, &secret, &sink).await {
             Ok(upstream_status) => Response::Refreshed { upstream_status },
             Err(error) => {
-                // A refresh that could not be made is not evidence the session
-                // is dead, so the counter advances and the state does not.
                 if let Err(recorded) = self.vault.record_refresh_failure(org, connection).await {
                     eprintln!(
                         "tam-session-broker: the refresh failure could not be recorded: {recorded}"

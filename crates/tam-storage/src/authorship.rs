@@ -1,4 +1,5 @@
-//! The authorship attestation a connection carries, read by the engine role.
+//! The connection facts the engine role reads per item: the authorship
+//! attestation, and whether the account behind the connection has been named.
 //!
 //! The attestation is the seller's own declaration of who authored what a
 //! connection publishes, sealed onto the connection row by the broker's link
@@ -28,11 +29,11 @@ pub struct AuthorshipRecord {
     pub attested_at: Timestamp,
 }
 
-pub struct AuthorshipRepo {
+pub struct ConnectionFactsRepo {
     pool: PgPool,
 }
 
-impl AuthorshipRepo {
+impl ConnectionFactsRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -49,7 +50,7 @@ impl AuthorshipRepo {
     /// Read over the engine role without a tenant pin, matching the lease
     /// scan that produced the item; the tenant is named explicitly in the
     /// predicate instead, which is the same discipline the broker follows.
-    pub async fn for_connection(
+    pub async fn authorship_for(
         &self,
         org: OrgId,
         marketplace: Marketplace,
@@ -74,5 +75,31 @@ impl AuthorshipRepo {
                 (Some(_) | None, _) => None,
             }
         }))
+    }
+
+    /// Whether this tenant's linked connection still has no named account.
+    ///
+    /// The guard on the claim backfill. A connection is usable from the moment
+    /// its credential is sealed and takes the global exclusivity lock later,
+    /// the first time a live read names the storefront it speaks for; this is
+    /// what stops that read being reissued on every item once it has.
+    ///
+    /// `false` for a connection that is not `linked` as well as for one already
+    /// claimed, because neither should be reading an identity: the first has
+    /// nothing to claim with and the second has nothing left to claim.
+    pub async fn account_claim_pending(
+        &self,
+        org: OrgId,
+        marketplace: Marketplace,
+    ) -> Result<bool, StorageError> {
+        let row = sqlx::query!(
+            "SELECT platform_account_digest FROM connection \
+             WHERE org_id = $1 AND marketplace = $2 AND state = 'linked'",
+            uuid_to_db(org.0),
+            marketplace_to_db(marketplace),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some_and(|found| found.platform_account_digest.is_none()))
     }
 }

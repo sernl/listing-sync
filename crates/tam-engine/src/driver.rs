@@ -7,8 +7,8 @@
 
 use serde_json::json;
 use tam_domain::{
-    verification_settles, BlockCause, Effect, HaltScope, Input, ItemOperation, ItemOutcome,
-    MachineError, SellerEvent, StepBudget, SyncMachine, SyncState, Transition,
+    seller_clears, verification_settles, BlockCause, Effect, HaltScope, Input, ItemOperation,
+    ItemOutcome, MachineError, SellerEvent, StepBudget, SyncMachine, SyncState, Transition,
 };
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
@@ -204,32 +204,31 @@ pub(crate) fn intent_as_json(operation: &ItemOperation, fields: &FieldSet) -> se
 
 /// How a blocking condition reads to the seller, split by whose it is.
 ///
-/// A lapsed session is theirs and a re-link fixes it. Everything else is the
-/// marketplace's edge answering our address rather than our credential, which
-/// no re-link touches — so the copy says what is true, that the retry is ours
-/// to do. Reporting the second as `SessionExpired` is how a connections page
-/// ends up telling a seller to re-link over an egress block.
+/// The split is [`seller_clears`]', the same one the machine parks on, so the
+/// row's copy and the item's fate cannot say different things. A lapsed
+/// session or a mailed one-time password is theirs and a re-link supplies it.
+/// A captcha or an interstitial is the edge answering our address rather than
+/// our credential, which no re-link touches — so the copy says what is true,
+/// that the retry is ours. Reporting the second as `SessionExpired` is how a
+/// connections page ends up telling a seller to re-link over an egress block.
 fn challenge_verdict(challenge: ChallengeKind) -> (FailureCode, tam_types::FailureDetail) {
-    match challenge {
-        ChallengeKind::ReauthRequired => (
+    if seller_clears(challenge) {
+        return (
             FailureCode::SessionExpired,
             tam_types::FailureDetail(
-                "this marketplace connection needs re-linking: the session it holds has \
-                 lapsed"
+                "this marketplace connection needs re-linking: it is asking us to sign in \
+                 again"
                     .to_owned(),
             ),
-        ),
-        ChallengeKind::Captcha
-        | ChallengeKind::JavaScriptInterstitial
-        | ChallengeKind::EmailedOneTimePassword => (
-            FailureCode::ChallengePresented,
-            tam_types::FailureDetail(
-                "the marketplace is challenging our requests; retrying is ours to do, not \
-                 yours"
-                    .to_owned(),
-            ),
-        ),
+        );
     }
+    (
+        FailureCode::ChallengePresented,
+        tam_types::FailureDetail(
+            "the marketplace is challenging our requests; retrying is ours to do, not yours"
+                .to_owned(),
+        ),
+    )
 }
 
 fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
@@ -845,6 +844,25 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
         match (&next.state, pending) {
             (SyncState::Terminal(outcome), _) => {
                 let now = ctx.clock.now();
+                // A blocked terminal raises no gate, so nothing else on this
+                // path would tell the progress stream what stopped the item.
+                // The event is the cause; the settle below is only the fact.
+                if let Outcome::Blocked { challenge } = outcome {
+                    let cause = if tam_domain::seller_clears(*challenge) {
+                        BlockCause::Reauth
+                    } else {
+                        BlockCause::Challenge
+                    };
+                    record_event(
+                        ctx,
+                        lease,
+                        &JobEventPayload::ItemBlocked {
+                            cause: block_cause_name(cause).to_owned(),
+                        },
+                        now,
+                    )
+                    .await?;
+                }
                 let verdict = outcome_to_item(outcome);
                 let item_outcome = verdict.outcome;
                 let mut severed = false;
@@ -1029,19 +1047,32 @@ async fn preflight_failed(
     at: Timestamp,
 ) -> Result<RunVerdict, EngineError> {
     let lease_ref = lease.lease_ref();
-    let streak = ctx.leases.preflight_failed(&lease_ref).await?;
+    let seen = preflight_challenge(error);
+    let streak = ctx
+        .leases
+        .preflight_failed(&lease_ref, !seller_clears(seen))
+        .await?;
     // The reaper's own predicate, read against the value `acquire` returned:
     // nothing moves `attempt_count` during a run, so this is exactly what
     // `expire_and_steal` will test when this lease expires.
     let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
     let last_attempt = lease.attempt_count.saturating_add(1) >= attempts_max;
-    if streak < PREFLIGHT_FAILURES_MAX && !last_attempt {
+    if streak.failures < PREFLIGHT_FAILURES_MAX && !last_attempt {
         return Ok(RunVerdict::Abandoned {
             reason: format!("preflight failed transiently: {error:?}"),
         });
     }
-    let challenge = preflight_challenge(error);
-    let cause = if matches!(challenge, ChallengeKind::ReauthRequired) {
+    // The whole streak decides, not its last member. A streak that mixed a
+    // Cloudflare block with a lapsed session takes the seller-actionable
+    // floor: a real auth failure anywhere in it is something they can fix,
+    // where an edge block is not, and judging by whichever error arrived last
+    // would make the seller's instructions depend on arrival order.
+    let challenge = if streak.edge_only {
+        seen
+    } else {
+        ChallengeKind::ReauthRequired
+    };
+    let cause = if seller_clears(challenge) {
         BlockCause::Reauth
     } else {
         BlockCause::Challenge

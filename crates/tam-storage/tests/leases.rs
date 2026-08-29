@@ -1407,13 +1407,32 @@ fn intent() -> AttemptIntent {
     }
 }
 
+async fn attempt_states(engine: &PgPool, org: OrgId, mapping: MappingId) -> Vec<String> {
+    attempt_rows(engine, org, mapping)
+        .await
+        .into_iter()
+        .map(|row| row.0)
+        .collect()
+}
+
+/// The attempt's state beside the listing it names. Both together, because
+/// the state alone cannot tell a faithful release from one that dropped the
+/// subject: `WriteAttemptRepo::settle` writes these three columns from
+/// `addressed_by`, and the re-link arm has to reproduce that or the ledger's
+/// "every settled row names what the write was about" stops holding on this
+/// path.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn attempt_states(engine: &PgPool, org: OrgId, mapping: MappingId) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT state FROM write_attempt WHERE org_id = $1 AND mapping_id = $2 ORDER BY opened_at",
+async fn attempt_rows(
+    engine: &PgPool,
+    org: OrgId,
+    mapping: MappingId,
+) -> Vec<(String, Option<String>, Option<String>, Option<i64>)> {
+    sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<i64>)>(
+        "SELECT state, remote_id_kind, remote_url, remote_numeric_id \
+         FROM write_attempt WHERE org_id = $1 AND mapping_id = $2 ORDER BY opened_at",
     )
     .bind(db_uuid(org.0))
     .bind(db_uuid(mapping.0))
@@ -1513,11 +1532,20 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
         1,
         "the re-linked marketplace's item requeues, and only that one"
     );
+    let RemoteListingId::Tes { url } = subject(0x71) else {
+        panic!("the fixture subject is a tes listing")
+    };
     assert_eq!(
-        attempt_states(&engine, tenant.org, tenant.mapping).await,
-        vec!["abandoned".to_owned()],
-        "the stranded attempt is settled in the same transaction, which is what frees the \
-         mapping for the next run"
+        attempt_rows(&engine, tenant.org, tenant.mapping).await,
+        vec![(
+            "abandoned".to_owned(),
+            Some("tes".to_owned()),
+            Some(url),
+            None
+        )],
+        "the stranded attempt is settled in the same transaction -- which is what frees the \
+         mapping for the next run -- and it still names the listing the revise addressed, \
+         exactly as `addressed_by` would have written it"
     );
     assert_eq!(
         attempt_states(&engine, tenant.org, tpt_mapping).await,
@@ -1636,4 +1664,60 @@ async fn connection_of(pool: &sqlx::PgPool, org: OrgId) -> tam_types::Connection
         .await
         .expect("the fixture linked exactly one connection");
     tam_types::ConnectionId(tam_types::Uuid(*id.as_bytes()))
+}
+
+/// A publish addressed no listing, and the release must not invent one.
+///
+/// `ItemOperation::subject()` answers `None` for a publish -- the id it will
+/// name is resolved from the binding at lease time rather than stated at
+/// enqueue -- so `landing_effect` maps an uncommitted publish to
+/// `LandingEffect::None` and the driver's own settle leaves the three remote
+/// columns NULL. The re-link arm copies `job_item`'s subject columns, which
+/// `job_item_operation_total` keeps NULL for a publish, so the two agree.
+/// Asserted rather than assumed: a copy that reached for the binding instead
+/// would put a listing on a settled row that never addressed one, and a
+/// publish is the only non-create shape where the distinction shows.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_released_publish_names_no_listing(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xCA, true).await;
+    let published = enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: tenant.mapping,
+            job_seed: 0x91,
+            item_seed: 0x92,
+            inventory: InventoryId::TesGb,
+            operation: ItemOperation::Publish {
+                to: ListingState::Live,
+            },
+        },
+    )
+    .await;
+
+    let leases = LeaseRepo::new(engine.clone());
+    assert_eq!(
+        park_mid_submit(&engine, "w1", tenant.mapping).await,
+        published
+    );
+    leases
+        .gate_connection(tenant.org, InventoryId::TesGb, T0)
+        .await
+        .expect("the connection gates");
+    relink(&engine, tenant.org, "tes").await;
+
+    assert_eq!(
+        leases
+            .revive_expired(Timestamp(T0.0 + 3_000), ATTEMPTS_MAX)
+            .await
+            .expect("the unparker runs"),
+        1,
+        "a publish is not a create, so the re-link resumes it"
+    );
+    assert_eq!(
+        attempt_rows(&engine, tenant.org, tenant.mapping).await,
+        vec![("abandoned".to_owned(), None, None, None)],
+        "a publish addressed no listing, so its released attempt names none either"
+    );
 }

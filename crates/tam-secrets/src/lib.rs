@@ -410,15 +410,26 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
 /// lives only in the broker process — the same boundary the credential vault
 /// already sits behind.
 ///
-/// Rotating the KEK rotates the pepper and therefore every digest: stored rows
-/// keep their uniqueness locks and stop matching anything freshly computed, so
-/// re-claiming each connection is part of a KEK rotation rather than a
-/// separate incident.
+/// `key_version` is bound into the digest so that a rotation is loud rather
+/// than silent. Rotating the KEK rotates the pepper, so every stored digest
+/// stops matching anything freshly computed — and because exclusivity is
+/// enforced on equality, a silent rotation would not merely fail to match, it
+/// would let a second organisation claim an account the first still holds
+/// under the retired key. With the version in the input the two generations
+/// are visibly different values, and re-claiming every connection is a
+/// recognised step of a rotation rather than an unnoticed loss of the lock.
 #[must_use]
-pub fn account_digest(kek: &Kek, marketplace: Marketplace, account_ref: &str) -> [u8; 32] {
+pub fn account_digest(
+    kek: &Kek,
+    marketplace: Marketplace,
+    key_version: i32,
+    account_ref: &str,
+) -> [u8; 32] {
     let mut pepper = hmac_sha256(&kek.0, ACCOUNT_DIGEST_LABEL);
-    let mut message = Vec::with_capacity(account_ref.len() + 2);
+    let mut message = Vec::with_capacity(account_ref.len() + 7);
     message.push(marketplace_ordinal(marketplace));
+    message.push(FIELD_SEPARATOR);
+    message.extend_from_slice(&key_version.to_be_bytes());
     message.push(FIELD_SEPARATOR);
     message.extend_from_slice(account_ref.as_bytes());
     let digest = hmac_sha256(&pepper, &message);
@@ -623,8 +634,8 @@ mod tests {
 
     #[test]
     fn a_digest_is_stable_for_the_same_account_under_the_same_key() {
-        let first = account_digest(&kek(0x07), Marketplace::Tpt, "900000001");
-        let second = account_digest(&kek(0x07), Marketplace::Tpt, "900000001");
+        let first = account_digest(&kek(0x07), Marketplace::Tpt, 1, "900000001");
+        let second = account_digest(&kek(0x07), Marketplace::Tpt, 1, "900000001");
         assert_eq!(
             first, second,
             "the exclusivity lock is the digest, so the same account must digest identically \
@@ -634,8 +645,8 @@ mod tests {
 
     #[test]
     fn the_same_account_reference_on_two_marketplaces_digests_differently() {
-        let tpt = account_digest(&kek(0x07), Marketplace::Tpt, "12345");
-        let tes = account_digest(&kek(0x07), Marketplace::Tes, "12345");
+        let tpt = account_digest(&kek(0x07), Marketplace::Tpt, 1, "12345");
+        let tes = account_digest(&kek(0x07), Marketplace::Tes, 1, "12345");
         assert_ne!(
             tpt, tes,
             "the index is (marketplace, digest), but a shared digest would still let one \
@@ -645,8 +656,8 @@ mod tests {
 
     #[test]
     fn the_field_separator_stops_a_concatenation_collision() {
-        let split_one = account_digest(&kek(0x07), Marketplace::Tpt, "1\u{1f}23");
-        let split_two = account_digest(&kek(0x07), Marketplace::Tpt, "1\u{1f}2\u{1f}3");
+        let split_one = account_digest(&kek(0x07), Marketplace::Tpt, 1, "1\u{1f}23");
+        let split_two = account_digest(&kek(0x07), Marketplace::Tpt, 1, "1\u{1f}2\u{1f}3");
         assert_ne!(
             split_one, split_two,
             "two distinct account references must not encode to the same message"
@@ -656,17 +667,27 @@ mod tests {
     #[test]
     fn rotating_the_key_rotates_the_digest() {
         assert_ne!(
-            account_digest(&kek(0x07), Marketplace::Tpt, "900000001"),
-            account_digest(&kek(0x08), Marketplace::Tpt, "900000001"),
+            account_digest(&kek(0x07), Marketplace::Tpt, 1, "900000001"),
+            account_digest(&kek(0x08), Marketplace::Tpt, 1, "900000001"),
             "the pepper derives from the KEK, so a rotation must invalidate stored digests \
              rather than silently keeping them valid under a retired key"
         );
     }
 
     #[test]
+    fn a_key_version_bump_changes_the_digest() {
+        assert_ne!(
+            account_digest(&kek(0x07), Marketplace::Tpt, 1, "900000001"),
+            account_digest(&kek(0x07), Marketplace::Tpt, 2, "900000001"),
+            "exclusivity is enforced on digest equality, so two key generations must produce \
+             visibly different values rather than a rotation silently releasing a held account"
+        );
+    }
+
+    #[test]
     fn the_pepper_is_not_the_key_itself() {
         let key = kek(0x09);
-        let digest = account_digest(&key, Marketplace::Tpt, "900000001");
+        let digest = account_digest(&key, Marketplace::Tpt, 1, "900000001");
         assert_ne!(
             digest.as_slice(),
             &[0x09; 32],

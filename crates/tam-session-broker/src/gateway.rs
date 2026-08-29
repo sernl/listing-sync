@@ -29,7 +29,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::jar::CookieJar;
+use crate::jar::{CookieJar, JarChange};
 
 /// The Tes prefixes a lease may reach, and nothing else. Adding one is a
 /// deliberate edit here, guarded by the refusal test. The middle three are the
@@ -101,6 +101,55 @@ pub(crate) const fn refresh_route(marketplace: Marketplace) -> Option<&'static s
     }
 }
 
+/// Resolves a request against the lease's upstream into the exact URL that
+/// will be sent, so the string checked and the string sent are the same one.
+///
+/// This is the whole of the traversal defence and it is structural rather than
+/// a filter. Checking `Uri::path()` and then sending a separately-built string
+/// checks a different value from the one that travels: URL resolution collapses
+/// dot-segments, so `/api/v2/dashboard/../../../api/v2/payouts` passes a check
+/// on the raw path and arrives at `/api/v2/payouts` — a payout route the
+/// compliance floor requires to be structurally unreachable, reached with the
+/// seller's cookie injected. Percent-encoded `%2e%2e` collapses the same way,
+/// so rejecting a literal `..` substring does not close it either.
+///
+/// Resolving once and checking `Url::path()` — already normalized, already
+/// percent-decoded in the segments that matter — removes the gap rather than
+/// filtering what falls through it. The resolved `Url` is then handed to
+/// reqwest as a `Url` rather than as a string, so nothing re-parses it.
+///
+/// `None` on a base or reference that will not resolve, which the caller
+/// refuses: a request whose destination cannot be determined is not one to
+/// send with a credential attached.
+fn resolve(upstream_base: &str, uri: &axum::http::Uri) -> Option<reqwest::Url> {
+    let base = reqwest::Url::parse(upstream_base).ok()?;
+    let reference = match uri.query() {
+        Some(query) => format!("{}?{query}", uri.path()),
+        None => uri.path().to_owned(),
+    };
+    let resolved = base.join(&reference).ok()?;
+    // `join` on an absolute reference would silently retarget the whole
+    // request at another host; only same-origin resolutions may be sent.
+    if resolved.origin() != base.origin() {
+        return None;
+    }
+    // An encoded separator survives normalisation and is therefore a second
+    // way for the checked path and the effective path to disagree — this time
+    // across the wire rather than within this process. `..%2f..` is one
+    // segment to the URL parser, so it collapses nothing and keeps the request
+    // inside an allowed prefix; an upstream that decodes before it routes then
+    // sees the traversal this side already approved. Refusing the encoding
+    // costs nothing real, because no allow-listed route takes a path segment
+    // containing a slash or a backslash.
+    (!encodes_a_separator(resolved.path())).then_some(resolved)
+}
+
+/// Whether a path carries a percent-encoded `/` or `\\`.
+fn encodes_a_separator(path: &str) -> bool {
+    let lowered = path.to_ascii_lowercase();
+    lowered.contains("%2f") || lowered.contains("%5c")
+}
+
 fn path_is_allowed(marketplace: Marketplace, path: &str) -> bool {
     allowed_prefixes(marketplace)
         .iter()
@@ -153,17 +202,35 @@ fn denied(deny: &[&str], name: &HeaderName) -> bool {
     deny.iter().any(|banned| name.as_str() == *banned)
 }
 
-/// Where a renewed jar goes when the upstream changes it.
+/// A future this trait's methods return. Boxed because the trait is used as an
+/// object, so that the gateway's own tests can drive a recording double.
+type SinkFuture<'a> = core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + 'a>>;
+
+/// Where the custody facts a live session produces are recorded.
 ///
-/// A trait rather than the vault itself so that the capture-and-reseal
-/// decision is provable without a database: the gateway's own tests drive a
-/// recording sink, and the sealing half is proved separately against the
-/// broker role.
+/// A trait rather than the vault itself so that the capture decisions are
+/// provable without a database: the gateway's own tests drive a recording
+/// sink, and the writing half is proved separately against the broker role.
+///
+/// The three methods are the only writers of the freshness axis, and the split
+/// between them is the invariant: `session_verified_at` means a real read
+/// proved this session live, so only [`SessionSink::reseal`] and
+/// [`SessionSink::record_verified`] may set it and both are reached only from
+/// a 2xx upstream answer. Linking sets it never — a credential that has been
+/// sealed has not thereby been shown to work.
 pub(crate) trait SessionSink: Send + Sync {
-    fn reseal<'a>(
-        &'a self,
-        cookie_header: String,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + 'a>>;
+    /// A renewal arrived on a 2xx answer: store it, and record that the
+    /// session was proved live just now.
+    fn reseal(&self, cookie_header: String) -> SinkFuture<'_>;
+
+    /// A 2xx answer carrying no cookie change still proves the session live.
+    fn record_verified(&self) -> SinkFuture<'_>;
+
+    /// A non-2xx answer, or one whose cookies were cleared. Advances the
+    /// consecutive-failure count without asserting the session is dead —
+    /// classifying a failure as an authentication problem is a decision this
+    /// layer deliberately does not make.
+    fn record_failure(&self) -> SinkFuture<'_>;
 }
 
 struct GatewayState {
@@ -173,6 +240,13 @@ struct GatewayState {
     jar: Mutex<CookieJar>,
     sink: Arc<dyn SessionSink>,
     client: reqwest::Client,
+    /// Whether this lease has already recorded a live verification.
+    ///
+    /// One write per lease rather than one per hop: a lease runs for minutes
+    /// and issues many requests, the freshness window it feeds is a day wide,
+    /// and stamping every 2xx would spend a database write per proxied request
+    /// to record a fact already recorded.
+    verified_recorded: std::sync::atomic::AtomicBool,
 }
 
 /// A bound gateway: its loopback address, the token a caller must present, and
@@ -240,6 +314,7 @@ pub(crate) async fn spawn(
         jar: Mutex::new(CookieJar::from_cookie_header(cookie.expose())),
         sink,
         client: proxy_client()?,
+        verified_recorded: std::sync::atomic::AtomicBool::new(false),
     });
     let router = Router::new().fallback(any(proxy)).with_state(state);
 
@@ -304,27 +379,23 @@ async fn proxy(State(state): State<Arc<GatewayState>>, request: Request) -> Resp
         )
             .into_response();
     }
-    let path = parts.uri.path();
-    if !path_is_allowed(state.marketplace, path) {
+    let Some(url) = resolve(&state.upstream_base, &parts.uri) else {
+        return (StatusCode::BAD_REQUEST, "the request url does not resolve").into_response();
+    };
+    if !path_is_allowed(state.marketplace, url.path()) {
         return (
             StatusCode::FORBIDDEN,
             "route is not on the lease allow-list",
         )
             .into_response();
     }
-    let query = parts
-        .uri
-        .query()
-        .map(|q| format!("?{q}"))
-        .unwrap_or_default();
-    let url = format!("{}{}{}", state.upstream_base, path, query);
 
     let cap = usize::try_from(tam_limits::http::UPLOAD_BODY_BYTES_MAX).unwrap_or(usize::MAX);
     let Ok(bytes) = axum::body::to_bytes(body, cap).await else {
         return (StatusCode::BAD_REQUEST, "body too large").into_response();
     };
 
-    let mut outbound = state.client.request(parts.method.clone(), &url);
+    let mut outbound = state.client.request(parts.method.clone(), url);
     for (name, value) in &parts.headers {
         if !denied(REQUEST_HEADER_DENY, name) {
             outbound = outbound.header(name, value);
@@ -357,27 +428,108 @@ async fn proxy(State(state): State<Arc<GatewayState>>, request: Request) -> Resp
     }
 }
 
-/// Absorbs the response's renewals into the jar and reseals if anything
-/// actually changed.
-///
-/// The debounce is the point of the return value from `apply_set_cookie`: a
-/// busy lease receives the same `Set-Cookie` on nearly every hop, and
-/// resealing each time would cost a database write and a fresh envelope per
-/// request to store bytes already stored.
-async fn absorb_renewals(state: &GatewayState, headers: &reqwest::header::HeaderMap) {
-    let mut jar = state.jar.lock().await;
-    let mut changed = false;
+/// What the jar did across every `Set-Cookie` on one response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Absorbed {
+    /// Nothing changed, or the change was a restatement.
+    Unchanged,
+    /// At least one cookie was renewed and none was removed.
+    Renewed,
+    /// At least one cookie was removed — the shape a logout takes.
+    Cleared,
+}
+
+/// Applies a response's `Set-Cookie` headers to a scratch copy of the jar and
+/// reports what they did, without committing anything.
+fn absorbed_into(jar: &mut CookieJar, headers: &reqwest::header::HeaderMap) -> Absorbed {
+    let mut outcome = Absorbed::Unchanged;
     for value in headers.get_all(reqwest::header::SET_COOKIE) {
-        if let Ok(text) = value.to_str() {
-            changed |= jar.apply_set_cookie(text);
+        let Ok(text) = value.to_str() else { continue };
+        match jar.apply_set_cookie(text) {
+            JarChange::Unchanged => {}
+            JarChange::Renewed => {
+                if outcome == Absorbed::Unchanged {
+                    outcome = Absorbed::Renewed;
+                }
+            }
+            // A clearing dominates: one removal on a response makes the whole
+            // response a logout, whatever else it renewed alongside it.
+            JarChange::Cleared => outcome = Absorbed::Cleared,
         }
     }
-    let renewed = changed.then(|| jar.to_cookie_header());
-    // Released before the reseal: the sink writes to the database, and a lease
-    // driving two hops at once must not queue the second behind that write.
+    outcome
+}
+
+/// Records what one upstream answer proved about the session, and stores a
+/// renewal only when the answer earned the right to be believed.
+///
+/// Three rules, and each closes a way the stored credential or the freshness
+/// axis could be corrupted by a response that proves nothing:
+///
+/// A non-2xx answer absorbs nothing. A 401, a Cloudflare challenge and a
+/// sign-in interstitial all carry `Set-Cookie`, and all of them are the
+/// marketplace replacing a working session with an anonymous one; sealing that
+/// would overwrite the only stored credential with one that cannot
+/// authenticate, and stamping it verified would make a dead connection read
+/// healthy for a day. Such an answer advances the failure count instead.
+///
+/// A cleared cookie is never sealed, whatever the status. A logout arrives as
+/// `Max-Age=0` or an empty value on an otherwise ordinary response, and the
+/// vault row is updated in place with no history, so one sealed logout is
+/// unrecoverable. This mirrors the guard the operator seal already has, where
+/// `cookie_header_from_netscape` refuses an empty jar.
+///
+/// `session_verified_at` is written here and in [`refresh_session`] and
+/// nowhere else. That is the invariant the whole function exists to hold: the
+/// column means a real read proved this session live, so linking must not set
+/// it and neither must anything that has not just seen a 2xx.
+async fn absorb_renewals(
+    state: &GatewayState,
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) {
+    if !status.is_success() {
+        // Deliberately without touching the jar: an answer that proves nothing
+        // must not move the session this lease is still driving with.
+        state.sink.record_failure().await;
+        return;
+    }
+    let mut jar = state.jar.lock().await;
+    // Decided on a copy and committed only once. A clearing must not reach the
+    // live jar either: this lease is still driving requests with it, and a
+    // logout absorbed in memory would make every remaining hop anonymous even
+    // though nothing was ever written to the vault.
+    let mut candidate = jar.clone();
+    let outcome = absorbed_into(&mut candidate, headers);
+    let renewed = match outcome {
+        Absorbed::Renewed if !candidate.is_empty() => {
+            *jar = candidate;
+            Some(jar.to_cookie_header())
+        }
+        Absorbed::Renewed | Absorbed::Cleared | Absorbed::Unchanged => None,
+    };
+    // Released before the sink writes: the sink reaches the database, and a
+    // lease driving two hops at once must not queue the second behind it.
     drop(jar);
-    if let Some(cookie_header) = renewed {
-        state.sink.reseal(cookie_header).await;
+
+    match outcome {
+        Absorbed::Cleared => state.sink.record_failure().await,
+        Absorbed::Renewed => match renewed {
+            Some(cookie_header) => state.sink.reseal(cookie_header).await,
+            // A renewal that empties the jar is not a renewal; unreachable by
+            // construction and refused rather than trusted.
+            None => state.sink.record_failure().await,
+        },
+        Absorbed::Unchanged => {
+            // A 2xx carrying no renewal still proves the session live, and is
+            // the ordinary case: most authenticated reads set no cookie.
+            if !state
+                .verified_recorded
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                state.sink.record_verified().await;
+            }
+        }
     }
 }
 
@@ -385,7 +537,7 @@ async fn relay(state: &GatewayState, upstream: reqwest::Response) -> Response {
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let upstream_headers = upstream.headers().clone();
-    absorb_renewals(state, &upstream_headers).await;
+    absorb_renewals(state, status, &upstream_headers).await;
     let body = upstream.bytes().await.unwrap_or_else(|_| Bytes::new());
     let mut response = (status, body).into_response();
     let relayed = response.headers_mut();
@@ -397,12 +549,19 @@ async fn relay(state: &GatewayState, upstream: reqwest::Response) -> Response {
     response
 }
 
-/// Drives the marketplace's own renewal route with the sealed jar and absorbs
-/// whatever it answers with, which is the broker's side of keeping a session
-/// alive between leases.
+/// Drives the marketplace's own renewal route with the sealed jar and records
+/// what it answered, which is the broker's side of keeping a session alive
+/// between leases.
 ///
-/// Returns the upstream status. A marketplace with no renewal route cannot be
-/// refreshed and says so through [`refresh_route`] rather than here.
+/// The status is acted on here rather than returned for somebody else to act
+/// on, because the two failure classes are not distinguishable afterwards. A
+/// refresh that could not be sent and a refresh answered `401` are both
+/// "the refresh did not work", and only the second is evidence about the
+/// session; treating the status as merely informational is how a refresh loop
+/// ends up counting network faults and never counting expired sessions.
+///
+/// A marketplace with no renewal route cannot be refreshed and says so through
+/// [`refresh_route`] rather than here.
 pub(crate) async fn refresh_session(
     upstream_base: &str,
     marketplace: Marketplace,
@@ -418,18 +577,21 @@ pub(crate) async fn refresh_session(
         .send()
         .await
         .map_err(|error| GatewayError(error.to_string()))?;
-    let status = response.status().as_u16();
+    let status = response.status();
+    if !status.is_success() {
+        sink.record_failure().await;
+        return Ok(status.as_u16());
+    }
     let mut jar = CookieJar::from_cookie_header(cookie.expose());
-    let mut changed = false;
-    for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
-        if let Ok(text) = value.to_str() {
-            changed |= jar.apply_set_cookie(text);
-        }
+    match absorbed_into(&mut jar, response.headers()) {
+        // A renewal that emptied the jar is not a renewal, so it joins the
+        // clearing rather than the sealing: both leave the stored credential
+        // as it was and both count as a failure to prove the session live.
+        Absorbed::Renewed if !jar.is_empty() => sink.reseal(jar.to_cookie_header()).await,
+        Absorbed::Cleared | Absorbed::Renewed => sink.record_failure().await,
+        Absorbed::Unchanged => sink.record_verified().await,
     }
-    if changed {
-        sink.reseal(jar.to_cookie_header()).await;
-    }
-    Ok(status)
+    Ok(status.as_u16())
 }
 
 #[cfg(test)]
@@ -446,7 +608,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        path_is_allowed, refresh_route, spawn, LeaseGateway, SessionSink, TES_REFRESH_ROUTE,
+        path_is_allowed, refresh_route, resolve, spawn, LeaseGateway, SessionSink, SinkFuture,
+        TES_REFRESH_ROUTE,
     };
 
     #[test]
@@ -574,15 +737,26 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         resealed: Mutex<Vec<String>>,
+        verified: Mutex<u32>,
+        failures: Mutex<u32>,
     }
 
     impl SessionSink for RecordingSink {
-        fn reseal<'a>(
-            &'a self,
-            cookie_header: String,
-        ) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + 'a>> {
+        fn reseal(&self, cookie_header: String) -> SinkFuture<'_> {
             Box::pin(async move {
                 self.resealed.lock().await.push(cookie_header);
+            })
+        }
+
+        fn record_verified(&self) -> SinkFuture<'_> {
+            Box::pin(async move {
+                *self.verified.lock().await += 1;
+            })
+        }
+
+        fn record_failure(&self) -> SinkFuture<'_> {
+            Box::pin(async move {
+                *self.failures.lock().await += 1;
             })
         }
     }
@@ -591,15 +765,23 @@ mod tests {
     struct Upstream {
         seen_cookies: Mutex<Vec<String>>,
         seen_csrf: Mutex<Vec<Option<String>>>,
+        seen_paths: Mutex<Vec<String>>,
         set_cookies: Mutex<Vec<Vec<String>>>,
+        status: axum::http::StatusCode,
     }
 
     impl Upstream {
         fn new(set_cookies: Vec<Vec<String>>) -> Arc<Self> {
+            Self::answering(axum::http::StatusCode::OK, set_cookies)
+        }
+
+        fn answering(status: axum::http::StatusCode, set_cookies: Vec<Vec<String>>) -> Arc<Self> {
             Arc::new(Self {
                 seen_cookies: Mutex::new(Vec::new()),
                 seen_csrf: Mutex::new(Vec::new()),
+                seen_paths: Mutex::new(Vec::new()),
                 set_cookies: Mutex::new(set_cookies),
+                status,
             })
         }
     }
@@ -621,6 +803,11 @@ mod tests {
             .map(str::to_owned);
         state.seen_cookies.lock().await.push(cookie);
         state.seen_csrf.lock().await.push(csrf);
+        state
+            .seen_paths
+            .lock()
+            .await
+            .push(request.uri().path().to_owned());
         let next = {
             let mut queued = state.set_cookies.lock().await;
             if queued.is_empty() {
@@ -629,7 +816,7 @@ mod tests {
                 queued.remove(0)
             }
         };
-        let mut response = (axum::http::StatusCode::OK, "ok").into_response();
+        let mut response = (state.status, "ok").into_response();
         for value in next {
             if let Ok(encoded) = axum::http::HeaderValue::from_str(&value) {
                 response
@@ -870,6 +1057,452 @@ mod tests {
                 .map(String::as_str),
             Some("sessionKey=abc; csrfToken=deadbeef"),
             "the sealed jar is injected server-side"
+        );
+        root.cancel();
+    }
+    /// Drives raw bytes at the loopback listener.
+    ///
+    /// The reqwest-driven tests cannot reach the traversal defence at all:
+    /// reqwest resolves the URL client-side, so `..` is already collapsed
+    /// before anything goes on the wire and the gateway never sees the shape
+    /// under test. Only a hand-written request line puts the dot-segments in
+    /// front of the allow-list.
+    async fn raw_get(endpoint: &str, token: &str, target: &str) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let address = endpoint.trim_start_matches("http://");
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("the gateway accepts a raw connection");
+        let request = format!(
+            "GET {target} HTTP/1.1\r\nHost: lease\r\nAuthorization: Bearer {token}\r\n\
+             Connection: close\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("the raw request writes");
+        let mut buffer = [0u8; 4096];
+        let read = stream
+            .read(&mut buffer)
+            .await
+            .expect("the gateway answers the raw request");
+        String::from_utf8_lossy(&buffer[..read]).into_owned()
+    }
+
+    fn resolved_path(target: &str) -> Option<String> {
+        let uri: axum::http::Uri = target.parse().ok()?;
+        resolve("https://www.tes.com", &uri).map(|url| url.path().to_owned())
+    }
+
+    #[test]
+    fn dot_segments_collapse_before_the_allow_list_sees_the_path() {
+        // The headline reproduction, pinned exactly: this is the request that
+        // reached the payout route with the seller cookie injected, because the
+        // allow-list read the raw path while the send built a separate string
+        // that url resolution then normalised.
+        assert_eq!(
+            resolved_path("/api/v2/dashboard/../../../api/v2/payouts").as_deref(),
+            Some("/api/v2/payouts"),
+            "the traversal resolves onto the payout route, which is why checking the raw path \
+             checked a value that never travelled"
+        );
+
+        // The property, over every encoding the collapse accepts. Where each
+        // one lands varies with how many segments it pops; that none of them
+        // lands anywhere the allow-list admits is the whole point.
+        for target in [
+            "/api/v2/dashboard/../../../api/v2/payouts",
+            "/api/v2/dashboard/../account/roster",
+            "/api/v2/dashboard/%2e%2e/%2e%2e/api/v2/payouts",
+            "/api/v2/dashboard/%2E%2E/%2E%2E/%2E%2E/api/v2/payouts",
+            "/api/v2/dashboard/..%2f../api/v2/payouts",
+            "/api/v2/dashboard/./../../api/v2/account/roster",
+            "/api/resources/v3/draft/../../../../api/v2/payouts",
+        ] {
+            // Two ways to be safe, and a traversal must take one of them:
+            // refused outright at resolution, or normalised onto a path the
+            // allow-list denies. What it must never do is normalise onto an
+            // admitted prefix while still carrying the means to move.
+            let Some(path) = resolved_path(target) else {
+                continue;
+            };
+            assert!(
+                !path_is_allowed(Marketplace::Tes, &path),
+                "{target} normalises to {path}, and no traversal may land on a route the \
+                 compliance floor requires to be structurally unreachable"
+            );
+            assert!(
+                !path.contains(".."),
+                "{target} must be checked after normalisation, not before: {path} still \
+                 carries dot-segments, so the checked value and the sent value disagree again"
+            );
+        }
+    }
+
+    #[test]
+    fn an_encoded_separator_is_refused_rather_than_passed_to_the_upstream() {
+        // `..%2f..` is one segment to the parser, so it collapses nothing and
+        // stays inside an allowed prefix. An upstream that decodes before it
+        // routes would then perform the traversal this side just approved, so
+        // the encoding is refused here rather than trusted to mean nothing.
+        for target in [
+            "/api/v2/dashboard/..%2f../api/v2/payouts",
+            "/api/v2/dashboard/..%2F..%2Fapi/v2/payouts",
+            "/api/v2/dashboard/..%5c../api/v2/payouts",
+        ] {
+            assert_eq!(
+                resolved_path(target),
+                None,
+                "{target} carries an encoded separator and must not be sent at all"
+            );
+        }
+    }
+
+    #[test]
+    fn a_benign_path_survives_resolution_unharmed() {
+        assert_eq!(
+            resolved_path("/api/v2/dashboard/getAllResources").as_deref(),
+            Some("/api/v2/dashboard/getAllResources"),
+            "normalising must not disturb an ordinary route"
+        );
+        assert!(
+            path_is_allowed(
+                Marketplace::Tes,
+                &resolved_path("/api/v2/resources/9001/draft").expect("resolves")
+            ),
+            "a real write path still passes after the fix"
+        );
+    }
+
+    #[test]
+    fn a_reference_that_would_leave_the_upstream_is_refused() {
+        let uri: axum::http::Uri = "https://evil.test/api/v2/dashboard"
+            .parse()
+            .expect("an absolute uri parses");
+        assert_eq!(
+            resolve("https://www.tes.com", &uri).map(|url| url.to_string()),
+            Some("https://www.tes.com/api/v2/dashboard".to_owned()),
+            "only the path is taken from the reference, so an absolute url cannot retarget \
+             the lease at another host"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_traversal_over_raw_bytes_never_reaches_a_denied_route() {
+        let upstream = Upstream::new(Vec::new());
+        let base = serve_upstream(Arc::clone(&upstream)).await;
+        let sink = Arc::new(RecordingSink::default());
+        let root = CancellationToken::new();
+        let gateway = spawn(
+            LeaseGateway {
+                upstream_base: base,
+                marketplace: Marketplace::Tes,
+                cookie: Secret::new("session=secret".to_owned()),
+                sink: shared_sink(&sink),
+            },
+            &root,
+        )
+        .await
+        .expect("the gateway binds");
+
+        for target in [
+            "/api/v2/dashboard/../../../api/v2/payouts",
+            "/api/v2/dashboard/%2e%2e/%2e%2e/api/v2/payouts",
+            "/api/v2/dashboard/../account/roster",
+            "/api/resources/v3/draft/../../../api/v2/payouts",
+        ] {
+            let answer = raw_get(&gateway.endpoint, &gateway.token, target).await;
+            assert!(
+                answer.starts_with("HTTP/1.1 403"),
+                "{target} must be refused by the allow-list; the gateway answered: {answer}"
+            );
+        }
+        assert!(
+            upstream.seen_paths.lock().await.is_empty(),
+            "no traversal may reach the upstream at all, with or without the cookie"
+        );
+
+        // The same connection still serves the routes it is for, so the fix is
+        // a normalisation rather than a blanket refusal.
+        let allowed = raw_get(
+            &gateway.endpoint,
+            &gateway.token,
+            "/api/v2/dashboard/getAllResources",
+        )
+        .await;
+        assert!(
+            allowed.starts_with("HTTP/1.1 200"),
+            "an ordinary route must still pass: {allowed}"
+        );
+        root.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_tpt_traversal_cannot_reach_the_account_routes_either() {
+        let upstream = Upstream::new(Vec::new());
+        let base = serve_upstream(Arc::clone(&upstream)).await;
+        let sink = Arc::new(RecordingSink::default());
+        let root = CancellationToken::new();
+        let gateway = spawn(
+            LeaseGateway {
+                upstream_base: base,
+                marketplace: Marketplace::Tpt,
+                cookie: Secret::new("csrfToken=deadbeef".to_owned()),
+                sink: shared_sink(&sink),
+            },
+            &root,
+        )
+        .await
+        .expect("the gateway binds");
+
+        for target in [
+            "/graph/../My-Account/Payouts",
+            "/uploads/time/%2e%2e/%2e%2e/My-Account/Payouts",
+        ] {
+            let answer = raw_get(&gateway.endpoint, &gateway.token, target).await;
+            assert!(
+                answer.starts_with("HTTP/1.1 403"),
+                "{target} must be refused on Tpt too: {answer}"
+            );
+        }
+        assert!(
+            upstream.seen_paths.lock().await.is_empty(),
+            "no Tpt traversal reaches the upstream"
+        );
+        root.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_non_success_answer_neither_reseals_nor_records_a_verification() {
+        // A 401 carrying Set-Cookie is exactly how an expired session and a
+        // sign-in interstitial arrive. Absorbing it would overwrite the only
+        // sealed credential with an anonymous one and stamp the connection
+        // verified, so the seller's page would read connected for a day
+        // against a session that authenticates nothing.
+        let upstream = Upstream::answering(
+            axum::http::StatusCode::UNAUTHORIZED,
+            vec![vec!["session=anonymous; Path=/".to_owned()]],
+        );
+        let base = serve_upstream(Arc::clone(&upstream)).await;
+        let sink = Arc::new(RecordingSink::default());
+        let root = CancellationToken::new();
+        let gateway = spawn(
+            LeaseGateway {
+                upstream_base: base,
+                marketplace: Marketplace::Tes,
+                cookie: Secret::new("session=live".to_owned()),
+                sink: shared_sink(&sink),
+            },
+            &root,
+        )
+        .await
+        .expect("the gateway binds");
+
+        let response = client()
+            .get(format!(
+                "{}/api/v2/dashboard/getAllResources",
+                gateway.endpoint
+            ))
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {}", gateway.token),
+            )
+            .send()
+            .await
+            .expect("the proxied request completes");
+        assert_eq!(response.status().as_u16(), 401, "the refusal is relayed");
+
+        assert!(
+            sink.resealed.lock().await.is_empty(),
+            "a 401 must never overwrite the stored credential"
+        );
+        assert_eq!(
+            *sink.verified.lock().await,
+            0,
+            "a 401 proves the session is not live, so nothing may record it as verified"
+        );
+        assert_eq!(
+            *sink.failures.lock().await,
+            1,
+            "a 401 is evidence about the session and must advance the failure count"
+        );
+
+        // And the lease keeps driving with the credential it started on.
+        assert_eq!(
+            upstream
+                .seen_cookies
+                .lock()
+                .await
+                .first()
+                .map(String::as_str),
+            Some("session=live"),
+            "the live jar is what was sent"
+        );
+        root.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_success_with_no_cookie_change_still_records_the_session_live() {
+        let upstream = Upstream::new(vec![Vec::new(), Vec::new()]);
+        let base = serve_upstream(Arc::clone(&upstream)).await;
+        let sink = Arc::new(RecordingSink::default());
+        let root = CancellationToken::new();
+        let gateway = spawn(
+            LeaseGateway {
+                upstream_base: base,
+                marketplace: Marketplace::Tes,
+                cookie: Secret::new("session=live".to_owned()),
+                sink: shared_sink(&sink),
+            },
+            &root,
+        )
+        .await
+        .expect("the gateway binds");
+
+        for _ in 0..2u8 {
+            let response = client()
+                .get(format!(
+                    "{}/api/v2/dashboard/getAllResources",
+                    gateway.endpoint
+                ))
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {}", gateway.token),
+                )
+                .send()
+                .await
+                .expect("the proxied request completes");
+            assert_eq!(response.status().as_u16(), 200, "the read succeeds");
+        }
+
+        assert_eq!(
+            *sink.verified.lock().await,
+            1,
+            "most authenticated reads set no cookie, so this is the production writer of \
+             session_verified_at — and it writes once per lease rather than once per hop"
+        );
+        assert!(
+            sink.resealed.lock().await.is_empty(),
+            "nothing changed, so nothing is sealed"
+        );
+        root.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_session_clearing_cookie_never_reaches_the_vault() {
+        // A logout arrives as a 200 with Max-Age=0. The vault row is updated
+        // in place with no history, so one sealed logout destroys the only
+        // copy of a working credential.
+        let upstream = Upstream::new(vec![vec!["session=; Max-Age=0; Path=/".to_owned()]]);
+        let base = serve_upstream(Arc::clone(&upstream)).await;
+        let sink = Arc::new(RecordingSink::default());
+        let root = CancellationToken::new();
+        let gateway = spawn(
+            LeaseGateway {
+                upstream_base: base,
+                marketplace: Marketplace::Tes,
+                cookie: Secret::new("session=live".to_owned()),
+                sink: shared_sink(&sink),
+            },
+            &root,
+        )
+        .await
+        .expect("the gateway binds");
+
+        let response = client()
+            .get(format!(
+                "{}/api/v2/dashboard/getAllResources",
+                gateway.endpoint
+            ))
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {}", gateway.token),
+            )
+            .send()
+            .await
+            .expect("the proxied request completes");
+        assert_eq!(response.status().as_u16(), 200, "the logout answers 200");
+
+        assert!(
+            sink.resealed.lock().await.is_empty(),
+            "a cleared session must never be sealed over a working one"
+        );
+        assert_eq!(
+            *sink.verified.lock().await,
+            0,
+            "a response that ended the session did not prove it live"
+        );
+        assert_eq!(
+            *sink.failures.lock().await,
+            1,
+            "a cleared session is a failure signal, not a silent no-op"
+        );
+        root.cancel();
+    }
+
+    #[tokio::test]
+    async fn one_leases_token_does_not_open_another_lease() {
+        let first_upstream = Upstream::new(Vec::new());
+        let second_upstream = Upstream::new(Vec::new());
+        let first_base = serve_upstream(Arc::clone(&first_upstream)).await;
+        let second_base = serve_upstream(Arc::clone(&second_upstream)).await;
+        let sink = Arc::new(RecordingSink::default());
+        let root = CancellationToken::new();
+        let first = spawn(
+            LeaseGateway {
+                upstream_base: first_base,
+                marketplace: Marketplace::Tes,
+                cookie: Secret::new("session=first".to_owned()),
+                sink: shared_sink(&sink),
+            },
+            &root,
+        )
+        .await
+        .expect("the first gateway binds");
+        let second = spawn(
+            LeaseGateway {
+                upstream_base: second_base,
+                marketplace: Marketplace::Tes,
+                cookie: Secret::new("session=second".to_owned()),
+                sink: shared_sink(&sink),
+            },
+            &root,
+        )
+        .await
+        .expect("the second gateway binds");
+
+        assert_ne!(
+            first.token, second.token,
+            "two leases must not share a token"
+        );
+        assert_eq!(
+            first.token.len(),
+            second.token.len(),
+            "both are the same length, so the refusal below is about identity rather than shape"
+        );
+
+        let crossed = client()
+            .get(format!(
+                "{}/api/v2/dashboard/getAllResources",
+                second.endpoint
+            ))
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {}", first.token),
+            )
+            .send()
+            .await
+            .expect("the request completes");
+        assert_eq!(
+            crossed.status().as_u16(),
+            401,
+            "a token is scoped to the lease that minted it; a length check alone would let \
+             one tenant's worker ride another tenant's seller session"
+        );
+        assert!(
+            second_upstream.seen_cookies.lock().await.is_empty(),
+            "the other lease's session was never reached"
         );
         root.cancel();
     }

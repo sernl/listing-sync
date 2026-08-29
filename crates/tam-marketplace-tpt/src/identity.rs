@@ -10,6 +10,29 @@
 //! identifier a seller could type would be a denial-of-service primitive: any
 //! account could claim a store it does not own, and the real owner would then
 //! be unable to link at all.
+//!
+//! Which response is read matters as much as that one is. Two committed
+//! cassettes carry an `author` on the `Store` type and they are not
+//! interchangeable:
+//!
+//! `MyProductListings`, as [`crate::endpoints::my_product_listings_request`]
+//! builds it, passes neither `sellerId` nor `resourceIds`, so the server
+//! resolves the catalogue from the session alone. Its author is therefore the
+//! session's own seller, by construction, whatever the caller wanted.
+//!
+//! `UploadPageProductQuery` takes a product id from the caller. Its author is
+//! the author of whatever product was named, which is the session's seller
+//! only when the caller happened to name their own product. Claiming on it
+//! would let a caller who can name any product id take the exclusivity lock on
+//! that product's storefront and lock its real owner out — the same
+//! denial-of-service primitive a seller-typed identifier would be, reached by
+//! a different route.
+//!
+//! [`read_seller_store_id`] therefore issues the listings read and nothing
+//! else, and it is the only function the claim path may go through. The two
+//! cassettes carrying different store ids is a sanitisation artefact of two
+//! separately-captured fixtures, not a disagreement about where the field
+//! lives; both put it at `author.id` under `__typename: "Store"`.
 
 use serde_json::Value;
 use tam_marketplace::transport::{HttpResponse, Transport, TransportError};
@@ -25,8 +48,14 @@ const AUTHOR_FIELD: &str = "author";
 const TYPENAME_FIELD: &str = "__typename";
 const ID_FIELD: &str = "id";
 
-/// The store id TPT asserts for the seller, from any GraphQL response that
-/// carries an authored product.
+/// The store id in a GraphQL response that carries an authored product.
+///
+/// This is the parser, not the identity decision. It reports whose store the
+/// response names, and it is the caller's responsibility that the response was
+/// one the server scoped to the session — see the module note on why
+/// `UploadPageProductQuery` must never be that response. Go through
+/// [`read_seller_store_id`] rather than calling this on a body of your own
+/// choosing.
 ///
 /// Searched for rather than read at a fixed path because the two operations
 /// that carry it nest it differently — `UploadPageProductQuery` puts the
@@ -87,8 +116,10 @@ fn store_id_of(author: &Value) -> Option<String> {
 
 /// Reads the seller's own store id back through a transport.
 ///
-/// The narrowest read that names the account: one page of the seller's own
-/// catalogue, whose every row carries the author the session speaks for.
+/// The one identity read the claim path may use. It issues
+/// `MyProductListings` with no seller and no resource selector, so the
+/// storefront it names is the session's own by the server's choice rather than
+/// the caller's — which is what makes the result admissible as a claim.
 ///
 /// `Ok(None)` is a seller whose catalogue is empty, which is a real state at
 /// link time and not an error — a brand-new store has nothing authored to
@@ -121,8 +152,12 @@ mod tests {
             .to_vec()
     }
 
+    /// The upload-page shape parses, and that is precisely why the module
+    /// note exists: the parser cannot tell whose product it was handed, so the
+    /// safety comes from `read_seller_store_id` choosing the request, not from
+    /// the parser refusing the body.
     #[test]
-    fn the_store_id_is_read_from_the_upload_page_cassette() {
+    fn the_parser_reads_the_upload_page_shape_which_is_why_it_is_not_the_identity_source() {
         let body = cassette_body(
             include_str!("../tests/cassettes/upload_page_product.json"),
             0,
@@ -130,13 +165,13 @@ mod tests {
         assert_eq!(
             seller_store_id(&body),
             Some(StoreId("900000001".to_owned())),
-            "UploadPageProductQuery names the author on the Store type, which is the identity \
-             the claim phase locks on"
+            "the author parses out of this shape too, so nothing in the parser stops a \
+             caller-named product's owner from being claimed — the request choice does"
         );
     }
 
     #[test]
-    fn the_store_id_is_read_from_the_listings_cassette() {
+    fn the_store_id_is_read_from_the_listings_cassette_the_claim_path_uses() {
         let body = cassette_body(
             include_str!("../tests/cassettes/my_product_listings.json"),
             0,
@@ -144,8 +179,9 @@ mod tests {
         assert_eq!(
             seller_store_id(&body),
             Some(StoreId("90000001".to_owned())),
-            "MyProductListings nests the same author under a results envelope, and the read \
-             must find it at either depth"
+            "MyProductListings nests the author under a results envelope, and this is the \
+             only response the claim path reads: the server scoped it to the session, so its \
+             author is the session's own seller by construction"
         );
     }
 
@@ -203,6 +239,80 @@ mod tests {
             seller_store_id(b"<html>challenge</html>"),
             None,
             "a Cloudflare interstitial must not be mistaken for an identity"
+        );
+    }
+
+    /// A transport that answers one canned body and records what it was asked
+    /// for, so the identity read's own request shape is under test rather than
+    /// assumed. `OnceLock` because exactly one request is expected and it is
+    /// the only shared-mutable state the trait's `Sync` bound admits without a
+    /// lock.
+    #[derive(Default)]
+    struct RecordingTransport {
+        seen: std::sync::OnceLock<(String, String)>,
+        body: Vec<u8>,
+    }
+
+    impl tam_marketplace::transport::Transport for RecordingTransport {
+        async fn send(
+            &self,
+            request: tam_marketplace::transport::HttpRequest,
+        ) -> Result<
+            tam_marketplace::transport::HttpResponse,
+            tam_marketplace::transport::TransportError,
+        > {
+            // The variables object rather than the whole body: the captured
+            // query text *declares* `$sellerId` and `$resourceIds`, and what
+            // decides whose catalogue the server resolves is whether either is
+            // supplied a value.
+            let variables = match &request.body {
+                tam_marketplace::transport::RequestBody::Json(value) => value
+                    .get("variables")
+                    .map_or_else(|| "<none>".to_owned(), ToString::to_string),
+                body @ (tam_marketplace::transport::RequestBody::Empty
+                | tam_marketplace::transport::RequestBody::Bytes(_)
+                | tam_marketplace::transport::RequestBody::Multipart { .. }) => {
+                    format!("{body:?}")
+                }
+            };
+            let recorded = (request.url.clone(), variables);
+            drop(self.seen.set(recorded));
+            Ok(tam_marketplace::transport::HttpResponse::plain(
+                200,
+                self.body.clone(),
+            ))
+        }
+    }
+
+    #[test]
+    fn the_identity_read_asks_the_server_who_the_session_is() {
+        let transport = RecordingTransport {
+            seen: std::sync::OnceLock::new(),
+            body: cassette_body(
+                include_str!("../tests/cassettes/my_product_listings.json"),
+                0,
+            ),
+        };
+        let found = futures::executor::block_on(super::read_seller_store_id(&transport))
+            .expect("the read succeeds");
+        assert_eq!(
+            found,
+            Some(StoreId("90000001".to_owned())),
+            "the identity comes back from the response"
+        );
+
+        let (url, variables) = transport.seen.get().expect("exactly one request was made");
+        assert!(
+            url.contains("opname=MyProductListings"),
+            "the claim path must read the session-scoped enumeration, not a product the caller \
+             named — an UploadPageProductQuery read would let whoever picks the product id \
+             claim that product's storefront: {url}"
+        );
+        assert!(
+            !variables.contains("sellerId") && !variables.contains("resourceIds"),
+            "the query declares both variables and the request must supply neither, or the \
+             storefront it names would be the caller's choice rather than the server's: \
+             {variables}"
         );
     }
 }

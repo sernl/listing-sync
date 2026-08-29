@@ -22,16 +22,33 @@ async fn seed_org_a(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn the_audit_trail_cannot_be_rewritten(pool: PgPool) {
-    seed_org_a(&pool).await.expect("fixture org inserts");
-
+/// A transaction with the tenant pin already applied.
+///
+/// Every step below needs its OWN transaction, which is the whole point of
+/// this test's shape: a statement error aborts a Postgres transaction, and a
+/// `COMMIT` issued on an aborted transaction rolls back and reports success.
+/// Appending and then attempting the denied write in one transaction
+/// therefore discards the append, leaving the immutability assertions to run
+/// against an empty table and prove nothing.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn pinned(pool: &PgPool) -> sqlx::Transaction<'static, sqlx::Postgres> {
     let mut tx = pool.begin().await.expect("transaction begins");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
         .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
         .execute(&mut *tx)
         .await
         .expect("tenant pin applies");
+    tx
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_audit_trail_cannot_be_rewritten(pool: PgPool) {
+    seed_org_a(&pool).await.expect("fixture org inserts");
+
+    let mut tx = pinned(&pool).await;
     sqlx::query(
         "INSERT INTO field_audit \
          (org_id, mapping_id, field, intended, observed_before, observed_after, \
@@ -44,12 +61,19 @@ async fn the_audit_trail_cannot_be_rewritten(pool: PgPool) {
     .execute(&mut *tx)
     .await
     .expect("the application role may append");
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM field_audit")
+    tx.commit().await.expect("the append commits");
+
+    // Read in a fresh transaction, so what is asserted from here on is a
+    // durable row rather than one visible only to the writer.
+    let mut tx = pinned(&pool).await;
+    let landed: i64 = sqlx::query_scalar("SELECT count(*) FROM field_audit")
         .fetch_one(&mut *tx)
         .await
         .expect("the application role may read");
-    assert_eq!(count, 1, "the appended row is visible under the tenant pin");
+    assert_eq!(landed, 1, "the appended row survived its own commit");
+    tx.commit().await.expect("the read commits");
 
+    let mut tx = pinned(&pool).await;
     let rewritten = sqlx::query("UPDATE field_audit SET intended = 'b'")
         .execute(&mut *tx)
         .await;
@@ -57,20 +81,31 @@ async fn the_audit_trail_cannot_be_rewritten(pool: PgPool) {
         rewritten.is_err(),
         "update on field_audit must be denied to the application role"
     );
-    tx.commit().await.expect("the read-write half commits");
+    drop(tx);
 
-    let mut tx = pool.begin().await.expect("transaction begins");
-    sqlx::query("SELECT set_config('app.current_org', $1, true)")
-        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
-        .execute(&mut *tx)
-        .await
-        .expect("tenant pin applies");
+    let mut tx = pinned(&pool).await;
     let erased = sqlx::query("DELETE FROM field_audit")
         .execute(&mut *tx)
         .await;
     assert!(
         erased.is_err(),
         "delete on field_audit must be denied to the application role"
+    );
+    drop(tx);
+
+    // The assertion the test is named for, and the one it never made: the
+    // committed row is still there and still says what it said. Without this,
+    // both refusals above would pass just as happily against an empty table.
+    let mut tx = pinned(&pool).await;
+    let surviving: Vec<(String, i64)> =
+        sqlx::query_as("SELECT intended, count(*) OVER () FROM field_audit")
+            .fetch_all(&mut *tx)
+            .await
+            .expect("the application role may read");
+    assert_eq!(
+        surviving,
+        vec![("a".to_owned(), 1_i64)],
+        "the row outlived both a rewrite and an erasure attempt, unchanged"
     );
 }
 
@@ -181,6 +216,20 @@ async fn the_lifecycle_audit_cannot_be_rewritten_or_erased(pool: PgPool) {
             .await
             .is_err(),
         "delete on connection_audit must be denied to the application role"
+    );
+    drop(tx);
+
+    // Same reason as the field_audit test: without reading the row back, both
+    // refusals would pass against an empty table.
+    let history = ConnectionAudit::new(pool.clone())
+        .history(ORG_A, CONNECTION)
+        .await
+        .expect("the history reads back");
+    assert_eq!(history.len(), 1, "the appended row outlived both attempts");
+    assert_eq!(
+        history[0].event.as_str(),
+        "revoked",
+        "and still says what it said"
     );
 }
 

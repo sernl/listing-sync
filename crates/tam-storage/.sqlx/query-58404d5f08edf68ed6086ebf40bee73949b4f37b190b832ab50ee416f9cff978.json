@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item SET preflight_failures = 0, preflight_challenge_only = true WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 AND state IN ('leased', 'running', 'verifying') AND (preflight_failures <> 0 OR NOT preflight_challenge_only)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "58404d5f08edf68ed6086ebf40bee73949b4f37b190b832ab50ee416f9cff978"
+}

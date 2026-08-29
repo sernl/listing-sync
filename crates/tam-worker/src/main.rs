@@ -30,7 +30,7 @@
 //! attestation speaks for exactly one seller while `LeaseRepo::acquire` reads
 //! across organisations under BYPASSRLS, so the worker would otherwise attest
 //! one seller's authorship on another's listing. The broker's link step seals
-//! it onto the connection row and `AuthorshipRepo` reads it back per item.
+//! it onto the connection row and `ConnectionFactsRepo` reads it back per item.
 //!
 //! Usage: tam-worker <engine-database-url> <worker-name> <broker-socket> \
 //!            <kek-path> <store-root> [poll-ms]
@@ -42,19 +42,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tam_domain::{ItemOperation, ItemOutcome};
 use tam_engine::breaker::run_breaker;
-use tam_engine::broker_client::{request_lease, LeasePurpose};
+use tam_engine::broker_client::{claim_account, request_lease, ClaimError, LeasePurpose};
 use tam_engine::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
 use tam_marketplace_tes::{GatewayTransport as TesGatewayTransport, TesAdapter};
 use tam_marketplace_tpt::{
-    AuthorshipDeclaration, GatewayTransport as TptGatewayTransport, TptAdapter,
+    read_seller_store_id, AuthorshipDeclaration, GatewayTransport as TptGatewayTransport,
+    TptAdapter,
 };
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    AuthorshipRepo, BlobRepo, ElectionRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo, LeasedItem,
-    PipelineFileSource, RateBudgetRepo, WriteAttemptRepo,
+    BlobRepo, ConnectionFactsRepo, ElectionRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo,
+    LeasedItem, PipelineFileSource, RateBudgetRepo, WriteAttemptRepo,
 };
 use tam_types::{FailureCode, FailureDetail, Marketplace, Timestamp};
 use tokio_util::sync::CancellationToken;
@@ -132,7 +133,7 @@ struct Pump {
     broker_socket: std::path::PathBuf,
     kek: Kek,
     store_root: std::path::PathBuf,
-    authorship: AuthorshipRepo,
+    facts: ConnectionFactsRepo,
     cancel: CancellationToken,
     unadapted_said: OncePerPass,
 }
@@ -369,11 +370,7 @@ impl Pump {
                 return None;
             }
         };
-        let attestation = match self
-            .authorship
-            .for_connection(item.org, Marketplace::Tpt)
-            .await
-        {
+        let attestation = match self.facts.authorship_for(item.org, Marketplace::Tpt).await {
             Ok(Some(record)) => AuthorshipDeclaration::attested(record.name, record.attested_at),
             Ok(None) => {
                 eprintln!(
@@ -410,7 +407,98 @@ impl Pump {
                 return None;
             }
         };
+        if !self
+            .claim_account_if_pending(worker, item, connection, &transport)
+            .await
+        {
+            return None;
+        }
         Some(TptAdapter::new(transport, self.files(item), SleepingPause).attesting(attestation))
+    }
+
+    /// Names the marketplace account behind this connection the first time a
+    /// live session lets us ask, and reports whether the item may proceed.
+    ///
+    /// The exclusivity lock cannot be taken at link time, because nothing at
+    /// link time has reached the marketplace: the credential has been sealed
+    /// and not yet shown to work. Gating the link on an identity read instead
+    /// was tried and is worse — it stranded every Tpt connection in a state
+    /// the lease scan would not drive, waiting for a claim that could only
+    /// come from a lease. So the link completes, and the claim happens here,
+    /// once, the first time a lease exists to ask through.
+    ///
+    /// `false` refuses the item and leaves its lease to expire, which happens
+    /// on exactly one outcome: the account belongs to another organisation.
+    /// That connection holds a working credential for a storefront it does not
+    /// own, and driving its items would write one seller's listings into
+    /// another's store. Every other outcome proceeds — an unread identity
+    /// costs the lock, not the item.
+    async fn claim_account_if_pending(
+        &self,
+        worker: &str,
+        item: &LeasedItem,
+        connection: tam_types::ConnectionId,
+        transport: &TptGatewayTransport,
+    ) -> bool {
+        match self
+            .facts
+            .account_claim_pending(item.org, Marketplace::Tpt)
+            .await
+        {
+            Ok(false) => return true,
+            Ok(true) => {}
+            Err(error) => {
+                eprintln!("tam-worker {worker}: the account-claim check failed: {error}");
+                return true;
+            }
+        }
+        let store = match read_seller_store_id(transport).await {
+            // An empty catalogue names no author, which is the ordinary state
+            // of a brand-new store. It links, it works, and it takes the lock
+            // on the first item it publishes.
+            Ok(None) => return true,
+            Ok(Some(store)) => store,
+            Err(error) => {
+                eprintln!(
+                    "tam-worker {worker}: the Tpt identity read failed, so the account stays \
+                     unclaimed and the item proceeds: {error:?}"
+                );
+                return true;
+            }
+        };
+        match claim_account(
+            &self.broker_socket,
+            item.org,
+            connection,
+            Marketplace::Tpt,
+            &store.0,
+        )
+        .await
+        {
+            Ok(()) => {
+                eprintln!(
+                    "tam-worker {worker}: the Tpt connection for organisation {} now names its \
+                     account and holds the exclusivity lock",
+                    item.org.0.to_hyphenated()
+                );
+                true
+            }
+            Err(ClaimError::AccountAlreadyLinked(marketplace)) => {
+                eprintln!(
+                    "tam-worker {worker}: this {marketplace:?} account is already linked to \
+                     another organisation, so the connection is blocked and the item's lease \
+                     is left to expire rather than writing into a store this tenant does not own"
+                );
+                false
+            }
+            Err(error) => {
+                eprintln!(
+                    "tam-worker {worker}: the Tpt account claim did not complete, so the \
+                     account stays unclaimed and the item proceeds: {error}"
+                );
+                true
+            }
+        }
     }
 
     fn files(&self, item: &LeasedItem) -> PipelineFileSource<LocalObjectStore> {
@@ -521,7 +609,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         broker_socket,
         kek,
         store_root,
-        authorship: AuthorshipRepo::new(pool.clone()),
+        facts: ConnectionFactsRepo::new(pool.clone()),
         cancel: cancel.clone(),
         unadapted_said: OncePerPass::new(),
     };

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH eligible AS ( SELECT ji.org_id, ji.id, ji.subject_kind, ji.subject_url, ji.subject_numeric_id FROM job_item ji JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id WHERE ji.state = 'parked_live' AND ji.blocked_on = $2 AND ji.operation <> 'create' AND EXISTS (SELECT 1 FROM connection c WHERE c.org_id = ji.org_id AND c.marketplace = j.marketplace AND c.state = 'linked') ), released AS ( UPDATE write_attempt wa SET state = 'abandoned', settled_at = $1, remote_id_kind = e.subject_kind, remote_url = e.subject_url, remote_numeric_id = e.subject_numeric_id FROM eligible e WHERE wa.org_id = e.org_id AND wa.job_item_id = e.id AND wa.state = 'in_flight' RETURNING wa.id ) UPDATE job_item ji SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, attempt_count = attempt_count + 1 FROM eligible e WHERE ji.org_id = e.org_id AND ji.id = e.id AND ji.state = 'parked_live' RETURNING ji.org_id, ji.job_id, ji.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5ef39c4927e53db1dc0cf2fc6b1681903f7fd799735475817bb1c0c6d386c553"
+}

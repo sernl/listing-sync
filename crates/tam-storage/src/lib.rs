@@ -22,7 +22,7 @@ pub mod pruning;
 pub mod sessions;
 pub mod taxonomy;
 
-pub use authorship::{AuthorshipRecord, AuthorshipRepo};
+pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,

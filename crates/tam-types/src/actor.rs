@@ -129,9 +129,6 @@ mod tests {
         }
     }
 
-    /// `pre-attribution` is migration 0033's backfill marker for rows written
-    /// before attribution existed. No live component may collide with it, or
-    /// a genuine gap in the trail becomes indistinguishable from a write.
     #[test]
     fn a_system_stamp_carries_both_halves() {
         use super::Stamp;
@@ -141,6 +138,9 @@ mod tests {
         assert_eq!(stamp.actor.id(), "engine");
     }
 
+    /// `pre-attribution` is migration 0033's backfill marker for rows written
+    /// before attribution existed. No live component may collide with it, or
+    /// a genuine gap in the trail becomes indistinguishable from a write.
     #[test]
     fn no_component_collides_with_the_backfill_marker() {
         for component in SystemComponent::ALL {

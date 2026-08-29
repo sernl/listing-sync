@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT platform_account_digest FROM connection WHERE org_id = $1 AND marketplace = $2 AND state = 'linked'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "platform_account_digest",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "f2f8fa96c0e57002d760094511768f5b7be3269d721226bc93a245a6ab9aa2dd"
+}

@@ -128,8 +128,11 @@ db-test-all: db-wait db-verify
 # Everything that can fail before a push. The gated lane compiles the
 # pg-gated tests but never runs them, so a query built from a literal SQL
 # string and an assertion whose expected value has moved both reach main
-# green; this runs them.
-pre-push: check db-verify db-test-all
+# green; this runs them. web-check sits second because its first step is the
+# vocabulary diff, and a Rust enum that moved leaves vocab.ts stale without
+# failing anything in `check` -- cheaper to learn that before the database
+# lane than after it.
+pre-push: check web-check db-verify db-test-all
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:

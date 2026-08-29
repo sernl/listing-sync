@@ -15,17 +15,21 @@ const EXCLUSIVITY_INDEX: &str = "connection_platform_account_exclusive";
 
 /// Whether a marketplace can name the account a link speaks for.
 ///
-/// The account reference is what makes global exclusivity enforceable, so a
-/// marketplace that cannot produce one links without a lock rather than with a
-/// guessed lock. The variant is a value rather than an `Option` at each call
-/// site so the reason travels with the answer.
+/// This decides whether the exclusivity lock is ever obtainable, and no longer
+/// decides what state a link lands in. Both were once the same decision, and
+/// making them one stranded every Tpt connection: a link that waited for a
+/// claim nothing issued sat in `linking` forever, never leased, never took the
+/// lock it was waiting for, and read `checking` on the seller's page
+/// permanently. A link now completes for every marketplace, and the lock is
+/// taken opportunistically by [`Vault::claim`] the first time a live read
+/// names the account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IdentitySource {
-    /// An identity read after linking supplies the account reference, which
-    /// `Vault::claim` turns into the digest and the lock.
+    /// A live read can name the account, so a claim will eventually take the
+    /// lock. The connection is usable before that happens.
     Claimed,
-    /// No identity read exists for this marketplace yet, so the link completes
-    /// immediately and holds no exclusivity lock.
+    /// No identity read exists for this marketplace yet, so no claim will ever
+    /// arrive and the connection holds no exclusivity lock.
     Unavailable,
 }
 
@@ -176,16 +180,24 @@ impl Vault {
         Self { pool, kek }
     }
 
-    /// Seals the credential and opens the link, both in one transaction. The
-    /// secret is moved in and never leaves.
+    /// Seals the credential and links the connection, both in one transaction.
+    /// The secret is moved in and never leaves.
     ///
-    /// The state the link lands in is the identity obligation made visible.
-    /// A marketplace whose account this system can name lands in `linking` and
-    /// waits for [`Vault::claim`]; one it cannot name lands in `linked`
-    /// immediately, because there is no obligation to discharge. A crash
-    /// between the two phases leaves a `linking` row with no digest, which
-    /// holds no exclusivity lock and which the lease scan — requiring
-    /// `linked` — will not drive. Half-linked is inert, not half-usable.
+    /// Every link lands in `linked` with no digest, on every marketplace. The
+    /// exclusivity lock is taken later, by [`Vault::claim`], the first time a
+    /// live read names the account — so a connection is usable from the moment
+    /// its credential is sealed, and the lock activates on first real use
+    /// rather than gating it. Two organisations that both link the same
+    /// storefront before either reads are both still caught, at whichever
+    /// claim arrives second.
+    ///
+    /// `session_verified_at` is deliberately not set here, and this is the
+    /// invariant that column carries: it means a real read proved this session
+    /// live, and sealing a credential proves nothing about whether it works. A
+    /// link that stamped it would make a connection built from a stale
+    /// browser export read `connected` for a day before anything tried it.
+    /// The column stays null and the status derives `checking` until the
+    /// gateway sees a 2xx.
     pub(crate) async fn link(&self, request: LinkRequest<'_>) -> Result<(), VaultError> {
         let LinkRequest {
             org,
@@ -201,10 +213,6 @@ impl Vault {
             key_version: KEY_VERSION,
         };
         let sealed = seal(&self.kek, &context, secret).map_err(|_| VaultError::Seal)?;
-        let opening_state = match identity_source(marketplace) {
-            IdentitySource::Claimed => "linking",
-            IdentitySource::Unavailable => "linked",
-        };
 
         let mut tx = self.pool.begin().await?;
         // Which of the two events this is, read before the upsert rather than
@@ -225,11 +233,11 @@ impl Vault {
             "INSERT INTO connection \
              (org_id, id, marketplace, state, created_at, updated_at, \
               session_verified_at, refresh_failures, authorship_name, authorship_attested_at) \
-             VALUES ($1, $2, $3, $4, now(), now(), now(), 0, $5, \
-                     to_timestamp($6::bigint / 1000.0)) \
+             VALUES ($1, $2, $3, 'linked', now(), now(), NULL, 0, $4, \
+                     to_timestamp($5::bigint / 1000.0)) \
              ON CONFLICT (org_id, id) DO UPDATE SET \
-                 state = EXCLUDED.state, updated_at = now(), \
-                 session_verified_at = now(), refresh_failures = 0, \
+                 state = 'linked', updated_at = now(), \
+                 session_verified_at = NULL, refresh_failures = 0, \
                  authorship_name = COALESCE(EXCLUDED.authorship_name, connection.authorship_name), \
                  authorship_attested_at = COALESCE(EXCLUDED.authorship_attested_at, \
                                                    connection.authorship_attested_at)",
@@ -237,7 +245,6 @@ impl Vault {
         .bind(uuid(org.0))
         .bind(uuid(connection.0))
         .bind(marketplace_to_db(marketplace))
-        .bind(opening_state)
         .bind(authorship.map(|declared| declared.name.as_str()))
         .bind(authorship.map(|declared| declared.attested_at_ms))
         .execute(&mut *tx)
@@ -275,8 +282,15 @@ impl Vault {
         Ok(())
     }
 
-    /// The second phase: names the account this connection speaks for and
-    /// completes the link.
+    /// Names the account this connection speaks for and takes the global
+    /// exclusivity lock on it.
+    ///
+    /// Opportunistic rather than a phase the link waits on. The link already
+    /// completed and the connection is already usable; this runs the first time
+    /// a live read names the account, and until it does the connection simply
+    /// holds no lock. Two organisations that both linked the same storefront
+    /// are still both caught — at whichever claim arrives second, which is the
+    /// first moment either of them demonstrably reached the account at all.
     ///
     /// The broker never parses a marketplace response — the caller runs the
     /// identity read through its lease and passes the account reference it
@@ -288,6 +302,17 @@ impl Vault {
     /// Writing the digest is what takes the lock, so a second organisation
     /// claiming the same account is refused here by the index rather than by a
     /// read-then-write race this code would have to win.
+    ///
+    /// The reference is trimmed before digesting, because the lock is equality
+    /// on a hash: one caller passing `"900000001"` and another `" 900000001"`
+    /// would digest differently and both would hold the same storefront. Only
+    /// whitespace is stripped — no case folding, no numeric parsing — because
+    /// what makes two identifiers equal is the platform's to define, and
+    /// guessing wider would merge two accounts that genuinely differ.
+    ///
+    /// `session_verified_at` is not written here. A claim names an account; the
+    /// read that named it is what proved the session live, and that read's own
+    /// 2xx answer is what records the proof.
     pub(crate) async fn claim(
         &self,
         org: OrgId,
@@ -295,27 +320,52 @@ impl Vault {
         marketplace: Marketplace,
         account_ref: &str,
     ) -> Result<(), VaultError> {
-        let digest = account_digest(&self.kek, marketplace, account_ref);
+        // A marketplace whose responses name no account cannot be claimed, and
+        // the socket surface is reachable by any caller holding the socket, so
+        // the refusal is here rather than trusted to callers. Tes today parses
+        // no author identity at all; a Tes claim could therefore only be
+        // carrying a value nothing server-asserted, which is exactly the
+        // seller-typed input the lock must never be taken on.
+        if identity_source(marketplace) == IdentitySource::Unavailable {
+            return Err(VaultError::NotClaimable);
+        }
+        let canonical = account_ref.trim();
+        if canonical.is_empty() {
+            return Err(VaultError::NotClaimable);
+        }
+        let digest = account_digest(&self.kek, marketplace, KEY_VERSION, canonical);
         let mut tx = self.pool.begin().await?;
+        // `platform_account_digest IS NULL` makes the backfill idempotent: a
+        // connection that already named its account is left alone rather than
+        // re-stamped on every live read.
         let claimed = sqlx::query(
             "UPDATE connection \
              SET platform_account_digest = $3, platform_account_seen_at = now(), \
-                 state = 'linked', updated_at = now() \
+                 updated_at = now() \
              WHERE org_id = $1 AND id = $2 \
-               AND state IN ('linking', 'linked', 'needs_reauth')",
+               AND state IN ('linking', 'linked', 'needs_reauth') \
+               AND platform_account_digest IS NULL",
         )
         .bind(uuid(org.0))
         .bind(uuid(connection.0))
         .bind(digest.as_slice())
         .execute(&mut *tx)
-        .await
-        .map_err(|error| {
-            if is_exclusivity_violation(&error) {
-                VaultError::AccountAlreadyLinked(marketplace)
-            } else {
-                VaultError::Db(error)
+        .await;
+        let claimed = match claimed {
+            Ok(claimed) => claimed,
+            Err(error) if is_exclusivity_violation(&error) => {
+                // The transaction that hit the constraint is finished, so the
+                // block is a separate statement. It has to happen: this
+                // connection holds a credential for a storefront another
+                // organisation owns, and leaving it `linked` would let the
+                // lease scan keep driving that seller's listings from here.
+                // `needs_reauth` stops the scan and reads `disconnected`.
+                drop(tx);
+                self.block_contested(org, connection, marketplace).await;
+                return Err(VaultError::AccountAlreadyLinked(marketplace));
             }
-        })?;
+            Err(error) => return Err(VaultError::Db(error)),
+        };
         if claimed.rows_affected() == 0 {
             return Err(VaultError::NotClaimable);
         }
@@ -423,6 +473,59 @@ impl Vault {
         .await?;
         audit(&mut tx, org, connection, ConnectionEvent::Refreshed, None).await?;
         tx.commit().await?;
+        Ok(())
+    }
+
+    /// Stops a connection that turned out to point at somebody else's account.
+    ///
+    /// Best-effort and reported rather than propagated: the caller is already
+    /// returning the collision, and failing to record the block must not turn
+    /// a precise refusal into a database error the seller cannot act on.
+    async fn block_contested(
+        &self,
+        org: OrgId,
+        connection: ConnectionId,
+        marketplace: Marketplace,
+    ) {
+        let blocked = sqlx::query(
+            "UPDATE connection \
+             SET state = 'needs_reauth', updated_at = now() \
+             WHERE org_id = $1 AND id = $2 AND state <> 'revoked'",
+        )
+        .bind(uuid(org.0))
+        .bind(uuid(connection.0))
+        .execute(&self.pool)
+        .await;
+        if let Err(error) = blocked {
+            eprintln!(
+                "tam-session-broker: a contested {} connection could not be blocked: {error}",
+                marketplace_to_db(marketplace)
+            );
+        }
+    }
+
+    /// Records that a read just proved this session live, with no credential
+    /// change to store.
+    ///
+    /// One of exactly two writers of `session_verified_at`, the other being
+    /// [`Vault::reseal`]; both are reached only from a 2xx upstream answer.
+    /// Nothing else may set it, because the column is the difference between
+    /// "a credential was sealed once" and "this connection works", and the
+    /// seller's page says `connected` on the strength of it.
+    pub(crate) async fn record_verified(
+        &self,
+        org: OrgId,
+        connection: ConnectionId,
+    ) -> Result<(), VaultError> {
+        sqlx::query(
+            "UPDATE connection \
+             SET session_verified_at = now(), refresh_failures = 0, updated_at = now() \
+             WHERE org_id = $1 AND id = $2",
+        )
+        .bind(uuid(org.0))
+        .bind(uuid(connection.0))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -739,9 +842,10 @@ mod tests {
                 .await
                 .expect("the refused connection still exists");
         assert_eq!(
-            second_state, "linking",
-            "a refused claim leaves the connection short of linked, so the lease scan will \
-             not drive it against an account it does not own"
+            second_state, "needs_reauth",
+            "a connection holding a credential for somebody else's storefront must be stopped: \
+             left linked, the lease scan would keep driving the first seller's listings from \
+             the second organisation's queue"
         );
     }
 
@@ -787,7 +891,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../tam-storage/migrations")]
-    async fn a_link_that_never_claimed_holds_no_lock(app: PgPool) {
+    async fn a_link_that_has_not_yet_claimed_is_usable_and_holds_no_lock(app: PgPool) {
         let crashed = [0xC5; 16];
         let other = [0xC6; 16];
         seed_org(&app, crashed, "org-crashed").await;
@@ -795,20 +899,33 @@ mod tests {
         let broker = broker_pool(&app).await;
         let vault = Vault::new(broker.clone(), Kek::from_bytes(&[0x33; 32]).expect("kek"));
 
-        // Phase one only: the credential is sealed and the row is `linking`,
-        // which is exactly the state a crash between the two phases leaves.
+        // A link with no claim behind it yet: sealed, `linked`, and holding no
+        // lock. This is the ordinary state of every new connection, and it is
+        // also what a crash before the claim leaves.
         link_tpt(&vault, crashed, [0xD5; 16]).await;
-        let (digest,): (Option<Vec<u8>>,) = sqlx::query_as(
-            "SELECT platform_account_digest FROM connection WHERE org_id = $1 AND id = $2",
+        let (state, digest, verified): (String, Option<Vec<u8>>, Option<i64>) = sqlx::query_as(
+            "SELECT state, platform_account_digest, \
+             (extract(epoch from session_verified_at) * 1000)::bigint \
+             FROM connection WHERE org_id = $1 AND id = $2",
         )
         .bind(uuid::Uuid::from_bytes(crashed))
         .bind(uuid::Uuid::from_bytes([0xD5; 16]))
         .fetch_one(&broker)
         .await
-        .expect("the half-linked row exists");
+        .expect("the linked row exists");
+        assert_eq!(
+            state, "linked",
+            "the connection is usable immediately; waiting for a claim stranded it forever"
+        );
         assert_eq!(
             digest, None,
-            "phase one writes no digest, which is what makes the crash inert"
+            "no claim has run, so no exclusivity lock is held"
+        );
+        assert_eq!(
+            verified, None,
+            "sealing a credential proves nothing about whether it works, so linking must not \
+             stamp session_verified_at — a stale browser export would otherwise read connected \
+             for a day before anything tried it"
         );
 
         link_tpt(&vault, other, [0xD6; 16]).await;
@@ -824,6 +941,168 @@ mod tests {
                 "a half-linked row holds no digest and therefore no lock, so a crash must \
                  not strand the account against every other tenant",
             );
+    }
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn a_claim_names_the_account_without_claiming_the_session_is_live(app: PgPool) {
+        let org = [0xC8; 16];
+        seed_org(&app, org, "org-claim").await;
+        let broker = broker_pool(&app).await;
+        let vault = Vault::new(broker.clone(), Kek::from_bytes(&[0x35; 32]).expect("kek"));
+        link_tpt(&vault, org, [0xD8; 16]).await;
+
+        vault
+            .claim(
+                OrgId(Uuid(org)),
+                ConnectionId(Uuid([0xD8; 16])),
+                Marketplace::Tpt,
+                // Padded deliberately: the lock is equality on a hash, so an
+                // uncanonicalised reference would let the same storefront be
+                // held twice under two spellings.
+                "  900000001  ",
+            )
+            .await
+            .expect("the claim takes the lock");
+
+        let (digest, seen, verified): (Option<Vec<u8>>, Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT platform_account_digest, \
+                 (extract(epoch from platform_account_seen_at) * 1000)::bigint, \
+                 (extract(epoch from session_verified_at) * 1000)::bigint \
+                 FROM connection WHERE org_id = $1 AND id = $2",
+        )
+        .bind(uuid::Uuid::from_bytes(org))
+        .bind(uuid::Uuid::from_bytes([0xD8; 16]))
+        .fetch_one(&broker)
+        .await
+        .expect("the claimed row reads");
+        assert!(digest.is_some(), "the claim wrote the digest");
+        assert!(seen.is_some(), "and stamped when the account was named");
+        assert_eq!(
+            verified, None,
+            "a claim names an account; the read that named it is what proved the session \
+             live, and that read's own answer is what records the proof"
+        );
+
+        // A second claim on the same connection is a no-op rather than a
+        // re-stamp, which is what makes the backfill safe to attempt on every
+        // live read.
+        assert!(
+            matches!(
+                vault
+                    .claim(
+                        OrgId(Uuid(org)),
+                        ConnectionId(Uuid([0xD8; 16])),
+                        Marketplace::Tpt,
+                        "900000001",
+                    )
+                    .await,
+                Err(VaultError::NotClaimable)
+            ),
+            "an already-claimed connection is left alone"
+        );
+    }
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn a_padded_reference_collides_with_its_own_trimmed_form(app: PgPool) {
+        let first = [0xC9; 16];
+        let second = [0xCA; 16];
+        seed_org(&app, first, "org-pad-a").await;
+        seed_org(&app, second, "org-pad-b").await;
+        let vault = Vault::new(
+            broker_pool(&app).await,
+            Kek::from_bytes(&[0x36; 32]).expect("kek"),
+        );
+
+        link_tpt(&vault, first, [0xD9; 16]).await;
+        vault
+            .claim(
+                OrgId(Uuid(first)),
+                ConnectionId(Uuid([0xD9; 16])),
+                Marketplace::Tpt,
+                SHARED_ACCOUNT,
+            )
+            .await
+            .expect("the first organisation claims the account");
+
+        link_tpt(&vault, second, [0xDA; 16]).await;
+        let padded = format!("  {SHARED_ACCOUNT}\n");
+        assert!(
+            matches!(
+                vault
+                    .claim(
+                        OrgId(Uuid(second)),
+                        ConnectionId(Uuid([0xDA; 16])),
+                        Marketplace::Tpt,
+                        &padded,
+                    )
+                    .await,
+                Err(VaultError::AccountAlreadyLinked(Marketplace::Tpt))
+            ),
+            "whitespace must not be a way past the exclusivity lock"
+        );
+    }
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn a_marketplace_with_no_identity_source_cannot_be_claimed(app: PgPool) {
+        let org = [0xCC; 16];
+        seed_org(&app, org, "org-tes-claim").await;
+        let vault = Vault::new(
+            broker_pool(&app).await,
+            Kek::from_bytes(&[0x38; 32]).expect("kek"),
+        );
+        vault
+            .link(LinkRequest {
+                org: OrgId(Uuid(org)),
+                connection: ConnectionId(Uuid([0xDC; 16])),
+                marketplace: Marketplace::Tes,
+                secret: Secret::new("session=live".to_owned()),
+                authorship: None,
+            })
+            .await
+            .expect("the Tes link seals");
+
+        assert!(
+            matches!(
+                vault
+                    .claim(
+                        OrgId(Uuid(org)),
+                        ConnectionId(Uuid([0xDC; 16])),
+                        Marketplace::Tes,
+                        "whatever-a-caller-typed",
+                    )
+                    .await,
+                Err(VaultError::NotClaimable)
+            ),
+            "Tes parses no author identity, so any value offered as one came from the caller \
+             rather than the server; taking the global lock on it would let anybody lock a \
+             storefront they do not own"
+        );
+    }
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn an_empty_account_reference_is_refused_rather_than_locked(app: PgPool) {
+        let org = [0xCB; 16];
+        seed_org(&app, org, "org-empty-ref").await;
+        let vault = Vault::new(
+            broker_pool(&app).await,
+            Kek::from_bytes(&[0x37; 32]).expect("kek"),
+        );
+        link_tpt(&vault, org, [0xDB; 16]).await;
+        assert!(
+            matches!(
+                vault
+                    .claim(
+                        OrgId(Uuid(org)),
+                        ConnectionId(Uuid([0xDB; 16])),
+                        Marketplace::Tpt,
+                        "   ",
+                    )
+                    .await,
+                Err(VaultError::NotClaimable)
+            ),
+            "an empty reference names no account; digesting it would take a lock every \
+             connection that failed to read an identity would then collide on"
+        );
     }
 
     #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -946,8 +1225,10 @@ mod tests {
         .await
         .expect("the connection row exists");
         assert_eq!(
-            state, "linking",
-            "Tpt can name its account, so the link waits for the claim rather than completing"
+            state, "linked",
+            "every link completes; the exclusivity lock is taken later by a claim, so a Tpt \
+             connection is usable from the moment its credential is sealed rather than \
+             stranded waiting for a claim nothing had issued"
         );
         assert_eq!(
             name.as_deref(),

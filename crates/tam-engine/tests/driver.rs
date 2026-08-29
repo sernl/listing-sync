@@ -18,9 +18,9 @@ use tam_engine::seed::verify_policy;
 use tam_marketplace::FetchReason;
 use tam_marketplace::{
     AdapterError, AmbiguityCause, ChallengeKind, CreateStrategy, FieldSet, FormId,
-    FormSchemaFingerprint, IdempotencyKey, InstantPause, ListingLocator, MarketplaceAdapter,
-    ObservedListing, ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan,
-    SubmitEvidence,
+    FormSchemaFingerprint, IdempotencyKey, InstantPause, LifecycleTransition, ListingLocator,
+    ListingState, MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle,
+    RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
 };
 use tam_storage::{
     HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
@@ -56,6 +56,10 @@ struct ScriptedAdapter {
     /// case — one fixture drives every lease the test takes.
     preflight_answers: Vec<Result<FormSchemaFingerprint, AdapterError>>,
     preflight_cursor: AtomicUsize,
+    /// What a lifecycle write answers, where a fixture drives one. `None`
+    /// keeps the refusal below, so a test that grew a revise by accident says
+    /// so rather than replaying a create's scripted answer.
+    revise_answer: Option<Result<SubmitEvidence, AdapterError>>,
 }
 
 impl ScriptedAdapter {
@@ -66,7 +70,13 @@ impl ScriptedAdapter {
             read_back_condition: None,
             preflight_answers: vec![Ok(FormSchemaFingerprint(ContentHash([0x0F; 32])))],
             preflight_cursor: AtomicUsize::new(0),
+            revise_answer: None,
         }
+    }
+
+    fn revising(mut self, answer: Result<SubmitEvidence, AdapterError>) -> Self {
+        self.revise_answer = Some(answer);
+        self
     }
 
     fn with_read_back_condition(mut self, condition: AdapterError) -> Self {
@@ -127,19 +137,20 @@ impl MarketplaceAdapter for ScriptedAdapter {
             )))
     }
 
-    /// The lifecycle writes are unreachable from this fixture: every item it
-    /// drives is a create. They refuse rather than answer, so a test that
-    /// grew a revise or a removal would say so instead of replaying a
-    /// scripted submit answer that describes a different write.
+    /// A lifecycle write answers only where a fixture scripted one. The
+    /// default refuses rather than replaying a create's scripted answer, so a
+    /// test that grew a revise or a removal by accident says so.
     async fn revise(
         &self,
         _org: OrgId,
         _plan: RevisePlan,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
-        Err(AdapterError::Uncaptured {
-            capability: "scripted.revise",
-        })
+        self.revise_answer
+            .clone()
+            .unwrap_or(Err(AdapterError::Uncaptured {
+                capability: "scripted.revise",
+            }))
     }
 
     async fn remove(
@@ -859,19 +870,22 @@ async fn an_item_out_of_attempt_budget_still_settles_on_the_connection(app: PgPo
     );
 }
 
-/// F9's second half. Cloudflare answering our address rather than our
-/// credential used to reach the seller as "disconnected — re-link": the
-/// machine parked the item and raised the gate for every challenge class, and
-/// the driver gated on the effect's presence rather than on its cause. A
-/// re-link clears nothing here, so the remedy printed was the wrong one.
+/// The duplicate-create path this arm opened, closed. Tes mints the draft in
+/// `create_listing` and only then reads the resource back, so a Cloudflare
+/// block on that read arrives *after* a listing exists. Settling terminal
+/// there records no landing, leaves the mapping unbound, and the next lowering
+/// of the same mapping asks for a second create — a duplicate live product,
+/// the one failure this ledger cannot undo. So a create-challenge takes the
+/// ambiguity route, and what stops the second create is the org-inventory
+/// halt, which the lease scan reads.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_marketplace_challenge_settles_blocked_and_leaves_the_connection_linked(app: PgPool) {
+async fn a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further(app: PgPool) {
     let adapter = ScriptedAdapter::answering(Err(AdapterError::Challenge(
         ChallengeKind::JavaScriptInterstitial,
     )));
     let engine = engine_pool(&app).await;
     let mapping = seed(&app, &engine).await;
-    enqueue_sibling(&engine, mapping).await;
+    enqueue_sibling(&engine, mapping, tam_domain::ItemOperation::Create).await;
     let leases = LeaseRepo::new(engine.clone());
 
     let verdict = drive(
@@ -884,50 +898,130 @@ async fn a_marketplace_challenge_settles_blocked_and_leaves_the_connection_linke
     .await;
     assert_eq!(
         verdict,
-        RunVerdict::Settled(ItemOutcome::Blocked),
-        "a challenge nobody can hand us the answer to settles the item rather than \
-         parking it on a gate no producer ever clears"
+        RunVerdict::Settled(ItemOutcome::Ambiguous),
+        "a challenge on a create is a write that may have landed, and that is where \
+         may-have-landed already goes"
     );
 
-    let settled: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT state, outcome, failure_code, failure_detail FROM job_item \
-         WHERE id = $1",
-    )
-    .bind(uuid::Uuid::from_bytes([0x07; 16]))
-    .fetch_one(&engine)
-    .await
-    .expect("the item row reads");
+    let halted: i64 = sqlx::query_scalar("SELECT count(*) FROM org_inventory_halt")
+        .fetch_one(&engine)
+        .await
+        .expect("the halt table reads");
     assert_eq!(
-        (
-            settled.0.as_str(),
-            settled.1.as_deref(),
-            settled.2.as_deref()
-        ),
-        ("settled", Some("blocked"), Some("ChallengePresented")),
-        "the code names the condition rather than borrowing the session's"
-    );
-    let detail = settled.3.expect("a blocked item states why");
-    assert!(
-        !detail.contains("re-link") && detail.contains("ours to do"),
-        "the seller is told whose problem this is, and it is not theirs: {detail}"
+        halted, 1,
+        "the tenant's inventory halts, which is what freezes the queue instead of \
+         minting a second listing"
     );
 
+    // The assertion that is the whole point. The sibling is a second Create on
+    // the same mapping; if the scan hands it out, the next run posts a second
+    // draft over a listing that already exists.
+    assert!(
+        leases
+            .acquire("driver-test", Timestamp(T0.0 + 1_000), LEASE_SECONDS)
+            .await
+            .expect("the scan runs")
+            .is_none(),
+        "no second create is leasable while the ambiguity stands"
+    );
+    let binding: String = sqlx::query_scalar("SELECT binding_state FROM mapping LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the mapping row reads");
+    assert_eq!(
+        binding, "unbound",
+        "and nothing was bound on the strength of a read the edge answered"
+    );
+
+    // F9's own content, preserved: the halt is an inventory halt, never a
+    // connection gate, so the seller is not sent to re-link over an egress
+    // block.
     let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
         .fetch_one(&engine)
         .await
         .expect("the connection row reads");
     assert_eq!(
         connection, "linked",
-        "the credential was never in question, so the status page must keep saying so"
+        "the credential was never in question and the status page must keep saying so"
     );
-    let sibling = leases
-        .acquire("driver-test", Timestamp(T0.0 + 1_000), LEASE_SECONDS)
-        .await
-        .expect("the scan runs")
-        .expect("the sibling leases");
+}
+
+/// The non-create side, where F9's settle-without-gating survives. A revise
+/// re-applies the same fields, so re-running it mints nothing and there is no
+/// duplicate hazard to fence against.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_challenge_on_a_revise_settles_blocked_and_leaves_the_connection_linked(app: PgPool) {
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence())).revising(Err(
+        AdapterError::Challenge(ChallengeKind::JavaScriptInterstitial),
+    ));
+    let engine = engine_pool(&app).await;
+    let mapping = seed(&app, &engine).await;
+    enqueue_sibling(&engine, mapping, revision()).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    // The create leases first (FIFO on created_at); settle it out of the way
+    // so the revise is what the next scan hands over.
+    let first = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        T0,
+    )
+    .await;
     assert_eq!(
-        sibling.item.0 .0, [0x09; 16],
-        "and the tenant's other work keeps moving, because nothing was gated"
+        first,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "the create is fixture, not subject: {first:?}"
+    );
+    let verdict = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        Timestamp(T0.0 + 1_000),
+    )
+    .await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Blocked),
+        "a revise cannot mint a second anything, so the challenge is terminal"
+    );
+
+    let settled: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT failure_code, failure_detail FROM job_item WHERE id = $1")
+            .bind(uuid::Uuid::from_bytes([0x09; 16]))
+            .fetch_one(&engine)
+            .await
+            .expect("the item row reads");
+    assert_eq!(
+        settled.0.as_deref(),
+        Some("ChallengePresented"),
+        "the code names the condition rather than borrowing the session's"
+    );
+    let detail = settled.1.expect("a blocked item states why");
+    assert!(
+        !detail.contains("re-link") && detail.contains("ours to do"),
+        "the seller is told whose problem this is, and it is not theirs: {detail}"
+    );
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "linked",
+        "no gate: the credential was never in question"
+    );
+    let blocked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM job_event WHERE kind = 'ItemBlocked' \
+           AND payload->>'cause' = 'challenge'",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the events read");
+    assert_eq!(
+        blocked, 1,
+        "and the cause reaches the progress stream, which no gate would have carried"
     );
 }
 
@@ -1056,7 +1150,11 @@ async fn a_preflight_challenge_settles_blocked_without_gating(app: PgPool) {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn enqueue_sibling(engine: &PgPool, mapping: MappingId) {
+async fn enqueue_sibling(
+    engine: &PgPool,
+    mapping: MappingId,
+    operation: tam_domain::ItemOperation,
+) {
     JobRepo::new(engine.clone())
         .enqueue(
             ORG,
@@ -1072,10 +1170,98 @@ async fn enqueue_sibling(engine: &PgPool, mapping: MappingId) {
                 item: tam_domain::JobItemId(Uuid([0x09; 16])),
                 mapping,
                 idempotency_key: IdempotencyKey(Uuid([0x0A; 16])),
-                operation: tam_domain::ItemOperation::Create,
+                operation,
                 requires_bound_on: None,
             }],
         )
         .await
         .expect("the sibling job enqueues");
+}
+
+/// A draft-to-draft revise against the listing the fixture's create lands on.
+fn revision() -> tam_domain::ItemOperation {
+    tam_domain::ItemOperation::Revise {
+        subject: RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        },
+        transition: LifecycleTransition {
+            from: ListingState::Draft,
+            to: ListingState::Draft,
+        },
+    }
+}
+
+/// A streak can mix classes: a Cloudflare block on one lease and a genuinely
+/// lapsed session on the next. Judging by whichever error arrived last makes
+/// the seller's instructions depend on arrival order, so the streak carries
+/// the conjunction and takes the seller-actionable floor unless every failure
+/// in it was the edge's. The session expiry sits in the middle here on
+/// purpose: the last error is a challenge, so a last-one-wins rule would gate
+/// nothing and tell the seller the retry was ours.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_mixed_preflight_streak_takes_the_seller_actionable_floor(app: PgPool) {
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence())).with_preflight_script(vec![
+        Err(AdapterError::Challenge(
+            ChallengeKind::JavaScriptInterstitial,
+        )),
+        Err(AdapterError::SessionExpired),
+        Err(AdapterError::Challenge(
+            ChallengeKind::JavaScriptInterstitial,
+        )),
+    ]);
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let mut at = T0;
+    let mut verdicts = Vec::new();
+    for lease in 0..PREFLIGHT_FAILURES_MAX {
+        if lease > 0 {
+            at = requeue(&leases, at).await;
+        }
+        verdicts.push(
+            drive(
+                &engine,
+                &leases,
+                &adapter,
+                CreateStrategy::HaltOnAmbiguity,
+                at,
+            )
+            .await,
+        );
+    }
+    assert_eq!(
+        verdicts.last(),
+        Some(&RunVerdict::Settled(ItemOutcome::Blocked)),
+        "the bound still ends the run"
+    );
+
+    let settled: (Option<String>, Option<String>, bool) = sqlx::query_as(
+        "SELECT failure_code, failure_detail, preflight_challenge_only FROM job_item LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the item row reads");
+    assert!(
+        !settled.2,
+        "one non-edge failure clears the conjunction for the whole streak"
+    );
+    assert_eq!(
+        settled.0.as_deref(),
+        Some("SessionExpired"),
+        "so the verdict is the seller-actionable one, even though the last error was not"
+    );
+    let detail = settled.1.expect("a blocked item states why");
+    assert!(
+        detail.contains("re-link"),
+        "a real auth failure in the streak is a fact the seller can act on: {detail}"
+    );
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "needs_reauth",
+        "and the gate goes up, because a re-link is what clears the half we can name"
+    );
 }

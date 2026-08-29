@@ -837,7 +837,7 @@ mod tests {
                 Err(AdapterError::Challenge(
                     ChallengeKind::JavaScriptInterstitial
                 )),
-                "a challenge answered {status} is parked, never retried"
+                "a challenge answered {status} is the edge refusing us, not a dead session"
             );
         }
         assert_eq!(

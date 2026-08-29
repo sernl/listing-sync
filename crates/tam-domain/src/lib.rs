@@ -524,6 +524,28 @@ impl ItemOperation {
 /// required `Live` for a publish while the machine asked only whether the
 /// listing was absent, so a publish whose budget ran out while the listing
 /// still read `Draft` settled Succeeded and bound the mapping `'draft'`.
+/// Whether clearing this challenge is the seller's to do.
+///
+/// One function with two callers, for the same reason as the one below it:
+/// the machine decides from this whether to park the item behind the
+/// connection gate, and the driver decides from it which failure code and
+/// which sentence the report carries. Two copies would let an item park on a
+/// gate only a re-link opens while its row told the seller the retry was
+/// ours, or the reverse.
+///
+/// The line is who holds the answer, not how the condition arrived. A lapsed
+/// session and a one-time password mailed to the seller's inbox are both
+/// theirs: nobody else can supply either, and a re-link is how they do it.
+/// A captcha or a Cloudflare interstitial is the edge answering our address
+/// rather than our credential, and no seller action reaches it.
+#[must_use]
+pub const fn seller_clears(challenge: ChallengeKind) -> bool {
+    match challenge {
+        ChallengeKind::ReauthRequired | ChallengeKind::EmailedOneTimePassword => true,
+        ChallengeKind::Captcha | ChallengeKind::JavaScriptInterstitial => false,
+    }
+}
+
 #[must_use]
 pub fn verification_settles(operation: &ItemOperation, observed: &ObservedListing) -> bool {
     let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
@@ -1302,11 +1324,12 @@ impl SyncMachine {
     /// decides everything that follows, because the two classes clear by
     /// different events and only one of them is the seller's to clear.
     ///
-    /// `ReauthRequired` is the seller's: the cookie jar has lapsed, a re-link
-    /// fixes it, and until then every sibling item would spend a lease
-    /// discovering the same thing. So the item parks on that gate, the
-    /// connection is gated behind it, and the seller is told. `revive_expired`
-    /// releases the park when the re-link lands.
+    /// [`seller_clears`] names the first class: a lapsed session, or a
+    /// one-time password mailed to the seller. Both want a fresh
+    /// authentication that only they can give, and until they give it every
+    /// sibling item would spend a lease discovering the same thing. So the
+    /// item parks, the connection is gated behind it, and the seller is told.
+    /// `revive_expired` releases the park when the re-link lands.
     ///
     /// Everything else is the marketplace's edge: an interstitial, a captcha
     /// or a firewall rule, arriving because of where the request came from
@@ -1317,26 +1340,54 @@ impl SyncMachine {
     /// remedy that fits: one tenant losing an item is a bad minute, and every
     /// tenant losing one is an egress block the fleet halt should catch.
     ///
-    /// Settling rather than parking is also the only reachable answer.
-    /// `Input::ChallengeCleared` and `Input::ParkExpired` have no producer
-    /// outside this crate's tests, and a non-reauth park writes a `blocked_on`
-    /// that is in neither `REVIVABLE_GATES` nor the re-link arm — so such a
-    /// park is never revived, never settled, and its job reads active
-    /// forever. The landing judgement is unchanged: a challenge still means
-    /// the write did not land, exactly as the park arm always claimed.
+    /// Settling rather than parking is also the only reachable answer for the
+    /// second class. `Input::ChallengeCleared` and `Input::ParkExpired` have
+    /// no producer outside this crate's tests, and such a park writes a
+    /// `blocked_on` that is in neither `REVIVABLE_GATES` nor the re-link arm
+    /// — so it is never revived, never settled, and its job reads active
+    /// forever.
+    ///
+    /// Except on a create, which is the third arm and the reason this is not
+    /// simply a two-way branch. A challenge does not prove the write did not
+    /// land: an adapter may mint the listing and only then read it back, and
+    /// the read is where the edge answers — Tes does exactly that, posting the
+    /// create and reading the resource afterwards, so a Cloudflare block on
+    /// that read arrives with a draft already minted. Settling terminal there
+    /// records no landing, leaves the mapping unbound, and the next lowering
+    /// of the same mapping asks for a second create. So a create-challenge
+    /// takes the ambiguity route instead, which is where "the write may have
+    /// landed" already leads: the tenant's inventory halts and a human
+    /// reconciles. This is the same judgement `may_settle_unverified` makes
+    /// in the driver — a create is the one operation whose re-run mints, and
+    /// a duplicate live listing is the one failure this ledger cannot undo.
+    /// A revise re-applies the same fields and a removal re-deletes something
+    /// already gone, so both keep the terminal settle.
+    ///
+    /// The halt is not a gate: `halt_ambiguous` raises the org-inventory halt
+    /// and never touches the connection, so the seller is still told the truth
+    /// about their credential.
     fn challenged(
         self,
         attempt: WriteAttemptId,
         challenge: ChallengeKind,
         now: LogicalInstant,
     ) -> Result<Transition, MachineError> {
-        if !matches!(challenge, ChallengeKind::ReauthRequired) {
+        if !seller_clears(challenge) {
+            if matches!(self.operation, ItemOperation::Create) {
+                return self.reconcile(attempt);
+            }
             return self.advance(SyncState::Terminal(Outcome::Blocked { challenge }), vec![]);
         }
+        // Both seller-clearable challenges clear the same way, so both park on
+        // the gate that way opens. The driver writes `blocked_on` from this
+        // effect's kind and `revive_expired`'s re-link arm matches
+        // `REAUTH_REQUIRED` exactly, so parking a one-time password under its
+        // own name would be a park no re-link ever wakes.
+        let gate = ChallengeKind::ReauthRequired;
         let effects = vec![
             Effect::ParkItem {
                 item: self.item,
-                challenge,
+                challenge: gate,
                 expires: LogicalInstant(now.0.saturating_add(PARK_TTL_MS)),
             },
             Effect::RequeueBehindGate {
@@ -1351,7 +1402,7 @@ impl SyncMachine {
         self.advance(
             SyncState::Parked {
                 attempt: Some(attempt),
-                challenge,
+                challenge: gate,
             },
             effects,
         )
@@ -2071,14 +2122,80 @@ mod machine_tests {
         );
     }
 
-    /// This row used to park on the challenge and gate the connection behind
-    /// it. Both were wrong for a condition the seller does not hold: the gate
-    /// prints "disconnected — re-link" over a marketplace edge that no
-    /// credential clears, and the park had no producer for either input that
-    /// ends it, so the item sat `parked_live` and its job read active forever.
+    /// A challenge does not prove the write did not land. Tes posts the create
+    /// and reads the resource afterwards, so an edge block on that read
+    /// arrives with a draft already minted; settling terminal there records no
+    /// landing, leaves the mapping unbound, and the next lowering asks for a
+    /// second create. So a create takes the ambiguity route, which is where
+    /// "may have landed" already goes.
     #[test]
-    fn row_intent_recorded_submit_challenge_settles_blocked_without_gating() {
+    fn row_intent_recorded_submit_challenge_on_a_create_reconciles_rather_than_settling() {
+        for strategy in [marker_strategy(), draft_strategy()] {
+            let transition = machine(
+                SyncState::IntentRecorded {
+                    attempt: attempt(),
+                    schema: Some(schema()),
+                },
+                strategy,
+                10,
+            )
+            .step(
+                Input::SubmitResult(Err(AdapterError::Challenge(ChallengeKind::Captcha))),
+                now(),
+            )
+            .expect("a submit result applies in IntentRecorded");
+            assert!(
+                !matches!(
+                    transition.next.state,
+                    SyncState::Terminal(Outcome::Blocked { .. })
+                ),
+                "a create-challenge must never take the terminal that records no landing: \
+                 {:?}",
+                transition.next.state
+            );
+            assert!(
+                !transition
+                    .effects
+                    .0
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::RequeueBehindGate { .. })),
+                "and it must still not gate the connection: the edge answered our address, \
+                 not our credential"
+            );
+        }
+        // The strategy production seeds settles it: the tenant's inventory
+        // halts and a human reconciles, which freezes the queue rather than
+        // minting a second listing.
         let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: Some(schema()),
+            },
+            draft_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::Challenge(ChallengeKind::Captcha))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert!(
+            transition
+                .effects
+                .0
+                .iter()
+                .any(|effect| matches!(effect, Effect::Halt { .. })),
+            "the halt is what stops the second create, and it is not a connection gate"
+        );
+    }
+
+    /// The other side: a revise re-applies the same fields and a removal
+    /// re-deletes something already gone, so neither can mint a duplicate and
+    /// both keep F9's terminal settle with no gate.
+    #[test]
+    fn row_intent_recorded_submit_challenge_on_a_removal_settles_blocked_without_gating() {
+        let transition = machine_for(
+            removal(),
             SyncState::IntentRecorded {
                 attempt: attempt(),
                 schema: Some(schema()),

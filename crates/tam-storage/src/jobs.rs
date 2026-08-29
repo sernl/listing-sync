@@ -761,6 +761,21 @@ pub struct ItemVerdict {
     pub failure_detail: Option<FailureDetail>,
 }
 
+/// Where an item's run of failed preflights stands: how many in a row, and
+/// whether every one of them was the marketplace's edge rather than something
+/// the seller could act on.
+///
+/// The second field travels with the first because the caller's verdict is
+/// about the streak and not about its last member. A streak that mixed a
+/// Cloudflare block with a lapsed session would otherwise be judged by
+/// whichever arrived last, which is arrival order deciding whether a seller is
+/// told to re-link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreflightStreak {
+    pub failures: u32,
+    pub edge_only: bool,
+}
+
 pub struct LeaseRepo {
     pool: PgPool,
 }
@@ -954,25 +969,36 @@ impl LeaseRepo {
     /// return to zero. Fenced on the epoch like every other lease write, so a
     /// stolen item's former holder cannot move a counter its new holder is
     /// also moving.
-    pub async fn preflight_failed(&self, lease: &LeaseRef) -> Result<u32, StorageError> {
+    pub async fn preflight_failed(
+        &self,
+        lease: &LeaseRef,
+        edge_class: bool,
+    ) -> Result<PreflightStreak, StorageError> {
         let LeaseRef {
             org,
             item,
             lease_epoch,
         } = *lease;
-        let streak = sqlx::query_scalar!(
+        let row = sqlx::query!(
             r#"UPDATE job_item
-               SET preflight_failures = preflight_failures + 1
+               SET preflight_failures = preflight_failures + 1,
+                   preflight_challenge_only = preflight_challenge_only AND $4
                WHERE org_id = $1 AND id = $2 AND lease_epoch = $3
                  AND state IN ('leased', 'running', 'verifying')
-               RETURNING preflight_failures AS "streak!""#,
+               RETURNING preflight_failures AS "failures!",
+                 preflight_challenge_only AS "edge_only!""#,
             uuid_to_db(org.0),
             uuid_to_db(item.0),
             lease_epoch,
+            edge_class,
         )
         .fetch_optional(&self.pool)
-        .await?;
-        count_u32(i64::from(streak.ok_or(StorageError::StaleLease)?))
+        .await?
+        .ok_or(StorageError::StaleLease)?;
+        Ok(PreflightStreak {
+            failures: count_u32(i64::from(row.failures))?,
+            edge_only: row.edge_only,
+        })
     }
 
     /// Returns the streak to zero, so the bound the caller holds is on
@@ -989,10 +1015,11 @@ impl LeaseRepo {
             lease_epoch,
         } = *lease;
         sqlx::query!(
-            "UPDATE job_item SET preflight_failures = 0 \
+            "UPDATE job_item \
+             SET preflight_failures = 0, preflight_challenge_only = true \
              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
                AND state IN ('leased', 'running', 'verifying') \
-               AND preflight_failures <> 0",
+               AND (preflight_failures <> 0 OR NOT preflight_challenge_only)",
             uuid_to_db(org.0),
             uuid_to_db(item.0),
             lease_epoch,
@@ -1157,43 +1184,52 @@ impl LeaseRepo {
         // read-back that settles on what is actually there; that read is not
         // available to this scan, and building it is the intended next step
         // rather than an omission.
+        // Both writes hang off one statement, and that is the whole reason
+        // this is a CTE rather than the two statements it reads as. Postgres
+        // runs every arm of a data-modifying `WITH` against a single snapshot,
+        // so the connection predicate is evaluated once for both. Split into
+        // two statements under READ COMMITTED each takes its own snapshot, and
+        // a re-link committing between them revives an item whose attempt the
+        // first statement had already declined to settle -- putting back the
+        // `AttemptInFlight` deadlock this arm exists to prevent.
+        //
+        // `eligible` re-states `parked_live` and `in_flight` on the updates
+        // themselves as well: the snapshot settles which rows are in scope,
+        // and those predicates keep a concurrent pass that already revived a
+        // row from advancing its `attempt_count` a second time.
         let at = timestamp_to_db(now)?;
-        sqlx::query!(
-            "UPDATE write_attempt wa \
-             SET state = 'abandoned', settled_at = $1, \
-                 remote_id_kind = ji.subject_kind, \
-                 remote_url = ji.subject_url, \
-                 remote_numeric_id = ji.subject_numeric_id \
-             FROM job_item ji, job j \
-             WHERE ji.org_id = wa.org_id AND ji.id = wa.job_item_id \
-               AND j.org_id = ji.org_id AND j.id = ji.job_id \
-               AND wa.state = 'in_flight' \
-               AND ji.state = 'parked_live' \
-               AND ji.blocked_on = $2 \
-               AND ji.operation <> 'create' \
-               AND EXISTS (SELECT 1 FROM connection c \
-                     WHERE c.org_id = ji.org_id \
-                       AND c.marketplace = j.marketplace \
-                       AND c.state = 'linked')",
-            at,
-            REAUTH_REQUIRED,
-        )
-        .execute(&mut *tx)
-        .await?;
         let relinked = sqlx::query!(
-            "UPDATE job_item ji \
+            "WITH eligible AS ( \
+                 SELECT ji.org_id, ji.id, ji.subject_kind, ji.subject_url, \
+                        ji.subject_numeric_id \
+                 FROM job_item ji \
+                 JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id \
+                 WHERE ji.state = 'parked_live' \
+                   AND ji.blocked_on = $2 \
+                   AND ji.operation <> 'create' \
+                   AND EXISTS (SELECT 1 FROM connection c \
+                         WHERE c.org_id = ji.org_id \
+                           AND c.marketplace = j.marketplace \
+                           AND c.state = 'linked') \
+             ), released AS ( \
+                 UPDATE write_attempt wa \
+                 SET state = 'abandoned', settled_at = $1, \
+                     remote_id_kind = e.subject_kind, \
+                     remote_url = e.subject_url, \
+                     remote_numeric_id = e.subject_numeric_id \
+                 FROM eligible e \
+                 WHERE wa.org_id = e.org_id AND wa.job_item_id = e.id \
+                   AND wa.state = 'in_flight' \
+                 RETURNING wa.id \
+             ) \
+             UPDATE job_item ji \
              SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, \
                  attempt_count = attempt_count + 1 \
-             FROM job j \
-             WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+             FROM eligible e \
+             WHERE ji.org_id = e.org_id AND ji.id = e.id \
                AND ji.state = 'parked_live' \
-               AND ji.blocked_on = $1 \
-               AND ji.operation <> 'create' \
-               AND EXISTS (SELECT 1 FROM connection c \
-                     WHERE c.org_id = ji.org_id \
-                       AND c.marketplace = j.marketplace \
-                       AND c.state = 'linked') \
              RETURNING ji.org_id, ji.job_id, ji.id",
+            at,
             REAUTH_REQUIRED,
         )
         .fetch_all(&mut *tx)
