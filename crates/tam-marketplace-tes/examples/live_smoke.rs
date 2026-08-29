@@ -204,15 +204,37 @@ fn describe_observation(observed: &ObservedListing) {
     );
 }
 
+/// The resource exists and reads back, polled because a create does not appear
+/// on the read API the instant it returns.
+///
+/// [`RemoteLifecycle::Absent`] is not a presence proof. Since absence became
+/// an observation rather than a read failure, a read that settles on it is
+/// both routes answering that the resource is not there — exactly what this
+/// check exists to rule out, and what `Result::is_ok` alone accepts.
 async fn confirm_present(
     adapter: &Adapter,
     id: DraftId,
     now: Timestamp,
 ) -> Result<ObservedListing, Failure> {
-    let observed = poll_until(adapter, id, now, Result::is_ok)
-        .await
-        .map_err(|error| failed("the read-back never found the resource", &error))?;
+    let observed = poll_until(adapter, id, now, |seen| {
+        seen.as_ref()
+            .is_ok_and(|observed| !matches!(observed.lifecycle, RemoteLifecycle::Absent))
+    })
+    .await
+    .map_err(|error| {
+        failed(
+            "the read-back never settled, so nothing here proves the resource is there",
+            &error,
+        )
+    })?;
     describe_observation(&observed);
+    if matches!(observed.lifecycle, RemoteLifecycle::Absent) {
+        return Err(format!(
+            "{} never appeared within the verification budget: neither route answers for it",
+            id.0
+        )
+        .into());
+    }
     Ok(observed)
 }
 

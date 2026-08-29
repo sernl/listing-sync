@@ -304,15 +304,35 @@ fn describe_observation(observed: &ObservedListing) {
 
 /// The product exists and reads back, polled because a create does not appear
 /// on the read API the instant its form post returns.
+///
+/// [`RemoteLifecycle::Absent`] is not a presence proof. Since absence became
+/// an observation rather than a read failure, a read that settles on it is the
+/// catalogue answering that the product is not there — exactly what this check
+/// exists to rule out, and what `Result::is_ok` alone accepts.
 async fn confirm_present(
     adapter: &Adapter,
     product: ProductId,
     now: Timestamp,
 ) -> Result<ObservedListing, Failure> {
-    let observed = poll_until(adapter, product, now, Result::is_ok)
-        .await
-        .map_err(|error| failed("the read-back never found the product", &error))?;
+    let observed = poll_until(adapter, product, now, |seen| {
+        seen.as_ref()
+            .is_ok_and(|observed| !matches!(observed.lifecycle, RemoteLifecycle::Absent))
+    })
+    .await
+    .map_err(|error| {
+        failed(
+            "the read-back never settled, so nothing here proves the product is there",
+            &error,
+        )
+    })?;
     describe_observation(&observed);
+    if matches!(observed.lifecycle, RemoteLifecycle::Absent) {
+        return Err(format!(
+            "{product} never appeared within the verification budget: the catalogue still \
+             answers that it is not there"
+        )
+        .into());
+    }
     Ok(observed)
 }
 
@@ -364,6 +384,23 @@ async fn confirm_live(
     .into())
 }
 
+/// What the confirming read after a delete settled on.
+///
+/// The three answers are kept apart because collapsing two of them is what
+/// reported every clean removal as a failed cleanup: a product the parsed
+/// catalogue does not carry reads back as [`RemoteLifecycle::Absent`], and the
+/// check that predates that contract waited for an `Ambiguous` read that no
+/// longer comes.
+enum Removal {
+    /// The read-back settled on `Absent`: the catalogue no longer carries it.
+    Gone,
+    /// The read-back still carries the product after the whole budget.
+    StillThere(RemoteLifecycle),
+    /// The read never settled either way, so the removal is unproven — which
+    /// is a different claim from the product still being there.
+    Unconfirmed(String),
+}
+
 /// Delete, then prove the product is gone by a read that no longer finds it —
 /// polled, because a delete this API answered 200 to was still readable two
 /// seconds later in the live run.
@@ -371,31 +408,45 @@ async fn delete_and_confirm(
     adapter: &Adapter,
     product: ProductId,
     now: Timestamp,
-) -> Result<(), Failure> {
+) -> Result<Removal, Failure> {
     adapter
         .delete(product)
         .await
         .map_err(|error| failed("the delete failed", &error))?;
     println!("  deleted {product}");
-    match poll_until(adapter, product, now, |seen| {
-        matches!(*seen, Err(AdapterError::Ambiguous(_)))
+    let settled = poll_until(adapter, product, now, |seen| {
+        seen.as_ref()
+            .is_ok_and(|observed| matches!(observed.lifecycle, RemoteLifecycle::Absent))
     })
-    .await
-    {
-        Ok(observed) => Err(format!(
-            "{product} still reads back after its delete and the whole verification budget: \
-             {observed:?}"
-        )
-        .into()),
-        Err(AdapterError::Ambiguous(_)) => {
+    .await;
+    Ok(match settled {
+        Ok(observed) if matches!(observed.lifecycle, RemoteLifecycle::Absent) => {
             println!("  confirmed gone: the catalogue no longer returns {product}");
-            Ok(())
+            Removal::Gone
         }
-        Err(error) => Err(format!(
-            "the delete of {product} could not be confirmed: {}",
-            describe(&error)
-        )
-        .into()),
+        Ok(observed) => {
+            describe_observation(&observed);
+            Removal::StillThere(observed.lifecycle)
+        }
+        Err(error) => Removal::Unconfirmed(describe(&error)),
+    })
+}
+
+/// The operator-facing account of a removal that was not proven, and `None`
+/// where it was. An unsettled read is reported as unconfirmed rather than as a
+/// failed cleanup: one says a listing is on the store, the other says nobody
+/// knows, and they ask the operator for different things.
+fn unresolved(removal: &Removal, product: ProductId) -> Option<String> {
+    match *removal {
+        Removal::Gone => None,
+        Removal::StillThere(ref lifecycle) => Some(format!(
+            "CLEANUP FAILED: {product} still reads back as {lifecycle:?} after its delete and \
+             the whole verification budget, so it is still on the store"
+        )),
+        Removal::Unconfirmed(ref why) => Some(format!(
+            "CLEANUP UNCONFIRMED: the delete of {product} was issued and the confirming read \
+             never settled ({why}), so check the store before running anything else"
+        )),
     }
 }
 
@@ -412,26 +463,25 @@ async fn finish(
     outcome: Result<(), Failure>,
 ) -> Result<(), Failure> {
     println!("cleanup: deleting {product} whatever the operation concluded");
-    let cleaned = delete_and_confirm(adapter, product, now).await;
-    match (outcome, cleaned) {
-        (Ok(()), Ok(())) => {
+    let cleanup = match delete_and_confirm(adapter, product, now).await {
+        Ok(removal) => unresolved(&removal, product),
+        Err(refused) => Some(format!(
+            "CLEANUP FAILED: {refused}, so {product} may still be on the store"
+        )),
+    };
+    match (outcome, cleanup) {
+        (Ok(()), None) => {
             println!("ok: the operation succeeded and {product} is gone");
             Ok(())
         }
-        (Err(operation), Ok(())) => {
+        (Err(operation), None) => {
             println!("cleanup ok: {product} is gone, so nothing was left behind");
             Err(format!("the operation failed: {operation}").into())
         }
-        (Ok(()), Err(cleanup)) => Err(format!(
-            "the operation succeeded but CLEANUP FAILED: {product} may still be on the store — \
-             {cleanup}"
-        )
-        .into()),
-        (Err(operation), Err(cleanup)) => Err(format!(
-            "the operation failed ({operation}) AND CLEANUP FAILED: {product} may still be on \
-             the store — {cleanup}"
-        )
-        .into()),
+        (Ok(()), Some(cleanup)) => Err(format!("the operation succeeded but {cleanup}").into()),
+        (Err(operation), Some(cleanup)) => {
+            Err(format!("the operation failed ({operation}) AND {cleanup}").into())
+        }
     }
 }
 
@@ -566,7 +616,11 @@ async fn run_delete(
             .map_err(|error| format!("{raw:?} is not a TPT product id: {error}"))?,
     );
     println!("deleting {product}, which this run did not create");
-    delete_and_confirm(adapter, product, now).await
+    let removal = delete_and_confirm(adapter, product, now).await?;
+    if let Some(unproven) = unresolved(&removal, product) {
+        return Err(unproven.into());
+    }
+    Ok(())
 }
 
 fn adapter_for(mode: &str, arguments: &[String], now: Timestamp) -> Result<Adapter, Failure> {
