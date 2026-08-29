@@ -7,7 +7,7 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use tam_marketplace::transport::{FilePart, HttpRequest, RequestAuth};
-use tam_types::InventoryId;
+use tam_types::{CopyFormat, InventoryId};
 
 pub const ORIGIN: &str = "https://www.tes.com";
 
@@ -206,7 +206,13 @@ impl TesPricing {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TesListing {
     pub title: String,
-    pub description_markdown: String,
+    pub description_raw: String,
+    /// Which of the two formats `descriptionRawType` declares for the bytes
+    /// above. Tes takes either: the 2026-08-29 probe posted `html` to a live
+    /// draft, the API echoed the type back and the markup round-tripped
+    /// byte-intact, so a TPT-sourced body travels as itself rather than being
+    /// refused or converted.
+    pub description_format: CopyFormat,
     pub category_ids: Vec<i64>,
     pub age_channel: TesAges,
     pub ages: Vec<i64>,
@@ -304,13 +310,42 @@ pub const ZZ_TITLE_PREFIX: &str = "ZZ-SMOKE-DELETE-ME";
 pub fn probe_listing() -> TesListing {
     TesListing {
         title: ZZ_TITLE_PREFIX.to_owned(),
-        description_markdown: "Automated schema probe. **Delete me.**".to_owned(),
+        description_raw: "Automated schema probe. **Delete me.**".to_owned(),
+        description_format: CopyFormat::Markdown,
         category_ids: vec![1_000_448],
         age_channel: TesAges::Ranges(vec![4]),
         ages: vec![11, 12, 13, 14],
         main_type: Some(99_009),
         main_age: Some(4),
         pricing: TesPricing::Free(FreeLicence::CcBy),
+    }
+}
+
+/// The `descriptionRawType` token one body format posts under.
+///
+/// Both are live-proven: the M0 captures wrote `md` throughout, and the
+/// 2026-08-29 probe wrote `html` to a draft, read the type back unchanged and
+/// found the markup byte-intact. So the type is a function of the body rather
+/// than the constant it used to be, and a TPT-sourced listing crosses into
+/// Tes as itself.
+#[must_use]
+pub const fn raw_type(format: CopyFormat) -> &'static str {
+    match format {
+        CopyFormat::Markdown => "md",
+        CopyFormat::Html => "html",
+    }
+}
+
+/// The format a `descriptionRawType` token names, or `None` for a token this
+/// adapter does not model -- which a read refuses rather than reading as
+/// markdown, because guessing the format of bytes is the failure the
+/// declaration exists to prevent.
+#[must_use]
+pub fn format_from_raw_type(token: &str) -> Option<CopyFormat> {
+    match token {
+        "md" => Some(CopyFormat::Markdown),
+        "html" => Some(CopyFormat::Html),
+        _ => None,
     }
 }
 
@@ -331,8 +366,8 @@ fn metadata_body(listing: &TesListing) -> Value {
     // group in `ageRanges` would be a wrong field rather than a wrong label.
     let mut body = json!({
         "title": listing.title,
-        "descriptionRaw": listing.description_markdown,
-        "descriptionRawType": "md",
+        "descriptionRaw": listing.description_raw,
+        "descriptionRawType": raw_type(listing.description_format),
         "categories": categories,
         "ageRanges": listing.age_channel.ranges(),
         "yearGroups": year_groups(&listing.age_channel),
@@ -733,6 +768,7 @@ mod tests {
         TesAges, TesLicence, TesListing, TesPrice, TesPricing,
     };
     use base64::Engine;
+    use tam_types::CopyFormat;
 
     /// The read side is a transcription of a polled vocabulary, so it is
     /// checked against that vocabulary rather than trusted. The paid/free
@@ -828,7 +864,8 @@ mod tests {
     fn listing(pricing: TesPricing) -> TesListing {
         TesListing {
             title: "T".to_owned(),
-            description_markdown: "D".to_owned(),
+            description_raw: "D".to_owned(),
+            description_format: CopyFormat::Markdown,
             category_ids: vec![1_000_448, 1_000_977],
             age_channel: TesAges::Ranges(vec![3, 4]),
             ages: vec![11, 12],

@@ -453,7 +453,16 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         };
         Ok(TesListing {
             title: entry(FieldKey::Title)?.to_owned(),
-            description_markdown: entry(FieldKey::Description)?.to_owned(),
+            description_raw: entry(FieldKey::Description)?.to_owned(),
+            // The declaration travels with the bytes or the write refuses:
+            // posting one format's markup under the other's type is what the
+            // seam carries this field to make impossible.
+            description_format: fields.body_format.ok_or_else(|| AdapterError::Rejected {
+                code: FailureCode::UploadRejected,
+                detail: FailureDetail(
+                    "the projection carried a description and no format for it".to_owned(),
+                ),
+            })?,
             category_ids: ids(&taxonomy, "categories"),
             // The channel is the inventory's, and the seam's own JSON names
             // it, so a read-back parses the field the write emitted rather
@@ -482,21 +491,14 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// A category the crosswalk left without a numeric id is refused: Tes
     /// addresses categories by number and there is nothing to send.
     ///
-    /// So is a body in the other format. `metadata_body` posts
-    /// `descriptionRawType: "md"` unconditionally, so an HTML body sent here
-    /// reaches the seller's live listing as escaped markup nobody asked for.
-    /// Until the converter decision lands, a cross-format sync refuses rather
-    /// than corrupts, which is what the declaration exists to make possible.
+    /// The body is not. Tes takes either format and posts the matching
+    /// `descriptionRawType`, which the 2026-08-29 probe established against a
+    /// live draft, so a TPT-sourced HTML body crosses as itself rather than
+    /// being refused or converted. What the declaration still prevents is
+    /// posting one format's bytes under the other's type; carrying it through
+    /// the field set is what makes that unrepresentable rather than merely
+    /// avoided.
     fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
-        if listing.body_format != CopyFormat::Markdown {
-            return Err(refused(format!(
-                "Tes posts its description as {:?} and this listing declares {:?}; the body \
-                 is refused rather than converted, because posting one format's bytes under \
-                 the other's declaration writes escaped markup into the seller's listing",
-                CopyFormat::Markdown,
-                listing.body_format,
-            )));
-        }
         let elected = licence_from(&listing.natives);
         let licence = match listing.price {
             PriceIntent::Free => elected
@@ -557,6 +559,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
             None => (Vec::new(), None),
         };
         Ok(FieldSet {
+            body_format: Some(listing.body_format),
             entries: vec![
                 (FieldKey::Title, listing.title.clone()),
                 (FieldKey::Description, listing.body.clone()),
@@ -986,6 +989,21 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             native.push(term(None, &orientation));
         }
 
+        // Declared by the resource rather than guessed from the bytes. The
+        // write posts the type the projection carried, so a read that assumed
+        // markdown would relabel every HTML body this adapter now writes; a
+        // resource predating the field says nothing and is the markdown every
+        // earlier write posted.
+        let body_format = match state.get("descriptionRawType").and_then(Value::as_str) {
+            Some(token) => endpoints::format_from_raw_type(token).ok_or_else(|| {
+                refused(format!(
+                    "unrecognised descriptionRawType {token:?}; refusing to guess what the \
+                     body's bytes are"
+                ))
+            })?,
+            None => CopyFormat::Markdown,
+        };
+
         let licence = state.get("licence").and_then(Value::as_str);
         let rights = licence.map(|token| term(Some(TermKind::Licence), token));
         let price = self.import_price(licence, state.get("price").and_then(Value::as_f64))?;
@@ -996,10 +1014,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             },
             title,
             body,
-            // The adapter posts `descriptionRawType: "md"` on every write and
-            // the vocabulary catalogue records the field as Markdown, so this
-            // is a read of a declared format rather than a guess about bytes.
-            body_format: CopyFormat::Markdown,
+            body_format,
             native,
             rights,
             price,

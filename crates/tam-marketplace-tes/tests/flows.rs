@@ -66,7 +66,8 @@ fn status(code: u16) -> HttpResponse {
 fn sample_listing() -> TesListing {
     TesListing {
         title: "Fractions pack".to_owned(),
-        description_markdown: "A pack.".to_owned(),
+        description_raw: "A pack.".to_owned(),
+        description_format: CopyFormat::Markdown,
         category_ids: vec![1_000_448],
         age_channel: tam_marketplace_tes::endpoints::TesAges::Ranges(vec![4]),
         ages: vec![11, 12],
@@ -107,6 +108,7 @@ fn sample_field_set(file: FileId) -> FieldSet {
             ),
         ],
         files: vec![file],
+        body_format: Some(CopyFormat::Markdown),
     }
 }
 
@@ -469,13 +471,13 @@ fn an_elected_creative_commons_licence_on_a_priced_listing_is_refused() {
     );
 }
 
-/// O.16's other half. `metadata_body` posts `descriptionRawType: "md"`
-/// unconditionally, so an HTML body — which is what every TPT-sourced product
-/// now carries, the import having stopped hardcoding markdown — would reach
-/// the seller's live Tes listing as escaped markup. F3's settled interim is
-/// that the declaration refuses rather than converting.
+/// F3, settled by the 2026-08-29 live probe: Tes accepts
+/// `descriptionRawType: "html"`, echoes the type back and returns the markup
+/// byte-intact. So a TPT-sourced body -- every one of which is HTML -- crosses
+/// into Tes as itself. The refusal this replaces was the interim that stood
+/// while the wire question was open.
 #[test]
-fn an_html_body_is_refused_rather_than_posted_under_the_markdown_declaration() {
+fn an_html_body_posts_under_the_html_type_rather_than_being_refused() {
     let adapter = adapter(
         Cassette {
             interactions: vec![],
@@ -485,14 +487,130 @@ fn an_html_body_is_refused_rather_than_posted_under_the_markdown_declaration() {
     let mut listing = projected(PriceIntent::Free);
     listing.body = "<p>A pack.</p>".to_owned();
     listing.body_format = CopyFormat::Html;
-    let refused = adapter.project_fields(&listing);
-    let Err(AdapterError::Rejected { detail, .. }) = refused else {
-        panic!("a body the target cannot take is a rejection, got {refused:?}");
+    let fields = adapter
+        .project_fields(&listing)
+        .expect("Tes takes either format, so an HTML body projects");
+    assert_eq!(
+        entry(&fields, FieldKey::Description),
+        "<p>A pack.</p>",
+        "the markup travels verbatim; nothing converts it"
+    );
+    assert_eq!(
+        fields.body_format,
+        Some(CopyFormat::Html),
+        "and the declaration travels beside it, because the type posted is a function of it"
+    );
+}
+
+/// The wire half of the same rule, on both tokens: the type is what the
+/// listing declares rather than the constant `"md"` it used to be.
+#[test]
+fn the_description_type_follows_the_format_the_listing_declares() {
+    for (format, token) in [(CopyFormat::Markdown, "md"), (CopyFormat::Html, "html")] {
+        let listing = TesListing {
+            description_format: format,
+            ..sample_listing()
+        };
+        let RequestBody::Json(body) = endpoints::set_metadata_request(DRAFT, &listing).body else {
+            panic!("the draft metadata is a JSON post");
+        };
+        assert_eq!(
+            body["descriptionRawType"],
+            json!(token),
+            "{format:?} posts as {token:?}, and posting one format's bytes under the other's \
+             declaration is what writes escaped markup into the seller's listing"
+        );
+    }
+}
+
+/// The seam the two halves meet at. The cassette is the assertion: a submit
+/// that dropped the declaration would build the `"md"` request and diverge
+/// here.
+#[test]
+fn a_field_set_declaring_html_submits_the_draft_under_the_html_type() {
+    let html = TesListing {
+        description_raw: "<p>A pack.</p>".to_owned(),
+        description_format: CopyFormat::Html,
+        ..sample_listing()
     };
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::create_draft_request(),
+                response: ok(&json!({"id": 9001})),
+            },
+            Interaction {
+                request: endpoints::set_metadata_request(DRAFT, &html),
+                response: ok(&json!({"id": 9001})),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let fields = FieldSet {
+        entries: vec![
+            (FieldKey::Title, "Fractions pack".to_owned()),
+            (FieldKey::Description, "<p>A pack.</p>".to_owned()),
+            (FieldKey::Price, "CC-BY".to_owned()),
+            (
+                FieldKey::Taxonomy,
+                json!({"categories": [1_000_448], "mainType": 99_009}).to_string(),
+            ),
+            (
+                FieldKey::Grades,
+                json!({"ageRanges": [4], "ages": [11, 12], "mainAge": 4}).to_string(),
+            ),
+        ],
+        files: vec![],
+        body_format: Some(CopyFormat::Html),
+    };
+    futures::executor::block_on(adapter.submit(
+        ORG,
+        tam_marketplace::IdempotencyKey(Uuid([4; 16])),
+        fields,
+        NOW,
+    ))
+    .expect("the HTML submit lands");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the draft was written under the type the field set declared"
+    );
+}
+
+/// And a description with no declaration beside it is refused rather than
+/// assumed to be markdown, which is the same rule the licence and the
+/// category ids answer to.
+#[test]
+fn a_description_without_a_declared_format_is_refused_rather_than_assumed() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![],
+        },
+        vec![],
+    );
+    let fields = FieldSet {
+        body_format: None,
+        ..sample_field_set_without_files()
+    };
+    let refused = futures::executor::block_on(adapter.submit(
+        ORG,
+        tam_marketplace::IdempotencyKey(Uuid([5; 16])),
+        fields,
+        NOW,
+    ));
     assert!(
-        detail.0.contains("Markdown") && detail.0.contains("Html"),
-        "the refusal names both formats, got {}",
-        detail.0
+        matches!(refused, Err(AdapterError::Rejected { .. })),
+        "guessing a body's format from its bytes is the failure the declaration prevents: \
+         {refused:?}"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "and nothing was sent on the strength of the guess"
     );
 }
 
@@ -619,6 +737,7 @@ fn a_paid_field_set_parses_back_into_the_priced_draft_the_projection_named() {
             ),
         ],
         files: vec![],
+        body_format: Some(CopyFormat::Markdown),
     };
     futures::executor::block_on(adapter.submit(
         ORG,
@@ -652,6 +771,7 @@ fn a_paid_token_without_a_usable_amount_is_refused_rather_than_freed() {
                 (FieldKey::Grades, json!({"ageRanges": []}).to_string()),
             ],
             files: vec![],
+            body_format: Some(CopyFormat::Markdown),
         };
         let refused = futures::executor::block_on(adapter.submit(
             ORG,
@@ -1171,7 +1291,7 @@ fn a_probed_delete_whose_state_cannot_be_read_names_the_condition_rather_than_a_
 fn an_edit_reposts_the_draft_metadata_carrying_the_change() {
     let edited = TesListing {
         title: "Fractions pack, second edition".to_owned(),
-        description_markdown: "A better pack.".to_owned(),
+        description_raw: "A better pack.".to_owned(),
         ..sample_listing()
     };
     let cassette = Cassette {

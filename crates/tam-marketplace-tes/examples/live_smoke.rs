@@ -119,7 +119,7 @@ fn read_file(path: &str) -> Result<Vec<u8>, std::io::Error> {
 fn listing(mode: &str, now: Timestamp, pricing: TesPricing) -> TesListing {
     TesListing {
         title: format!("{ZZ_TITLE_PREFIX}-{mode}-{}", now.0),
-        description_markdown: format!(
+        description_raw: format!(
             "A throwaway listing written by live_smoke ({mode}). **Delete on sight.**"
         ),
         pricing,
@@ -483,7 +483,7 @@ async fn edit_and_verify(
     confirm_present(adapter, id, now).await?;
     let rewritten = TesListing {
         title: format!("{}-edited", created.title),
-        description_markdown: "The second body, written by the edit.".to_owned(),
+        description_raw: "The second body, written by the edit.".to_owned(),
         ..created.clone()
     };
     adapter

@@ -1547,6 +1547,7 @@ mod machine_tests {
         FieldSet {
             entries: vec![(FieldKey::Title, "a resource".to_owned())],
             files: vec![],
+            body_format: None,
         }
     }
 

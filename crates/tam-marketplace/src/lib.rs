@@ -388,6 +388,15 @@ pub struct FormSchemaFingerprint(pub ContentHash);
 pub struct FieldSet {
     pub entries: Vec<(FieldKey, String)>,
     pub files: Vec<FileId>,
+    /// What the [`FieldKey::Description`] entry's bytes are, absent exactly
+    /// where the set carries no description -- a removal renders none, and
+    /// neither does a set naming only a title.
+    ///
+    /// The declaration travels beside the bytes rather than being recovered
+    /// from them: a marketplace that takes either format posts the type it
+    /// was given, and sniffing one format's bytes under the other's
+    /// declaration is how a listing acquires escaped markup nobody asked for.
+    pub body_format: Option<CopyFormat>,
 }
 
 /// One projected vocabulary term as the seam carries it: the marketplace's

@@ -783,6 +783,10 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
         grades.push(native.to_owned());
     }
     Ok(FieldSet {
+        // TPT's own wire is HTML and the projection above refuses anything
+        // else, so the declaration the seam carries is a fact of this
+        // marketplace rather than of one listing.
+        body_format: Some(CopyFormat::Html),
         entries: vec![
             (FieldKey::Title, listing.title.clone()),
             (FieldKey::Description, listing.body.clone()),

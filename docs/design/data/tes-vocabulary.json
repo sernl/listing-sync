@@ -196,7 +196,7 @@
       "zip"
     ]
   },
-  "descriptionFormat": "Markdown (descriptionRawType: md); external search shows first 155 chars; title guidance 35-45 chars",
+  "descriptionFormat": "Markdown or HTML, declared per resource by descriptionRawType (md or html); the 2026-08-29 probe posted html to a live draft, the API echoed the type back and the markup round-tripped byte-intact. External search shows first 155 chars; title guidance 35-45 chars",
   "durableKey": "numeric resource id, minted at creation; URL fixed to original title and never changes",
   "yearGroups": {
     "field": "yearGroups",

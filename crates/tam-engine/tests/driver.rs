@@ -72,6 +72,7 @@ impl MarketplaceAdapter for ScriptedAdapter {
         Ok(FieldSet {
             entries: vec![(FieldKey::Title, listing.title.clone())],
             files: listing.files.clone(),
+            body_format: Some(listing.body_format),
         })
     }
 
@@ -287,6 +288,7 @@ fn seed_machine(strategy: CreateStrategy) -> MachineSeed {
         fields: FieldSet {
             entries: vec![(FieldKey::Title, "Fixture".to_owned())],
             files: vec![],
+            body_format: None,
         },
         intent_hash: ContentHash([0x0A; 32]),
         strategy,
