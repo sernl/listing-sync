@@ -1,12 +1,14 @@
 //! The taxonomy hub: the pure projection function over the edge relation,
 //! the crosswalk derivation over the captured Tes trees, and the Tes
-//! age-range table. No I/O; the durable side lives in tam-storage.
+//! age-range table, and the captured labels a form renders those
+//! vocabularies with. No I/O; the durable side lives in tam-storage.
 
 #![forbid(unsafe_code)]
 
 pub mod grades;
 pub mod licences;
 pub mod listing;
+pub mod native_labels;
 pub mod project;
 pub mod provenance;
 pub mod tes;
@@ -14,6 +16,7 @@ pub mod tes;
 pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
 pub use licences::{derive_licence_crosswalk, LicenceCrosswalk, LicenceError};
 pub use listing::{project_listing, projection_vocabularies, routed_vocabularies, ListingContext};
+pub use native_labels::native_label;
 pub use project::{
     ingest, ingest_grades, project, project_axis, project_terms, AxisRequest, BlockedTerm,
     GradeIngest, TermsOutcome,

@@ -236,6 +236,34 @@ impl DelegationView {
     }
 }
 
+/// One admissible value of a native field: the token the adapter posts and
+/// the words a seller reads.
+///
+/// Both, rather than the token alone, because the registry holds a platform's
+/// own identifiers — Tes `mainType` is `99001` and its GB age bands are `1`
+/// through `7` — and a select rendered from those asks a seller to pick a
+/// number whose meaning is off-screen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeValueView {
+    pub id: String,
+    /// The label the committed capture carries for this id, and the id itself
+    /// where it carries none: a value that is already its own name, and TPT's
+    /// two enumerations captured as machine tokens alone. Never a reading
+    /// invented here — see [`tam_taxonomy::native_label`].
+    pub label: String,
+}
+
+impl NativeValueView {
+    fn of(inventory: InventoryId, field: &str, id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            label: tam_taxonomy::native_label(inventory, field, id)
+                .unwrap_or(id)
+                .to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeFieldView {
     pub name: String,
@@ -245,21 +273,24 @@ pub struct NativeFieldView {
     /// The captured members, present only for `closed`. An empty array here
     /// would be a claim nobody made, so the field is absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<Vec<String>>,
+    pub values: Option<Vec<NativeValueView>>,
     pub delegation: DelegationView,
 }
 
 impl NativeFieldView {
-    fn of(native: NativeField) -> Self {
+    fn of(inventory: InventoryId, native: NativeField) -> Self {
         Self {
             name: native.name.to_owned(),
             direction: DirectionView::of(native.direction),
             required: native.required,
             vocabulary: VocabularyKind::of(native.vocabulary),
             values: match native.vocabulary {
-                NativeVocabulary::Closed(values) => {
-                    Some(values.iter().map(|value| (*value).to_owned()).collect())
-                }
+                NativeVocabulary::Closed(values) => Some(
+                    values
+                        .iter()
+                        .map(|value| NativeValueView::of(inventory, native.name, value))
+                        .collect(),
+                ),
                 NativeVocabulary::ClosedUncaptured
                 | NativeVocabulary::Free
                 | NativeVocabulary::Numeric
@@ -453,7 +484,7 @@ pub fn view(inventory: InventoryId) -> VocabularyView {
             .natives
             .iter()
             .copied()
-            .map(NativeFieldView::of)
+            .map(|native| NativeFieldView::of(inventory, native))
             .collect(),
         axes: entry
             .equivalence_axes
@@ -493,8 +524,8 @@ pub(crate) async fn vocabulary_view(
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_inventory, view, BodyWire, CardinalityKind, DelegationKind, NonDelegableReason,
-        PayloadFileRule, VocabularyKind,
+        parse_inventory, view, BodyWire, CardinalityKind, DelegationKind, NativeValueView,
+        NonDelegableReason, PayloadFileRule, VocabularyKind,
     };
     use tam_domain::TermKind;
     use tam_types::InventoryId;
@@ -653,6 +684,62 @@ mod tests {
             (tes.payload_files, tes.price_floor_minor_units),
             (PayloadFileRule::EveryPayloadFile, None),
             "Tes uploads every payload file and no Tes floor has been measured"
+        );
+    }
+
+    #[test]
+    fn every_captured_option_reaches_the_form_with_words_beside_its_token() {
+        let ages = view(InventoryId::TesGb);
+        let ages = native(&ages, "ageRanges");
+        let ages: Vec<(&str, &str)> = ages
+            .values
+            .as_deref()
+            .expect("the seven bands are captured")
+            .iter()
+            .map(|value| (value.id.as_str(), value.label.as_str()))
+            .collect();
+        assert_eq!(
+            ages.as_slice(),
+            [
+                ("1", "3-5"),
+                ("2", "5-7"),
+                ("3", "7-11"),
+                ("4", "11-14"),
+                ("5", "14-16"),
+                ("6", "16+"),
+                ("7", "Age not applicable"),
+            ]
+            .as_slice(),
+            "a seller picks the band rather than its row number"
+        );
+
+        let types = view(InventoryId::TesGb);
+        let types = native(&types, "mainType");
+        let first = types
+            .values
+            .as_deref()
+            .and_then(<[NativeValueView]>::first)
+            .map(|value| (value.id.as_str(), value.label.as_str()));
+        assert_eq!(
+            first,
+            Some(("99001", "Assembly")),
+            "the resource-type select carries the words the uploader shows"
+        );
+
+        let attestation = view(InventoryId::Tpt);
+        let attestation = native(&attestation, "ItemsProperty.copyright_declaration");
+        let attestation: Vec<(&str, &str)> = attestation
+            .values
+            .as_deref()
+            .expect("the two posted members are captured")
+            .iter()
+            .map(|value| (value.id.as_str(), value.label.as_str()))
+            .collect();
+        assert_eq!(
+            attestation.as_slice(),
+            [("1", "1"), ("2", "2")].as_slice(),
+            "no capture carries words for these two, so the token stands in for itself \
+             rather than a reading being invented here"
         );
     }
 

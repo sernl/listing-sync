@@ -510,6 +510,23 @@ impl TaxonomyRepo {
     }
 }
 
+/// One `canonical_term` row as the relation's own type. Free rather than a
+/// method because `query!` mints an anonymous row type per call site, and the
+/// two reads below would otherwise decode the same four columns twice.
+fn canonical_term(
+    id: uuid::Uuid,
+    kind: &str,
+    parent: Option<uuid::Uuid>,
+    label: String,
+) -> Result<CanonicalTerm, StorageError> {
+    Ok(CanonicalTerm {
+        id: CanonicalTermId(uuid_from_db(id)),
+        kind: term_kind_from_db(kind)?,
+        parent: parent.map(|parent| CanonicalTermId(uuid_from_db(parent))),
+        label,
+    })
+}
+
 impl TaxonomyRepo {
     /// Every canonical term, for the projection's kind lookup. Global
     /// reference data; bounded by the seeded vocabulary's own size.
@@ -518,16 +535,32 @@ impl TaxonomyRepo {
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
-            .map(|row| {
-                Ok(CanonicalTerm {
-                    id: CanonicalTermId(uuid_from_db(row.id)),
-                    kind: term_kind_from_db(&row.kind)?,
-                    parent: row
-                        .parent
-                        .map(|parent| CanonicalTermId(uuid_from_db(parent))),
-                    label: row.label,
-                })
-            })
+            .map(|row| canonical_term(row.id, &row.kind, row.parent, row.label))
+            .collect()
+    }
+
+    /// The canonical terms of one axis, or every term where no axis is named,
+    /// ordered as a picker reads them rather than as the relation stores them.
+    ///
+    /// The same global reference data `terms` returns and the same bound on
+    /// its size; the kind filter is in the statement rather than the caller
+    /// because the subject axis is a fortieth of the relation and the topic
+    /// axis is most of the rest.
+    pub async fn terms_of_kind(
+        &self,
+        kind: Option<TermKind>,
+    ) -> Result<Vec<CanonicalTerm>, StorageError> {
+        let kind = kind.map(term_kind_to_db);
+        let rows = sqlx::query!(
+            "SELECT id, kind, parent, label FROM canonical_term \
+             WHERE $1::text IS NULL OR kind = $1 \
+             ORDER BY label, id",
+            kind,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| canonical_term(row.id, &row.kind, row.parent, row.label))
             .collect()
     }
 }

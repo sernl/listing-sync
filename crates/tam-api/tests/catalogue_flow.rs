@@ -16,10 +16,13 @@ use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::catalogue::{CreatedProductView, DeletedProductView, UploadedView};
 use tam_api::resources::ProductView;
+use tam_api::taxonomy::TermsView;
 use tam_api::vocabulary::VocabularyView;
 use tam_api::{router, APIError, APIErrorCode, AppState, BlobStore, Config, SESSION_COOKIE};
-use tam_storage::{ElectionRepo, MappingRepo, ProductRepo, SessionRepo, SessionToken};
-use tam_types::{InventoryId, OrgId, ProductId, Timestamp, UserId, Uuid};
+use tam_storage::{
+    ElectionRepo, MappingRepo, ProductRepo, SessionRepo, SessionToken, TaxonomyRepo,
+};
+use tam_types::{CanonicalTermId, InventoryId, OrgId, ProductId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -1034,5 +1037,99 @@ async fn the_vocabulary_endpoint_serves_one_marketplace_s_own_registry(pool: PgP
         status,
         StatusCode::UNAUTHORIZED,
         "the vocabulary is tenant-scoped like every other catalogue read"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_taxonomy_endpoint_enumerates_the_terms_a_create_body_names(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let subject = CanonicalTermId(Uuid([0x51; 16]));
+    let topic = CanonicalTermId(Uuid([0x52; 16]));
+    let licence = CanonicalTermId(Uuid([0x53; 16]));
+    TaxonomyRepo::new(pool.clone())
+        .seed(
+            &[
+                tam_domain::CanonicalTerm {
+                    id: subject,
+                    kind: tam_domain::TermKind::Subject,
+                    parent: None,
+                    label: "Maths".to_owned(),
+                },
+                tam_domain::CanonicalTerm {
+                    id: topic,
+                    kind: tam_domain::TermKind::Topic,
+                    parent: Some(subject),
+                    label: "Time".to_owned(),
+                },
+                tam_domain::CanonicalTerm {
+                    id: licence,
+                    kind: tam_domain::TermKind::Licence,
+                    parent: None,
+                    label: "Teaching Resource Licence".to_owned(),
+                },
+            ],
+            &[],
+        )
+        .await
+        .expect("the terms seed");
+    let state = unconfigured(pool);
+
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/taxonomy/terms?kind=subject").await;
+    assert_eq!(status, StatusCode::OK);
+    let view: TermsView = parse(&body);
+    assert_eq!(
+        view.terms
+            .iter()
+            .map(|term| (term.id, term.label.as_str(), term.parent))
+            .collect::<Vec<_>>(),
+        vec![(subject, "Maths", None)],
+        "the subject picker offers the identifier the create body carries, under its own label"
+    );
+
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/taxonomy/terms?kind=topic").await;
+    assert_eq!(status, StatusCode::OK);
+    let view: TermsView = parse(&body);
+    assert_eq!(
+        view.terms.first().map(|term| term.parent),
+        Some(Some(subject)),
+        "a topic names the subject it narrows, so a picker can group them"
+    );
+
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/taxonomy/terms").await;
+    assert_eq!(status, StatusCode::OK);
+    let view: TermsView = parse(&body);
+    assert_eq!(
+        view.terms.len(),
+        3,
+        "no filter serves every kind the relation holds, each labelled by its own"
+    );
+
+    let (status, _) = get(
+        state.clone(),
+        &TOKEN_A,
+        "/v1/taxonomy/terms?kind=resourceType",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a spelling this server never issues is refused rather than read as no filter"
+    );
+
+    let (status, _) = call(
+        state,
+        &SessionToken([0x00; 32]),
+        Call {
+            method: Method::GET,
+            path: "/v1/taxonomy/terms",
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the canonical taxonomy is global reference data behind a session, like every other read"
     );
 }

@@ -29,6 +29,7 @@ pub mod quota;
 pub mod resources;
 pub mod session;
 pub mod stream;
+pub mod taxonomy;
 pub mod version;
 pub mod vocabulary;
 
@@ -184,6 +185,7 @@ pub fn router(state: AppState) -> Router {
             "/{version}/vocabulary/{inventory}",
             get(vocabulary::vocabulary_view),
         )
+        .route("/{version}/taxonomy/terms", get(taxonomy::list_terms))
         .route("/{version}/connections", get(resources::list_connections))
         .route(
             "/{version}/connections/{connection}/revoke",

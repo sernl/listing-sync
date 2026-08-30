@@ -767,6 +767,10 @@ pub const TES_MAIN_AGE_RANGES: [TesAgeRange; 7] = [
     },
 ];
 
+/// The vocabulary `TES_MAIN_AGE_RANGES` is the membership of. Only a GB
+/// resource's phase values are drawn from it.
+const TES_MAIN_AGE_VOCABULARY: VocabularyId = VocabularyId(InventoryId::TesGb, TermKind::Phase);
+
 /// Derives the age interval a declaration spans, and only when every declared
 /// range is closed. An empty declaration, an unrecognised native id, a
 /// half-open band and the not-applicable row each derive nothing rather than
@@ -782,6 +786,14 @@ pub const TES_MAIN_AGE_RANGES: [TesAgeRange; 7] = [
 /// published age sets, where band 6 is closed at 18. A band closed on the
 /// wire is not thereby closed as a claim about who the resource is for.
 ///
+/// A declaration is read off this table only where it names the vocabulary the
+/// table is the members of. The Tes editor takes `ageRanges` when the country
+/// is GB and `yearGroups` otherwise, so `VocabularyId(TesGb, Phase)` denotes
+/// these seven bands while the same small integers under any other inventory
+/// denote year groups: US year group 3 is grade 1, and row 3 here is ages
+/// 7-11. A path from any other vocabulary derives nothing rather than a band
+/// it never named.
+///
 /// The table's bounded rows are all non-inverted, so `AgeInterval::new` cannot
 /// reject the derived pair; `.ok()` carries that without asserting it.
 #[must_use]
@@ -792,6 +804,9 @@ pub fn derive_interval(paths: &[VocabularyPath]) -> Option<AgeInterval> {
     let mut low = u8::MAX;
     let mut high = u8::MIN;
     for path in paths {
+        if path.vocabulary != TES_MAIN_AGE_VOCABULARY {
+            return None;
+        }
         let native = path.native_id.as_deref()?;
         let row = TES_MAIN_AGE_RANGES
             .iter()
@@ -1327,6 +1342,35 @@ mod tests {
     #[test]
     fn an_unknown_native_id_derives_nothing() {
         assert_eq!(derive_interval(&[range("2"), range("99")]), None);
+    }
+
+    #[test]
+    fn a_year_group_never_derives_a_gb_age_band() {
+        let year_group = |inventory, native: &str| VocabularyPath {
+            vocabulary: VocabularyId(inventory, TermKind::Phase),
+            segments: vec!["year".to_owned()],
+            native_id: Some(native.to_owned()),
+        };
+        assert_eq!(
+            derive_interval(&[year_group(InventoryId::TesUs, "3")]),
+            None,
+            "US year group 3 is grade 1, and the GB table's row 3 is ages 7-11"
+        );
+        assert_eq!(
+            derive_interval(&[year_group(InventoryId::TesNz, "3")]),
+            None,
+            "the NZ fork reads the same year-group vocabulary and not this table"
+        );
+        assert_eq!(
+            derive_interval(&[range("3"), year_group(InventoryId::TesUs, "4")]),
+            None,
+            "one foreign member is enough: the span would be read off two vocabularies"
+        );
+        assert_eq!(
+            derive_interval(&[range("3")]).map(|span| (span.low_years(), span.high_years())),
+            Some((7, 11)),
+            "the GB age-range path still derives its own band"
+        );
     }
 
     #[test]
