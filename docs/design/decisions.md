@@ -23,8 +23,13 @@ Its job around sync is detailed progress reporting: files in sync, completed, fa
 Web client first, Android second.
 Mobile is a full client rather than a read-only one, because the client performs no automation.
 
-Rust is non-negotiable for the engine, all I/O, batch processing, the automation layer, and anything computationally heavy.
-TypeScript is acceptable for the user interface only.
+Rust is required for the engine, all I/O, batch processing, the automation layer, and anything computationally heavy.
+TypeScript is for the user interface, and for one bounded identity service.
+That service is better-auth, running as `tam-auth`, and it owns platform-user identity and browser session only: registration, sign-in, social and passkey credentials, email verification, password reset, and the keys for the tokens it issues.
+It owns no domain data, performs no marketplace request, and holds no marketplace credential.
+It reaches Postgres only as the `tam_auth` role, whose grants are confined to the `auth` schema; it never reads or writes a table in `public`, never sets `app.current_org`, and never contacts the session broker.
+Authorisation — which organisation a request speaks for and what it may do there — is decided in Rust from Postgres, and is never asserted by a token claim.
+Any extension of this service beyond identity and session is a new founder decision, not an application of this one.
 
 Sync is deterministic and cron-scheduled, never agent-driven.
 Large language models are confined to listing-copy generation and to rediscovering a selector after a marketplace changes its markup.

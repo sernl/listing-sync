@@ -19,7 +19,20 @@ sources are under `docs/design/`.
 - Automation runs server-side, on infrastructure we operate. The client is
   thin and performs no automation; it renders progress.
 - Rust is required for the engine, all I/O, batch processing, the automation
-  layer, and anything computationally heavy. TypeScript is for the UI only.
+  layer, and anything computationally heavy. TypeScript is for the user
+  interface, and for one bounded identity service. That service is
+  better-auth, running as `tam-auth`, and it owns platform-user identity and
+  browser session only: registration, sign-in, social and passkey
+  credentials, email verification, password reset, and the keys for the
+  tokens it issues. It owns no domain data, performs no marketplace request,
+  and holds no marketplace credential. It reaches Postgres only as the
+  `tam_auth` role, whose grants are confined to the `auth` schema; it never
+  reads or writes a table in `public`, never sets `app.current_org`, and
+  never contacts the session broker. Authorisation — which organisation a
+  request speaks for and what it may do there — is decided in Rust from
+  Postgres, and is never asserted by a token claim. Any extension of this
+  service beyond identity and session is a new founder decision, not an
+  application of this one.
 - Sync is deterministic and cron-scheduled, never agent-driven. Models appear
   only in listing-copy generation and selector rediscovery.
 - Markdown is one sentence per line; comments earn their place per the

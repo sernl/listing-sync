@@ -11,9 +11,15 @@ Both were written for contexts unlike this one — a single-purpose Zig database
 Holzmann's own meta-criterion governs the whole thing: a rule that cannot be mechanically checked is a weak rule, which is why this charter's primary artefacts are a `[workspace.lints]` table, a `clippy.toml`, a `crates/limits`, and a set of flake checks, with prose reserved for the rules that genuinely cannot be automated.
 
 One standing constraint bounds every recommendation below, and it is a requirement in the core rather than a preference.
-Rust is required for the engine, all input and output, batch processing, the automation layer, and anything computationally heavy.
+Rust is required for the engine, all I/O, batch processing, the automation layer, and anything computationally heavy.
 That is a founder decision recorded in the decision register, not an engineering taste, and it is not reopened here.
-TypeScript is acceptable for the user interface only, which is why the web client is React and TypeScript and why the Android client carries no Rust at all.
+TypeScript is for the user interface, and for one bounded identity service.
+That service is better-auth, running as `tam-auth`, and it owns platform-user identity and browser session only: registration, sign-in, social and passkey credentials, email verification, password reset, and the keys for the tokens it issues.
+It owns no domain data, performs no marketplace request, and holds no marketplace credential.
+It reaches Postgres only as the `tam_auth` role, whose grants are confined to the `auth` schema; it never reads or writes a table in `public`, never sets `app.current_org`, and never contacts the session broker.
+Authorisation — which organisation a request speaks for and what it may do there — is decided in Rust from Postgres, and is never asserted by a token claim.
+Any extension of this service beyond identity and session is a new founder decision, not an application of this one.
+This is why the web client is Svelte and SvelteKit and why the Android client carries no Rust at all.
 So the preference is at the edges and the requirement is in the core: nothing below should be read as licence to move a core component out of Rust, and nothing below should be read as an instruction to write an interface in Rust.
 
 The charter is three files, because one file carrying all of it would exceed the length at which any part of it stays reviewable.
@@ -113,7 +119,7 @@ The asymmetry moves from the device to the connection, which is where it actuall
 
 Two smaller consequences follow and are worth taking.
 No client carries Rust, so no crate in the workspace is a candidate for `deny` rather than `forbid` on `unsafe_code`, which removes Miri from the deferred list along with the trigger that would have reintroduced it.
-And the client feature matrix collapses to one row, because the web and Android clients are the same React codebase over the same REST contract.
+And the client feature matrix collapses to one row, because the web and Android clients are the same Svelte codebase over the same REST contract.
 
 ### The automation plane is server-side, and its crate is chosen for bounded commands
 
