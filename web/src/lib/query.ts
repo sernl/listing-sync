@@ -36,6 +36,10 @@ export const queryKeys = {
 	 *  form reads several at once and each is a separate cache entry, so
 	 *  selecting a second platform fetches only the one it added. */
 	vocabulary: (inventory: string) => ['vocabulary', inventory] as const,
+	/** The canonical terms of one kind. Keyed by the kind because the create
+	 *  form reads the subjects alone, and a second kind is a second entry
+	 *  rather than a refetch of this one. */
+	taxonomyTerms: (kind: string) => ['taxonomy-terms', kind] as const,
 	mappings: ['mappings'] as const,
 	status: ['status'] as const,
 	org: ['org'] as const,

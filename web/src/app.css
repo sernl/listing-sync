@@ -1590,6 +1590,19 @@ dl.facts dd:last-child {
 	color: var(--muted);
 }
 
+/* A long tick-box list — the canonical subjects, of which there are forty-odd —
+   kept in its own scroll box so the rows do not push the rest of the form off
+   the screen. */
+.pick-list {
+	max-height: 232px;
+	overflow-y: auto;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card);
+	padding: 0 11px;
+	font-weight: 400;
+}
+
 .inline-choices {
 	display: flex;
 	gap: 16px;

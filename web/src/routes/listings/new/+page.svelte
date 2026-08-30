@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createQueries, useQueryClient } from '@tanstack/svelte-query';
+	import { createQueries, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { ApiFailure, api, type UploadedView, type VocabularyView } from '$lib/api';
 	import {
@@ -7,13 +7,14 @@
 		axisKey,
 		createBodyOf,
 		emptyDraft,
-		licenceValues,
+		licenceOptions,
 		measure,
 		payloadRefusal,
 		priceOf,
 		quotaSentence,
 		refusalsOf,
 		submittable,
+		toggleSubject,
 		CURRENCY_OPTIONS,
 		type Draft
 	} from '$lib/authoring';
@@ -48,6 +49,15 @@
 			pending: results.some((result) => result.isPending),
 			failed: results.some((result) => result.isError)
 		})
+	}));
+
+	// The canonical subjects: ours rather than any one marketplace's, so one read
+	// serves the whole form. Cached like a vocabulary — forty-odd terms that
+	// change only when the server does are not worth refetching.
+	const subjects = createQuery(() => ({
+		queryKey: queryKeys.taxonomyTerms('subject'),
+		queryFn: () => api.terms('subject').then((view) => view.terms),
+		staleTime: Infinity
 	}));
 
 	const known = $derived(vocabularies.known);
@@ -114,9 +124,7 @@
 		selected.filter((inventory) => known.get(inventory)?.authoring.licence !== undefined)
 	);
 	const licenceChoices = $derived(
-		licensing.length === 0
-			? []
-			: licenceValues(known.get(licensing[0])?.authoring.licence, draft.branch)
+		licensing.length === 0 ? [] : licenceOptions(known.get(licensing[0]), draft.branch)
 	);
 	const refusals = $derived(refusalsOf(draft, known));
 	const canCreate = $derived(submittable(refusals) && !loadingVocabulary && !creating);
@@ -125,7 +133,7 @@
 	// write, so switching between free and paid clears it rather than leaving a
 	// selection the seller can no longer see in the list.
 	$effect(() => {
-		if (draft.licence !== null && !licenceChoices.includes(draft.licence)) {
+		if (draft.licence !== null && !licenceChoices.some((choice) => choice.id === draft.licence)) {
 			draft = { ...draft, licence: null };
 		}
 	});
@@ -261,6 +269,52 @@
 				{/each}
 			</div>
 
+			<div class="field" style="margin-top: 14px">
+				<span id="subjects-label">Subjects</span>
+				<span class="hint">
+					What this resource teaches, from the taxonomy this catalogue holds rather than any
+					one marketplace's. A subject left unset is resolved later in Reconciliation.
+				</span>
+				{#if subjects.isPending}
+					<p class="quiet">Reading the taxonomy…</p>
+				{:else if subjects.isError}
+					<p class="refusal">
+						The subjects could not be read. A draft can still be created without one, and the
+						subject is resolved in Reconciliation.
+					</p>
+				{:else if (subjects.data ?? []).length === 0}
+					<p class="quiet">
+						The taxonomy holds no subjects yet, so there is nothing to choose from here.
+					</p>
+				{:else}
+					<div class="pick-list" role="group" aria-labelledby="subjects-label">
+						{#each subjects.data ?? [] as term (term.id)}
+							<label class="choice">
+								<input
+									type="checkbox"
+									checked={draft.subjects.includes(term.id)}
+									onchange={(event) =>
+										(draft = {
+											...draft,
+											subjects: toggleSubject(
+												draft.subjects,
+												term.id,
+												event.currentTarget.checked
+											)
+										})}
+								/>
+								<span class="t">{term.label}</span>
+							</label>
+						{/each}
+					</div>
+					<span class="hint">
+						{draft.subjects.length === 0
+							? 'None chosen; Reconciliation will raise the subject when a platform needs one.'
+							: `${draft.subjects.length} chosen.`}
+					</span>
+				{/if}
+			</div>
+
 			<div class="inline-choices" style="margin-top: 14px">
 				<label>
 					<input
@@ -360,8 +414,8 @@
 							})}
 					>
 						<option value="">Choose a licence</option>
-						{#each licenceChoices as value (value)}
-							<option {value}>{value}</option>
+						{#each licenceChoices as choice (choice.id)}
+							<option value={choice.id}>{choice.label}</option>
 						{/each}
 					</select>
 				</label>
@@ -418,8 +472,8 @@
 					{/if}
 				{/each}
 				<p class="foot-note">
-					Subjects and topics are not set here: they come from the taxonomy this catalogue holds,
-					and anything a platform cannot place is raised in Reconciliation.
+					Topics are not set here: they come from the taxonomy this catalogue holds, and
+					anything a platform cannot place is raised in Reconciliation.
 				</p>
 			</Panel>
 		{/if}

@@ -46,7 +46,12 @@ function vocabulary(inventory: InventoryId, patch: Partial<VocabularyView> = {})
 						direction: 'both',
 						required: true,
 						vocabulary: 'closed',
-						values: ['CC-BY'],
+						values: [
+						{
+							id: 'CC-BY',
+							label: 'Creative Commons Attribution 4.0 International licence'
+						}
+					],
 						delegation: { kind: 'never', reason: 'legal_content' }
 					}
 				]

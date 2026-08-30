@@ -12,6 +12,7 @@ import type {
 	FileHandle,
 	LicenceGateView,
 	MappingHead,
+	NativeValueView,
 	PathInput,
 	PriceIntent,
 	ProductView,
@@ -122,6 +123,42 @@ export function licenceValues(
 	return branch === 'free' ? gate.free : gate.paid;
 }
 
+/** The same values as a seller reads them: each gate id carrying the words the
+ *  captured vocabulary holds for it.
+ *
+ * The gate names ids alone, and the words are read off the native field it
+ * points at, so the label has one source rather than a second copy beside the
+ * gate that nothing keeps in step. An id that vocabulary carries no words for
+ * stands in for itself, which is what the server does with an uncaptured label
+ * too. */
+export function licenceOptions(
+	view: VocabularyView | undefined,
+	branch: PricingBranch
+): readonly NativeValueView[] {
+	const gate = view?.authoring.licence;
+	if (view === undefined || gate === undefined) {
+		return [];
+	}
+	const named = view.natives.find((native) => native.name === gate.native);
+	const labels = new Map((named?.values ?? []).map((value) => [value.id, value.label]));
+	return licenceValues(gate, branch).map((id) => ({ id, label: labels.get(id) ?? id }));
+}
+
+// --------------------------------------------------------------- the subjects
+
+/** The chosen subject ids with one term added or removed.
+ *
+ * The seller's own order is kept rather than sorted: `subjects` reaches the
+ * wire as a list, and reordering it on every tick would send something other
+ * than what was done. Ticking a term already held is a no-op, so a repeated
+ * change event cannot write it twice. */
+export function toggleSubject(chosen: readonly string[], term: string, on: boolean): string[] {
+	if (!on) {
+		return chosen.filter((held) => held !== term);
+	}
+	return chosen.includes(term) ? [...chosen] : [...chosen, term];
+}
+
 // ------------------------------------------------------------ platform fields
 
 /** One control a platform's section renders, read off the vocabulary rather
@@ -134,9 +171,10 @@ export interface AxisControl {
 	/** The platform's measured selection limit, where one is measured. */
 	cap: number | null;
 	required: boolean;
-	/** Present only for a captured closed set. Absent means the form renders a
-	 *  disclosure rather than a select with no options. */
-	values: readonly string[] | null;
+	/** Present only for a captured closed set, each value carrying the words the
+	 *  capture holds for it. Absent means the form renders a disclosure rather
+	 *  than a select with no options. */
+	values: readonly NativeValueView[] | null;
 	vocabulary: NativeVocabularyKind;
 	/** Why the seller may not hand this axis to a best-fit computation, or
 	 *  `null` where the registry permits delegation. */
@@ -219,6 +257,10 @@ export interface Draft {
 	previews: FileHandle[];
 	inventories: InventoryId[];
 	licence: string | null;
+	/** Canonical term ids, which is what the create body's `subjects` takes.
+	 *  Ours rather than any one marketplace's, so it is answered once for the
+	 *  whole product. */
+	subjects: string[];
 	/** Native ids chosen per inventory, keyed by the native's own name. */
 	axes: Record<string, string[]>;
 }
@@ -241,6 +283,7 @@ export function emptyDraft(): Draft {
 		previews: [],
 		inventories: [],
 		licence: null,
+		subjects: [],
 		axes: {}
 	};
 }
@@ -533,6 +576,7 @@ export function createBodyOf(
 		payload: draft.payload,
 		cover: draft.cover,
 		previews: draft.previews,
+		subjects: draft.subjects,
 		grades: gradesOf(draft, vocabularies),
 		rights,
 		inventories: draft.inventories,

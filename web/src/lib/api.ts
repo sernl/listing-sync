@@ -597,6 +597,17 @@ export interface DelegationView {
 	reason?: NonDelegableReason;
 }
 
+/** One admissible value of a native field: the token the adapter posts and the
+ *  words a seller reads.
+ *
+ *  `label` is the id itself wherever the committed capture carries no words for
+ *  it, so a value that is already its own name renders unchanged and no reading
+ *  is invented on either side of the wire. */
+export interface NativeValueView {
+	id: string;
+	label: string;
+}
+
 /** `values` is present only for a `closed` vocabulary. A `closed_uncaptured`
  *  one is closed and unheld, so a form must render it as a value the seller
  *  supplies at their own risk rather than as a select with no options. */
@@ -605,7 +616,7 @@ export interface NativeFieldView {
 	direction: NativeDirection;
 	required: boolean;
 	vocabulary: NativeVocabularyKind;
-	values?: string[];
+	values?: NativeValueView[];
 	delegation: DelegationView;
 }
 
@@ -656,6 +667,26 @@ export interface VocabularyView {
 	axes: AxisView[];
 	absent_axes: TermKind[];
 	authoring: AuthoringView;
+}
+
+// ----------------------------------------------------------------- taxonomy
+
+/** One canonical term: the relation above the marketplaces' own field tables,
+ *  which the projection carries into whichever platform a product is authored
+ *  for.
+ *
+ *  `id` is the identifier `CreateProductBody.subjects` carries. `parent` is the
+ *  broader term this one sits under — a topic names its subject — and is absent
+ *  for a root, which every subject is. */
+export interface TermView {
+	id: string;
+	kind: TermKind;
+	label: string;
+	parent?: string;
+}
+
+export interface TermsView {
+	terms: TermView[];
 }
 
 /** Bytes to `POST /v1/uploads`, with the fraction sent reported as it goes.
@@ -722,6 +753,10 @@ export const api = {
 	 *  does. */
 	vocabulary: (inventory: InventoryId) =>
 		request<VocabularyView>(`/v1/vocabulary/${inventory}`),
+	/** The canonical terms of one kind, ordered by the words they read. Cached
+	 *  like a vocabulary: the taxonomy is ours rather than an organisation's and
+	 *  changes only when the server does. */
+	terms: (kind: TermKind) => request<TermsView>(`/v1/taxonomy/terms?kind=${kind}`),
 	upload,
 	createProduct: (body: CreateProductBody) =>
 		post<CreatedProductView>('/v1/products', body),

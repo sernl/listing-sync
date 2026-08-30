@@ -5,6 +5,7 @@ import {
 	emptyDraft,
 	formatBytes,
 	licenceElections,
+	licenceOptions,
 	licenceValues,
 	measure,
 	payloadRefusal,
@@ -14,6 +15,7 @@ import {
 	rightsOf,
 	submittable,
 	toMinorUnits,
+	toggleSubject,
 	unansweredRequired,
 	type Draft
 } from './authoring';
@@ -41,7 +43,18 @@ const TES_GB: VocabularyView = {
 			direction: 'both',
 			required: true,
 			vocabulary: 'closed',
-			values: ['CC-BY', 'CC-BY-ND', 'CC-BY-SA', 'TES-PAID'],
+			values: [
+				{ id: 'CC-BY', label: 'Creative Commons Attribution 4.0 International licence' },
+				{
+					id: 'CC-BY-ND',
+					label: 'Creative Commons Attribution-NoDerivatives 4.0 International licence'
+				},
+				{
+					id: 'CC-BY-SA',
+					label: 'Creative Commons Attribution-ShareAlike 4.0 International licence'
+				},
+				{ id: 'TES-PAID', label: 'Teaching Resource Licence' }
+			],
 			delegation: { kind: 'never', reason: 'legal_content' }
 		},
 		{
@@ -49,7 +62,10 @@ const TES_GB: VocabularyView = {
 			direction: 'written',
 			required: false,
 			vocabulary: 'closed',
-			values: ['99001', '99002'],
+			values: [
+				{ id: '99001', label: 'Assembly' },
+				{ id: '99002', label: 'Assessment and revision' }
+			],
 			delegation: { kind: 'by_opt_in' }
 		},
 		{
@@ -57,7 +73,15 @@ const TES_GB: VocabularyView = {
 			direction: 'both',
 			required: false,
 			vocabulary: 'closed',
-			values: ['1', '2', '3', '4', '5', '6', '7'],
+			values: [
+				{ id: '1', label: '3-5' },
+				{ id: '2', label: '5-7' },
+				{ id: '3', label: '7-11' },
+				{ id: '4', label: '11-14' },
+				{ id: '5', label: '14-16' },
+				{ id: '6', label: '16+' },
+				{ id: '7', label: 'Age not applicable' }
+			],
 			delegation: { kind: 'by_opt_in' }
 		},
 		{
@@ -65,7 +89,7 @@ const TES_GB: VocabularyView = {
 			direction: 'read_only',
 			required: false,
 			vocabulary: 'closed',
-			values: ['English'],
+			values: [{ id: 'English', label: 'English' }],
 			delegation: { kind: 'by_opt_in' }
 		}
 	],
@@ -210,6 +234,37 @@ describe('the licence, which is the one required field anywhere', () => {
 
 	it('offers nothing where the platform holds no licence field', () => {
 		expect(licenceValues(TPT.authoring.licence, 'free')).toEqual([]);
+		expect(licenceOptions(TPT, 'free')).toEqual([]);
+		expect(licenceOptions(undefined, 'free')).toEqual([]);
+	});
+
+	it('names each gate id with the words the captured vocabulary holds for it', () => {
+		expect(licenceOptions(TES_GB, 'free')).toEqual([
+			{ id: 'CC-BY', label: 'Creative Commons Attribution 4.0 International licence' },
+			{
+				id: 'CC-BY-ND',
+				label: 'Creative Commons Attribution-NoDerivatives 4.0 International licence'
+			},
+			{
+				id: 'CC-BY-SA',
+				label: 'Creative Commons Attribution-ShareAlike 4.0 International licence'
+			}
+		]);
+		expect(licenceOptions(TES_GB, 'paid')).toEqual([
+			{ id: 'TES-PAID', label: 'Teaching Resource Licence' }
+		]);
+	});
+
+	it('lets a gate id the capture carries no words for stand in for itself', () => {
+		const unlabelled: VocabularyView = {
+			...TES_GB,
+			natives: TES_GB.natives.map((native) =>
+				native.name === 'licence' ? { ...native, values: undefined } : native
+			)
+		};
+		expect(licenceOptions(unlabelled, 'paid')).toEqual([
+			{ id: 'TES-PAID', label: 'TES-PAID' }
+		]);
 	});
 
 	it('reads a Tes selection as unanswered until a licence is chosen', () => {
@@ -267,9 +322,66 @@ describe('the platform field controls', () => {
 		expect(tags.vocabulary).toBe('closed_uncaptured');
 	});
 
+	it('carries the words a seller reads beside each platform token', () => {
+		const phase = axisControls(TES_GB).find((control) => control.axis === 'phase');
+		expect(phase?.values?.map((value) => `${value.id}:${value.label}`)).toEqual([
+			'1:3-5',
+			'2:5-7',
+			'3:7-11',
+			'4:11-14',
+			'5:14-16',
+			'6:16+',
+			'7:Age not applicable'
+		]);
+		const type = axisControls(TES_GB).find((control) => control.axis === 'resource_type');
+		expect(type?.values?.[0]).toEqual({ id: '99001', label: 'Assembly' });
+	});
+
 	it('states why the licence refuses delegation', () => {
 		const licence = TES_GB.natives.find((native) => native.name === 'licence');
 		expect(licence?.delegation.reason).toBe('legal_content');
+	});
+});
+
+describe('the subject picker', () => {
+	// Canonical term ids, which are the hyphenated UUIDs `subjects` carries.
+	const MATHS = '1b4d2a70-0000-4000-8000-000000000001';
+	const ENGLISH = '1b4d2a70-0000-4000-8000-000000000002';
+
+	it('adds a ticked term, in the order the seller ticked it', () => {
+		expect(toggleSubject([], MATHS, true)).toEqual([MATHS]);
+		expect(toggleSubject([MATHS], ENGLISH, true)).toEqual([MATHS, ENGLISH]);
+	});
+
+	it('removes an unticked term and leaves the rest alone', () => {
+		expect(toggleSubject([MATHS, ENGLISH], MATHS, false)).toEqual([ENGLISH]);
+		expect(toggleSubject([ENGLISH], MATHS, false)).toEqual([ENGLISH]);
+	});
+
+	it('writes a term already held once rather than twice', () => {
+		expect(toggleSubject([MATHS], MATHS, true)).toEqual([MATHS]);
+	});
+
+	it('never mutates the list it was handed', () => {
+		const chosen = [MATHS];
+		toggleSubject(chosen, ENGLISH, true);
+		expect(chosen).toEqual([MATHS]);
+	});
+
+	it('carries the chosen ids into the create body’s subjects', () => {
+		const draft = draftWith({
+			title: 'A worksheet',
+			payload: [handle('a')],
+			inventories: ['TesGb'],
+			licence: 'CC-BY',
+			subjects: [MATHS, ENGLISH]
+		});
+		expect(createBodyOf(draft, VOCABULARIES)?.subjects).toEqual([MATHS, ENGLISH]);
+	});
+
+	it('sends an empty list where none was chosen, which is what the server defaults to', () => {
+		const draft = draftWith({ title: 'A worksheet', payload: [handle('a')] });
+		expect(createBodyOf(draft, VOCABULARIES)?.subjects).toEqual([]);
 	});
 });
 

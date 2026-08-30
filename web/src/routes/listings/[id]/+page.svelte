@@ -14,7 +14,7 @@
 		editSeedOf,
 		measure,
 		patchBodyOf,
-		licenceValues,
+		licenceOptions,
 		type EditSeed
 	} from '$lib/authoring';
 	import { platformTitle } from '$lib/platforms';
@@ -118,7 +118,7 @@
 	const licenceChoices = $derived(
 		seed === null || licensing.length === 0
 			? []
-			: licenceValues(vocabularies.get(licensing[0])?.authoring.licence, seed.branch)
+			: licenceOptions(vocabularies.get(licensing[0]), seed.branch)
 	);
 	const payloadFiles = $derived(
 		(product.data?.files ?? []).filter((file) => file.role === 'payload').length
@@ -395,8 +395,8 @@
 									})}
 							>
 								<option value="">Leave as stored</option>
-								{#each licenceChoices as value (value)}
-									<option {value}>{value}</option>
+								{#each licenceChoices as choice (choice.id)}
+									<option value={choice.id}>{choice.label}</option>
 								{/each}
 							</select>
 						</label>

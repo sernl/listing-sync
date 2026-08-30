@@ -13,9 +13,6 @@
 
 	const id = $props.id();
 
-	// The platform's own ids, rendered verbatim. The registry captures the
-	// admissible values and no labels for them, so naming them here would be a
-	// second vocabulary in front of the seller that nothing keeps in step.
 	const values = $derived(control.values ?? []);
 	const overCap = $derived(control.cap !== null && chosen.length > control.cap);
 
@@ -46,8 +43,7 @@
 		<span class="hint">
 			{control.axis}, {control.multiple ? 'several' : 'one'}{control.cap === null
 				? ''
-				: `, up to ${control.cap}`} — the platform's own ids, which is all the registry
-			captures.
+				: `, up to ${control.cap}`}.
 		</span>
 		<select
 			{id}
@@ -58,8 +54,8 @@
 			{#if !control.multiple}
 				<option value="" selected={chosen.length === 0}>Not stated</option>
 			{/if}
-			{#each values as value (value)}
-				<option {value} selected={chosen.includes(value)}>{value}</option>
+			{#each values as value (value.id)}
+				<option value={value.id} selected={chosen.includes(value.id)}>{value.label}</option>
 			{/each}
 		</select>
 		<span class="hint">
