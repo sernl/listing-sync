@@ -2256,6 +2256,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-admin"
+version = "0.0.0"
+dependencies = [
+ "sqlx",
+ "tam-storage",
+ "tam-types",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "tam-analytics"
 version = "0.0.0"
 dependencies = [

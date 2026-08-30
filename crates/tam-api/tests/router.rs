@@ -41,6 +41,7 @@ fn test_state() -> AppState {
         config: Config::default(),
         wall: || Timestamp(0),
         auth: None,
+        backoffice: None,
     }
 }
 

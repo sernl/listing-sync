@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.id, o.name, o.created_at, (SELECT count(*) FROM product p WHERE p.org_id = o.id AND p.deleted_at IS NULL) AS \"products!\", (SELECT count(*) FROM mapping m WHERE m.org_id = o.id) AS \"mappings!\", (SELECT count(*) FROM connection c WHERE c.org_id = o.id) AS \"connections!\", (SELECT count(*) FROM app_user u WHERE u.org_id = o.id) AS \"users!\" FROM organisation o ORDER BY o.created_at DESC, o.id LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "products!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "mappings!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "connections!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "users!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "46f66bcd9b9b7dd8fd12de6208b5dd3ae43ce46f1228903acd3d38ebb06a304d"
+}

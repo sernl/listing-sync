@@ -7,7 +7,7 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::{header, request::Parts, StatusCode};
-use tam_storage::{NewTenant, SessionRepo, SessionToken};
+use tam_storage::{NewTenant, OperatorRepo, SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
@@ -71,6 +71,47 @@ impl FromRequestParts<AppState> for OrgContext {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, APIError> {
         resolve(parts, state).await?.ok_or_else(unauthenticated)
+    }
+}
+
+/// Who an operator request speaks for.
+///
+/// The user and no organisation, deliberately. Every route taking this
+/// extractor is org-independent, and a field naming one would be an
+/// invitation to scope a cross-tenant read by accident.
+///
+/// The marking is read from `platform_operator` on every request rather than
+/// carried in the session or asserted by a token, so a revocation takes
+/// effect on the next request rather than at the next login.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperatorContext {
+    pub user: UserId,
+}
+
+impl FromRequestParts<AppState> for OperatorContext {
+    type Rejection = APIError;
+
+    /// A caller who is not an operator is refused exactly as one with no
+    /// session at all: the same 401, the same code, the same body.
+    ///
+    /// Two reasons, and the second is the one that decides it. The session
+    /// store already answers this way — an unknown token and an expired one
+    /// are both `None`, and the caller cannot tell them apart — so this
+    /// matches the refusal the surrounding code already makes. And a distinct
+    /// 403 would turn every `/admin` route into an oracle: a seller probing
+    /// one would learn from the status alone that their session is live and
+    /// that the operator surface is real, which is precisely the pair of
+    /// facts an attacker enumerating this platform wants confirmed.
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, APIError> {
+        let context = resolve(parts, state).await?.ok_or_else(unauthenticated)?;
+        let active = OperatorRepo::new(state.pool.clone())
+            .is_active(context.user)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?;
+        if !active {
+            return Err(unauthenticated());
+        }
+        Ok(Self { user: context.user })
     }
 }
 

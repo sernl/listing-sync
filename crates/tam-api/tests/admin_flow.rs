@@ -1,0 +1,597 @@
+//! The operator surface over the wire: what an operator reads, what everyone
+//! else is told, and what a deployment without a backoffice database answers.
+//!
+//! The severity of this file is in its negatives. Two tenants exist, and the
+//! seller session belonging to one of them must be refused on every operator
+//! route with the same body an anonymous caller gets -- if a non-operator ever
+//! learned the difference between "your session is dead" and "you are not an
+//! operator", `/admin` would be an oracle telling an attacker both that their
+//! session is live and that the operator surface is real.
+
+#![cfg(feature = "pg-tests")]
+
+use axum::{
+    body::Body,
+    http::{header, Request, StatusCode},
+};
+use http_body_util::BodyExt;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use tam_api::admin::{FailedWritesView, OrgDetailView, OrgsView, SignupsView, SyncHealthView};
+use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
+use tam_storage::{OperatorRepo, SessionRepo, SessionToken};
+use tam_types::{OrgId, Timestamp, UserId, Uuid};
+use tower::ServiceExt;
+
+const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
+const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
+const USER_OPERATOR: UserId = UserId(Uuid([0x0A; 16]));
+const USER_SELLER: UserId = UserId(Uuid([0x0B; 16]));
+const TOKEN_OPERATOR: SessionToken = SessionToken([0x41; 32]);
+const TOKEN_SELLER: SessionToken = SessionToken([0x42; 32]);
+const NOW: Timestamp = Timestamp(5_000);
+
+/// Every operator route, with the organisation path already concrete. Used
+/// whole by the refusal tests, so a route added to the router and forgotten
+/// here is a gap a reviewer can see rather than one the suite hides.
+const ADMIN_PATHS: [&str; 5] = [
+    "/v1/admin/signups",
+    "/v1/admin/orgs",
+    "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "/v1/admin/sync-health",
+    "/v1/admin/failed-writes",
+];
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn backoffice_pool(app: &PgPool) -> PgPool {
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(app)
+        .await
+        .expect("the test database names itself");
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&format!(
+            "postgres://tam_backoffice:tam_backoffice_dev@127.0.0.1:5433/{database}"
+        ))
+        .await
+        .expect("the backoffice role connects")
+}
+
+fn state(pool: PgPool, backoffice: Option<PgPool>) -> AppState {
+    AppState {
+        pool,
+        config: Config::default(),
+        wall: || NOW,
+        auth: None,
+        backoffice,
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+/// Runs a group of fixture statements under one tenant pin in one
+/// transaction. A group rather than a statement: the catalogue's payload
+/// assertion is a deferred constraint trigger, so a product and the file that
+/// satisfies it must land together or the commit refuses them both.
+async fn pinned(pool: &PgPool, org: OrgId, statements: &[String]) {
+    let mut tx = pool.begin().await.expect("the fixture transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    for sql in statements {
+        sqlx::query(sql)
+            .bind(uuid::Uuid::from_bytes(org.0 .0))
+            .execute(&mut *tx)
+            .await
+            .expect("the fixture row inserts");
+    }
+    tx.commit().await.expect("the fixture transaction commits");
+}
+
+/// Two tenants, each carrying one of everything the operator surface reads,
+/// plus a seller session in one of them and an operator session in the other.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn provision(pool: &PgPool) {
+    for (org, name) in [(ORG_A, "org-a"), (ORG_B, "org-b")] {
+        sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
+            .bind(uuid::Uuid::from_bytes(org.0 .0))
+            .bind(name)
+            .execute(pool)
+            .await
+            .expect("the org seeds");
+    }
+    let sessions = SessionRepo::new(pool.clone());
+    for (org, user, email, token) in [
+        (
+            ORG_A,
+            USER_OPERATOR,
+            "operator@example.test",
+            TOKEN_OPERATOR,
+        ),
+        (ORG_B, USER_SELLER, "seller@example.test", TOKEN_SELLER),
+    ] {
+        sessions
+            .create_user(org, user, email, Timestamp(1_000))
+            .await
+            .expect("the user provisions");
+        sessions
+            .mint(&token, user, Timestamp(100_000), Timestamp(1_000))
+            .await
+            .expect("the session mints");
+    }
+
+    for (org, product, mapping, job, item, attempt) in [
+        (ORG_A, 0x11u8, 0x21u8, 0x31u8, 0x41u8, 0x51u8),
+        (ORG_B, 0x12, 0x22, 0x32, 0x42, 0x52),
+    ] {
+        let id = |byte: u8| uuid::Uuid::from_bytes([byte; 16]).to_string();
+        pinned(
+            pool,
+            org,
+            &[
+                format!(
+                    "INSERT INTO blob (org_id, hash, byte_len, object_key, dek_key_version, \
+                         first_seen_at) \
+                     VALUES ($1, '\\x{product:02x}'::bytea, 4, 'fixture', 1, now())"
+                ),
+                format!(
+                    "INSERT INTO product (org_id, id, title, body, body_format, price_kind, \
+                         rights_state, created_at, updated_at) \
+                     VALUES ($1, '{}', 'fixture', 'body', 'markdown', 'free', 'unstated', \
+                         now(), now())",
+                    id(product)
+                ),
+                format!(
+                    "INSERT INTO product_file (org_id, id, product_id, position, role, kind, \
+                         hash, scan_state, created_at) \
+                     VALUES ($1, '{}', '{}', 0, 'payload', 'pdf', '\\x{product:02x}'::bytea, \
+                         'pending', now())",
+                    id(product.wrapping_add(0x70)),
+                    id(product)
+                ),
+            ],
+        )
+        .await;
+        pinned(
+            pool,
+            org,
+            &[format!(
+                "INSERT INTO mapping (org_id, id, product_id, inventory, marketplace, \
+                     binding_state, verify_state, normaliser_version, policy_title, \
+                     policy_description, policy_price, policy_taxonomy, policy_grades, \
+                     policy_files, price_rule_kind, price_explicit_kind, publish_mode, \
+                     lifecycle_state, created_at, updated_at) \
+                 VALUES ($1, '{}', '{}', 'tes_nz', 'tes', 'unbound', 'stale', 1, \
+                     'managed', 'managed', 'managed', 'managed', 'managed', 'managed', \
+                     'explicit', 'free', 'dry_run', 'absent', now(), now())",
+                id(mapping),
+                id(product)
+            )],
+        )
+        .await;
+        pinned(
+            pool,
+            org,
+            &[format!(
+                "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+                 VALUES ($1, '{}', 'tes', 'linked', now(), now())",
+                id(product.wrapping_add(0x60))
+            )],
+        )
+        .await;
+        pinned(
+            pool,
+            org,
+            &[format!(
+                "INSERT INTO job (org_id, id, inventory, marketplace, created_at, actor_kind) \
+                 VALUES ($1, '{}', 'tes_nz', 'tes', now(), 'system')",
+                id(job)
+            )],
+        )
+        .await;
+        pinned(
+            pool,
+            org,
+            &[format!(
+                "INSERT INTO job_item (org_id, id, job_id, mapping_id, idempotency_key, state, \
+                     operation, outcome, failure_code, failure_detail, settled_at, created_at) \
+                 VALUES ($1, '{}', '{}', '{}', gen_random_uuid(), 'settled', 'create', \
+                     'failed', 'Other', 'the fixture failure', now(), now())",
+                id(item),
+                id(job),
+                id(mapping)
+            )],
+        )
+        .await;
+        pinned(
+            pool,
+            org,
+            &[format!(
+                "INSERT INTO write_attempt (org_id, id, job_item_id, mapping_id, lease_epoch, \
+                     intent, intent_hash, state, opened_at, settled_at, failure_code, \
+                     actor_kind) \
+                 VALUES ($1, '{}', '{}', '{}', 0, '{{}}'::jsonb, '\\x00'::bytea, 'settled', \
+                     now(), now(), 'Other', 'system')",
+                id(attempt),
+                id(item),
+                id(mapping)
+            )],
+        )
+        .await;
+    }
+
+    pinned(
+        pool,
+        ORG_B,
+        &[
+            "INSERT INTO org_halt (org_id, raised_by, reason, raised_at) \
+             VALUES ($1, 'founder', 'a fixture halt', now())"
+                .to_owned(),
+        ],
+    )
+    .await;
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn grant_operator(pool: &PgPool) {
+    OperatorRepo::new(pool.clone())
+        .grant(USER_OPERATOR, "the test fixture", NOW)
+        .await
+        .expect("the operator marking lands");
+}
+
+struct Answer {
+    status: StatusCode,
+    body: Vec<u8>,
+}
+
+impl Answer {
+    #[expect(
+        clippy::expect_used,
+        reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+    )]
+    fn json<T: serde::de::DeserializeOwned>(&self) -> T {
+        serde_json::from_slice(&self.body).expect("the answer body parses")
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn call(
+    pool: PgPool,
+    backoffice: Option<PgPool>,
+    path: &str,
+    token: Option<&SessionToken>,
+) -> Answer {
+    let request = Request::builder().uri(path);
+    let request = match token {
+        Some(token) => request.header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        ),
+        None => request,
+    };
+    let response = router(state(pool, backoffice))
+        .oneshot(request.body(Body::empty()).expect("the request builds"))
+        .await
+        .expect("the router serves");
+    let status = response.status();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes()
+        .to_vec();
+    Answer { status, body }
+}
+
+fn assert_blank_refusal(answer: &Answer, what: &str) {
+    assert_eq!(
+        answer.status,
+        StatusCode::UNAUTHORIZED,
+        "{what} must be refused with 401"
+    );
+    let error: APIError = answer.json();
+    assert_eq!(
+        (error.errors[0].code, error.errors[0].kind),
+        (
+            Some(APIErrorCode::SessionRequired),
+            Some(APIErrorKind::Unauthenticated)
+        ),
+        "{what} must be refused in exactly the words an anonymous caller gets, \
+         so the status cannot be read as an answer about who is an operator"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operator_reads_every_tenant_from_one_request(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/orgs",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "the operator is admitted");
+    let view: OrgsView = answer.json();
+    assert_eq!(
+        view.orgs.len(),
+        2,
+        "both tenants appear in one unpinned listing"
+    );
+    for org in &view.orgs {
+        assert_eq!(
+            (org.products, org.mappings, org.connections, org.users),
+            (1, 1, 1, 1),
+            "{} carries the fenced rows seeded under it, counted across the fence",
+            org.name
+        );
+    }
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_ledger_aggregate_spans_tenants(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/sync-health",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: SyncHealthView = answer.json();
+    assert_eq!(view.jobs, 2, "one job under each tenant");
+    assert_eq!(
+        (view.items, view.settled, view.failed),
+        (2, 2, 2),
+        "the item counts are the sum over tenants, in the stored state vocabulary"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn failed_writes_carry_both_tenants_with_the_owning_item(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/failed-writes",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: FailedWritesView = answer.json();
+    assert_eq!(view.writes.len(), 2, "one failed attempt under each tenant");
+    let mut orgs: Vec<OrgId> = view.writes.iter().map(|write| write.org).collect();
+    orgs.sort_by_key(|org| org.0 .0);
+    assert_eq!(orgs, vec![ORG_A, ORG_B], "both tenants are represented");
+    for write in &view.writes {
+        assert_eq!(
+            write.item_failure_detail.as_deref(),
+            Some("the fixture failure"),
+            "the owning item's detail travels beside the attempt's own code"
+        );
+    }
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn one_organisation_renders_its_connections_and_halts(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/orgs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: OrgDetailView = answer.json();
+    assert_eq!(view.org.org, ORG_B, "the organisation the path named");
+    assert_eq!(view.connections.len(), 1, "its one connection is rendered");
+    assert_eq!(
+        view.connections[0].state, "linked",
+        "the stored link state travels beside the derived status"
+    );
+    assert_eq!(view.halts.len(), 1, "its tenant-wide halt is rendered");
+    assert!(
+        view.halts[0].inventory.is_none(),
+        "a halt with no inventory is the tenant-wide one"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_organisation_nobody_holds_is_a_structured_not_found(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/orgs/cccccccc-cccc-cccc-cccc-cccccccccccc",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::NOT_FOUND,
+        "an operator asking after an organisation that does not exist is told so"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn signups_omit_the_identity_series_where_that_schema_is_absent(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/signups",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: SignupsView = answer.json();
+    assert!(
+        view.identity.is_none(),
+        "a database carrying no identity schema reports no identity series at all, \
+         rather than a zero that would read as nobody having signed up"
+    );
+    assert_eq!(
+        view.provisioned.iter().map(|day| day.count).sum::<i64>(),
+        2,
+        "both provisioned users are counted from app_user"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn signups_carry_the_identity_series_where_that_schema_is_present(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    // A stand-in for db/auth/0002_audit_event.sql, which a throwaway test
+    // database does not carry: those files are applied by `just auth-migrate`
+    // as tam_auth, and this crate's migrations are the only DDL sqlx::test
+    // runs. Only the two columns this read names are reproduced.
+    for statement in [
+        "CREATE SCHEMA auth",
+        "CREATE TABLE auth.auth_event (event text NOT NULL, at timestamptz NOT NULL)",
+        "INSERT INTO auth.auth_event (event, at) VALUES \
+         ('user_signed_up', now()), ('user_signed_up', now()), ('user_signed_in', now())",
+    ] {
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .expect("the identity stand-in builds");
+    }
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/signups",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: SignupsView = answer.json();
+    let identity = view.identity.expect("the identity series is present");
+    assert_eq!(
+        identity.iter().map(|day| day.count).sum::<i64>(),
+        2,
+        "only signup events are counted; the sign-in beside them is not one"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn every_admin_route_refuses_a_seller_and_an_anonymous_caller(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+
+    for path in ADMIN_PATHS {
+        let backoffice = backoffice_pool(&pool).await;
+        let seller = call(
+            pool.clone(),
+            Some(backoffice.clone()),
+            path,
+            Some(&TOKEN_SELLER),
+        )
+        .await;
+        assert_blank_refusal(&seller, &format!("a seller's live session on {path}"));
+
+        let anonymous = call(pool.clone(), Some(backoffice), path, None).await;
+        assert_blank_refusal(&anonymous, &format!("an anonymous request to {path}"));
+        assert_eq!(
+            seller.body, anonymous.body,
+            "the two refusals on {path} must be byte-identical, or the difference \
+             is itself the answer a prober wanted"
+        );
+    }
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_revoked_operator_is_refused_on_the_very_next_request(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let admitted = call(
+        pool.clone(),
+        Some(backoffice.clone()),
+        "/v1/admin/orgs",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(admitted.status, StatusCode::OK, "the grant admits");
+
+    let withdrawn = OperatorRepo::new(pool.clone())
+        .revoke(USER_OPERATOR, NOW)
+        .await;
+    assert_eq!(
+        withdrawn.ok(),
+        Some(true),
+        "there was an active grant to withdraw"
+    );
+
+    let refused = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/orgs",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_blank_refusal(
+        &refused,
+        "a revoked operator holding the same live session cookie",
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_deployment_without_a_backoffice_database_refuses_every_route(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+
+    for path in ADMIN_PATHS {
+        let operator = call(pool.clone(), None, path, Some(&TOKEN_OPERATOR)).await;
+        assert_eq!(
+            operator.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{path} refuses cleanly rather than serving half a surface"
+        );
+        // The order matters more than the status: a seller must still be
+        // refused by the operator check, which runs first, so an unconfigured
+        // deployment does not become a way to learn who is an operator.
+        let seller = call(pool.clone(), None, path, Some(&TOKEN_SELLER)).await;
+        assert_blank_refusal(&seller, &format!("a seller on unconfigured {path}"));
+    }
+}

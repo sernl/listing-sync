@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inventory, reason, raised_by, raised_at FROM org_inventory_halt WHERE org_id = $1 ORDER BY inventory",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "raised_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "raised_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "70a4b375a3675aff439f33ef33b79d9c1b7ee4663f8435188bfe0c1505016904"
+}

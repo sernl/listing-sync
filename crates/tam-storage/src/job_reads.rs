@@ -55,7 +55,7 @@ impl ItemStateKind {
         }
     }
 
-    fn from_db(raw: &str) -> Result<Self, StorageError> {
+    pub(crate) fn from_db(raw: &str) -> Result<Self, StorageError> {
         match raw {
             "queued" => Ok(Self::Queued),
             "leased" => Ok(Self::Leased),
@@ -72,7 +72,7 @@ impl ItemStateKind {
     }
 }
 
-fn item_outcome_from_db(raw: &str) -> Result<ItemOutcome, StorageError> {
+pub(crate) fn item_outcome_from_db(raw: &str) -> Result<ItemOutcome, StorageError> {
     match raw {
         "succeeded" => Ok(ItemOutcome::Succeeded),
         "degraded" => Ok(ItemOutcome::Degraded),
@@ -151,6 +151,41 @@ pub struct EventRow {
     pub kind: String,
     pub payload: serde_json::Value,
     pub created_at: Timestamp,
+}
+
+/// Folds one `GROUP BY state, outcome` row into the roll-up.
+///
+/// Shared by the per-job snapshot and the cross-tenant aggregate the operator
+/// surface reads, so the two cannot disagree about which stored state feeds
+/// which counter.
+pub(crate) fn add_item_group(
+    counts: &mut ItemCounts,
+    state: &str,
+    outcome: Option<&str>,
+    n: u64,
+) -> Result<(), StorageError> {
+    counts.total += n;
+    match ItemStateKind::from_db(state)? {
+        ItemStateKind::Queued => counts.queued += n,
+        ItemStateKind::Leased => counts.leased += n,
+        ItemStateKind::Running => counts.running += n,
+        ItemStateKind::Blocked => counts.blocked += n,
+        ItemStateKind::ParkedLive => counts.parked_live += n,
+        ItemStateKind::ParkedCold => counts.parked_cold += n,
+        ItemStateKind::Verifying => counts.verifying += n,
+        ItemStateKind::Settled => counts.settled += n,
+    }
+    if let Some(outcome) = outcome {
+        match item_outcome_from_db(outcome)? {
+            ItemOutcome::Succeeded => counts.succeeded += n,
+            ItemOutcome::Degraded => counts.degraded += n,
+            ItemOutcome::Failed => counts.failed += n,
+            ItemOutcome::Ambiguous => counts.ambiguous += n,
+            ItemOutcome::Skipped => counts.skipped += n,
+            ItemOutcome::Blocked => counts.outcome_blocked += n,
+        }
+    }
+    Ok(())
 }
 
 pub struct JobReadRepo {
@@ -235,28 +270,12 @@ impl JobReadRepo {
 
         let mut counts = ItemCounts::default();
         for group in groups {
-            let n = u64::try_from(group.count).unwrap_or(0);
-            counts.total += n;
-            match ItemStateKind::from_db(&group.state)? {
-                ItemStateKind::Queued => counts.queued += n,
-                ItemStateKind::Leased => counts.leased += n,
-                ItemStateKind::Running => counts.running += n,
-                ItemStateKind::Blocked => counts.blocked += n,
-                ItemStateKind::ParkedLive => counts.parked_live += n,
-                ItemStateKind::ParkedCold => counts.parked_cold += n,
-                ItemStateKind::Verifying => counts.verifying += n,
-                ItemStateKind::Settled => counts.settled += n,
-            }
-            if let Some(outcome) = group.outcome.as_deref() {
-                match item_outcome_from_db(outcome)? {
-                    ItemOutcome::Succeeded => counts.succeeded += n,
-                    ItemOutcome::Degraded => counts.degraded += n,
-                    ItemOutcome::Failed => counts.failed += n,
-                    ItemOutcome::Ambiguous => counts.ambiguous += n,
-                    ItemOutcome::Skipped => counts.skipped += n,
-                    ItemOutcome::Blocked => counts.outcome_blocked += n,
-                }
-            }
+            add_item_group(
+                &mut counts,
+                &group.state,
+                group.outcome.as_deref(),
+                u64::try_from(group.count).unwrap_or(0),
+            )?;
         }
         Ok(Some(JobSnapshot {
             job,

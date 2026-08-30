@@ -113,7 +113,9 @@ db-prepare:
     cd crates/tam-storage && SQLX_OFFLINE=false DATABASE_URL={{db_url}} cargo sqlx prepare
 
 # Assert the committed offline query metadata matches the source, so schema
-# drift fails here rather than at the first request
+# drift fails here rather than at the first request. Needs both migration
+# sets applied (db-migrate and auth-migrate): the metadata covers a query
+# on auth.auth_event, the admin surface's signups read
 db-verify:
     cd crates/tam-storage && SQLX_OFFLINE=false DATABASE_URL={{db_url}} cargo sqlx prepare --check
 

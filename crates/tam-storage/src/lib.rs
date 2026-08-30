@@ -11,6 +11,7 @@
 
 pub mod analytics;
 pub mod authorship;
+pub mod backoffice;
 pub mod blobs;
 mod codec;
 pub mod connections;
@@ -18,6 +19,7 @@ pub mod job_reads;
 pub mod jobs;
 pub mod lowering;
 mod mapping;
+pub mod operators;
 pub mod org;
 mod product;
 pub mod pruning;
@@ -26,6 +28,10 @@ pub mod taxonomy;
 
 pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
+pub use backoffice::{
+    BackofficeRepo, DailyCount, FailedWrite, HaltRecord, OrgDetail, OrgSummary, SignupsRepo,
+    SyncHealth,
+};
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,
@@ -47,6 +53,7 @@ pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{BoundListing, LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
+pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};

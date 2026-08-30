@@ -1,0 +1,372 @@
+//! The operator backoffice's reads: the whole platform rather than one
+//! tenant.
+//!
+//! [`BackofficeRepo`] runs on a pool connected as `tam_backoffice`, whose
+//! reach is the grant list and the read policies of migration 0037 and
+//! nothing else. It pins no organisation, deliberately -- the pin is what
+//! makes the application's own pool a tenant fence, and every query here
+//! exists precisely to aggregate across tenants. Nothing here writes, and the
+//! role holds no privilege that would let it.
+//!
+//! [`SignupsRepo`] is the exception and runs on the application pool, because
+//! everything it reads is global already: `app_user` carries no policy, and
+//! `auth.auth_event` is the one object in the identity schema `tam_app` holds
+//! SELECT on.
+
+use sqlx::PgPool;
+use tam_domain::JobItemId;
+use tam_types::{
+    connection_status, ConnectionHealth, ConnectionId, ConnectionState, FailureCode, InventoryId,
+    MappingId, OrgId, Timestamp, Uuid,
+};
+
+use crate::codec::{
+    failure_code_from_db, inventory_from_db, timestamp_from_db, uuid_from_db, uuid_to_db,
+};
+use crate::connections::{marketplace_from_db, ConnectionRow};
+use crate::job_reads::add_item_group;
+use crate::{ItemCounts, StorageError};
+
+/// How many rows a signup series or a failure listing may carry back. A bound
+/// on one caller's own answer rather than a shared resource, so it lives here
+/// beside the query rather than in `tam-limits`.
+const MAX_ROWS: i64 = 500;
+
+/// One day and what was counted on it. The instant is the day's start in UTC,
+/// which is what `date_trunc` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DailyCount {
+    pub day: Timestamp,
+    pub count: i64,
+}
+
+/// Signups from both planes, read on the application pool.
+pub struct SignupsRepo {
+    pool: PgPool,
+}
+
+impl SignupsRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// App-side provisioning per day: one row per `app_user`, which the
+    /// session exchange writes on a subject's first login.
+    pub async fn provisioned_by_day(&self) -> Result<Vec<DailyCount>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT date_trunc('day', created_at) AS \"day!\", count(*) AS \"count!\" \
+             FROM app_user GROUP BY 1 ORDER BY 1 DESC LIMIT $1",
+            MAX_ROWS,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| DailyCount {
+                day: timestamp_from_db(row.day),
+                count: row.count,
+            })
+            .collect())
+    }
+
+    /// Identity-plane signups per day, or `None` where the identity schema is
+    /// not present in this database.
+    ///
+    /// The two DDL sets are applied by separate commands against separate
+    /// roles -- `just db-migrate` for `crates/tam-storage/migrations` and
+    /// `just auth-migrate` for `db/auth` -- so a database can legitimately
+    /// hold one and not the other. Answering zero there would report "nobody
+    /// signed up" for what is really "this database cannot see the identity
+    /// audit trail", and those are the two readings an operator looking at an
+    /// empty chart needs told apart.
+    pub async fn identity_by_day(&self) -> Result<Option<Vec<DailyCount>>, StorageError> {
+        let present =
+            sqlx::query!("SELECT to_regclass('auth.auth_event') IS NOT NULL AS \"present!\"",)
+                .fetch_one(&self.pool)
+                .await?
+                .present;
+        if !present {
+            return Ok(None);
+        }
+        let rows = sqlx::query!(
+            "SELECT date_trunc('day', at) AS \"day!\", count(*) AS \"count!\" \
+             FROM auth.auth_event WHERE event = 'user_signed_up' \
+             GROUP BY 1 ORDER BY 1 DESC LIMIT $1",
+            MAX_ROWS,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|row| DailyCount {
+                    day: timestamp_from_db(row.day),
+                    count: row.count,
+                })
+                .collect(),
+        ))
+    }
+}
+
+/// One organisation and what it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgSummary {
+    pub org: OrgId,
+    pub name: String,
+    pub created_at: Timestamp,
+    pub products: i64,
+    pub mappings: i64,
+    pub connections: i64,
+    pub users: i64,
+}
+
+/// A tenant-wide halt as recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HaltRecord {
+    pub inventory: Option<InventoryId>,
+    pub reason: String,
+    pub raised_by: String,
+    pub raised_at: Timestamp,
+}
+
+/// One organisation rendered whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgDetail {
+    pub summary: OrgSummary,
+    pub connections: Vec<ConnectionRow>,
+    pub halts: Vec<HaltRecord>,
+}
+
+/// The ledger across every tenant: how many jobs exist, and their items by
+/// state with the settled outcomes beside them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncHealth {
+    pub jobs: i64,
+    pub items: ItemCounts,
+}
+
+/// One failed write attempt, with the item that owns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedWrite {
+    pub org: OrgId,
+    pub attempt: Uuid,
+    pub item: JobItemId,
+    pub mapping: MappingId,
+    pub state: String,
+    pub opened_at: Timestamp,
+    pub settled_at: Option<Timestamp>,
+    pub failure_code: FailureCode,
+    pub ambiguity_cause: Option<String>,
+    pub item_failure_code: Option<FailureCode>,
+    pub item_failure_detail: Option<String>,
+}
+
+pub struct BackofficeRepo {
+    pool: PgPool,
+}
+
+impl BackofficeRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Every organisation with its per-tenant counts, newest first.
+    ///
+    /// One query rather than a listing plus a count per tenant, which is what
+    /// the grant on `organisation` and `app_user` buys: both are readable
+    /// across tenants by the application role already, so naming them here
+    /// moves an existing read onto this connection instead of reaching
+    /// anything new.
+    pub async fn orgs(&self) -> Result<Vec<OrgSummary>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT o.id, o.name, o.created_at, \
+                    (SELECT count(*) FROM product p \
+                      WHERE p.org_id = o.id AND p.deleted_at IS NULL) AS \"products!\", \
+                    (SELECT count(*) FROM mapping m WHERE m.org_id = o.id) AS \"mappings!\", \
+                    (SELECT count(*) FROM connection c WHERE c.org_id = o.id) AS \"connections!\", \
+                    (SELECT count(*) FROM app_user u WHERE u.org_id = o.id) AS \"users!\" \
+             FROM organisation o ORDER BY o.created_at DESC, o.id LIMIT $1",
+            MAX_ROWS,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| OrgSummary {
+                org: OrgId(uuid_from_db(row.id)),
+                name: row.name,
+                created_at: timestamp_from_db(row.created_at),
+                products: row.products,
+                mappings: row.mappings,
+                connections: row.connections,
+                users: row.users,
+            })
+            .collect())
+    }
+
+    /// One organisation: its counts, its connections carrying the same
+    /// derived status the seller's own page renders, and its halts.
+    pub async fn org(&self, org: OrgId, now: Timestamp) -> Result<Option<OrgDetail>, StorageError> {
+        let Some(head) = sqlx::query!(
+            "SELECT o.id, o.name, o.created_at, \
+                    (SELECT count(*) FROM product p \
+                      WHERE p.org_id = o.id AND p.deleted_at IS NULL) AS \"products!\", \
+                    (SELECT count(*) FROM mapping m WHERE m.org_id = o.id) AS \"mappings!\", \
+                    (SELECT count(*) FROM connection c WHERE c.org_id = o.id) AS \"connections!\", \
+                    (SELECT count(*) FROM app_user u WHERE u.org_id = o.id) AS \"users!\" \
+             FROM organisation o WHERE o.id = $1",
+            uuid_to_db(org.0),
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Ok(None);
+        };
+
+        let connection_rows = sqlx::query!(
+            "SELECT id, marketplace, state, created_at, updated_at, \
+                    session_verified_at, session_refresh_after, refresh_failures \
+             FROM connection WHERE org_id = $1 ORDER BY marketplace",
+            uuid_to_db(org.0),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let connections = connection_rows
+            .into_iter()
+            .map(|row| {
+                let state = ConnectionState::from_db(&row.state).ok_or_else(|| {
+                    StorageError::CorruptRow {
+                        reason: format!("unknown connection state {:?}", row.state),
+                    }
+                })?;
+                let status = connection_status(
+                    &ConnectionHealth {
+                        state,
+                        session_verified_at: row.session_verified_at.map(timestamp_from_db),
+                        session_refresh_after: row.session_refresh_after.map(timestamp_from_db),
+                        refresh_failures: row.refresh_failures,
+                    },
+                    now,
+                );
+                Ok(ConnectionRow {
+                    id: ConnectionId(uuid_from_db(row.id)),
+                    marketplace: marketplace_from_db(&row.marketplace)?,
+                    state: row.state,
+                    created_at: timestamp_from_db(row.created_at),
+                    updated_at: timestamp_from_db(row.updated_at),
+                    status,
+                })
+            })
+            .collect::<Result<Vec<_>, StorageError>>()?;
+
+        let tenant_halt = sqlx::query!(
+            "SELECT reason, raised_by, raised_at FROM org_halt WHERE org_id = $1",
+            uuid_to_db(org.0),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        let inventory_halts = sqlx::query!(
+            "SELECT inventory, reason, raised_by, raised_at FROM org_inventory_halt \
+             WHERE org_id = $1 ORDER BY inventory",
+            uuid_to_db(org.0),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut halts = Vec::with_capacity(inventory_halts.len() + 1);
+        if let Some(row) = tenant_halt {
+            halts.push(HaltRecord {
+                inventory: None,
+                reason: row.reason,
+                raised_by: row.raised_by,
+                raised_at: timestamp_from_db(row.raised_at),
+            });
+        }
+        for row in inventory_halts {
+            halts.push(HaltRecord {
+                inventory: Some(inventory_from_db(&row.inventory)?),
+                reason: row.reason,
+                raised_by: row.raised_by,
+                raised_at: timestamp_from_db(row.raised_at),
+            });
+        }
+
+        Ok(Some(OrgDetail {
+            summary: OrgSummary {
+                org: OrgId(uuid_from_db(head.id)),
+                name: head.name,
+                created_at: timestamp_from_db(head.created_at),
+                products: head.products,
+                mappings: head.mappings,
+                connections: head.connections,
+                users: head.users,
+            },
+            connections,
+            halts,
+        }))
+    }
+
+    /// The ledger's shape across every tenant. Raw counts, never a scalar
+    /// verdict, for the reason the per-job roll-up gives: a health figure
+    /// that collapses states hides the one that matters.
+    pub async fn sync_health(&self) -> Result<SyncHealth, StorageError> {
+        let jobs = sqlx::query!("SELECT count(*) AS \"jobs!\" FROM job")
+            .fetch_one(&self.pool)
+            .await?
+            .jobs;
+        let groups = sqlx::query!(
+            "SELECT state, outcome, count(*) AS \"count!\" FROM job_item GROUP BY state, outcome",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut items = ItemCounts::default();
+        for group in groups {
+            add_item_group(
+                &mut items,
+                &group.state,
+                group.outcome.as_deref(),
+                u64::try_from(group.count).unwrap_or(0),
+            )?;
+        }
+        Ok(SyncHealth { jobs, items })
+    }
+
+    /// Write attempts that recorded a failure, newest first, across tenants.
+    pub async fn failed_writes(&self, limit: i64) -> Result<Vec<FailedWrite>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT w.org_id, w.id, w.job_item_id, w.mapping_id, w.state, \
+                    w.opened_at, w.settled_at, w.failure_code AS \"failure_code!\", \
+                    w.ambiguity_cause, i.failure_code AS item_failure_code, \
+                    i.failure_detail AS item_failure_detail \
+             FROM write_attempt w \
+             JOIN job_item i ON i.org_id = w.org_id AND i.id = w.job_item_id \
+             WHERE w.failure_code IS NOT NULL \
+             ORDER BY w.opened_at DESC, w.id DESC LIMIT $1",
+            limit.clamp(1, MAX_ROWS),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(FailedWrite {
+                    org: OrgId(uuid_from_db(row.org_id)),
+                    attempt: uuid_from_db(row.id),
+                    item: JobItemId(uuid_from_db(row.job_item_id)),
+                    mapping: MappingId(uuid_from_db(row.mapping_id)),
+                    state: row.state,
+                    opened_at: timestamp_from_db(row.opened_at),
+                    settled_at: row.settled_at.map(timestamp_from_db),
+                    failure_code: failure_code_from_db(&row.failure_code)?,
+                    ambiguity_cause: row.ambiguity_cause,
+                    item_failure_code: row
+                        .item_failure_code
+                        .as_deref()
+                        .map(failure_code_from_db)
+                        .transpose()?,
+                    item_failure_detail: row.item_failure_detail,
+                })
+            })
+            .collect()
+    }
+}

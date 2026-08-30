@@ -133,6 +133,7 @@ fn state(pool: PgPool, auth: Option<Arc<AuthBridge>>) -> AppState {
         config: Config::default(),
         wall: now,
         auth,
+        backoffice: None,
     }
 }
 

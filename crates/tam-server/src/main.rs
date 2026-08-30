@@ -5,7 +5,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--backoffice-db-url <url>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -39,6 +39,13 @@ const BROKER_FLAG: &str = "--broker-socket";
 /// row-level security would show them an empty database. Absent, this process
 /// only serves.
 const ENGINE_DB_FLAG: &str = "--engine-db-url";
+
+/// The backoffice-role url the operator surface reads on. That role is
+/// SELECT-only and its reach is enumerated table by table in migration 0037,
+/// so it can aggregate across tenants without holding any privilege that
+/// would let a wrong predicate write one. Absent, every `/admin` route
+/// refuses: a deployment serves the operator surface or it does not.
+const BACKOFFICE_DB_FLAG: &str = "--backoffice-db-url";
 
 /// The built client directory, served as the router's fallback so the API
 /// and the UI share one origin; unknown paths fall through to index.html,
@@ -201,11 +208,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => None,
     };
+    let backoffice = match &invocation.backoffice_db_url {
+        Some(url) => {
+            eprintln!("tam-server serving the operator backoffice");
+            Some(
+                sqlx::postgres::PgPoolOptions::new()
+                    .max_connections(2)
+                    .connect(url)
+                    .await?,
+            )
+        }
+        None => None,
+    };
     let state = AppState {
         pool,
         config: invocation.config.clone(),
         wall: wall_now,
         auth,
+        backoffice,
     };
 
     let listener = tokio::net::TcpListener::bind(invocation.bind).await?;
@@ -262,6 +282,7 @@ struct Invocation {
     bind: SocketAddr,
     config: Config,
     engine_db_url: Option<String>,
+    backoffice_db_url: Option<String>,
     ui_dir: Option<std::path::PathBuf>,
     /// The issuer and the key-set url, which are meaningless apart and so are
     /// parsed as one value.
@@ -276,6 +297,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut positional = Vec::new();
     let mut config = Config::default();
     let mut engine_db_url = None;
+    let mut backoffice_db_url = None;
     let mut ui_dir = None;
     let mut auth_issuer = None;
     let mut auth_jwks_url = None;
@@ -293,6 +315,12 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                 arguments
                     .next()
                     .ok_or("--engine-db-url needs a url argument")?,
+            );
+        } else if argument == BACKOFFICE_DB_FLAG {
+            backoffice_db_url = Some(
+                arguments
+                    .next()
+                    .ok_or("--backoffice-db-url needs a url argument")?,
             );
         } else if argument == UI_FLAG {
             ui_dir = Some(std::path::PathBuf::from(
@@ -340,6 +368,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         bind,
         config,
         engine_db_url,
+        backoffice_db_url,
         ui_dir,
         identity,
     })

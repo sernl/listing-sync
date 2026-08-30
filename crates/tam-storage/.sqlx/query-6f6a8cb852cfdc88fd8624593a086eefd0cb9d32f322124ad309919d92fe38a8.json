@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform_operator (user_id, granted_at, granted_by) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO UPDATE SET granted_at = EXCLUDED.granted_at, granted_by = EXCLUDED.granted_by, revoked_at = NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6f6a8cb852cfdc88fd8624593a086eefd0cb9d32f322124ad309919d92fe38a8"
+}

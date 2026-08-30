@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT w.org_id, w.id, w.job_item_id, w.mapping_id, w.state, w.opened_at, w.settled_at, w.failure_code AS \"failure_code!\", w.ambiguity_cause, i.failure_code AS item_failure_code, i.failure_detail AS item_failure_detail FROM write_attempt w JOIN job_item i ON i.org_id = w.org_id AND i.id = w.job_item_id WHERE w.failure_code IS NOT NULL ORDER BY w.opened_at DESC, w.id DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "job_item_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "opened_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "settled_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "failure_code!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "ambiguity_cause",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "item_failure_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "item_failure_detail",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f897d910730345b7b135e533e92f6855cd80a000288259255119b6578de89b17"
+}

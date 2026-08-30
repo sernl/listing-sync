@@ -47,6 +47,7 @@ fn state_with(pool: PgPool, config: Config) -> AppState {
         config,
         wall: || NOW,
         auth: None,
+        backoffice: None,
     }
 }
 

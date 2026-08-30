@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT date_trunc('day', at) AS \"day!\", count(*) AS \"count!\" FROM auth.auth_event WHERE event = 'user_signed_up' GROUP BY 1 ORDER BY 1 DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "438bb80321020cb398a6f776cdd15eae3ab7de017a6a0b9c86b8d37dd74bc413"
+}

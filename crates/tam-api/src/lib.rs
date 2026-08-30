@@ -7,10 +7,15 @@
 //! an unknown version is refused with the same structured body as any other
 //! fault rather than falling through to a bare not-found. The tenant boundary
 //! is the [`OrgContext`] extractor; a handler that forgets it cannot name an
-//! organisation, because no other source of one exists.
+//! organisation, because no other source of one exists. The operator surface
+//! under `/{version}/admin` is the one exception to that keying, and it is a
+//! different extractor rather than a flag on the same one: [`OperatorContext`]
+//! names no organisation at all, and the pool it reads through is a second
+//! one whose privileges are enumerated table by table.
 
 #![forbid(unsafe_code)]
 
+pub mod admin;
 pub mod analytics;
 pub mod auth;
 pub mod error;
@@ -36,7 +41,7 @@ pub use crate::{
         AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
     },
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
-    session::{OrgContext, StreamAuth, SESSION_COOKIE},
+    session::{OperatorContext, OrgContext, StreamAuth, SESSION_COOKIE},
     version::{APIVersion, VersionError},
 };
 
@@ -68,6 +73,15 @@ pub struct AppState {
     /// service is configured, and a login assertion is refused rather than
     /// verified against nothing.
     pub auth: Option<std::sync::Arc<auth::AuthBridge>>,
+    /// The operator backoffice's pool, connected as `tam_backoffice`, whose
+    /// reach is the SELECT grants and read policies of migration 0037.
+    ///
+    /// A second pool rather than a wider grant on the first: the tenant fence
+    /// is what makes every other handler safe, and the way to keep a handler
+    /// from crossing it by accident is to give it no connection that can.
+    /// Absent means this deployment serves no operator surface, and every
+    /// `/admin` route refuses.
+    pub backoffice: Option<PgPool>,
 }
 
 impl AppState {
@@ -163,6 +177,11 @@ pub fn router(state: AppState) -> Router {
             get(analytics::analytics_summary),
         )
         .route("/{version}/status", get(resources::status))
+        .route("/{version}/admin/signups", get(admin::signups))
+        .route("/{version}/admin/orgs", get(admin::list_orgs))
+        .route("/{version}/admin/orgs/{org}", get(admin::org_detail))
+        .route("/{version}/admin/sync-health", get(admin::sync_health))
+        .route("/{version}/admin/failed-writes", get(admin::failed_writes))
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }

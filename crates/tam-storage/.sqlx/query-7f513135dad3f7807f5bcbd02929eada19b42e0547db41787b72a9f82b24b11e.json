@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT reason, raised_by, raised_at FROM org_halt WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "raised_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "raised_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7f513135dad3f7807f5bcbd02929eada19b42e0547db41787b72a9f82b24b11e"
+}
