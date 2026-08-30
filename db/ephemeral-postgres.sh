@@ -20,8 +20,12 @@ up)
     pg_ctl -D "$data" -l "$state/server.log" \
         -o "-p 5433 -c listen_addresses=127.0.0.1 -c unix_socket_directories='$sock'" \
         start
-    psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5433 -U postgres -d postgres \
-        -f "$root/db/init/01-app-role.sql"
+    # compose mounts the whole of db/init as the entrypoint's initdb scripts,
+    # so this path runs every file in the same order rather than naming one
+    for init in "$root"/db/init/*.sql; do
+        psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5433 -U postgres -d postgres \
+            -f "$init"
+    done
     ;;
 down)
     pg_ctl -D "$data" stop
