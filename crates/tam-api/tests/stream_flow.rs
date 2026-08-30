@@ -31,6 +31,7 @@ fn state(pool: PgPool) -> AppState {
         pool,
         config: Config::default(),
         wall: || NOW,
+        auth: None,
     }
 }
 

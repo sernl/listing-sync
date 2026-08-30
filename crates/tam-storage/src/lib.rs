@@ -46,7 +46,7 @@ pub use lowering::{
 pub use mapping::{LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
-pub use sessions::{SessionIdentity, SessionRepo, SessionToken};
+pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub mod elections;
 pub mod sync_requests;
 pub use elections::{AnswerReport, ElectionRepo, NewAnswer, OpenElection};

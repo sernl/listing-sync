@@ -5,13 +5,15 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--ui-dir <path>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use tam_api::{AppState, Config, Disclosure};
+use tam_api::{
+    AppState, AuthBridge, Config, Disclosure, JwkSet, JwksFuture, JwksSource, JwksUnavailable,
+};
 use tam_engine::outbox::{drain, LoggingDeliverer};
 use tam_storage::{OutboxRepo, PruneRepo};
 use tam_types::Timestamp;
@@ -42,6 +44,52 @@ const ENGINE_DB_FLAG: &str = "--engine-db-url";
 /// and the UI share one origin; unknown paths fall through to index.html,
 /// which is what a single-page app's client router needs.
 const UI_FLAG: &str = "--ui-dir";
+
+/// The identity service's issuer, which every login assertion's `iss` must
+/// equal. Absent, no assertion is accepted and the break-glass token minted by
+/// `tam-mint-session` is the only way in.
+const AUTH_ISSUER_FLAG: &str = "--auth-issuer";
+
+/// Where that service publishes the keys its assertions are signed under.
+const AUTH_JWKS_FLAG: &str = "--auth-jwks-url";
+
+/// The key set is small and the identity service is a neighbour, so these are
+/// short. They are named at all because the lint table refuses a client built
+/// without them: an untimed fetch here would stall a login indefinitely.
+const JWKS_TIMEOUT_SECS: u64 = 5;
+const JWKS_CONNECT_TIMEOUT_SECS: u64 = 2;
+
+/// The key set over HTTP. Lives in the binary rather than the library for the
+/// same reason the clock does: `tam-api` holds no client and opens no socket,
+/// which is what lets its tests drive the whole exchange with no listener.
+struct HttpJwks {
+    client: reqwest::Client,
+    url: String,
+}
+
+impl JwksSource for HttpJwks {
+    fn fetch(&self) -> JwksFuture<'_> {
+        Box::pin(async move {
+            let failed = |what: &str, error: &dyn core::fmt::Display| {
+                let reason = format!("{what}: {error}");
+                eprintln!("tam-server: {} {reason}", self.url);
+                JwksUnavailable(reason)
+            };
+            let answer = self
+                .client
+                .get(&self.url)
+                .send()
+                .await
+                .map_err(|error| failed("the key set could not be fetched", &error))?
+                .error_for_status()
+                .map_err(|error| failed("the key set answered an error status", &error))?;
+            answer
+                .json::<JwkSet>()
+                .await
+                .map_err(|error| failed("the key set did not parse", &error))
+        })
+    }
+}
 
 /// One drain pass claims at most this many messages, so a backlog is worked
 /// off over several passes rather than held in one long transaction.
@@ -136,10 +184,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(8)
         .connect(&invocation.db_url)
         .await?;
+    let auth = match &invocation.identity {
+        Some((issuer, url)) => {
+            eprintln!("tam-server accepting login assertions from {issuer}");
+            let client = reqwest::Client::builder()
+                .timeout(core::time::Duration::from_secs(JWKS_TIMEOUT_SECS))
+                .connect_timeout(core::time::Duration::from_secs(JWKS_CONNECT_TIMEOUT_SECS))
+                .build()?;
+            Some(std::sync::Arc::new(AuthBridge::new(
+                issuer.clone(),
+                Box::new(HttpJwks {
+                    client,
+                    url: url.clone(),
+                }),
+            )))
+        }
+        None => None,
+    };
     let state = AppState {
         pool,
         config: invocation.config.clone(),
         wall: wall_now,
+        auth,
     };
 
     let listener = tokio::net::TcpListener::bind(invocation.bind).await?;
@@ -197,6 +263,9 @@ struct Invocation {
     config: Config,
     engine_db_url: Option<String>,
     ui_dir: Option<std::path::PathBuf>,
+    /// The issuer and the key-set url, which are meaningless apart and so are
+    /// parsed as one value.
+    identity: Option<(String, String)>,
 }
 
 /// The database url first, then an optional bind address and the disclosure
@@ -208,6 +277,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut config = Config::default();
     let mut engine_db_url = None;
     let mut ui_dir = None;
+    let mut auth_issuer = None;
+    let mut auth_jwks_url = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -227,6 +298,18 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             ui_dir = Some(std::path::PathBuf::from(
                 arguments.next().ok_or("--ui-dir needs a path argument")?,
             ));
+        } else if argument == AUTH_ISSUER_FLAG {
+            auth_issuer = Some(
+                arguments
+                    .next()
+                    .ok_or("--auth-issuer needs a url argument")?,
+            );
+        } else if argument == AUTH_JWKS_FLAG {
+            auth_jwks_url = Some(
+                arguments
+                    .next()
+                    .ok_or("--auth-jwks-url needs a url argument")?,
+            );
         } else {
             positional.push(argument);
         }
@@ -239,12 +322,26 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         Some(raw) => raw.parse()?,
         None => DEFAULT_BIND,
     };
+    // Refused rather than half-configured: an issuer with nowhere to fetch
+    // keys from would verify nothing, and a key set with no expected issuer
+    // would accept an assertion minted for somebody else.
+    let identity = match (auth_issuer, auth_jwks_url) {
+        (Some(issuer), Some(url)) => Some((issuer, url)),
+        (None, None) => None,
+        _ => {
+            return Err(format!(
+                "{AUTH_ISSUER_FLAG} and {AUTH_JWKS_FLAG} are given together or not at all"
+            )
+            .into())
+        }
+    };
     Ok(Invocation {
         db_url,
         bind,
         config,
         engine_db_url,
         ui_dir,
+        identity,
     })
 }
 

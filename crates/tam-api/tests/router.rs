@@ -40,6 +40,7 @@ fn test_state() -> AppState {
             .expect("a lazy pool parses its url without dialling"),
         config: Config::default(),
         wall: || Timestamp(0),
+        auth: None,
     }
 }
 

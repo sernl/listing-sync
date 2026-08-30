@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod error;
 pub mod jobs;
 pub mod openapi;
@@ -29,6 +30,9 @@ use sqlx::PgPool;
 use tam_types::{OrgId, Timestamp, UserId};
 
 pub use crate::{
+    auth::{
+        AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
+    },
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
     session::{OrgContext, StreamAuth, SESSION_COOKIE},
     version::{APIVersion, VersionError},
@@ -50,12 +54,18 @@ pub struct Config {
 /// injects a fixed one here.
 pub type WallClock = fn() -> Timestamp;
 
-/// The router's state: the pool, the binary's decisions, and the clock.
+/// The router's state: the pool, the binary's decisions, the clock, and the
+/// identity service when one is configured.
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub config: Config,
     pub wall: WallClock,
+    /// The identity bridge, shared across the clone axum makes per request so
+    /// one key-set cache serves the whole process. Absent means no identity
+    /// service is configured, and a login assertion is refused rather than
+    /// verified against nothing.
+    pub auth: Option<std::sync::Arc<auth::AuthBridge>>,
 }
 
 impl AppState {

@@ -191,6 +191,97 @@ impl SessionRepo {
     }
 }
 
+/// The tenant a subject seen for the first time becomes. The address and the
+/// name are the caller's rather than derived here, because what a signup
+/// without either should carry is a product decision and not a storage one.
+#[derive(Debug, Clone, Copy)]
+pub struct NewTenant<'a> {
+    pub subject: tam_types::Uuid,
+    pub org: OrgId,
+    pub user: UserId,
+    pub email: &'a str,
+    pub org_name: &'a str,
+}
+
+/// The identity service's subject to the tenant it speaks for.
+///
+/// The join key is `app_user.auth_subject` rather than the email, because the
+/// identity service lets a user change their address: an email join would
+/// rebind an identity to whichever row currently holds it (migration 0035).
+impl SessionRepo {
+    pub async fn user_by_auth_subject(
+        &self,
+        subject: tam_types::Uuid,
+    ) -> Result<Option<(OrgId, UserId)>, StorageError> {
+        let row = sqlx::query!(
+            "SELECT id, org_id FROM app_user WHERE auth_subject = $1",
+            uuid_to_db(subject),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| {
+            (
+                OrgId(crate::codec::uuid_from_db(row.org_id)),
+                UserId(crate::codec::uuid_from_db(row.id)),
+            )
+        }))
+    }
+
+    /// A subject seen for the first time becomes a tenant: the organisation
+    /// and its first user in one transaction, so a crash between the two
+    /// cannot leave a user referencing an organisation that does not exist.
+    /// This is self-serve signup; the caller has already established that the
+    /// assertion is valid and its address verified.
+    ///
+    /// Two logins racing for the same new subject both reach here. The unique
+    /// constraint on `auth_subject` decides, the loser's transaction rolls
+    /// back — organisation included, so no orphan tenant survives — and the
+    /// row the winner wrote is returned to both.
+    pub async fn provision_for_auth_subject(
+        &self,
+        tenant: NewTenant<'_>,
+        at: Timestamp,
+    ) -> Result<(OrgId, UserId), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query!(
+            "INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, $3)",
+            uuid_to_db(tenant.org.0),
+            tenant.org_name,
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        let inserted = sqlx::query!(
+            "INSERT INTO app_user (id, org_id, email, created_at, auth_subject) \
+             VALUES ($1, $2, $3, $4, $5)",
+            uuid_to_db(tenant.user.0),
+            uuid_to_db(tenant.org.0),
+            tenant.email,
+            timestamp_to_db(at)?,
+            uuid_to_db(tenant.subject),
+        )
+        .execute(&mut *tx)
+        .await;
+        match inserted {
+            Ok(_) => {
+                tx.commit().await?;
+                Ok((tenant.org, tenant.user))
+            }
+            Err(sqlx::Error::Database(database))
+                if database.constraint() == Some("app_user_auth_subject") =>
+            {
+                drop(tx);
+                self.user_by_auth_subject(tenant.subject)
+                    .await?
+                    .ok_or(StorageError::Inconsistent {
+                        reason: "the winning signup's user must exist".to_owned(),
+                    })
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::SessionToken;

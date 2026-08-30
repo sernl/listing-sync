@@ -70,8 +70,10 @@ nix flake check    # everything
 The active milestone plan is the newest file in `docs/design/plans/`.
 Progress against it is recorded in the jj log; the working tree stays green under `just check`.
 
-Three database roles, deliberately: `tam_app` (the API path, forced RLS,
+Four database roles, deliberately: `tam_app` (the API path, forced RLS,
 cannot read `connection_secret`), `tam_engine` (the cross-tenant lease scan,
-BYPASSRLS), `tam_broker` (the only role that reads the credential vault). The
-dev database is created by `db/init/01-app-role.sql`; `just db-setup` prepares
-rootless podman once per machine.
+BYPASSRLS), `tam_broker` (the only role that reads the credential vault), and
+`tam_auth` (platform identity; confined to the `auth` schema, holding no
+privilege on any table in `public` and not BYPASSRLS). The dev database is
+created by `db/init/01-app-role.sql` and `db/init/02-auth-role.sql`; `just
+db-setup` prepares rootless podman once per machine.

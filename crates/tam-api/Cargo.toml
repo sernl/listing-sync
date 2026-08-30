@@ -10,6 +10,7 @@ pg-tests = []
 [dependencies]
 axum = "0.8"
 futures-util = { version = "0.3", default-features = false }
+jsonwebtoken = { version = "9.3", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
@@ -18,11 +19,13 @@ tam-marketplace = { path = "../tam-marketplace" }
 tam-storage = { path = "../tam-storage" }
 tam-taxonomy = { path = "../tam-taxonomy" }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["time", "net", "io-util"] }
+tokio = { version = "1", features = ["time", "net", "io-util", "sync"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+base64 = "0.22"
 http-body-util = "0.1"
+ring = { version = "0.17", features = ["std"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 tower = { version = "0.5", features = ["util"] }

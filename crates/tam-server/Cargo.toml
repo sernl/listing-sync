@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-api = { path = "../tam-api" }
 tam-engine = { path = "../tam-engine" }
