@@ -15,7 +15,7 @@
 
 	// The pages reachable without an API session. `/status` is deliberately
 	// among them: it matters most when signing in is what is broken.
-	const PUBLIC = ['/login', '/signup', '/status'];
+	const PUBLIC = ['/login', '/signup', '/reset', '/reset/confirm', '/status'];
 	$effect(() => {
 		if (!data.session && !PUBLIC.includes(page.url.pathname)) {
 			goto('/login');

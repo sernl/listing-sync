@@ -13,6 +13,8 @@
 		signInWithProvider,
 		type SocialProvider
 	} from '$lib/auth-client';
+	import Turnstile from '$lib/Turnstile.svelte';
+	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { toast } from '$lib/toast';
 
 	type Busy = 'password' | 'passkey' | 'resend' | 'resume' | SocialProvider;
@@ -21,6 +23,9 @@
 	let password = $state('');
 	let busy = $state<Busy | null>(null);
 	let awaitingVerification = $state<string | null>(null);
+	let captchaToken = $state<string | null>(null);
+	let captcha = $state<ReturnType<typeof Turnstile> | null>(null);
+	const challengePending = $derived(captchaPending(TURNSTILE_SITE_KEY, captchaToken));
 
 	function messageOf(error: unknown, fallback: string): string {
 		if (error !== null && typeof error === 'object' && 'message' in error) {
@@ -81,8 +86,13 @@
 		event.preventDefault();
 		busy = 'password';
 		try {
-			const { error } = await signInWithPassword(email.trim(), password);
+			const { error } = await signInWithPassword(
+				email.trim(),
+				password,
+				captchaOptions(captchaToken)
+			);
 			if (error) {
+				captcha?.reset();
 				toast('error', messageOf(error, 'That email and password did not match.'));
 				return;
 			}
@@ -194,13 +204,18 @@
 					bind:value={password}
 				/>
 			</label>
+			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
 			<button
 				class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
-				disabled={busy !== null}
+				disabled={busy !== null || challengePending}
 			>
 				{busy === 'password' ? 'Signing in…' : 'Sign in'}
 			</button>
 		</form>
+
+		<p class="mt-3 text-sm text-slate-600">
+			<a class="underline" href="/reset">Forgot your password?</a>
+		</p>
 
 		<div class="my-5 flex items-center gap-3 text-xs text-slate-400">
 			<span class="h-px grow bg-slate-200"></span>

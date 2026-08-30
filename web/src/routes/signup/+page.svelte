@@ -7,15 +7,24 @@
 		signUpWithPassword,
 		type SocialProvider
 	} from '$lib/auth-client';
+	import Turnstile from '$lib/Turnstile.svelte';
+	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { toast } from '$lib/toast';
 
 	type Busy = 'register' | 'resend' | SocialProvider;
+
+	/** Long enough for any display name a human types, short enough that the
+	 * column is not a free-text sink: `auth.user.name` is unconstrained text. */
+	const NAME_LIMIT = 120;
 
 	let name = $state('');
 	let email = $state('');
 	let password = $state('');
 	let busy = $state<Busy | null>(null);
 	let awaitingVerification = $state<string | null>(null);
+	let captchaToken = $state<string | null>(null);
+	let captcha = $state<ReturnType<typeof Turnstile> | null>(null);
+	const challengePending = $derived(captchaPending(TURNSTILE_SITE_KEY, captchaToken));
 
 	function messageOf(error: unknown, fallback: string): string {
 		if (error !== null && typeof error === 'object' && 'message' in error) {
@@ -36,8 +45,14 @@
 		busy = 'register';
 		try {
 			const address = email.trim();
-			const { error } = await signUpWithPassword(name.trim(), address, password);
+			const { error } = await signUpWithPassword(
+				name.trim(),
+				address,
+				password,
+				captchaOptions(captchaToken)
+			);
 			if (error) {
+				captcha?.reset();
 				toast('error', messageOf(error, 'That account could not be created.'));
 				return;
 			}
@@ -109,6 +124,7 @@
 					name="name"
 					type="text"
 					required
+					maxlength={NAME_LIMIT}
 					autocomplete="name"
 					class="rounded border border-slate-300 px-3 py-2"
 					bind:value={name}
@@ -138,9 +154,10 @@
 					bind:value={password}
 				/>
 			</label>
+			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
 			<button
 				class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
-				disabled={busy !== null}
+				disabled={busy !== null || challengePending}
 			>
 				{busy === 'register' ? 'Creating…' : 'Create account'}
 			</button>

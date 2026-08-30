@@ -11,6 +11,7 @@ import { passkeyClient } from '@better-auth/passkey/client';
 import { jwtClient } from 'better-auth/client/plugins';
 import { createAuthClient } from 'better-auth/svelte';
 import { api, type Whoami } from '$lib/api';
+import type { CaptchaOptions } from '$lib/captcha';
 
 /** Where the identity service is reached. Same-origin is a requirement rather
  * than a convenience: better-auth's session cookie has to be first-party
@@ -34,6 +35,12 @@ export type SocialProvider = (typeof SOCIAL_PROVIDERS)[number]['id'];
 /** Where a provider returns the browser. Both land on the sign-in page, which
  * is the page that knows how to finish the exchange. */
 const SOCIAL_RETURN = '/login';
+
+/** Where better-auth's reset-link callback returns the browser. Relative on
+ * purpose: the identity service resolves it against its own base URL, which is
+ * the dashboard's origin, and its origin check trusts a relative path without
+ * needing the origin listed. */
+const PASSWORD_RESET_RETURN = '/reset/confirm';
 
 /** What the identity service says about the signed-in human, reduced to the
  * two facts this client acts on. */
@@ -111,12 +118,37 @@ export async function signOutEverywhere(): Promise<boolean> {
 	return identityEnded && apiEnded;
 }
 
-export async function signInWithPassword(email: string, password: string) {
-	return authClient.signIn.email({ email, password });
+export async function signInWithPassword(
+	email: string,
+	password: string,
+	captcha?: CaptchaOptions
+) {
+	return authClient.signIn.email({ email, password }, captcha);
 }
 
-export async function signUpWithPassword(name: string, email: string, password: string) {
-	return authClient.signUp.email({ name, email, password, callbackURL: SOCIAL_RETURN });
+export async function signUpWithPassword(
+	name: string,
+	email: string,
+	password: string,
+	captcha?: CaptchaOptions
+) {
+	return authClient.signUp.email({ name, email, password, callbackURL: SOCIAL_RETURN }, captcha);
+}
+
+/**
+ * Ask for a reset link. The identity service answers the same way whether or
+ * not the address is registered, performing a dummy verification lookup when
+ * it finds no user, so its answer carries no evidence about the address. The
+ * page that renders the answer carries none either.
+ */
+export async function requestPasswordReset(email: string, captcha?: CaptchaOptions) {
+	return authClient.requestPasswordReset({ email, redirectTo: PASSWORD_RESET_RETURN }, captcha);
+}
+
+/** Spend a reset token on a new password. Not a guarded endpoint: the token is
+ * the proof, so the captcha plugin does not stand in front of it. */
+export async function resetPassword(token: string, newPassword: string) {
+	return authClient.resetPassword({ token, newPassword });
 }
 
 /** Hands the browser to the provider; the redirect is performed by the
