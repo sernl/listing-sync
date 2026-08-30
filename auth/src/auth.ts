@@ -68,6 +68,12 @@ const failureCode = (returned: unknown): string | undefined => {
 export const auth = betterAuth({
   appName: 'tam-auth',
   baseURL: env.baseUrl,
+  // The origins the browser is allowed to speak from, which better-auth checks
+  // on every state-changing request and on every callbackURL it is handed. The
+  // base URL is trusted implicitly; this is everything else, and in development
+  // it is the whole reason a request from the vite dev server is not a CSRF
+  // refusal.
+  trustedOrigins: [...env.trustedOrigins],
   secret: env.secret,
   database: { dialect, type: 'postgres' },
   telemetry: { enabled: false },

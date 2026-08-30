@@ -1,14 +1,13 @@
 <script lang="ts">
 	import {
-		SOCIAL_PROVIDERS,
 		identity,
 		resendVerification,
 		signInWithProvider,
-		signUpWithPassword,
-		type SocialProvider
+		signUpWithPassword
 	} from '$lib/auth-client';
 	import Turnstile from '$lib/Turnstile.svelte';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
+	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
 
 	type Busy = 'register' | 'resend' | SocialProvider;
@@ -163,24 +162,26 @@
 			</button>
 		</form>
 
-		<div class="my-5 flex items-center gap-3 text-xs text-slate-400">
-			<span class="h-px grow bg-slate-200"></span>
-			or
-			<span class="h-px grow bg-slate-200"></span>
-		</div>
+		{#if ENABLED_SOCIAL_PROVIDERS.length > 0}
+			<div class="my-5 flex items-center gap-3 text-xs text-slate-400">
+				<span class="h-px grow bg-slate-200"></span>
+				or
+				<span class="h-px grow bg-slate-200"></span>
+			</div>
 
-		<div class="flex flex-col gap-2">
-			{#each SOCIAL_PROVIDERS as provider (provider.id)}
-				<button
-					type="button"
-					class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
-					disabled={busy !== null}
-					onclick={() => withProvider(provider.id)}
-				>
-					{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}
-				</button>
-			{/each}
-		</div>
+			<div class="flex flex-col gap-2">
+				{#each ENABLED_SOCIAL_PROVIDERS as provider (provider.id)}
+					<button
+						type="button"
+						class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+						disabled={busy !== null}
+						onclick={() => withProvider(provider.id)}
+					>
+						{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}
+					</button>
+				{/each}
+			</div>
+		{/if}
 
 		<p class="mt-6 text-sm text-slate-600">
 			Already have an account? <a class="underline" href="/login">Sign in</a>.

@@ -4,18 +4,25 @@
 	import { ApiFailure } from '$lib/api';
 	import {
 		BridgeFailure,
-		SOCIAL_PROVIDERS,
 		establishSession,
 		identity,
 		resendVerification,
 		signInWithPasskey,
 		signInWithPassword,
-		signInWithProvider,
-		type SocialProvider
+		signInWithProvider
 	} from '$lib/auth-client';
 	import Turnstile from '$lib/Turnstile.svelte';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
+	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
+
+	/** Named here rather than in the markup: a build with no social provider
+	 * offers no linked account, and saying otherwise sends the human looking
+	 * for a button that is not there. */
+	const SIGN_IN_PROMPT =
+		ENABLED_SOCIAL_PROVIDERS.length > 0
+			? 'Use your email, a passkey, or a linked account.'
+			: 'Use your email or a passkey.';
 
 	type Busy = 'password' | 'passkey' | 'resend' | 'resume' | SocialProvider;
 
@@ -176,7 +183,7 @@
 	{:else}
 		<h1 class="mb-2 text-xl font-semibold">Sign in</h1>
 		<p class="mb-4 text-sm text-slate-600">
-			{busy === 'resume' ? 'Completing sign-in…' : 'Use your email, a passkey, or a linked account.'}
+			{busy === 'resume' ? 'Completing sign-in…' : SIGN_IN_PROMPT}
 		</p>
 
 		<form onsubmit={withPassword} class="flex flex-col gap-3">
@@ -232,7 +239,7 @@
 			>
 				{busy === 'passkey' ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
 			</button>
-			{#each SOCIAL_PROVIDERS as provider (provider.id)}
+			{#each ENABLED_SOCIAL_PROVIDERS as provider (provider.id)}
 				<button
 					type="button"
 					class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"

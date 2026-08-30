@@ -12,6 +12,7 @@ import { jwtClient } from 'better-auth/client/plugins';
 import { createAuthClient } from 'better-auth/svelte';
 import { api, type Whoami } from '$lib/api';
 import type { CaptchaOptions } from '$lib/captcha';
+import type { SocialProvider } from '$lib/social-providers';
 
 /** Where the identity service is reached. Same-origin is a requirement rather
  * than a convenience: better-auth's session cookie has to be first-party
@@ -23,14 +24,6 @@ export const authClient = createAuthClient({
 	basePath: AUTH_BASE_PATH,
 	plugins: [passkeyClient(), jwtClient()]
 });
-
-/** The social providers `tam-auth` is configured for (`auth/src/auth.ts`). */
-export const SOCIAL_PROVIDERS = [
-	{ id: 'google', label: 'Google' },
-	{ id: 'microsoft', label: 'Microsoft' }
-] as const;
-
-export type SocialProvider = (typeof SOCIAL_PROVIDERS)[number]['id'];
 
 /** Where a provider returns the browser. Both land on the sign-in page, which
  * is the page that knows how to finish the exchange. */

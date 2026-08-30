@@ -10,6 +10,7 @@ export interface Env {
   readonly bind: string;
   readonly port: number;
   readonly baseUrl: string;
+  readonly trustedOrigins: readonly string[];
   readonly secret: string;
   readonly databaseUrl: string;
   readonly passkeyRpId: string;
@@ -80,6 +81,47 @@ const readBaseUrl = (): URL => {
   return url;
 };
 
+// The browser reaches /api/auth through the client dev server's proxy, so the
+// Origin better-auth sees is vite's own, never this service's base URL. Both
+// loopback spellings and both ports, because vite drifts to 5174 when 5173 is
+// taken and the developer's Origin is whichever one they opened.
+const DEVELOPMENT_ORIGINS: readonly string[] = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
+
+// better-auth compares a pattern against the request's origin verbatim
+// (packages/better-auth/src/auth/trusted-origins.ts), so an entry carrying a
+// path or a trailing slash matches nothing and surfaces as a blank CSRF
+// refusal at sign-in rather than as a misconfiguration. Rejecting it here
+// makes it a startup error naming the entry instead. A wildcard pattern such
+// as https://*.example.com survives this check unchanged, which is what lets
+// better-auth's own wildcard matching still be reachable.
+const readTrustedOrigins = (mode: Mode): readonly string[] => {
+  const configured = (read('TAM_AUTH_TRUSTED_ORIGINS') ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  for (const entry of configured) {
+    let origin: string;
+    try {
+      origin = new URL(entry).origin;
+    } catch {
+      throw new ConfigurationError(
+        `tam-auth: TAM_AUTH_TRUSTED_ORIGINS entry ${entry} is not an absolute URL`,
+      );
+    }
+    if (origin !== entry) {
+      throw new ConfigurationError(
+        `tam-auth: TAM_AUTH_TRUSTED_ORIGINS entry ${entry} must be a bare origin, with no path and no trailing slash`,
+      );
+    }
+  }
+  return mode === 'development' ? [...DEVELOPMENT_ORIGINS, ...configured] : configured;
+};
+
 // A provider configured with an id but no secret fails at the OAuth callback
 // rather than at startup, so the pair is rejected here as a unit.
 const readOAuthPair = (idName: string, secretName: string): OAuthCredentials | undefined => {
@@ -108,6 +150,7 @@ const load = (): Env => {
     bind: read('TAM_AUTH_BIND') ?? '127.0.0.1',
     port: readPort(),
     baseUrl: baseUrl.origin,
+    trustedOrigins: readTrustedOrigins(mode),
     secret: readRequired('BETTER_AUTH_SECRET'),
     databaseUrl: readRequired('TAM_AUTH_DATABASE_URL'),
     passkeyRpId: read('TAM_AUTH_PASSKEY_RP_ID') ?? baseUrl.hostname,
