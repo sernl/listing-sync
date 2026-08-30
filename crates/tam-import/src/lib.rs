@@ -461,6 +461,10 @@ where
             IngestContext {
                 budget: ExtractBudget::default(),
                 now: run.now,
+                // An import mirrors what the seller uploaded to the source
+                // marketplace, and the source's own bundle is an archive of
+                // separately listed files.
+                archives: tam_pipeline::pipeline::ArchiveMode::Explode,
             },
         )
         .await?;

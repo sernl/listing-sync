@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT hash FROM blob WHERE org_id = $1 AND hash = ANY($2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hash",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "ByteaArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dc0f4ad88fa33e645b7d10771728931cd71c5cc6061607664240f7592632327b"
+}

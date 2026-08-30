@@ -58,6 +58,7 @@ async fn ingest_then_fetch_back_closes_the_adapter_seam(pool: PgPool) {
         IngestContext {
             budget: ExtractBudget::default(),
             now: T0,
+            archives: tam_pipeline::pipeline::ArchiveMode::Explode,
         },
     )
     .await

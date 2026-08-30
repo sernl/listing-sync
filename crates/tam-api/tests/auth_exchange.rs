@@ -134,6 +134,7 @@ fn state(pool: PgPool, auth: Option<Arc<AuthBridge>>) -> AppState {
         wall: now,
         auth,
         backoffice: None,
+        blobs: None,
     }
 }
 

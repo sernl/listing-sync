@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE product SET deleted_at = $3, updated_at = $3 WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ed04c46f59d5ec82ae1d5f136643433bdb520b6777755aa030ba05c1c4d3744e"
+}

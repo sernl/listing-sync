@@ -7,12 +7,18 @@
 #![forbid(unsafe_code)]
 
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
+use tam_api::quota::QuotaKind;
+use tam_api::resources::{kind_str, role_str};
+use tam_api::vocabulary::{
+    BodyWire, CardinalityKind, DelegationKind, DirectionView, NonDelegableReason, PayloadFileRule,
+    VocabularyKind,
+};
 use tam_api::{APIErrorCode, APIErrorKind};
 use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_storage::ItemStateKind;
 use tam_types::{
-    ConnectionEvent, ConnectionStatus, FailureCode, InventoryId, JobEventPayload, Marketplace,
-    TermKind,
+    ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,
+    JobEventPayload, LengthUnit, Marketplace, TermKind,
 };
 
 fn union<T, F: Fn(&T) -> String>(name: &str, values: &[T], render: F) -> String {
@@ -60,6 +66,47 @@ fn main() {
     ));
     out.push('\n');
     out.push_str(&union("TermKind", &TermKind::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union("CopyFormat", &CopyFormat::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union("LengthUnit", &LengthUnit::ALL, serde_name));
+    out.push('\n');
+    // Emitted from the API's own spelling rather than from serde: an upload
+    // handle and a product view both carry these lowercase tokens, and the
+    // derive's PascalCase is a different vocabulary the client never sees.
+    out.push_str(&union("FileKind", &FileKind::ALL, |kind| {
+        format!("\"{}\"", kind_str(*kind))
+    }));
+    out.push('\n');
+    out.push_str(&union("FileRole", &FileRole::ALL, |role| {
+        format!("\"{}\"", role_str(*role))
+    }));
+    out.push('\n');
+    out.push_str(&union("QuotaKind", &QuotaKind::ALL, |kind| {
+        format!("\"{}\"", kind.as_str())
+    }));
+    out.push('\n');
+    out.push_str(&union("NativeDirection", &DirectionView::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union(
+        "NativeVocabularyKind",
+        &VocabularyKind::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&union("Cardinality", &CardinalityKind::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union("Delegation", &DelegationKind::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union(
+        "NonDelegableReason",
+        &NonDelegableReason::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&union("PayloadFileRule", &PayloadFileRule::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union("BodyWire", &BodyWire::ALL, serde_name));
     out.push('\n');
     // Emitted from `as_str` rather than from serde, because these two live in
     // tam-domain, which carries no serde dependency and does not acquire one

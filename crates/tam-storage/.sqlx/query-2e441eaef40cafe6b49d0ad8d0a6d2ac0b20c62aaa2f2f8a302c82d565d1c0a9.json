@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE product SET title = COALESCE($3, title), body = COALESCE($4, body), body_format = COALESCE($5, body_format), price_kind = COALESCE($6, price_kind), price_minor_units = CASE WHEN $6 IS NULL THEN price_minor_units ELSE $7 END, price_currency = CASE WHEN $6 IS NULL THEN price_currency ELSE $8 END, rights_state = COALESCE($9, rights_state), rights_source_inventory = CASE WHEN $9 IS NULL THEN rights_source_inventory ELSE $10 END, rights_segments = CASE WHEN $9 IS NULL THEN rights_segments ELSE $11 END, rights_native_id = CASE WHEN $9 IS NULL THEN rights_native_id ELSE $12 END, updated_at = $13 WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e441eaef40cafe6b49d0ad8d0a6d2ac0b20c62aaa2f2f8a302c82d565d1c0a9"
+}

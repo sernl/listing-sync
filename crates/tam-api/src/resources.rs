@@ -20,8 +20,8 @@ use tam_storage::{
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
-    CanonicalTermId, ConnectionId, ConnectionStatus, InventoryId, MappingId, Marketplace, OrgId,
-    PriceIntent, ProductId, ScanOutcome, Timestamp, Uuid,
+    CanonicalTermId, ConnectionId, ConnectionStatus, CopyFormat, InventoryId, MappingId,
+    Marketplace, OrgId, PriceIntent, ProductId, ScanOutcome, Timestamp, Uuid,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -125,10 +125,21 @@ pub struct ProductView {
     pub id: ProductId,
     pub title: String,
     pub body: String,
+    /// How `body` is written. Carried because the edit path writes it back
+    /// and a client that could not read it would have to guess, which is the
+    /// sniffing the declaration exists to avoid.
+    pub body_format: CopyFormat,
     pub price: PriceIntent,
+    /// Payload, cover and preview files alike. Previews are empty for
+    /// anything this flow authors — `ingest` produces none — but the field is
+    /// named `files` and silently dropping a role would make it a lie.
     pub files: Vec<FileView>,
     pub subjects: Vec<CanonicalTermId>,
     pub grades: GradesView,
+    /// The rights grant the source stated, or absent where none was captured.
+    /// Carried for the same reason `body_format` is: the edit path writes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rights: Option<PathView>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -194,7 +205,7 @@ const fn scan_str(scan: &ScanOutcome) -> &'static str {
     }
 }
 
-const fn role_str(role: tam_types::FileRole) -> &'static str {
+pub const fn role_str(role: tam_types::FileRole) -> &'static str {
     match role {
         tam_types::FileRole::Payload => "payload",
         tam_types::FileRole::Preview => "preview",
@@ -202,7 +213,7 @@ const fn role_str(role: tam_types::FileRole) -> &'static str {
     }
 }
 
-const fn kind_str(kind: tam_types::FileKind) -> &'static str {
+pub const fn kind_str(kind: tam_types::FileKind) -> &'static str {
     match kind {
         tam_types::FileKind::Pdf => "pdf",
         tam_types::FileKind::Pptx => "pptx",
@@ -210,6 +221,14 @@ const fn kind_str(kind: tam_types::FileKind) -> &'static str {
         tam_types::FileKind::Zip => "zip",
         tam_types::FileKind::Image => "image",
     }
+}
+
+/// The inverse of [`kind_str`], so an upload handle names its kind in the
+/// same vocabulary the product view reads it back in.
+pub(crate) fn kind_from_str(raw: &str) -> Option<tam_types::FileKind> {
+    tam_types::FileKind::ALL
+        .into_iter()
+        .find(|kind| kind_str(*kind) == raw)
 }
 
 pub(crate) async fn product_view(
@@ -244,6 +263,15 @@ pub(crate) async fn product_view(
             scan: scan_str(&cover.scan).to_owned(),
         });
     }
+    for preview in &aggregate.previews {
+        files.push(FileView {
+            id: preview.id.0,
+            role: role_str(preview.role).to_owned(),
+            kind: kind_str(preview.kind).to_owned(),
+            byte_len: preview.byte_len,
+            scan: scan_str(&preview.scan).to_owned(),
+        });
+    }
     let grades = GradesView {
         source: match aggregate.grades.source {
             tam_domain::DeclarationSource::Seller => "seller".to_owned(),
@@ -258,14 +286,20 @@ pub(crate) async fn product_view(
             high_years: interval.high_years(),
         }),
     };
+    let rights = match &aggregate.rights {
+        tam_domain::RightsDeclaration::Unstated => None,
+        tam_domain::RightsDeclaration::Declared { source } => Some(path_view(source)),
+    };
     Ok(Json(ProductView {
         id: aggregate.id,
         title: aggregate.title.0,
         body: aggregate.body.body,
+        body_format: aggregate.body.format,
         price: aggregate.price,
         files,
         subjects: aggregate.subjects,
         grades,
+        rights,
         created_at: record.created_at,
         updated_at: record.updated_at,
     }))

@@ -50,6 +50,7 @@ fn state(pool: PgPool, secret: Option<&str>) -> AppState {
         wall: || NOW,
         auth: None,
         backoffice: None,
+        blobs: None,
     }
 }
 

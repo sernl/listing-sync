@@ -19,15 +19,18 @@ pub mod admin;
 pub mod analytics;
 pub mod auth;
 pub mod billing;
+pub mod catalogue;
 pub mod error;
 pub mod jobs;
 pub mod openapi;
 pub mod org;
 pub mod paddle;
+pub mod quota;
 pub mod resources;
 pub mod session;
 pub mod stream;
 pub mod version;
+pub mod vocabulary;
 
 use axum::{
     http::StatusCode,
@@ -43,6 +46,7 @@ pub use crate::{
         AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
     },
     billing::{BillingView, SubscriptionView, WebhookSecret, ORG_CUSTOM_DATA_KEY},
+    catalogue::{FileHandle, UploadedView},
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
     session::{OperatorContext, OrgContext, StreamAuth, SESSION_COOKIE},
     version::{APIVersion, VersionError},
@@ -89,6 +93,24 @@ pub struct AppState {
     /// Absent means this deployment serves no operator surface, and every
     /// `/admin` route refuses.
     pub backoffice: Option<PgPool>,
+    /// Where an upload's bytes are sealed and where the sealed objects live.
+    ///
+    /// Absent means this deployment was started without a key-encryption key
+    /// and an object-store root, and `POST /{version}/uploads` refuses with
+    /// 503 rather than accepting bytes it cannot seal — the same posture the
+    /// operator surface takes without its backoffice pool, and the same one
+    /// revocation takes without the broker socket.
+    pub blobs: Option<BlobStore>,
+}
+
+/// The two values an upload needs and no other route does: the key every
+/// tenant's blob DEK is wrapped under, and the root the sealed objects are
+/// written beneath. Held here rather than in [`Config`] because a key is not
+/// a value that belongs in a `Debug` render of the configuration.
+#[derive(Clone)]
+pub struct BlobStore {
+    pub kek: tam_secrets::Kek,
+    pub root: std::path::PathBuf,
 }
 
 impl AppState {
@@ -144,10 +166,23 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/jobs/{job}/items", get(jobs::job_items))
         .route("/{version}/jobs/{job}/items/{item}", get(jobs::item_detail))
         .route("/{version}/events/stream", get(stream::events_stream))
-        .route("/{version}/products", get(resources::list_products))
+        .route(
+            "/{version}/uploads",
+            post(catalogue::upload).layer(catalogue::upload_body_limit()),
+        )
+        .route(
+            "/{version}/products",
+            get(resources::list_products).post(catalogue::create_product),
+        )
         .route(
             "/{version}/products/{product}",
-            get(resources::product_view),
+            get(resources::product_view)
+                .patch(catalogue::patch_product)
+                .delete(catalogue::delete_product),
+        )
+        .route(
+            "/{version}/vocabulary/{inventory}",
+            get(vocabulary::vocabulary_view),
         )
         .route("/{version}/connections", get(resources::list_connections))
         .route(

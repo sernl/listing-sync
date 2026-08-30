@@ -2296,13 +2296,17 @@ dependencies = [
  "sqlx",
  "subtle",
  "tam-domain",
+ "tam-limits",
  "tam-marketplace",
+ "tam-pipeline",
+ "tam-secrets",
  "tam-storage",
  "tam-taxonomy",
  "tam-types",
  "tokio",
  "tower",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -2472,6 +2476,7 @@ dependencies = [
  "tam-api",
  "tam-engine",
  "tam-limits",
+ "tam-secrets",
  "tam-storage",
  "tam-types",
  "tokio",

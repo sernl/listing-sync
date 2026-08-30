@@ -308,6 +308,11 @@ pub enum FileRole {
     Cover,
 }
 
+impl FileRole {
+    /// The closed set, in a stable order, for the same reader.
+    pub const ALL: [Self; 3] = [Self::Payload, Self::Preview, Self::Cover];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileKind {
     Pdf,
@@ -315,6 +320,13 @@ pub enum FileKind {
     Docx,
     Zip,
     Image,
+}
+
+impl FileKind {
+    /// The closed set, in a stable order; the API's own spelling of these is
+    /// what an upload handle and a product view both carry, and the
+    /// vocabulary generator reads this single source.
+    pub const ALL: [Self; 5] = [Self::Pdf, Self::Pptx, Self::Docx, Self::Zip, Self::Image];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,6 +382,17 @@ pub enum LengthUnit {
     GraphemeClusters,
 }
 
+impl LengthUnit {
+    /// The closed set, in a stable order; the vocabulary generator reads this
+    /// single source, because a cap crosses to the client carrying its unit.
+    pub const ALL: [Self; 4] = [
+        Self::Bytes,
+        Self::Utf16CodeUnits,
+        Self::Codepoints,
+        Self::GraphemeClusters,
+    ];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListingCopy {
     pub body: String,
@@ -391,6 +414,11 @@ pub struct ListingCopy {
 pub enum CopyFormat {
     Markdown,
     Html,
+}
+
+impl CopyFormat {
+    /// The closed set, in a stable order, for the same reader.
+    pub const ALL: [Self; 2] = [Self::Markdown, Self::Html];
 }
 
 /// A source value as an import read yields it, before the relation has been

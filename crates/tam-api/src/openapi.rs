@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 39] = [
+pub const ROUTES: [Route; 44] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -125,14 +125,39 @@ pub const ROUTES: [Route; 39] = [
         summary: "SSE ledger projection; Last-Event-ID resumes, 204 stops",
     },
     Route {
+        method: "post",
+        path: "/{version}/uploads",
+        summary: "Ingest one upload's bytes and return the handles a create names",
+    },
+    Route {
         method: "get",
         path: "/{version}/products",
         summary: "Page the catalogue by opaque keyset cursor",
     },
     Route {
+        method: "post",
+        path: "/{version}/products",
+        summary: "Author a draft product and one unbound mapping per selected platform",
+    },
+    Route {
         method: "get",
         path: "/{version}/products/{product}",
         summary: "The product aggregate: files, subjects, verbatim grades",
+    },
+    Route {
+        method: "patch",
+        path: "/{version}/products/{product}",
+        summary: "Edit the canonical fields, refusing an uncaptured live transition",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/products/{product}",
+        summary: "Soft-delete locally and enqueue a removal per elected platform",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/vocabulary/{inventory}",
+        summary: "One marketplace's authoring vocabulary, so the form is data-driven",
     },
     Route {
         method: "get",
@@ -279,11 +304,12 @@ mod tests {
             .get("paths")
             .and_then(|paths| paths.as_object())
             .map(serde_json::Map::len);
-        // /v1/jobs, /v1/session and /v1/org each carry two operations, so
-        // distinct paths are three fewer than the operations in the table.
+        // /v1/jobs, /v1/session and /v1/org each carry two operations,
+        // /v1/products carries two and /v1/products/{product} three, so
+        // distinct paths are six fewer than the operations in the table.
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 3),
+            Some(ROUTES.len() - 6),
             "each operation lands in the document exactly once"
         );
     }

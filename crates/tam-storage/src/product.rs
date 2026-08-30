@@ -11,8 +11,8 @@ use tam_domain::{
     TermKind, VocabularyId, VocabularyPath,
 };
 use tam_types::{
-    CanonicalTermId, FileId, FileRole, ImportedTerm, OrgId, PayloadSet, PriceIntent, ProductFile,
-    ProductId, Timestamp, Title,
+    CanonicalTermId, FileId, FileRole, ImportedTerm, ListingCopy, OrgId, PayloadSet, PriceIntent,
+    ProductFile, ProductId, Timestamp, Title,
 };
 
 use crate::codec::{
@@ -38,6 +38,21 @@ pub struct ProductSummary {
     pub price: PriceIntent,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// One edit to a product's canonical fields. Every field is optional and an
+/// absent one is left as stored, so a partial form submission cannot erase
+/// what it did not render.
+///
+/// Files are deliberately absent: bytes enter through the upload path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProductEdit {
+    pub title: Option<Title>,
+    pub body: Option<ListingCopy>,
+    pub price: Option<PriceIntent>,
+    pub subjects: Option<Vec<CanonicalTermId>>,
+    pub grades: Option<GradeDeclaration>,
+    pub rights: Option<RightsDeclaration>,
 }
 
 pub struct ProductRepo {
@@ -279,6 +294,212 @@ impl ProductRepo {
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),
         }))
+    }
+
+    /// Applies one edit to a product's canonical fields, in one transaction.
+    ///
+    /// Files are absent from [`ProductEdit`] on purpose: bytes enter through
+    /// the upload path, and swapping a payload is a different operation from
+    /// editing the copy that describes it. Every field is optional and an
+    /// absent one is left as stored, so a client that renders four fields
+    /// cannot erase the two it does not.
+    ///
+    /// The merge happens inside the statement rather than in a caller that
+    /// read first: a read-modify-write across two round trips loses the
+    /// concurrent edit that landed between them.
+    ///
+    /// `false` means no live product of that identifier exists for the
+    /// tenant, which is the not-found answer rather than a fault.
+    pub async fn update(
+        &self,
+        org: OrgId,
+        id: ProductId,
+        edit: &ProductEdit,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let product_db = uuid_to_db(id.0);
+        let at_db = timestamp_to_db(at)?;
+        let price = edit.price.map(PriceColumns::from_intent);
+        let rights = edit.rights.as_ref().map(RightsColumns::encode);
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let touched = sqlx::query!(
+            "UPDATE product SET \
+             title = COALESCE($3, title), \
+             body = COALESCE($4, body), \
+             body_format = COALESCE($5, body_format), \
+             price_kind = COALESCE($6, price_kind), \
+             price_minor_units = CASE WHEN $6 IS NULL THEN price_minor_units ELSE $7 END, \
+             price_currency = CASE WHEN $6 IS NULL THEN price_currency ELSE $8 END, \
+             rights_state = COALESCE($9, rights_state), \
+             rights_source_inventory = \
+                 CASE WHEN $9 IS NULL THEN rights_source_inventory ELSE $10 END, \
+             rights_segments = CASE WHEN $9 IS NULL THEN rights_segments ELSE $11 END, \
+             rights_native_id = CASE WHEN $9 IS NULL THEN rights_native_id ELSE $12 END, \
+             updated_at = $13 \
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+            org_db,
+            product_db,
+            edit.title.as_ref().map(|title| title.0.as_str()),
+            edit.body.as_ref().map(|copy| copy.body.as_str()),
+            edit.body
+                .as_ref()
+                .map(|copy| copy_format_to_db(copy.format)),
+            price.as_ref().map(|price| price.kind),
+            price.as_ref().and_then(|price| price.minor_units),
+            price.as_ref().and_then(|price| price.currency),
+            rights.as_ref().map(|rights| rights.state),
+            rights.as_ref().and_then(|rights| rights.inventory.clone()),
+            rights
+                .as_ref()
+                .and_then(|rights| rights.segments.as_deref()),
+            rights
+                .as_ref()
+                .and_then(|rights| rights.native_id.as_deref()),
+            at_db,
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if touched == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        if let Some(subjects) = &edit.subjects {
+            sqlx::query!(
+                "DELETE FROM product_term WHERE org_id = $1 AND product_id = $2",
+                org_db,
+                product_db,
+            )
+            .execute(&mut *tx)
+            .await?;
+            for (index, term) in subjects.iter().enumerate() {
+                let position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
+                    reason: format!("subject position {index} exceeds the column range"),
+                })?;
+                sqlx::query!(
+                    "INSERT INTO product_term (org_id, product_id, term_id, position) \
+                     VALUES ($1, $2, $3, $4)",
+                    org_db,
+                    product_db,
+                    uuid_to_db(term.0),
+                    position,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        if let Some(grades) = &edit.grades {
+            // grade_declaration_path cascades off the declaration row, so one
+            // delete clears both and the reinsert is the whole replacement.
+            sqlx::query!(
+                "DELETE FROM grade_declaration WHERE org_id = $1 AND product_id = $2",
+                org_db,
+                product_db,
+            )
+            .execute(&mut *tx)
+            .await?;
+            insert_grades(&mut tx, org_db, product_db, grades).await?;
+        }
+
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// Which of these content hashes this tenant actually holds bytes for.
+    ///
+    /// The create names handles a client holds, and `insert_file` upserts a
+    /// `blob` row rather than requiring one — the not-yet-encrypted sentinel
+    /// path M1f left behind — so without this a handle naming bytes nobody
+    /// uploaded would mint a phantom row pointing at an object that does not
+    /// exist, and count against the tenant's storage. Asked here rather than
+    /// on `BlobRepo` because the caller is the create, which needs no object
+    /// store to answer it.
+    pub async fn stored_hashes(
+        &self,
+        org: OrgId,
+        hashes: &[tam_types::ContentHash],
+    ) -> Result<Vec<tam_types::ContentHash>, StorageError> {
+        let wanted: Vec<Vec<u8>> = hashes.iter().copied().map(hash_to_db).collect();
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query_scalar!(
+            "SELECT hash FROM blob WHERE org_id = $1 AND hash = ANY($2)",
+            uuid_to_db(org.0),
+            &wanted,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.iter().map(|row| hash_from_db(row)).collect()
+    }
+
+    /// Marks a product deleted without erasing it. Every catalogue read
+    /// already filters on `deleted_at`, so this is the whole local removal.
+    ///
+    /// `false` means the tenant has no live product of that identifier, which
+    /// makes a repeated delete a no-op rather than a fault.
+    pub async fn soft_delete(
+        &self,
+        org: OrgId,
+        id: ProductId,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let deleted = sqlx::query!(
+            "UPDATE product SET deleted_at = $3, updated_at = $3 \
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+            uuid_to_db(org.0),
+            uuid_to_db(id.0),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(deleted == 1)
+    }
+
+    /// How many live products this tenant holds, which is what
+    /// `TierQuota::listings_max` bounds.
+    pub async fn live_count(&self, org: OrgId) -> Result<i64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let counted = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "counted!" FROM product
+               WHERE org_id = $1 AND deleted_at IS NULL"#,
+            uuid_to_db(org.0),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(counted)
+    }
+
+    /// How many bytes this tenant's blobs occupy, which is what
+    /// `TierQuota::storage_bytes_max` bounds.
+    ///
+    /// Counted over `blob` rather than over `product_file`: dedup is per
+    /// tenant on the hash, so one blob referenced by three products occupies
+    /// its bytes once and charging for it three times would bill a seller for
+    /// storage nobody uses. A soft-deleted product's blob is still stored, so
+    /// it still counts.
+    pub async fn stored_bytes(&self, org: OrgId) -> Result<i64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let total = sqlx::query_scalar!(
+            r#"SELECT COALESCE(sum(byte_len), 0)::bigint AS "total!" FROM blob WHERE org_id = $1"#,
+            uuid_to_db(org.0),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(total)
     }
 
     pub async fn list(&self, org: OrgId) -> Result<Vec<ProductSummary>, StorageError> {

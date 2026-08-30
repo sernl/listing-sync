@@ -83,6 +83,22 @@ pub struct NewAnswer<'a> {
     pub promote: Option<&'a ElectionRule>,
 }
 
+/// One question answered on the create form, before any mapping exists.
+///
+/// A separate type from [`NewAnswer`], which settles an open row the
+/// projection raised: this one mints the row and the answer together, so it
+/// names the question rather than an item identifier.
+pub struct AnsweredElection<'a> {
+    pub product: ProductId,
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub trigger_kind: ElectionTriggerKind,
+    /// `free` or `paid` for a supply, the source value's own native id for a
+    /// narrow, and `None` for the two kinds that generalise to nothing.
+    pub trigger_key: Option<&'a str>,
+    pub paths: &'a [VocabularyPath],
+}
+
 impl ElectionRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
@@ -147,6 +163,80 @@ impl ElectionRepo {
         }
         tx.commit().await?;
         Ok(report)
+    }
+
+    /// Records a question the seller answered before it was ever asked.
+    ///
+    /// The create form is the one place an answer can precede every mapping:
+    /// the seller picks a licence while authoring, and the projection that
+    /// would otherwise raise the question runs for the first time after the
+    /// product exists. `election_item.raised_by` is nullable for exactly this
+    /// shape and migration 0023's provenance CHECK admits it
+    /// (`raised_by IS NOT NULL OR state = 'answered'`), so nothing here
+    /// invents a mapping to name.
+    ///
+    /// Nothing is revived, because nothing can be parked on a question no
+    /// mapping has raised yet.
+    ///
+    /// Guarded against a duplicate the way `raise` is: an identical question
+    /// this tenant has already settled for this product writes no second row,
+    /// so a retried create is a no-op rather than a second answer.
+    /// `false` reports exactly that.
+    pub async fn record_answered(
+        &self,
+        org: OrgId,
+        answered: &AnsweredElection<'_>,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        if answered.paths.is_empty() {
+            return Err(StorageError::Inconsistent {
+                reason: "an answered election names at least one value".to_owned(),
+            });
+        }
+        // The CHECK ties the sentinel to the trigger kind, so a violation here
+        // would surface as a bare constraint failure the caller cannot read.
+        let keyed = matches!(
+            answered.trigger_kind,
+            ElectionTriggerKind::Supply | ElectionTriggerKind::Narrow
+        );
+        let key = answered.trigger_key.unwrap_or_default();
+        if keyed == key.is_empty() {
+            return Err(StorageError::Inconsistent {
+                reason: format!(
+                    "a {} election carries {} trigger key",
+                    answered.trigger_kind.as_str(),
+                    if keyed { "no" } else { "a" }
+                ),
+            });
+        }
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let written = sqlx::query!(
+            "INSERT INTO election_item \
+             (org_id, id, product_id, inventory, axis, trigger_kind, trigger_key, \
+              raised_by, raised_at, state, answer, resolved_at) \
+             SELECT $1, $2, $3, $4, $5, $6, $7, NULL, $8, 'answered', $9, $8 \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM election_item \
+                 WHERE org_id = $1 AND product_id = $3 AND inventory = $4 \
+                   AND axis = $5 AND trigger_kind = $6 AND trigger_key = $7 \
+                   AND state = 'answered') \
+             ON CONFLICT DO NOTHING",
+            uuid_to_db(org.0),
+            uuid::Uuid::new_v4(),
+            uuid_to_db(answered.product.0),
+            inventory_to_db(answered.inventory),
+            term_kind_to_db(answered.axis),
+            answered.trigger_kind.as_str(),
+            key,
+            timestamp_to_db(at)?,
+            encode_paths(answered.paths),
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(written == 1)
     }
 
     /// Every open question for one tenant, in a deterministic order.

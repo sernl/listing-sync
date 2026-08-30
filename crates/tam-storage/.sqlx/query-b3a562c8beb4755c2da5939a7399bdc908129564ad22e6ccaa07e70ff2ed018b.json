@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM grade_declaration WHERE org_id = $1 AND product_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b3a562c8beb4755c2da5939a7399bdc908129564ad22e6ccaa07e70ff2ed018b"
+}

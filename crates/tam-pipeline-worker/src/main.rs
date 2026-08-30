@@ -95,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         IngestContext {
             budget: ExtractBudget::default(),
             now,
+            archives: tam_pipeline::pipeline::ArchiveMode::Explode,
         },
     )
     .await?;

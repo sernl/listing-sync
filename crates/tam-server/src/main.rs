@@ -5,15 +5,15 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use tam_api::{
-    AppState, AuthBridge, Config, Disclosure, JwkSet, JwksFuture, JwksSource, JwksUnavailable,
-    WebhookSecret,
+    AppState, AuthBridge, BlobStore, Config, Disclosure, JwkSet, JwksFuture, JwksSource,
+    JwksUnavailable, WebhookSecret,
 };
 use tam_engine::outbox::{drain, LoggingDeliverer};
 use tam_storage::{OutboxRepo, PruneRepo};
@@ -67,6 +67,20 @@ const AUTH_ISSUER_FLAG: &str = "--auth-issuer";
 
 /// Where that service publishes the keys its assertions are signed under.
 const AUTH_JWKS_FLAG: &str = "--auth-jwks-url";
+
+/// The key every tenant's blob data-encryption key is wrapped under, read
+/// from a file the way `tam-worker` and `tam-import` read theirs. Given on
+/// the command line like every other configuration value here, because the
+/// lint table bans environment reads outside the one crate that will own
+/// them. Absent, `POST /{version}/uploads` answers 503: an upload has to seal
+/// its bytes somewhere, and there is no unsealed mode of it to fall back to.
+const BLOB_KEK_FLAG: &str = "--blob-kek-path";
+
+/// The directory the sealed objects are written beneath, which is the same
+/// root the worker reads them back from. Paired with the key above for the
+/// reason the identity pair is paired: a key with nowhere to write would seal
+/// bytes into nothing, and a root with no key would have nothing to write.
+const BLOB_STORE_ROOT_FLAG: &str = "--blob-store-root";
 
 /// The key set is small and the identity service is a neighbour, so these are
 /// short. They are named at all because the lint table refuses a client built
@@ -228,12 +242,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => None,
     };
+    let blobs = match &invocation.blobs {
+        Some((kek_path, root)) => {
+            eprintln!(
+                "tam-server accepting resource uploads into {}",
+                root.display()
+            );
+            Some(BlobStore {
+                kek: load_kek(kek_path)?,
+                root: root.clone(),
+            })
+        }
+        None => None,
+    };
     let state = AppState {
         pool,
         config: invocation.config.clone(),
         wall: wall_now,
         auth,
         backoffice,
+        blobs,
     };
 
     let listener = tokio::net::TcpListener::bind(invocation.bind).await?;
@@ -298,6 +326,9 @@ struct Invocation {
     /// The issuer and the key-set url, which are meaningless apart and so are
     /// parsed as one value.
     identity: Option<(String, String)>,
+    /// The key-encryption key's path and the object-store root, which are
+    /// meaningless apart for the same reason.
+    blobs: Option<(String, std::path::PathBuf)>,
 }
 
 /// The database url first, then an optional bind address and the disclosure
@@ -312,6 +343,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut ui_dir = None;
     let mut auth_issuer = None;
     let mut auth_jwks_url = None;
+    let mut blob_kek_path = None;
+    let mut blob_store_root = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -355,6 +388,18 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--auth-jwks-url needs a url argument")?,
             );
+        } else if argument == BLOB_KEK_FLAG {
+            blob_kek_path = Some(
+                arguments
+                    .next()
+                    .ok_or("--blob-kek-path needs a path argument")?,
+            );
+        } else if argument == BLOB_STORE_ROOT_FLAG {
+            blob_store_root = Some(std::path::PathBuf::from(
+                arguments
+                    .next()
+                    .ok_or("--blob-store-root needs a path argument")?,
+            ));
         } else {
             positional.push(argument);
         }
@@ -380,6 +425,19 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             .into())
         }
     };
+    // Refused rather than half-configured, exactly as the identity pair is: a
+    // key with nowhere to write would seal bytes into nothing, and a root with
+    // no key would have nothing to write into it.
+    let blobs = match (blob_kek_path, blob_store_root) {
+        (Some(kek), Some(root)) => Some((kek, root)),
+        (None, None) => None,
+        _ => {
+            return Err(format!(
+                "{BLOB_KEK_FLAG} and {BLOB_STORE_ROOT_FLAG} are given together or not at all"
+            )
+            .into())
+        }
+    };
     Ok(Invocation {
         db_url,
         bind,
@@ -388,7 +446,18 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         backoffice_db_url,
         ui_dir,
         identity,
+        blobs,
     })
+}
+
+/// The key-encryption key off disk, read the way `tam-worker` reads its own:
+/// a bounded file opened and read to end, rather than `std::fs::read`, which
+/// the lint table bans.
+fn load_kek(path: &str) -> Result<tam_secrets::Kek, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.read_to_end(&mut bytes)?;
+    Ok(tam_secrets::Kek::from_bytes(&bytes)?)
 }
 
 fn read_shell(path: &std::path::Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

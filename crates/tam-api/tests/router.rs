@@ -42,6 +42,7 @@ fn test_state() -> AppState {
         wall: || Timestamp(0),
         auth: None,
         backoffice: None,
+        blobs: None,
     }
 }
 

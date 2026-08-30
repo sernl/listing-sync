@@ -66,11 +66,31 @@ impl From<ArchiveError> for IngestError {
     }
 }
 
-/// The extract budget and the wall-clock instant an ingest runs under.
+/// What an archive upload means to the caller.
+///
+/// A ZIP is the one upload whose payload count is a choice rather than a
+/// fact: exploded it is one payload file per entry, and kept whole it is one
+/// file the seller assembled. TPT's create takes exactly one file
+/// (`crates/tam-marketplace-tpt/src/flows.rs:634`), so an exploded ZIP is
+/// structurally unpublishable there while the same bytes kept whole are not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ArchiveMode {
+    /// Extract the archive and classify each recognised entry as its own
+    /// payload file. The import's behaviour, and the default.
+    #[default]
+    Explode,
+    /// Store the upload as a single payload file whatever its kind, so a
+    /// bundle stays one file.
+    KeepWhole,
+}
+
+/// The extract budget, the archive treatment, and the wall-clock instant an
+/// ingest runs under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IngestContext {
     pub budget: ExtractBudget,
     pub now: Timestamp,
+    pub archives: ArchiveMode,
 }
 
 /// Stores one blob's bytes and returns its content hash. The pipeline calls
@@ -100,17 +120,18 @@ pub async fn ingest(
         return Err(IngestError::Infected { signature });
     }
 
-    let files: Vec<(Vec<u8>, FileKind)> = if kind == FileKind::Zip {
-        let mut classified = Vec::new();
-        for entry in extract(std::io::Cursor::new(upload), ctx.budget)? {
-            if let Some(entry_kind) = probe_kind(&entry.bytes) {
-                classified.push((entry.bytes, entry_kind));
+    let files: Vec<(Vec<u8>, FileKind)> =
+        if kind == FileKind::Zip && ctx.archives == ArchiveMode::Explode {
+            let mut classified = Vec::new();
+            for entry in extract(std::io::Cursor::new(upload), ctx.budget)? {
+                if let Some(entry_kind) = probe_kind(&entry.bytes) {
+                    classified.push((entry.bytes, entry_kind));
+                }
             }
-        }
-        classified
-    } else {
-        vec![(upload.to_vec(), kind)]
-    };
+            classified
+        } else {
+            vec![(upload.to_vec(), kind)]
+        };
 
     let mut payload = Vec::new();
     for (bytes, file_kind) in &files {
@@ -166,7 +187,7 @@ async fn store_render(
 
 #[cfg(test)]
 mod tests {
-    use super::{ingest, BlobSink, IngestContext, IngestError};
+    use super::{ingest, ArchiveMode, BlobSink, IngestContext, IngestError};
     use crate::archive::ExtractBudget;
     use crate::hash::content_hash;
     use crate::scan::{AllowAllScanner, EicarScanner, EICAR};
@@ -190,6 +211,7 @@ mod tests {
         IngestContext {
             budget: ExtractBudget::default(),
             now: Timestamp(1),
+            archives: ArchiveMode::Explode,
         }
     }
 
@@ -238,6 +260,44 @@ mod tests {
             ingested.payload.len(),
             1,
             "only the recognised entry became a payload file"
+        );
+    }
+
+    #[test]
+    fn a_zip_kept_whole_is_one_payload_file() {
+        let archive = zip_of(&[("one.pdf", &pdf()), ("two.pdf", &pdf())]);
+        let exploded =
+            futures::executor::block_on(ingest(&archive, &AllowAllScanner, &HashOnlySink, ctx()))
+                .expect("the zip ingests exploded");
+        assert_eq!(
+            exploded.payload.len(),
+            2,
+            "the default explodes an archive into one payload file per entry"
+        );
+        let whole = futures::executor::block_on(ingest(
+            &archive,
+            &AllowAllScanner,
+            &HashOnlySink,
+            IngestContext {
+                archives: ArchiveMode::KeepWhole,
+                ..ctx()
+            },
+        ))
+        .expect("the zip ingests whole");
+        assert_eq!(
+            whole.payload.len(),
+            1,
+            "kept whole, the archive is the single payload file the seller assembled"
+        );
+        assert_eq!(
+            whole.payload[0].kind,
+            tam_types::FileKind::Zip,
+            "the kept-whole payload keeps the archive's own kind"
+        );
+        assert_eq!(
+            whole.cover.role,
+            FileRole::Cover,
+            "a cover is still generated, from the archive's placeholder card"
         );
     }
 

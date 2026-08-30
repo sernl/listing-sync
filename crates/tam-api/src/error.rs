@@ -69,13 +69,42 @@ pub enum APIErrorCode {
     /// would turn the exclusivity constraint into a directory of every seller
     /// on the platform.
     PlatformAccountAlreadyLinked,
+    /// This deployment was started without a key-encryption key and an
+    /// object-store root, so the upload route accepts no bytes at all rather
+    /// than accepting bytes it cannot seal.
+    BlobStoreUnavailable,
+    /// The upload's own content is what the pipeline refused: an unaccepted
+    /// kind, a scan hit, an archive over its bounds, a cover that could not
+    /// be produced, or a handle naming bytes this tenant never stored. Every
+    /// one is the seller's to fix, which is what separates it from a fault.
+    UploadRejected,
+    /// A create carrying no payload file. Named apart from a general
+    /// validation refusal because the deferred `assert_product_has_payload`
+    /// trigger states the same invariant at commit, and the client's remedy
+    /// is a specific one: upload the bytes first.
+    PayloadMissing,
+    /// A selected platform declares a field required that this product does
+    /// not carry. `detail.missing` names the inventory and the field.
+    RequiredFieldMissing,
+    /// The tenant's tier quota is full. `detail` names which quota, what is
+    /// used and what the limit is, so the client can render the sentence
+    /// rather than reconstructing it.
+    QuotaExceeded,
+    /// The edit addresses a listing whose transition no capture supports —
+    /// today, a live Tes listing, which serves neither live-to-live nor
+    /// live-to-draft. Refused before the edit is written rather than after
+    /// an item settles with a code that says nothing about why.
+    UncapturedTransition,
+    /// A local delete would leave a bound listing standing on a platform it
+    /// does not remove from. `detail.bound` names them.
+    ListingStillBound,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 19] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -87,6 +116,13 @@ impl APIErrorCode {
         Self::BrokerUnavailable,
         Self::BackofficeUnavailable,
         Self::PlatformAccountAlreadyLinked,
+        Self::BlobStoreUnavailable,
+        Self::UploadRejected,
+        Self::PayloadMissing,
+        Self::RequiredFieldMissing,
+        Self::QuotaExceeded,
+        Self::UncapturedTransition,
+        Self::ListingStillBound,
         Self::Internal,
     ];
 
@@ -104,6 +140,13 @@ impl APIErrorCode {
             Self::BrokerUnavailable => "broker_unavailable",
             Self::BackofficeUnavailable => "backoffice_unavailable",
             Self::PlatformAccountAlreadyLinked => "platform_account_already_linked",
+            Self::BlobStoreUnavailable => "blob_store_unavailable",
+            Self::UploadRejected => "upload_rejected",
+            Self::PayloadMissing => "payload_missing",
+            Self::RequiredFieldMissing => "required_field_missing",
+            Self::QuotaExceeded => "quota_exceeded",
+            Self::UncapturedTransition => "uncaptured_transition",
+            Self::ListingStillBound => "listing_still_bound",
             Self::Internal => "internal",
         }
     }
@@ -322,6 +365,13 @@ mod tests {
                 | APIErrorCode::BrokerUnavailable
                 | APIErrorCode::BackofficeUnavailable
                 | APIErrorCode::PlatformAccountAlreadyLinked
+                | APIErrorCode::BlobStoreUnavailable
+                | APIErrorCode::UploadRejected
+                | APIErrorCode::PayloadMissing
+                | APIErrorCode::RequiredFieldMissing
+                | APIErrorCode::QuotaExceeded
+                | APIErrorCode::UncapturedTransition
+                | APIErrorCode::ListingStillBound
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

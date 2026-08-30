@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM product_term WHERE org_id = $1 AND product_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "82e0e1062e659c0b8366c81af5a4a872cb1834f2f01de5ca377901ca5a2adae8"
+}

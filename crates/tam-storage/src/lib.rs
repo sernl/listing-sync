@@ -57,12 +57,12 @@ pub use lowering::{
 pub use mapping::{BoundListing, LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
 pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo};
-pub use product::{ProductRecord, ProductRepo, ProductSummary};
+pub use product::{ProductEdit, ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub mod elections;
 pub mod sync_requests;
-pub use elections::{AnswerReport, ElectionRepo, NewAnswer, OpenElection};
+pub use elections::{AnswerReport, AnsweredElection, ElectionRepo, NewAnswer, OpenElection};
 pub use sync_requests::{
     job_request_key, Canonicalised, Disposition, Enqueued, NewSyncRequest, SyncIntent,
     SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
