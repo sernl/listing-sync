@@ -28,5 +28,8 @@ export function createQueryClient(): QueryClient {
 /** The cache keys, named once so an invalidation and its query cannot drift. */
 export const queryKeys = {
 	connections: ['connections'] as const,
-	status: ['status'] as const
+	status: ['status'] as const,
+	org: ['org'] as const,
+	identity: ['identity'] as const,
+	passkeys: ['passkeys'] as const
 };

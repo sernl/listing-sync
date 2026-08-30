@@ -43,6 +43,7 @@
 					<a class="hover:underline" href="/jobs">Jobs</a>
 					<a class="hover:underline" href="/connections">Connections</a>
 					<a class="hover:underline" href="/queue">Reconciliation</a>
+					<a class="hover:underline" href="/settings">Settings</a>
 				{/if}
 				<a class="hover:underline" href="/status">Status</a>
 				<span class="grow"></span>

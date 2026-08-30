@@ -71,11 +71,28 @@ function post<T>(path: string, body: unknown, headers?: Record<string, string>):
 	});
 }
 
+function patch<T>(path: string, body: unknown): Promise<T> {
+	return request<T>(path, {
+		method: 'PATCH',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+}
+
 // ------------------------------------------------------------------ shapes
 
 export interface Whoami {
 	org: string;
 	user: string;
+}
+
+/** The organisation's own settings, as `/v1/org` serves and stores them. The
+ *  name comes back from the rename too, because the server trims on the way in
+ *  and a client that echoed what it sent would render a value it does not
+ *  hold. */
+export interface OrgView {
+	id: string;
+	name: string;
 }
 
 export interface ProductHead {
@@ -206,6 +223,9 @@ export const api = {
 	whoami: () => request<Whoami>('/v1/whoami'),
 	exchange: (token: string) => post<Whoami>('/v1/session', { token }),
 	logout: () => request<void>('/v1/session', { method: 'DELETE' }),
+
+	org: () => request<OrgView>('/v1/org'),
+	renameOrg: (name: string) => patch<OrgView>('/v1/org', { name }),
 
 	products: (cursor?: string | null) =>
 		request<ProductsPage>(`/v1/products${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
