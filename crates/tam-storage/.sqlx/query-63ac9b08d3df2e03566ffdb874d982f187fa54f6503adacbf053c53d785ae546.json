@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event, user_id AS \"actor!\", target_user_id AS \"target!\", ip_address, at FROM auth.auth_event WHERE event IN ('user_impersonated', 'user_impersonation_stopped') ORDER BY at DESC, id DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "actor!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "target!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "ip_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "63ac9b08d3df2e03566ffdb874d982f187fa54f6503adacbf053c53d785ae546"
+}

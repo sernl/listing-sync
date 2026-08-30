@@ -54,6 +54,16 @@ const subject = (minted: MintedSession | null, submitted: string | undefined): S
     ? { identifier: submitted }
     : { userId: minted.user.id, sessionId: minted.session.id };
 
+// The admin plugin declares impersonatedBy on the session table
+// (packages/better-auth/src/plugins/admin/schema.ts:29-37) and fills it with
+// the acting admin's user id (plugins/admin/routes.ts:1283). A database hook
+// receives Session & Record<string, unknown>, so a plugin's own column arrives
+// untyped and is narrowed here rather than asserted.
+const impersonatedBy = (session: Record<string, unknown>): string | undefined => {
+  const actor = session['impersonatedBy'];
+  return typeof actor === 'string' && actor.length > 0 ? actor : undefined;
+};
+
 // A rejected endpoint leaves its APIError on ctx.context.returned rather than
 // skipping the after hooks (packages/better-auth/src/api/dispatch.ts:405-431),
 // which is what makes a failed sign-in recordable at all.
@@ -159,20 +169,64 @@ export const auth = betterAuth({
   },
   databaseHooks: {
     session: {
+      create: {
+        // Impersonation is a session mint and has no other trace: the response
+        // to /admin/impersonate-user carries the impersonated user but not the
+        // admin, whose id reaches this row and nowhere else. Both parties are
+        // readable here, which is the same reason the delete hook below exists.
+        after: async (session, context) => {
+          const actor = impersonatedBy(session);
+          if (context === null || actor === undefined) {
+            return;
+          }
+          audit({
+            event: 'user_impersonated',
+            userId: actor,
+            targetUserId: session.userId,
+            sessionId: session.id,
+            ...origin(context.headers, context.context.options),
+          });
+        },
+      },
       delete: {
         // The only seam that can attribute a sign-out: the endpoint deletes
         // the session row before any after hook runs and never puts it on the
         // response context, so this is where the subject is still readable.
+        // The same holds for the end of an impersonation, which
+        // /admin/stop-impersonating performs by deleting this row and answers
+        // with the restored admin session, naming the impersonated user
+        // nowhere.
         after: async (session, context) => {
-          if (context?.path !== '/sign-out') {
+          if (context === null) {
             return;
           }
-          audit({
-            event: 'user_signed_out',
-            userId: session.userId,
-            sessionId: session.id,
-            ...origin(context.headers, context.context.options),
-          });
+          const where = origin(context.headers, context.context.options);
+          const actor = impersonatedBy(session);
+
+          // Discriminated on the row rather than on the path, so an
+          // impersonation ended by signing out is recorded as what it was.
+          // Deleting that session is not the impersonated user signing out,
+          // and a row saying it was would be a false attribution in the one
+          // table whose whole value is attribution.
+          if (actor !== undefined) {
+            audit({
+              event: 'user_impersonation_stopped',
+              userId: actor,
+              targetUserId: session.userId,
+              sessionId: session.id,
+              ...where,
+            });
+            return;
+          }
+
+          if (context.path === '/sign-out') {
+            audit({
+              event: 'user_signed_out',
+              userId: session.userId,
+              sessionId: session.id,
+              ...where,
+            });
+          }
         },
       },
     },

@@ -108,6 +108,88 @@ impl SignupsRepo {
     }
 }
 
+/// One impersonation as the identity service recorded it.
+///
+/// `actor` and `target` are identity-plane subject ids -- `auth."user".id`,
+/// which `app_user.auth_subject` joins to -- and not `UserId`s. The two planes
+/// number their users separately, so rendering one as the other would name a
+/// different person.
+///
+/// Neither party is optional, though the columns holding them are.
+/// `auth_event_impersonation_parties_identified` in
+/// `db/auth/0003_impersonation_event.sql` demands both of exactly the two
+/// events this read selects, so a row reaching here without them is one the
+/// database would not have accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImpersonationEvent {
+    pub event: String,
+    pub actor: Uuid,
+    pub target: Uuid,
+    pub at: Timestamp,
+    pub ip_address: Option<String>,
+}
+
+/// The identity plane's impersonation record, read on the application pool.
+///
+/// The same pool and the same reason as [`SignupsRepo`]: `auth.auth_event` is
+/// the one object in the identity schema `tam_app` holds SELECT on, and the
+/// cross-tenant `tam_backoffice` role holds nothing there at all.
+pub struct IdentityAuditRepo {
+    pool: PgPool,
+}
+
+impl IdentityAuditRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Impersonation events newest first, or `None` where the identity schema
+    /// is not present in this database.
+    ///
+    /// The `None` draws the distinction [`SignupsRepo::identity_by_day`] draws
+    /// and for the same reason: an operator looking at an empty list needs
+    /// "nobody impersonated anyone" told apart from "the identity audit trail
+    /// is not visible from here".
+    pub async fn impersonations(
+        &self,
+        limit: i64,
+    ) -> Result<Option<Vec<ImpersonationEvent>>, StorageError> {
+        let present =
+            sqlx::query!("SELECT to_regclass('auth.auth_event') IS NOT NULL AS \"present!\"",)
+                .fetch_one(&self.pool)
+                .await?
+                .present;
+        if !present {
+            return Ok(None);
+        }
+        // The two non-null overrides are the filter's own consequence: the
+        // check constraint that names both parties applies to exactly the two
+        // events selected here, so neither column can arrive null.
+        let rows = sqlx::query!(
+            "SELECT event, user_id AS \"actor!\", target_user_id AS \"target!\", \
+                    ip_address, at \
+             FROM auth.auth_event \
+             WHERE event IN ('user_impersonated', 'user_impersonation_stopped') \
+             ORDER BY at DESC, id DESC LIMIT $1",
+            limit.clamp(1, MAX_ROWS),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|row| ImpersonationEvent {
+                    event: row.event,
+                    actor: uuid_from_db(row.actor),
+                    target: uuid_from_db(row.target),
+                    at: timestamp_from_db(row.at),
+                    ip_address: row.ip_address,
+                })
+                .collect(),
+        ))
+    }
+}
+
 /// One organisation and what it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrgSummary {

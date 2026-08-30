@@ -1,4 +1,4 @@
-//! The operator backoffice: five reads over the whole platform rather than
+//! The operator backoffice: six reads over the whole platform rather than
 //! one tenant.
 //!
 //! Every route here takes [`OperatorContext`], so the marking is checked
@@ -17,7 +17,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tam_storage::{BackofficeRepo, DailyCount, ItemCounts, SignupsRepo};
+use tam_storage::{BackofficeRepo, DailyCount, IdentityAuditRepo, ItemCounts, SignupsRepo};
 use tam_types::{FailureCode, InventoryId, MappingId, OrgId, Timestamp, Uuid};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
@@ -28,6 +28,10 @@ use crate::AppState;
 /// How many failure rows one page carries. A bound on this answer's own size,
 /// so it is a constant beside its caller rather than an entry in `tam-limits`.
 const FAILED_WRITES_LIMIT: i64 = 100;
+
+/// How many impersonation rows one page carries, bounded for the reason the
+/// failure listing above is.
+const IMPERSONATIONS_LIMIT: i64 = 100;
 
 fn storage_fault(state: &AppState, error: &tam_storage::StorageError) -> APIError {
     state.internal(&error.to_string())
@@ -335,5 +339,65 @@ pub(crate) async fn failed_writes(
                 item_failure_detail: row.item_failure_detail,
             })
             .collect(),
+    }))
+}
+
+// ---------------------------------------------------------- impersonations
+
+/// One impersonation as the identity service recorded it.
+///
+/// `actor` and `target` are identity-plane subject ids, which is what
+/// `auth.auth_event` stores. They are not `UserId`s and name no row in
+/// `app_user` without the `auth_subject` join. Both are always present: the
+/// identity schema refuses an impersonation row that names only one party.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImpersonationView {
+    pub event: String,
+    pub actor: Uuid,
+    pub target: Uuid,
+    pub at: Timestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+}
+
+impl ImpersonationView {
+    fn of(event: tam_storage::ImpersonationEvent) -> Self {
+        Self {
+            event: event.event,
+            actor: event.actor,
+            target: event.target,
+            at: event.at,
+            ip: event.ip_address,
+        }
+    }
+}
+
+/// `impersonations` is absent rather than empty where this database holds no
+/// identity schema, for the reason [`SignupsView`] gives.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImpersonationsView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub impersonations: Option<Vec<ImpersonationView>>,
+}
+
+/// Every impersonation the identity service recorded, newest first.
+///
+/// This read is the condition on which impersonation ships at all: an admin
+/// signing in as a user leaves a record, and the record is readable by someone
+/// other than the impersonator. Reading it needs the operator marking, which
+/// the identity admin role does not confer -- the two roles are granted
+/// separately and by hand, so the party who can impersonate and the party who
+/// can read the trail are not the same party by construction.
+pub(crate) async fn impersonations(
+    State(state): State<AppState>,
+    _operator: OperatorContext,
+) -> Result<Json<ImpersonationsView>, APIError> {
+    let _configured = backoffice(&state)?;
+    let rows = IdentityAuditRepo::new(state.pool.clone())
+        .impersonations(IMPERSONATIONS_LIMIT)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(ImpersonationsView {
+        impersonations: rows.map(|events| events.into_iter().map(ImpersonationView::of).collect()),
     }))
 }

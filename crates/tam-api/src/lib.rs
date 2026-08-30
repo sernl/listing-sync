@@ -191,6 +191,10 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/admin/orgs/{org}", get(admin::org_detail))
         .route("/{version}/admin/sync-health", get(admin::sync_health))
         .route("/{version}/admin/failed-writes", get(admin::failed_writes))
+        .route(
+            "/{version}/admin/impersonations",
+            get(admin::impersonations),
+        )
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }

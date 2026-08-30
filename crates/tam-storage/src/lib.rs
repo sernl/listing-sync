@@ -30,8 +30,8 @@ pub mod taxonomy;
 pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{
-    BackofficeRepo, DailyCount, FailedWrite, HaltRecord, OrgDetail, OrgSummary, SignupsRepo,
-    SyncHealth,
+    BackofficeRepo, DailyCount, FailedWrite, HaltRecord, IdentityAuditRepo, ImpersonationEvent,
+    OrgDetail, OrgSummary, SignupsRepo, SyncHealth,
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};

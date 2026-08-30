@@ -11,7 +11,9 @@ export type AuthEventName =
   | 'user_sign_in_failed'
   | 'user_signed_out'
   | 'password_reset_requested'
-  | 'password_reset_completed';
+  | 'password_reset_completed'
+  | 'user_impersonated'
+  | 'user_impersonation_stopped';
 
 /**
  * One row of the identity audit trail.
@@ -21,10 +23,15 @@ export type AuthEventName =
  * subject is known by id, the id is what is recorded: the table is readable
  * by tam_app, and every address written here is one the identity-schema
  * boundary would otherwise have kept from it.
+ *
+ * `userId` is the actor throughout. `targetUserId` is the party the act was
+ * performed upon, which only the impersonation pair has; everywhere else the
+ * actor is the subject and it stays absent.
  */
 export interface AuthEvent {
   readonly event: AuthEventName;
   readonly userId?: string | undefined;
+  readonly targetUserId?: string | undefined;
   readonly identifier?: string | undefined;
   readonly sessionId?: string | undefined;
   readonly ipAddress?: string | undefined;
@@ -36,13 +43,14 @@ export interface AuthEvent {
 // that resolves to nothing fails into the catch below, and a silent gap in an
 // audit trail is the one failure this table exists to prevent.
 const INSERT = `INSERT INTO auth.auth_event
-    (event, user_id, identifier, session_id, ip_address, user_agent, detail)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)`;
+    (event, user_id, target_user_id, identifier, session_id, ip_address, user_agent, detail)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`;
 
 const insert = async (pool: Pool, event: AuthEvent): Promise<void> => {
   await pool.query(INSERT, [
     event.event,
     event.userId ?? null,
+    event.targetUserId ?? null,
     event.identifier ?? null,
     event.sessionId ?? null,
     event.ipAddress ?? null,

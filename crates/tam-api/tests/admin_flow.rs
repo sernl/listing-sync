@@ -17,7 +17,9 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use tam_api::admin::{FailedWritesView, OrgDetailView, OrgsView, SignupsView, SyncHealthView};
+use tam_api::admin::{
+    FailedWritesView, ImpersonationsView, OrgDetailView, OrgsView, SignupsView, SyncHealthView,
+};
 use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
 use tam_storage::{OperatorRepo, SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
@@ -34,12 +36,13 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 5] = [
+const ADMIN_PATHS: [&str; 6] = [
     "/v1/admin/signups",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     "/v1/admin/sync-health",
     "/v1/admin/failed-writes",
+    "/v1/admin/impersonations",
 ];
 
 #[expect(
@@ -510,6 +513,118 @@ async fn signups_carry_the_identity_series_where_that_schema_is_present(pool: Pg
         identity.iter().map(|day| day.count).sum::<i64>(),
         2,
         "only signup events are counted; the sign-in beside them is not one"
+    );
+}
+
+/// The two identity-plane subject ids one impersonation names. Deliberately
+/// not `UserId`s: `auth.auth_event` records `auth."user".id`, which reaches
+/// `app_user` only through the `auth_subject` join, and a test that reused a
+/// platform user id here would assert the two planes number their users the
+/// same way when they do not.
+const SUBJECT_ADMIN: [u8; 16] = [0xA1; 16];
+const SUBJECT_IMPERSONATED: [u8; 16] = [0xB2; 16];
+
+/// A stand-in for `auth.auth_event` as `db/auth/0002_audit_event.sql` and
+/// `0003_impersonation_event.sql` leave it, which a throwaway test database
+/// does not carry: those files are applied by `just auth-migrate` as tam_auth,
+/// and this crate's migrations are the only DDL sqlx::test runs. Only the
+/// columns the impersonation read names are reproduced, `id` among them
+/// because the ordering tiebreak uses it -- and the constraint naming both
+/// parties, because that is what entitles the read to treat them as non-null.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn identity_audit_standin(pool: &PgPool) {
+    let subject = |bytes: [u8; 16]| uuid::Uuid::from_bytes(bytes).to_string();
+    for statement in [
+        "CREATE SCHEMA auth".to_owned(),
+        "CREATE TABLE auth.auth_event (              id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,              event text NOT NULL, user_id uuid, target_user_id uuid,              ip_address text, at timestamptz NOT NULL, CONSTRAINT auth_event_impersonation_parties_identified CHECK (event NOT IN ('user_impersonated', 'user_impersonation_stopped') OR (user_id IS NOT NULL AND target_user_id IS NOT NULL)))"
+            .to_owned(),
+        // Newest last, so a read that forgot to reverse would return them in
+        // insertion order and fail rather than pass by accident. The sign-in
+        // beside them belongs to neither party and must not be listed.
+        format!(
+            "INSERT INTO auth.auth_event (event, user_id, target_user_id, ip_address, at) VALUES \
+             ('user_signed_in', '{admin}', NULL, '198.51.100.9', now() - interval '3 minutes'), \
+             ('user_impersonated', '{admin}', '{target}', '203.0.113.7', \
+              now() - interval '2 minutes'), \
+             ('user_impersonation_stopped', '{admin}', '{target}', '203.0.113.7', \
+              now() - interval '1 minute')",
+            admin = subject(SUBJECT_ADMIN),
+            target = subject(SUBJECT_IMPERSONATED),
+        ),
+    ] {
+        sqlx::query(&statement)
+            .execute(pool)
+            .await
+            .expect("the identity stand-in builds");
+    }
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operator_reads_who_impersonated_whom(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    identity_audit_standin(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/impersonations",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: ImpersonationsView = answer.json();
+    let events = view
+        .impersonations
+        .expect("the identity audit trail is visible from here");
+
+    assert_eq!(
+        events
+            .iter()
+            .map(|row| row.event.as_str())
+            .collect::<Vec<_>>(),
+        vec!["user_impersonation_stopped", "user_impersonated"],
+        "both new event names round-trip, newest first, and the sign-in row \
+         beside them is not an impersonation"
+    );
+    for row in &events {
+        assert_eq!(
+            (row.actor, row.target),
+            (Uuid(SUBJECT_ADMIN), Uuid(SUBJECT_IMPERSONATED)),
+            "the actor is the admin and the target is the party signed in as, \
+             in that order -- reversing them would name the wrong impersonator"
+        );
+        assert_eq!(
+            row.ip.as_deref(),
+            Some("203.0.113.7"),
+            "the network origin travels with the record"
+        );
+    }
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn impersonations_are_absent_where_the_identity_schema_is(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/impersonations",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: ImpersonationsView = answer.json();
+    assert!(
+        view.impersonations.is_none(),
+        "a database carrying no identity schema reports no record at all, rather \
+         than an empty list that would read as nobody having been impersonated"
     );
 }
 
