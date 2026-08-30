@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT paddle_subscription_id, paddle_customer_id, status, current_period_end, occurred_at FROM billing_subscription WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "paddle_subscription_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "paddle_customer_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "current_period_end",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "occurred_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "27d19238d1ea95ef0f08b93657d9e5eb026f8fec3ebb23a42cfb65c7b83d2f33"
+}

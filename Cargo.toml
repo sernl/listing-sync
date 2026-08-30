@@ -14,6 +14,15 @@ members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/
 [workspace.dependencies]
 sha2 = "0.10"
 
+# The other two primitives one Paddle webhook verification runs on, pinned
+# beside the hash it uses for the reason that pin exists: `hmac` keys the
+# SHA-256 above, and `subtle` supplies the comparison that does not branch on
+# the digest. A verifier assembled from three crates that disagreed on a
+# version would be a verifier whose behaviour depends on which crate resolved
+# first.
+hmac = "0.12"
+subtle = "2.6"
+
 # The Markdown-to-HTML renderer the Tes-to-TPT body carriage runs through,
 # pinned here for the reason above: one Markdown body must render to one HTML
 # body on every path that renders it, and a per-crate version is how two paths

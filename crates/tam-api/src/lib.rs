@@ -18,10 +18,12 @@
 pub mod admin;
 pub mod analytics;
 pub mod auth;
+pub mod billing;
 pub mod error;
 pub mod jobs;
 pub mod openapi;
 pub mod org;
+pub mod paddle;
 pub mod resources;
 pub mod session;
 pub mod stream;
@@ -40,6 +42,7 @@ pub use crate::{
     auth::{
         AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
     },
+    billing::{BillingView, SubscriptionView, WebhookSecret, ORG_CUSTOM_DATA_KEY},
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
     session::{OperatorContext, OrgContext, StreamAuth, SESSION_COOKIE},
     version::{APIVersion, VersionError},
@@ -54,6 +57,10 @@ pub struct Config {
     /// The credential broker's unix socket; revocation answers 503 without
     /// it rather than pretending.
     pub broker_socket: Option<std::path::PathBuf>,
+    /// Paddle's notification-webhook secret, which is the only thing that
+    /// authenticates the billing webhook. Absent, that route answers 503:
+    /// there is no unauthenticated mode of it to fall back to.
+    pub paddle_webhook_secret: Option<billing::WebhookSecret>,
 }
 
 /// How the current instant enters a handler: as a function the binary
@@ -125,6 +132,8 @@ pub fn router(state: AppState) -> Router {
             post(session::exchange).delete(session::logout),
         )
         .route("/{version}/org", get(org::org_view).patch(org::rename_org))
+        .route("/{version}/billing", get(billing::billing_view))
+        .route("/{version}/billing/webhook", post(billing::webhook))
         .route(
             "/{version}/jobs",
             post(jobs::create_job).get(jobs::list_jobs),

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 36] = [
+pub const ROUTES: [Route; 38] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -58,6 +58,16 @@ pub const ROUTES: [Route; 36] = [
         method: "patch",
         path: "/{version}/org",
         summary: "Rename the calling organisation",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/billing",
+        summary: "The calling organisation's subscription state, or none",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/billing/webhook",
+        summary: "Paddle's notification endpoint; the signature is the authentication",
     },
     Route {
         method: "get",

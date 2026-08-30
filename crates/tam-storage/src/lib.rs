@@ -12,6 +12,7 @@
 pub mod analytics;
 pub mod authorship;
 pub mod backoffice;
+pub mod billing;
 pub mod blobs;
 mod codec;
 pub mod connections;
@@ -32,6 +33,7 @@ pub use backoffice::{
     BackofficeRepo, DailyCount, FailedWrite, HaltRecord, OrgDetail, OrgSummary, SignupsRepo,
     SyncHealth,
 };
+pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,

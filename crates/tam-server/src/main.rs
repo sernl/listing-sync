@@ -5,7 +5,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--backoffice-db-url <url>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -13,6 +13,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use tam_api::{
     AppState, AuthBridge, Config, Disclosure, JwkSet, JwksFuture, JwksSource, JwksUnavailable,
+    WebhookSecret,
 };
 use tam_engine::outbox::{drain, LoggingDeliverer};
 use tam_storage::{OutboxRepo, PruneRepo};
@@ -46,6 +47,13 @@ const ENGINE_DB_FLAG: &str = "--engine-db-url";
 /// would let a wrong predicate write one. Absent, every `/admin` route
 /// refuses: a deployment serves the operator surface or it does not.
 const BACKOFFICE_DB_FLAG: &str = "--backoffice-db-url";
+
+/// Paddle's notification-webhook secret, which is the whole authentication of
+/// the billing webhook. Given on the command line like every other
+/// configuration value here, because the lint table bans environment reads
+/// outside the one crate that will own them. Absent, `/{version}/billing/webhook`
+/// answers 503: there is no unauthenticated mode of that route to fall back to.
+const PADDLE_WEBHOOK_SECRET_FLAG: &str = "--paddle-webhook-secret";
 
 /// The built client directory, served as the router's fallback so the API
 /// and the UI share one origin; unknown paths fall through to index.html,
@@ -231,6 +239,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(invocation.bind).await?;
     let bound = listener.local_addr()?;
     eprintln!("tam-server listening on http://{bound}");
+    if invocation.config.paddle_webhook_secret.is_some() {
+        eprintln!("tam-server accepting Paddle billing notifications");
+    }
     if invocation.config.disclosure == Disclosure::Full {
         eprintln!("tam-server disclosing fault internals ({DISCLOSE_FLAG}); development only");
     }
@@ -322,6 +333,12 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--backoffice-db-url needs a url argument")?,
             );
+        } else if argument == PADDLE_WEBHOOK_SECRET_FLAG {
+            config.paddle_webhook_secret = Some(WebhookSecret::new(
+                arguments
+                    .next()
+                    .ok_or("--paddle-webhook-secret needs a secret argument")?,
+            ));
         } else if argument == UI_FLAG {
             ui_dir = Some(std::path::PathBuf::from(
                 arguments.next().ok_or("--ui-dir needs a path argument")?,
