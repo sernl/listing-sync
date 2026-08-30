@@ -41,3 +41,15 @@ CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION tam_auth;
 -- USAGE on schema public that Postgres grants to PUBLIC, which permits name
 -- lookup and, without a privilege on any table, nothing else.
 REVOKE ALL ON SCHEMA public FROM tam_auth;
+
+-- The one crossing in the other direction, and it is deliberately the safe
+-- one. tam_app reads the identity audit trail; it never reads identity
+-- itself. USAGE alone permits naming objects in this schema and confers no
+-- privilege on any of them, so on its own this line grants nothing readable:
+-- the single table privilege that makes it useful is granted beside the table
+-- in db/auth/0002_audit_event.sql, because no table exists here at initdb
+-- time. No ALTER DEFAULT PRIVILEGES accompanies it, deliberately -- a default
+-- privilege would extend SELECT to every table tam_auth creates in this
+-- schema afterwards, which is exactly the direction this file exists to
+-- close.
+GRANT USAGE ON SCHEMA auth TO tam_app;
