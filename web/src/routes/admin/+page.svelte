@@ -37,7 +37,12 @@
 		<StatCard icon="⇄" label="Sync runs" sub="across every tenant">
 			{ledger?.jobs ?? '—'}
 		</StatCard>
-		<StatCard icon="▤" tag="in flight" label="Items moving" sub="queued, leased, running or verifying">
+		<StatCard
+			icon="▤"
+			tag="in flight"
+			label="Items moving"
+			sub="queued, leased, running or verifying"
+		>
 			{ledger === undefined ? '—' : inFlight}
 		</StatCard>
 		<StatCard
@@ -54,7 +59,9 @@
 			icon={(ledger?.failed ?? 0) > 0 ? '✕' : '✓'}
 			tone={(ledger?.failed ?? 0) > 0 ? 'bad' : 'ok'}
 			label="Failed items"
-			sub={ledger === undefined ? 'the ledger has not been read' : `${ledger.settled} settled in all`}
+			sub={ledger === undefined
+				? 'the ledger has not been read'
+				: `${ledger.settled} settled in all`}
 		>
 			{ledger?.failed ?? '—'}
 		</StatCard>

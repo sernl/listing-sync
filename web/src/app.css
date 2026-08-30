@@ -310,7 +310,6 @@ button {
 .search input {
 	border: 0;
 	background: none;
-	outline: none;
 	color: var(--ink);
 	font: inherit;
 	min-width: 0;
@@ -319,6 +318,12 @@ button {
 
 .search input::placeholder {
 	color: var(--muted);
+}
+
+.search input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 0;
+	border-radius: 4px;
 }
 
 .search:focus-within {
@@ -397,6 +402,7 @@ button {
 .page {
 	padding: 26px 28px 40px;
 	min-width: 0;
+	overflow-wrap: break-word;
 }
 
 .page-head {
@@ -405,6 +411,10 @@ button {
 	gap: 14px;
 	margin-bottom: 22px;
 	flex-wrap: wrap;
+}
+
+.page-head > div {
+	min-width: 0;
 }
 
 .page-ico {
@@ -548,6 +558,11 @@ button {
 	min-width: 0;
 }
 
+/* The page-level rhythm. Reached only panel-after-panel before, so a panel
+   following the stat row, a band or an attention box sat flush against it. */
+.cards + .panel,
+.band + .panel,
+.attn + .panel,
 .panel + .panel {
 	margin-top: 14px;
 }
@@ -581,7 +596,7 @@ button {
 .foot-note {
 	color: var(--faint);
 	font-size: 12px;
-	margin-top: 10px;
+	margin-top: 12px;
 }
 
 .job {
@@ -620,11 +635,19 @@ a.job:hover {
 	color: var(--muted);
 }
 
-.job .when {
-	margin-left: auto;
+.when {
 	font-size: 12px;
 	color: var(--faint);
 	white-space: nowrap;
+}
+
+.s {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.job .when {
+	margin-left: auto;
 }
 
 .row {
@@ -642,11 +665,6 @@ a.job:hover {
 
 .row .t {
 	font-weight: 500;
-}
-
-.row .s {
-	font-size: 12px;
-	color: var(--muted);
 }
 
 .row .what {
@@ -707,6 +725,7 @@ a.job:hover {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 11.5px;
 	color: var(--muted);
+	overflow-wrap: anywhere;
 }
 
 .attn {
@@ -714,7 +733,7 @@ a.job:hover {
 	border-left: 3px solid var(--bad);
 	border-radius: 10px;
 	padding: 11px 12px;
-	margin-top: 10px;
+	margin-top: 12px;
 	background: var(--card);
 }
 
@@ -803,13 +822,21 @@ th.num {
 	font-variant-numeric: tabular-nums;
 }
 
-.title-cell .t {
-	font-weight: 500;
+/* A title cell holds a product title or an identifier per line. Each is
+   clipped rather than allowed to widen the table, and carries the whole value
+   in its `title` attribute. */
+.title-cell .t,
+.title-cell .s,
+.title-cell .mono {
+	display: block;
+	max-width: 34ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
-.title-cell .s {
-	font-size: 12px;
-	color: var(--muted);
+.title-cell .t {
+	font-weight: 500;
 }
 
 .scroll-tbl {
@@ -991,10 +1018,6 @@ input:focus-visible {
 	gap: 8px;
 }
 
-.steps .s {
-	color: var(--muted);
-}
-
 .gate-row td {
 	font-weight: 600;
 }
@@ -1004,7 +1027,7 @@ td.flag {
 }
 
 .notice {
-	margin-top: 10px;
+	margin-top: 12px;
 	border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
 	background: var(--warn-soft);
 	color: var(--warn);
@@ -1044,11 +1067,11 @@ td.flag {
 }
 
 .form.spaced {
-	margin-top: 14px;
+	margin-top: 12px;
 }
 
 dl.facts {
-	margin: 0 0 14px;
+	margin: 0 0 12px;
 }
 
 dl.facts dt {
@@ -1059,6 +1082,7 @@ dl.facts dt {
 dl.facts dd {
 	margin: 2px 0 10px;
 	font-weight: 500;
+	overflow-wrap: anywhere;
 }
 
 dl.facts dd:last-child {
@@ -1342,7 +1366,7 @@ dl.facts dd:last-child {
 	flex-wrap: wrap;
 	font-size: 12px;
 	color: var(--muted);
-	margin-bottom: 10px;
+	margin-bottom: 12px;
 }
 
 .series-key span {
@@ -1427,6 +1451,10 @@ dl.facts dd:last-child {
 	gap: 10px;
 	flex-wrap: wrap;
 	margin-bottom: 12px;
+}
+
+.filter-bar + .notice {
+	margin-top: 0;
 }
 
 .filter-bar input[type='search'] {

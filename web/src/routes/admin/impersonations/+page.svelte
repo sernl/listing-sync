@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { api } from '$lib/api';
-	import { agoLabel } from '$lib/elapsed';
+	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -21,10 +21,6 @@
 		return event === 'user_impersonated'
 			? { label: 'started', tone: 'bad' }
 			: { label: 'stopped', tone: 'ok' };
-	}
-
-	function instant(at: number): string {
-		return new Date(at).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
 	}
 </script>
 
@@ -69,11 +65,15 @@
 							{#each events as row (`${row.event}-${row.at}-${row.actor}-${row.target}`)}
 								<tr>
 									<td><span class="pill {verb(row.event).tone}">{verb(row.event).label}</span></td>
-									<td class="mono">{row.actor}</td>
-									<td class="mono">{row.target}</td>
+									<td class="title-cell">
+										<span class="mono" title={row.actor}>{row.actor}</span>
+									</td>
+									<td class="title-cell">
+										<span class="mono" title={row.target}>{row.target}</span>
+									</td>
 									<td class="title-cell">
 										<div class="t">{agoLabel(row.at, now)}</div>
-										<div class="s mono">{instant(row.at)}</div>
+										<div class="s mono">{utcInstant(row.at)}</div>
 									</td>
 									<td class="mono">{row.ip ?? '—'}</td>
 								</tr>

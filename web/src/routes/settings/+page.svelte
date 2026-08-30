@@ -118,10 +118,10 @@
 			if (stored) {
 				displayName = stored.name;
 			}
-			toast('info', 'Name saved.');
+			toast('info', 'Display name saved.');
 		},
 		onError: (failure: Error) => {
-			toast('error', refusalOf(failure, 'The name was not saved.'));
+			toast('error', refusalOf(failure, 'The display name was not saved.'));
 		}
 	}));
 
@@ -257,7 +257,7 @@
 						class="cta"
 						disabled={renaming.isPending || orgUnchanged || !orgVerdict.accepted}
 					>
-						{renaming.isPending ? 'Saving…' : 'Save name'}
+						{renaming.isPending ? 'Saving…' : 'Save organisation name'}
 					</button>
 				</div>
 			</form>
@@ -296,7 +296,7 @@
 				</label>
 				<div class="actions">
 					<button class="cta" disabled={renamingUser.isPending || nameUnchanged || nameBlank}>
-						{renamingUser.isPending ? 'Saving…' : 'Save name'}
+						{renamingUser.isPending ? 'Saving…' : 'Save display name'}
 					</button>
 				</div>
 			</form>
@@ -377,7 +377,7 @@
 		{:else if subscription === null}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">◇</span>
-				<b>No subscription.</b>
+				<b>No subscription</b>
 				<p>
 					This organisation has never reached checkout, which is a different fact from a
 					cancelled subscription — that one would be shown here with its status.

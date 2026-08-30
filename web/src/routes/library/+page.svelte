@@ -5,5 +5,9 @@
 
 <div class="page">
 	<PageHead icon="≣" title="Library" description="Guides and articles from Teachouse." />
-	<Placeholder icon="≣" headline="Tools section." body="Articles, seller guides and platform news." />
+	<Placeholder
+		icon="≣"
+		headline="The library is not built yet"
+		body="It will hold guides, seller articles and news from Teachouse."
+	/>
 </div>

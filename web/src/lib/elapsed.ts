@@ -22,3 +22,13 @@ export function agoLabel(instant: number, now: number): string {
 	const days = Math.floor(elapsed / DAY);
 	return `${days} ${days === 1 ? 'day' : 'days'} ago`;
 }
+
+/** An instant written out in full, in UTC.
+ *
+ * The console shows ages rather than instants nearly everywhere; this is for
+ * the operator surface, where an exact instant is the point. The trailing `Z`
+ * is not decoration: without it the reading is indistinguishable from a local
+ * time, which is the one thing it is not. */
+export function utcInstant(instant: number): string {
+	return `${new Date(instant).toISOString().replace('T', ' ').slice(0, 19)}Z`;
+}

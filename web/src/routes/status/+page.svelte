@@ -40,7 +40,7 @@
 		{:else if inventories.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">◉</span>
-				<b>No marketplace is configured yet.</b>
+				<b>No marketplace is configured yet</b>
 				<p>Each inventory the engine works against appears here with its own state.</p>
 			</div>
 		{:else}

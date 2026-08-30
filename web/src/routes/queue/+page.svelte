@@ -192,7 +192,7 @@
 		{:else if items.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">✓</span>
-				<b>The queue is drained.</b>
+				<b>The queue is drained</b>
 				<p>
 					New items appear only when a listing carries a term with no translation yet — and
 					each one you resolve stays resolved.
@@ -202,7 +202,7 @@
 			{#each items as item (item.id)}
 				<div class="question">
 					<div class="head-row">
-						<span class="mono">{item.term.slice(0, 8)}…</span>
+						<span class="mono" title={item.term}>{item.term.slice(0, 8)}…</span>
 						<span class="badge">{item.kind} → {item.inventory}</span>
 						<span class="grow"></span>
 						<span class="when">

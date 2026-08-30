@@ -60,7 +60,7 @@
 									</div>
 								</td>
 								<td class="title-cell">
-									<div class="t mono">{write.attempt.slice(0, 8)}…</div>
+									<div class="t mono" title={write.attempt}>{write.attempt.slice(0, 8)}…</div>
 									<div class="s">{write.state}</div>
 								</td>
 								<td>
@@ -70,9 +70,9 @@
 									{/if}
 								</td>
 								<td class="title-cell">
-									<div class="t mono">{write.item.slice(0, 8)}…</div>
+									<div class="t mono" title={write.item}>{write.item.slice(0, 8)}…</div>
 									{#if write.item_failure_code !== undefined}
-										<div class="s">
+										<div class="s" title={write.item_failure_detail}>
 											<span class="badge">{write.item_failure_code}</span>
 											{write.item_failure_detail ?? ''}
 										</div>
@@ -80,9 +80,9 @@
 								</td>
 								<td class="title-cell">
 									<div class="t">
-										<a class="link" href={`/admin/orgs/${write.org}`}>{write.org.slice(0, 8)}…</a>
+										<a class="link" title={write.org} href={`/admin/orgs/${write.org}`}>{write.org.slice(0, 8)}…</a>
 									</div>
-									<div class="s mono">mapping {write.mapping.slice(0, 8)}…</div>
+									<div class="s mono" title={write.mapping}>mapping {write.mapping.slice(0, 8)}…</div>
 								</td>
 							</tr>
 						{/each}

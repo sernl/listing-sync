@@ -60,11 +60,11 @@
 	<PageHead
 		icon="◔"
 		title="Analytics"
-		description="Captured from Teachers Pay Teachers · figures show their age, never pretend to be live."
+		description="What each marketplace reports, and how old every figure is."
 	/>
 
 	<Panel
-		title="Per-listing performance"
+		title="TPT (Teachers Pay Teachers) per-listing performance"
 		description="Each row states the age of its own oldest figure."
 	>
 		{#if summary.isPending}
@@ -74,7 +74,7 @@
 		{:else if rows.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">◔</span>
-				<b>No analytics have been captured yet.</b>
+				<b>No analytics have been captured yet</b>
 				<p>
 					A capture runs once a day for each organisation it is enabled for, and the first
 					figures appear here after the first pass. Nothing is missing until then; there is
@@ -101,12 +101,12 @@
 									{#if row.title === undefined}
 										<span
 											class="mono"
-											title="This mapping's product is not in the catalogue read, so only its identifier is known here."
+											title={`Mapping ${row.listing.mapping}. Its product is not in the catalogue read, so only its identifier is known here.`}
 										>
 											{row.listing.mapping}
 										</span>
 									{:else}
-										<div class="t">{row.title}</div>
+										<div class="t" title={row.title}>{row.title}</div>
 									{/if}
 								</td>
 								<td><span class="badge">{row.listing.inventory}</span></td>
@@ -127,7 +127,7 @@
 	</Panel>
 
 	<Panel
-		title="Your Tes portfolio"
+		title="TES (Tes.com) portfolio"
 		description="Tes publishes no statistics of its own, so this is counted from your own catalogue instead."
 	>
 		{#snippet more()}

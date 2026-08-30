@@ -33,7 +33,7 @@
 		{:else if jobs.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">⇄</span>
-				<b>No sync has run yet.</b>
+				<b>No sync has run yet</b>
 				<p>
 					Start one from Listings: choose the resources to send, and the engine takes them
 					from there. Every run keeps its own record here.
@@ -44,7 +44,7 @@
 				<a class="job" href={`/sync/${job.job}`}>
 					<span class="badge">{job.inventory}</span>
 					<span class="what">
-						<span class="t mono">{job.job}</span>
+						<span class="t mono" title={job.job}>{job.job}</span>
 						<span class="w">{new Date(job.created_at).toLocaleString()}</span>
 					</span>
 					<span class="when">{agoLabel(job.created_at, Date.now())}</span>
@@ -52,7 +52,7 @@
 			{/each}
 			{#if nextCursor}
 				<div class="actions">
-					<button class="btn" onclick={() => loadPage(nextCursor)}>Load more</button>
+					<button class="btn" onclick={() => loadPage(nextCursor)}>Load more runs</button>
 				</div>
 			{/if}
 		{/if}

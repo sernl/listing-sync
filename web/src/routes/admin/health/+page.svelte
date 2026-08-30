@@ -86,7 +86,7 @@
 						<tbody>
 							{#each STATES as state (state.key)}
 								<tr>
-									<td class="title-cell"><div class="t">{state.label}</div></td>
+									<td class="title-cell"><div class="t" title={state.label}>{state.label}</div></td>
 									<td class="s">{state.note}</td>
 									<td class="num">{count(state.key)}</td>
 								</tr>

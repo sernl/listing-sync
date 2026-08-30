@@ -98,7 +98,7 @@
 			: mappings.isError
 				? 'Your catalogue could not be read just now.'
 				: `${tally.live} live ${tally.live === 1 ? 'listing' : 'listings'} across ` +
-					`${tally.marketplaces} ${tally.marketplaces === 1 ? 'marketplace' : 'marketplaces'}`
+					`${tally.marketplaces} ${tally.marketplaces === 1 ? 'marketplace' : 'marketplaces'}.`
 	);
 
 	function figure(value: number | null): string {
@@ -112,7 +112,7 @@
 	<div class="cards">
 		<StatCard
 			icon="▤"
-			tone="ok"
+			tone={tally.live > 0 ? 'ok' : ''}
 			tag={`${tally.marketplaces} ${tally.marketplaces === 1 ? 'marketplace' : 'marketplaces'}`}
 			label="Live listings"
 			sub={`${tally.total} ${tally.total === 1 ? 'mapping' : 'mappings'} in all`}
@@ -132,7 +132,7 @@
 		<StatCard
 			icon={sync.failed > 0 ? '✕' : '✓'}
 			tone={sync.failed > 0 ? 'bad' : 'ok'}
-			tag="needs you"
+			tag={sync.failed > 0 ? 'needs you' : 'all clear'}
 			label="Failed writes"
 			sub={sync.failed > 0
 				? `across ${sync.failingRuns} of the ${sync.runs} newest runs`
@@ -143,7 +143,6 @@
 
 		<StatCard
 			icon="◔"
-			tone="ok"
 			tag="captured"
 			label="Sales"
 			sub={capture.age ?? 'nothing captured yet'}
@@ -174,7 +173,7 @@
 					<a class="job" href={`/sync/${row.job}`}>
 						<span class="pill {row.tone}">{row.label}</span>
 						<span class="what">
-							<span class="t">{row.inventory} · {row.job.slice(0, 8)}…</span>
+							<span class="t" title={row.job}>{row.inventory} · {row.job.slice(0, 8)}…</span>
 							<span class="w">{row.detail}</span>
 						</span>
 						<span class="when">{agoLabel(row.created_at, Date.now())}</span>
@@ -207,7 +206,7 @@
 		description="Your five most recently touched resources."
 	>
 		{#snippet more()}
-			<a class="more" href="/listings">Open Listings</a>
+			<a class="more" href="/listings">View all</a>
 		{/snippet}
 		{#if catalogue.isPending}
 			<p class="quiet">Reading the catalogue…</p>
@@ -233,7 +232,9 @@
 					<tbody>
 						{#each recent as row (row.product.id)}
 							<tr>
-								<td class="title-cell"><div class="t">{row.product.title}</div></td>
+								<td class="title-cell">
+									<div class="t" title={row.product.title}>{row.product.title}</div>
+								</td>
 								<td>
 									{#each row.badges as badge (badge.inventory)}
 										<span class="badge {badge.live ? 'live' : ''}" title={badge.state}

@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { api } from '$lib/api';
 	import { present } from '$lib/connection-status';
-	import { agoLabel } from '$lib/elapsed';
+	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import StatCard from '$lib/StatCard.svelte';
@@ -32,7 +32,7 @@
 	}
 
 	function instant(at: number | undefined): string {
-		return at === undefined ? '—' : new Date(at).toISOString().replace('T', ' ').slice(0, 16);
+		return at === undefined ? '—' : utcInstant(at);
 	}
 </script>
 
@@ -85,7 +85,7 @@
 							</span>
 							<span class="grow"></span>
 							<span class="badge">{link.state}</span>
-							<span class="s">{agoLabel(link.updated_at, now)}</span>
+							<span class="when">updated {agoLabel(link.updated_at, now)}</span>
 						</div>
 					{/each}
 				{/if}
@@ -131,10 +131,10 @@
 				{#each view.halts as halt (`${halt.inventory ?? 'tenant'}-${halt.raised_at}`)}
 					<div class="attn">
 						<div class="t">
-							{halt.inventory === undefined ? 'The whole tenant' : halt.inventory} — raised by {halt.raised_by}
+							{halt.inventory === undefined ? 'The whole tenant' : halt.inventory} — raised
+							{agoLabel(halt.raised_at, now)} by {halt.raised_by}
 						</div>
 						<p>{halt.reason}</p>
-						<span class="s">{agoLabel(halt.raised_at, now)}</span>
 					</div>
 				{/each}
 			{/if}

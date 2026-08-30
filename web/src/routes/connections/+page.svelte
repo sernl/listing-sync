@@ -74,7 +74,7 @@
 		{:else if connections.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">⚲</span>
-				<b>No marketplace connections yet.</b>
+				<b>No marketplace connections yet</b>
 				<p>
 					A connection is your sign-in to one marketplace, held on our side so the engine can
 					work without you. Once one is linked, its health shows here and in the top bar.

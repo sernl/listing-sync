@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
-	import { agoLabel } from '$lib/elapsed';
+	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import { api } from '$lib/api';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -49,14 +49,16 @@
 						{#each rows as row (row.org)}
 							<tr>
 								<td class="title-cell">
-									<div class="t"><a class="link" href={`/admin/orgs/${row.org}`}>{row.name}</a></div>
-									<div class="s mono">{row.org}</div>
+									<div class="t" title={row.name}>
+										<a class="link" href={`/admin/orgs/${row.org}`}>{row.name}</a>
+									</div>
+									<div class="s mono" title={row.org}>{row.org}</div>
 								</td>
 								<td class="num">{row.products}</td>
 								<td class="num">{row.mappings}</td>
 								<td class="num">{row.connections}</td>
 								<td class="num">{row.users}</td>
-								<td class="num">{agoLabel(row.created_at, now)}</td>
+								<td class="num" title={utcInstant(row.created_at)}>{agoLabel(row.created_at, now)}</td>
 							</tr>
 						{/each}
 					</tbody>

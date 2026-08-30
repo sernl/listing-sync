@@ -208,7 +208,7 @@
 			<a class="account" href="/settings">
 				<span class="avatar" aria-hidden="true">{initials}</span>
 				<span class="who">
-					<span class="org">
+					<span class="org" title={orgName}>
 						{#if orgName !== undefined}
 							{orgName}
 						{:else if organisation.isError}

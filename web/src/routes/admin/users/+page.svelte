@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { identityAdminRefusal } from '$lib/admin';
+	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import {
 		AuthFailure,
 		IDENTITY_ROLES,
@@ -24,6 +25,7 @@
 	const PAGE_SIZE = 50;
 
 	const queryClient = useQueryClient();
+	const now = Date.now();
 
 	let typed = $state('');
 	let applied = $state('');
@@ -148,12 +150,12 @@
 		}
 	}
 
-	function joined(at: string | Date | null | undefined): string {
+	function joined(at: string | Date | null | undefined): number | null {
 		if (at === null || at === undefined) {
-			return '—';
+			return null;
 		}
 		const parsed = new Date(at);
-		return Number.isNaN(parsed.getTime()) ? '—' : parsed.toISOString().slice(0, 10);
+		return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
 	}
 </script>
 
@@ -224,10 +226,11 @@
 						</thead>
 						<tbody>
 							{#each rows as user (user.id)}
+								{@const joinedAt = joined(user.createdAt)}
 								<tr>
 									<td class="title-cell">
-										<div class="t">{user.name || user.email}</div>
-										<div class="s">{user.email}</div>
+										<div class="t" title={user.name || user.email}>{user.name || user.email}</div>
+										<div class="s" title={user.email}>{user.email}</div>
 									</td>
 									<td>
 										<label class="sr-only" for={`role-${user.id}`}>Role for {user.email}</label>
@@ -252,7 +255,9 @@
 											<span class="pill run">unverified</span>
 										{/if}
 									</td>
-									<td class="num">{joined(user.createdAt)}</td>
+									<td class="num" title={joinedAt === null ? undefined : utcInstant(joinedAt)}>
+										{joinedAt === null ? '—' : agoLabel(joinedAt, now)}
+									</td>
 									<td>
 										<div class="row-actions">
 											{#if user.banned}

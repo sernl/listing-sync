@@ -105,11 +105,11 @@
 				{/each}
 			</div>
 			<p class="foot-note">
-				{#each segments(run.counts) as segment, index (segment.label)}
-					{index > 0 ? ' · ' : ''}{segment.label}
-					{segment.count}
+				{#each segments(run.counts) as segment (segment.label)}
+					{segment.label}
+					{segment.count} ·
 				{/each}
-				· total {run.counts.total}
+				total {run.counts.total}
 			</p>
 		</Panel>
 
@@ -120,7 +120,7 @@
 			{#each items as item (item.item)}
 				<div class="item">
 					<button class="item-head" onclick={() => expand(item)}>
-						<span class="mono">{item.item.slice(0, 8)}…</span>
+						<span class="mono" title={item.item}>{item.item.slice(0, 8)}…</span>
 						<span class="pill mut">{item.state}</span>
 						{#if item.outcome}
 							<span class="pill mut">{item.outcome}</span>

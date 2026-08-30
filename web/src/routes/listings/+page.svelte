@@ -98,7 +98,7 @@
 			(mapping) => selected.has(mapping.id) && mapping.inventory === 'TesNz'
 		);
 		if (chosen.length !== selected.size) {
-			toast('error', 'A sync targets one inventory; only TesNz cells are selectable for now.');
+			toast('error', 'A sync targets one inventory; only Tes NZ cells are selectable for now.');
 			return;
 		}
 		syncing = true;
@@ -159,7 +159,7 @@
 		{:else if products.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">▤</span>
-				<b>No products yet.</b>
+				<b>No products yet</b>
 				<p>
 					The pipeline ingests them. Once a resource is in your catalogue it appears here, and
 					sync keeps every marketplace matching it.
@@ -168,7 +168,7 @@
 		{:else if rows.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">⌕</span>
-				<b>Nothing matches “{query}”.</b>
+				<b>Nothing matches “{query}”</b>
 				<p>Search reads listing titles. Clear the box to see the whole catalogue again.</p>
 			</div>
 		{:else}
@@ -210,7 +210,7 @@
 									{/if}
 								</td>
 								<td class="title-cell">
-									<div class="t">{row.product.title}</div>
+									<div class="t" title={row.product.title}>{row.product.title}</div>
 								</td>
 								<td>
 									{#each row.badges as badge (badge.inventory)}
