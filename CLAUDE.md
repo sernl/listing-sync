@@ -56,6 +56,7 @@ the dependencies they govern.
 ```
 just check         # the gated lane: fmt, clippy --deny warnings, purity, tests
 just db-setup      # once per machine: rootless-podman signature policy
+just dev-all       # everything in one terminal: database, migrations, API + auth + web
 just dev           # full local environment: postgres (podman), migrations, API server
 just dev-session   # mint a development login; paste the printed line into /login
 just web-dev       # the client dev server, proxying /v1 to a running tam-server

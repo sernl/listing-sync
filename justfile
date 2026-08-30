@@ -155,7 +155,8 @@ web-check:
 web-dev:
     cd web && npm run dev
 
-# Fail with instructions when tam-auth has no environment file
+# Give tam-auth an environment file, creating one from the template on a
+# machine that has none. An existing auth/.env is never touched.
 auth-env:
     #!/usr/bin/env sh
     set -eu
@@ -166,10 +167,24 @@ auth-env:
     if [ -f auth/.env ]; then
         exit 0
     fi
-    echo 'auth/.env is missing. Create it from the documented template:' >&2
-    echo '  cp auth/.env.example auth/.env' >&2
-    echo '  then set BETTER_AUTH_SECRET to `openssl rand -base64 32`' >&2
-    exit 1
+    if [ ! -f auth/.env.example ]; then
+        echo 'auth/.env is missing and so is auth/.env.example, which this' >&2
+        echo 'recipe copies it from. Restore the template, or write auth/.env' >&2
+        echo 'by hand against the variables auth/src/env.ts reads.' >&2
+        exit 1
+    fi
+    cp auth/.env.example auth/.env
+    # Not `openssl rand -base64 32`, which the error message this recipe
+    # replaced advised: openssl is not in this flake's devshell. Thirty-two
+    # bytes of /dev/urandom, base64-encoded, is the same secret.
+    secret="$(head -c 32 /dev/urandom | base64)"
+    sed -i "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$secret|" auth/.env
+    # The template is not read here, so the substitution is checked rather
+    # than assumed: a missing or commented-out key would otherwise leave the
+    # secret unset and fail at tam-auth's startup instead.
+    grep -q '^BETTER_AUTH_SECRET=.' auth/.env \
+        || printf 'BETTER_AUTH_SECRET=%s\n' "$secret" >> auth/.env
+    echo 'created auth/.env from auth/.env.example with a fresh BETTER_AUTH_SECRET'
 
 # The auth lane: lockfile install, types
 auth-check:
@@ -180,13 +195,31 @@ auth-check:
 auth-ddl: db-wait auth-env
     cd auth && npm run --silent ddl
 
-# Apply the reviewed identity DDL as tam_auth, which owns the auth schema
+# Apply the reviewed identity DDL as tam_auth, which owns the auth schema.
+# Which files have run is tracked in a ledger table created here rather than in
+# db/auth/, whose files are verbatim generator output that `just auth-ddl`
+# diffs byte for byte against auth/src/auth.ts.
 auth-migrate: db-wait
     #!/usr/bin/env sh
     set -eu
+    auth_psql() { psql '{{auth_db_url}}' -X -q -v ON_ERROR_STOP=1 "$@"; }
+    auth_psql -c 'SET client_min_messages = warning; CREATE TABLE IF NOT EXISTS auth.applied_migration (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())'
+    # A database migrated before the ledger existed holds the DDL with no row
+    # to show for it. One named marker per file rather than a general
+    # heuristic: a wrong guess here would skip a migration in silence.
+    auth_psql -c "INSERT INTO auth.applied_migration (name) SELECT '0001_identity.sql' WHERE to_regclass('auth.\"user\"') IS NOT NULL ON CONFLICT DO NOTHING"
+    auth_psql -c "INSERT INTO auth.applied_migration (name) SELECT '0002_audit_event.sql' WHERE to_regclass('auth.auth_event') IS NOT NULL ON CONFLICT DO NOTHING"
     for file in db/auth/*.sql; do
-        echo "applying $file"
-        psql '{{auth_db_url}}' -v ON_ERROR_STOP=1 -q -f "$file"
+        name="$(basename "$file")"
+        if [ -n "$(auth_psql -At -c "SELECT 1 FROM auth.applied_migration WHERE name = '$name'")" ]; then
+            echo "already applied $name"
+            continue
+        fi
+        echo "applying $name"
+        # One transaction over the file and its ledger row, so neither can
+        # land without the other and a failed run leaves nothing half-applied.
+        auth_psql --single-transaction -f "$file" \
+            -c "INSERT INTO auth.applied_migration (name) VALUES ('$name')"
     done
 
 # The identity service: better-auth over /api/auth/*, nothing else
@@ -203,3 +236,29 @@ dev-session: db-wait
 dev: db-up db-wait db-migrate
     @echo "need a login? in another terminal:  just dev-session"
     cargo run -p tam-server -- {{db_url}}
+
+# The whole environment in one terminal: database, both migration sets, an
+# environment file if the machine has none, then the API server, the identity
+# service and the client dev server together.
+dev-all: db-up db-wait db-migrate auth-migrate auth-env
+    #!/usr/bin/env sh
+    set -eu
+    # Read back through the same URL-origin normalisation auth/src/env.ts
+    # applies, so the issuer tam-server is told to expect is byte-identical to
+    # the `iss` tam-auth signs into its assertions.
+    issuer="$(node --env-file=auth/.env \
+        -e 'process.stdout.write(new URL(process.env.TAM_AUTH_BASE_URL).origin)')"
+    echo "listing-sync development environment"
+    echo "  web    http://localhost:5173"
+    echo "  auth   $issuer/api/auth"
+    echo "  API    http://127.0.0.1:8080"
+    echo "need a login? in another terminal:  just dev-session"
+    # kill 0 signals this recipe's whole process group, which is what reaps
+    # cargo's and npm's own children rather than orphaning them; the trap is
+    # cleared first so the signal it sends cannot re-enter it.
+    trap 'trap - INT TERM; kill 0' INT TERM
+    cargo run -p tam-server -- '{{db_url}}' \
+        --auth-issuer "$issuer" --auth-jwks-url "$issuer/api/auth/jwks" &
+    (cd auth && npm run dev) &
+    (cd web && npm run dev) &
+    wait

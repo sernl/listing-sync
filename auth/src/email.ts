@@ -15,7 +15,10 @@ const body = (delivery: Delivery): string =>
 
 const send = async (delivery: Delivery): Promise<void> => {
   if (resend === undefined || env.emailFrom === undefined) {
-    console.warn(`tam-auth: no email transport configured; ${delivery.subject} link: ${delivery.url}`);
+    console.warn(
+      `tam-auth: no email transport configured; to ${delivery.to}; ` +
+        `subject ${delivery.subject}; link: ${delivery.url}`,
+    );
     return;
   }
   const { error } = await resend.emails.send({
