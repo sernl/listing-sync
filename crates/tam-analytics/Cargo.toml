@@ -1,0 +1,20 @@
+[package]
+name    = "tam-analytics"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tam-engine = { path = "../tam-engine" }
+tam-marketplace = { path = "../tam-marketplace" }
+tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
+tam-storage = { path = "../tam-storage" }
+tam-types = { path = "../tam-types" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

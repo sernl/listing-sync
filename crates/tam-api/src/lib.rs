@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod analytics;
 pub mod auth;
 pub mod error;
 pub mod jobs;
@@ -157,6 +158,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/{version}/elections/rules", post(resources::upsert_rule))
         .route("/{version}/mappings", get(resources::list_mappings))
+        .route(
+            "/{version}/analytics/summary",
+            get(analytics::analytics_summary),
+        )
         .route("/{version}/status", get(resources::status))
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)

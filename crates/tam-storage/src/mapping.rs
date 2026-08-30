@@ -963,6 +963,57 @@ impl MappingRepo {
     }
 }
 
+/// A bound mapping and the listing identifier it binds.
+///
+/// [`MappingHead`] projects the binding as a state label, which is what a
+/// table of listings renders. A pass that addresses the marketplace itself
+/// needs the identifier inside `Binding::Bound` instead, and no other read
+/// carries it out of the aggregate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundListing {
+    pub mapping: MappingId,
+    pub remote: RemoteListingId,
+}
+
+impl MappingRepo {
+    /// Every mapping in one inventory whose binding is `Bound`, with the
+    /// remote listing each one names.
+    ///
+    /// Only `bound` qualifies: `creating` and `ambiguous_create` hold no
+    /// durable identifier at all, and a `severed` one names a listing the
+    /// marketplace no longer serves, so reading against any of them would ask
+    /// about something that is not there.
+    pub async fn bound_listings(
+        &self,
+        org: OrgId,
+        inventory: InventoryId,
+    ) -> Result<Vec<BoundListing>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT id, remote_id_kind, remote_url, remote_numeric_id FROM mapping \
+             WHERE org_id = $1 AND inventory = $2 AND binding_state = 'bound' \
+             ORDER BY id",
+            uuid_to_db(org.0),
+            inventory_to_db(inventory),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                let kind = row.remote_id_kind.ok_or_else(|| StorageError::CorruptRow {
+                    reason: format!("bound mapping {} carries no remote id kind", row.id),
+                })?;
+                Ok(BoundListing {
+                    mapping: MappingId(uuid_from_db(row.id)),
+                    remote: remote_id_from_db(&kind, row.remote_url, row.remote_numeric_id)?,
+                })
+            })
+            .collect()
+    }
+}
+
 /// The mapping, attempt and instant one batch of losses is recorded under;
 /// the losses themselves vary per value and travel separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

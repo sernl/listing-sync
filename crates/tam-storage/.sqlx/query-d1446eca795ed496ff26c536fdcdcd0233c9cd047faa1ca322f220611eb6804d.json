@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, remote_id_kind, remote_url, remote_numeric_id FROM mapping WHERE org_id = $1 AND inventory = $2 AND binding_state = 'bound' ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "remote_id_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "remote_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "remote_numeric_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d1446eca795ed496ff26c536fdcdcd0233c9cd047faa1ca322f220611eb6804d"
+}

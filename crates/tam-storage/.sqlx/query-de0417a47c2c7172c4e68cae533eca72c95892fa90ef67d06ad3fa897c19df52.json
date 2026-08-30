@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT ON (s.mapping_id, s.metric) s.mapping_id, s.metric, s.observed_at, s.total_value, m.inventory FROM listing_metric_snapshot s JOIN mapping m ON m.org_id = s.org_id AND m.id = s.mapping_id WHERE s.org_id = $1 ORDER BY s.mapping_id, s.metric, s.observed_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "metric",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "observed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_value",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "inventory",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "de0417a47c2c7172c4e68cae533eca72c95892fa90ef67d06ad3fa897c19df52"
+}

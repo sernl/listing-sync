@@ -23,14 +23,23 @@ struct LeaseRequest {
 pub enum LeasePurpose {
     Pump,
     Drain,
+    /// The analytics capture, which only reads. Its own purpose rather than a
+    /// reuse of `Drain`: the broker's audit says which process opened a
+    /// session, and a scheduled read of a seller's sales figures answering to
+    /// the canonicalisation drain's name would make that record wrong.
+    Analytics,
 }
 
 impl LeasePurpose {
+    /// The token the broker's own `LeasePurpose` deserialises. The two enums
+    /// are deliberately separate types across the privilege boundary, so these
+    /// strings are the whole contract between them.
     #[must_use]
     const fn as_str(self) -> &'static str {
         match self {
             Self::Pump => "pump",
             Self::Drain => "drain",
+            Self::Analytics => "analytics",
         }
     }
 }
@@ -214,4 +223,27 @@ async fn exchange(socket: &std::path::Path, request: &str) -> Result<String, Bro
         .await
         .map_err(|error| BrokerClientError(format!("read: {error}")))?;
     Ok(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LeasePurpose;
+
+    /// The engine's `LeasePurpose` and the broker's are separate types on
+    /// either side of the privilege boundary, joined only by these tokens, so
+    /// a typo in one of them is a lease the broker refuses at runtime with
+    /// nothing failing at compile time. Pinned literally rather than derived,
+    /// because a derivation would move with the mistake.
+    #[test]
+    fn every_purpose_spells_the_token_the_broker_deserialises() {
+        assert_eq!(
+            [
+                LeasePurpose::Pump.as_str(),
+                LeasePurpose::Drain.as_str(),
+                LeasePurpose::Analytics.as_str(),
+            ],
+            ["pump", "drain", "analytics"],
+            "these are the snake_case names the broker's protocol enum declares"
+        );
+    }
 }

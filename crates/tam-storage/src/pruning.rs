@@ -76,4 +76,41 @@ impl PruneRepo {
             watermark_advances: u64::try_from(counted.advances).unwrap_or(0),
         })
     }
+
+    /// Deletes up to `batch` metric snapshots observed before `cutoff`, oldest
+    /// first, and answers how many were erased.
+    ///
+    /// No watermark travels with it, unlike the pass above: a snapshot stream
+    /// has no resume position a client could fall behind, so erasing the tail
+    /// of it costs a console the oldest point on a chart and nothing else.
+    ///
+    /// The batch is picked before it is erased so one pass cannot lock the
+    /// whole table, and the ordering makes repeated passes converge from the
+    /// oldest end rather than sampling the window at random.
+    pub async fn prune_snapshots(
+        &self,
+        cutoff: Timestamp,
+        batch: i64,
+    ) -> Result<u64, StorageError> {
+        let erased = sqlx::query!(
+            r#"WITH doomed AS (
+                   SELECT org_id, mapping_id, metric, observed_at
+                     FROM listing_metric_snapshot
+                    WHERE observed_at < $1
+                    ORDER BY observed_at, org_id, mapping_id, metric
+                    LIMIT $2
+               )
+               DELETE FROM listing_metric_snapshot s
+                USING doomed d
+                WHERE s.org_id = d.org_id
+                  AND s.mapping_id = d.mapping_id
+                  AND s.metric = d.metric
+                  AND s.observed_at = d.observed_at"#,
+            timestamp_to_db(cutoff)?,
+            batch,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(erased.rows_affected())
+    }
 }

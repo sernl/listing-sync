@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod analytics;
 pub mod authorship;
 pub mod blobs;
 mod codec;
@@ -23,6 +24,7 @@ pub mod pruning;
 pub mod sessions;
 pub mod taxonomy;
 
+pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use connections::{
@@ -44,7 +46,7 @@ pub use jobs::{
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
-pub use mapping::{LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
+pub use mapping::{BoundListing, LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
 pub use org::{OrgRecord, OrgRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};

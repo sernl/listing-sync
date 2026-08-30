@@ -47,6 +47,21 @@ impl OrgRepo {
         }))
     }
 
+    /// Every tenant, for a pass that visits each in turn under its own pin.
+    ///
+    /// No pin here and none needed: `organisation` is the tenancy root and
+    /// carries no policy, for the reasons this module opens with. Ordered so a
+    /// pass visits tenants the same way twice.
+    pub async fn tenants(&self) -> Result<Vec<OrgId>, StorageError> {
+        let rows = sqlx::query!("SELECT id FROM organisation ORDER BY id")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| OrgId(uuid_from_db(row.id)))
+            .collect())
+    }
+
     /// Renames one organisation, answering whether a row was there to rename.
     /// The name is the caller's to validate; storage stores what it is given.
     pub async fn rename(&self, org: OrgId, name: &str) -> Result<bool, StorageError> {

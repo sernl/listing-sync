@@ -19,6 +19,10 @@ pub(crate) enum LeasePurpose {
     Pump,
     /// The canonicalisation drain, which only reads.
     Drain,
+    /// The scheduled analytics capture, which only reads. A third purpose
+    /// rather than a reuse of `Drain`, so this audit keeps saying which
+    /// process opened a session on a seller's account.
+    Analytics,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,4 +142,51 @@ pub(crate) enum Response {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<ErrorCode>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LeasePurpose, Request};
+    use tam_types::{ConnectionId, Marketplace, OrgId, Uuid};
+
+    fn lease(purpose: LeasePurpose) -> Request {
+        Request::Lease {
+            org: OrgId(Uuid([0x11; 16])),
+            connection: ConnectionId(Uuid([0x22; 16])),
+            marketplace: Marketplace::Tpt,
+            purpose,
+        }
+    }
+
+    /// The other half of the contract `tam-engine`'s `LeasePurpose::as_str`
+    /// pins: the caller writes these tokens by hand, so this side must accept
+    /// exactly them and no others.
+    #[test]
+    fn each_purpose_deserialises_from_the_token_the_caller_writes() {
+        for (token, expected) in [
+            ("pump", LeasePurpose::Pump),
+            ("drain", LeasePurpose::Drain),
+            ("analytics", LeasePurpose::Analytics),
+        ] {
+            let raw = format!(
+                r#"{{"op":"lease","org":"11111111-1111-1111-1111-111111111111",
+                     "connection":"22222222-2222-2222-2222-222222222222",
+                     "marketplace":"Tpt","purpose":"{token}"}}"#
+            );
+            let parsed: Request =
+                serde_json::from_str(&raw).expect("the lease request parses at all");
+            assert_eq!(parsed, lease(expected), "{token} names {expected:?}");
+        }
+    }
+
+    /// An unpinned purpose is the pump, which is what keeps a caller predating
+    /// the field working rather than failing closed on a field it never sent.
+    #[test]
+    fn a_lease_naming_no_purpose_is_the_pump() {
+        let raw = r#"{"op":"lease","org":"11111111-1111-1111-1111-111111111111",
+                      "connection":"22222222-2222-2222-2222-222222222222",
+                      "marketplace":"Tpt"}"#;
+        let parsed: Request = serde_json::from_str(raw).expect("the lease request parses");
+        assert_eq!(parsed, lease(LeasePurpose::Pump), "the default is the pump");
+    }
 }
