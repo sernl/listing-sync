@@ -243,6 +243,20 @@ async fn provision(pool: &PgPool) {
         ],
     )
     .await;
+
+    // Under one tenant only. A subscription seeded under both would let a
+    // detail read that ignored the organisation it was given still pass.
+    pinned(
+        pool,
+        ORG_B,
+        &["INSERT INTO billing_subscription \
+             (org_id, paddle_subscription_id, paddle_customer_id, status, \
+              current_period_end, occurred_at, updated_at) \
+             VALUES ($1, 'sub_fixture', 'ctm_fixture', 'active', NULL, \
+                 timestamptz '2026-02-03T04:05:06Z', now())"
+            .to_owned()],
+    )
+    .await;
 }
 
 #[expect(
@@ -428,6 +442,46 @@ async fn one_organisation_renders_its_connections_and_halts(pool: PgPool) {
     assert!(
         view.halts[0].inventory.is_none(),
         "a halt with no inventory is the tenant-wide one"
+    );
+    let subscription = view
+        .subscription
+        .expect("the tenant carrying a subscription reports one");
+    assert_eq!(
+        subscription.status, "active",
+        "Paddle's own vocabulary reaches the operator untranslated"
+    );
+    assert!(
+        subscription.current_period_end.is_none(),
+        "a subscription Paddle sent no billing period for reports none, \
+         rather than a fabricated instant"
+    );
+    assert_eq!(
+        subscription.occurred_at,
+        Timestamp(1_770_091_506_000),
+        "the instant Paddle stamped on the notification, not the instant of the write"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_organisation_that_never_reached_checkout_reports_no_subscription(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: OrgDetailView = answer.json();
+    assert_eq!(view.org.org, ORG_A, "the organisation the path named");
+    assert!(
+        view.subscription.is_none(),
+        "a tenant that never reached checkout carries no subscription at all, \
+         which is a different fact from a cancelled one"
     );
 }
 
@@ -702,6 +756,16 @@ async fn a_deployment_without_a_backoffice_database_refuses_every_route(pool: Pg
             operator.status,
             StatusCode::SERVICE_UNAVAILABLE,
             "{path} refuses cleanly rather than serving half a surface"
+        );
+        let refusal: APIError = operator.json();
+        assert_eq!(
+            (refusal.errors[0].code, refusal.errors[0].kind),
+            (
+                Some(APIErrorCode::BackofficeUnavailable),
+                Some(APIErrorKind::Internal)
+            ),
+            "{path} names the condition, so a client can tell an unconfigured \
+             operator surface from a fault"
         );
         // The order matters more than the status: a seller must still be
         // refused by the operator check, which runs first, so an unconfigured

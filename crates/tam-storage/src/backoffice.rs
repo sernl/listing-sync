@@ -211,12 +211,32 @@ pub struct HaltRecord {
     pub raised_at: Timestamp,
 }
 
+/// What Paddle last said about one organisation's subscription, narrowed to
+/// the three facts an operator reads.
+///
+/// Deliberately not [`crate::SubscriptionState`]. That carries Paddle's
+/// subscription and customer identifiers, which the tenant's own billing page
+/// needs and a cross-tenant read has no use for; the smallest row that
+/// answers the question is the one this surface carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscriptionRecord {
+    /// Paddle's own vocabulary, stored verbatim (migration 0038) and passed
+    /// through here rather than translated.
+    pub status: String,
+    pub current_period_end: Option<Timestamp>,
+    pub occurred_at: Timestamp,
+}
+
 /// One organisation rendered whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrgDetail {
     pub summary: OrgSummary,
     pub connections: Vec<ConnectionRow>,
     pub halts: Vec<HaltRecord>,
+    /// Absent for a tenant that has never reached checkout, which is a
+    /// different fact from a cancelled subscription: that one is present and
+    /// carries Paddle's cancelled status.
+    pub subscription: Option<SubscriptionRecord>,
 }
 
 /// The ledger across every tenant: how many jobs exist, and their items by
@@ -374,6 +394,22 @@ impl BackofficeRepo {
             });
         }
 
+        // Unpinned, like every other read on this pool: migration 0039's
+        // read policy is what admits it past the tenant fence migration 0038
+        // established, and pinning here would defeat the surface's purpose.
+        let subscription = sqlx::query!(
+            "SELECT status, current_period_end, occurred_at FROM billing_subscription \
+             WHERE org_id = $1",
+            uuid_to_db(org.0),
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| SubscriptionRecord {
+            status: row.status,
+            current_period_end: row.current_period_end.map(timestamp_from_db),
+            occurred_at: timestamp_from_db(row.occurred_at),
+        });
+
         Ok(Some(OrgDetail {
             summary: OrgSummary {
                 org: OrgId(uuid_from_db(head.id)),
@@ -386,6 +422,7 @@ impl BackofficeRepo {
             },
             connections,
             halts,
+            subscription,
         }))
     }
 

@@ -57,6 +57,12 @@ pub enum APIErrorCode {
     DuplicateSyncItem,
     ResourceMissing,
     BrokerUnavailable,
+    /// This deployment was started without a backoffice database, so the
+    /// operator surface serves nothing at all rather than half of itself.
+    /// Reached only after the operator marking has already been accepted, so
+    /// it discloses nothing to a caller who is not one: they are refused with
+    /// the blank 401 first.
+    BackofficeUnavailable,
     /// Another organisation already holds the marketplace account this link
     /// names. Deliberately says nothing about which one: the client renders
     /// the marketplace and no more, because a code that identified the holder
@@ -69,7 +75,7 @@ pub enum APIErrorCode {
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -79,6 +85,7 @@ impl APIErrorCode {
         Self::DuplicateSyncItem,
         Self::ResourceMissing,
         Self::BrokerUnavailable,
+        Self::BackofficeUnavailable,
         Self::PlatformAccountAlreadyLinked,
         Self::Internal,
     ];
@@ -95,6 +102,7 @@ impl APIErrorCode {
             Self::DuplicateSyncItem => "duplicate_sync_item",
             Self::ResourceMissing => "resource_missing",
             Self::BrokerUnavailable => "broker_unavailable",
+            Self::BackofficeUnavailable => "backoffice_unavailable",
             Self::PlatformAccountAlreadyLinked => "platform_account_already_linked",
             Self::Internal => "internal",
         }
@@ -312,6 +320,7 @@ mod tests {
                 | APIErrorCode::DuplicateSyncItem
                 | APIErrorCode::ResourceMissing
                 | APIErrorCode::BrokerUnavailable
+                | APIErrorCode::BackofficeUnavailable
                 | APIErrorCode::PlatformAccountAlreadyLinked
                 | APIErrorCode::Internal => {}
             }

@@ -197,7 +197,7 @@ pub const ROUTES: [Route; 39] = [
     Route {
         method: "get",
         path: "/{version}/admin/orgs/{org}",
-        summary: "Operator: one organisation, its connections and its halts",
+        summary: "Operator: one organisation, its connections, halts and subscription state",
     },
     Route {
         method: "get",

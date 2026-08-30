@@ -39,5 +39,21 @@ export const queryKeys = {
 	drainStats: ['drain-stats'] as const,
 	/** The newest runs read in full, which the jobs list alone cannot give:
 	 *  its heads carry no phase and no counts. */
-	activity: ['job-activity'] as const
+	activity: ['job-activity'] as const,
+
+	/** The operator probe. One read, shared by the sidebar that decides
+	 *  whether to show the Admin group and by the `/admin` pages themselves,
+	 *  so the question is asked once per session rather than once per page. */
+	operator: ['operator-probe'] as const,
+	/** The identity session as the impersonation banner reads it. A key of its
+	 *  own rather than `identity`, which the settings page holds a differently
+	 *  shaped answer under: one key, two shapes is a cache collision. */
+	identitySession: ['identity-session'] as const,
+	adminSignups: ['admin-signups'] as const,
+	adminOrgs: ['admin-orgs'] as const,
+	adminOrg: (org: string) => ['admin-org', org] as const,
+	adminFailures: ['admin-failed-writes'] as const,
+	adminImpersonations: ['admin-impersonations'] as const,
+	/** The identity plane's user list, keyed by the search that produced it. */
+	identityUsers: (search: string) => ['identity-users', search] as const
 };

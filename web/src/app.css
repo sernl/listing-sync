@@ -1265,3 +1265,194 @@ dl.facts dd:last-child {
 		}
 	}
 }
+
+/* The operator surface. Everything below is used only under /admin, plus the
+   impersonation banner, which is deliberately not: it has to be able to appear
+   over any page in the console. */
+
+.impersonating {
+	grid-column: 1 / -1;
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 10px 20px;
+	background: var(--bad);
+	color: #fff;
+	border-bottom: 2px solid var(--bad-soft);
+	font-size: 13px;
+}
+
+.impersonating .mark {
+	width: 24px;
+	height: 24px;
+	border-radius: 8px;
+	background: rgb(255 255 255 / 0.18);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+}
+
+.impersonating .said {
+	min-width: 0;
+}
+
+.impersonating b {
+	font-weight: 700;
+}
+
+.impersonating .refused {
+	background: rgb(255 255 255 / 0.15);
+	border-radius: 7px;
+	padding: 3px 9px;
+	font-size: 12px;
+}
+
+.impersonating button {
+	margin-left: auto;
+	border: 1px solid rgb(255 255 255 / 0.55);
+	background: #fff;
+	color: var(--bad);
+	font-weight: 700;
+	border-radius: 8px;
+	padding: 6px 16px;
+	font-size: 12.5px;
+}
+
+.impersonating button:hover:not(:disabled) {
+	background: var(--bad-soft);
+}
+
+.impersonating button:disabled {
+	opacity: 0.65;
+	cursor: default;
+}
+
+/* The signup chart: rows rather than a plotted chart, because two counts a day
+   over a fortnight is a list that happens to be sorted, and a chart library
+   would render the same figures less legibly and less honestly. */
+
+.series-key {
+	display: flex;
+	gap: 16px;
+	flex-wrap: wrap;
+	font-size: 12px;
+	color: var(--muted);
+	margin-bottom: 10px;
+}
+
+.series-key span {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+}
+
+.swatch {
+	width: 11px;
+	height: 11px;
+	border-radius: 3px;
+	display: inline-block;
+	background: var(--accent);
+}
+
+.swatch.second {
+	background: var(--ok);
+}
+
+.bar-row {
+	display: grid;
+	grid-template-columns: 92px 1fr;
+	gap: 12px;
+	align-items: center;
+	padding: 7px 2px;
+	border-top: 1px solid var(--line);
+}
+
+.bar-row:first-of-type {
+	border-top: 0;
+}
+
+.bar-row .day {
+	font-size: 12px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.bar-pair {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.bar .fill {
+	height: 9px;
+	border-radius: 999px;
+	background: var(--accent);
+	min-width: 0;
+}
+
+.bar.second .fill {
+	background: var(--ok);
+}
+
+.bar .n {
+	font-size: 11.5px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	flex: none;
+}
+
+.bar .absent {
+	font-size: 11.5px;
+	color: var(--faint);
+}
+
+/* The operator's own filter bar, which is a search box plus its result count
+   rather than the console-wide search in the top bar. */
+
+.filter-bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 12px;
+}
+
+.filter-bar input[type='search'] {
+	flex: 1;
+	min-width: 200px;
+}
+
+.row-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.row-actions .btn {
+	padding: 4px 10px;
+	font-size: 12px;
+}
+
+.row-actions select {
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: 8px;
+	padding: 4px 8px;
+	font: inherit;
+	font-size: 12px;
+	color: var(--ink);
+}

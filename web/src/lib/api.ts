@@ -256,6 +256,125 @@ export interface BillingView {
 	subscription: SubscriptionView | null;
 }
 
+// ----------------------------------------------------------------- operator
+
+/** One day and what was counted on it. The instant is the day's start in UTC,
+ *  which is what the server's `date_trunc` returns. */
+export interface DayCount {
+	day: number;
+	count: number;
+}
+
+/** Signups from both planes, newest day first.
+ *
+ *  `provisioned` counts rows in the platform's own `app_user` table, which the
+ *  session exchange writes on a subject's first login. `identity` counts
+ *  `user_signed_up` events in the identity service's audit trail, and is
+ *  *absent* rather than empty where this deployment's database carries no
+ *  identity schema — "nobody signed up" and "the identity trail is not visible
+ *  from here" are different facts and the page says which one it is looking
+ *  at. */
+export interface SignupsView {
+	provisioned: DayCount[];
+	identity?: DayCount[];
+}
+
+export interface OrgSummaryView {
+	org: string;
+	name: string;
+	created_at: number;
+	products: number;
+	mappings: number;
+	connections: number;
+	users: number;
+}
+
+export interface OrgsView {
+	orgs: OrgSummaryView[];
+}
+
+/** A halt as recorded. `inventory` absent is the tenant-wide halt; present is
+ *  the one raised against a single inventory. */
+export interface HaltView {
+	inventory?: InventoryId;
+	reason: string;
+	raised_by: string;
+	raised_at: number;
+}
+
+/** What Paddle last said about one tenant's subscription, as the operator
+ *  surface serves it: three facts and no Paddle identifier. */
+export interface SubscriptionStateView {
+	status: string;
+	current_period_end?: number;
+	occurred_at: number;
+}
+
+export interface OrgDetailView {
+	org: OrgSummaryView;
+	connections: ConnectionView[];
+	halts: HaltView[];
+	subscription?: SubscriptionStateView;
+}
+
+/** The ledger across every tenant, in the stored state vocabulary rather than
+ *  the collapsed one a seller's job page renders: whether items are parked
+ *  live or parked cold is the distinction an operator opened the page to
+ *  find. */
+export interface SyncHealthView {
+	jobs: number;
+	items: number;
+	queued: number;
+	leased: number;
+	running: number;
+	blocked: number;
+	parked_live: number;
+	parked_cold: number;
+	verifying: number;
+	settled: number;
+	succeeded: number;
+	degraded: number;
+	failed: number;
+	ambiguous: number;
+	skipped: number;
+	outcome_blocked: number;
+}
+
+export interface FailedWriteView {
+	org: string;
+	attempt: string;
+	item: string;
+	mapping: string;
+	state: string;
+	opened_at: number;
+	settled_at?: number;
+	failure_code: FailureCode;
+	ambiguity_cause?: string;
+	item_failure_code?: FailureCode;
+	item_failure_detail?: string;
+}
+
+export interface FailedWritesView {
+	writes: FailedWriteView[];
+}
+
+/** One impersonation as the identity service recorded it. `actor` and
+ *  `target` are identity-plane subject ids, not platform user ids: the two
+ *  planes number their users separately. */
+export interface ImpersonationView {
+	event: string;
+	actor: string;
+	target: string;
+	at: number;
+	ip?: string;
+}
+
+/** `impersonations` is absent rather than empty where the identity schema is
+ *  not visible, for the reason `SignupsView.identity` is. */
+export interface ImpersonationsView {
+	impersonations?: ImpersonationView[];
+}
+
 // --------------------------------------------------------------- endpoints
 
 export const api = {
@@ -305,7 +424,18 @@ export const api = {
 
 	status: () => request<{ inventories: InventoryStatus[] }>('/v1/status'),
 
-	billing: () => request<BillingView>('/v1/billing')
+	billing: () => request<BillingView>('/v1/billing'),
+
+	// The operator surface. Every one of these answers a blank 401 to a caller
+	// who is not an operator — the same body an anonymous request gets, so the
+	// refusal is never an oracle. A client reading one treats it as "not an
+	// operator", never as a fault.
+	adminSignups: () => request<SignupsView>('/v1/admin/signups'),
+	adminOrgs: () => request<OrgsView>('/v1/admin/orgs'),
+	adminOrg: (org: string) => request<OrgDetailView>(`/v1/admin/orgs/${org}`),
+	adminSyncHealth: () => request<SyncHealthView>('/v1/admin/sync-health'),
+	adminFailedWrites: () => request<FailedWritesView>('/v1/admin/failed-writes'),
+	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations')
 };
 
 /** Walks every page of a cursor-paginated endpoint, accumulating rows. */

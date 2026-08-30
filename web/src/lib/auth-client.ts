@@ -8,7 +8,7 @@
 // ("Session bridging") specifies.
 
 import { passkeyClient } from '@better-auth/passkey/client';
-import { jwtClient } from 'better-auth/client/plugins';
+import { adminClient, jwtClient } from 'better-auth/client/plugins';
 import { createAuthClient } from 'better-auth/svelte';
 import { api, type Whoami } from '$lib/api';
 import type { CaptchaOptions } from '$lib/captcha';
@@ -22,7 +22,7 @@ export const AUTH_BASE_PATH = '/api/auth';
 
 export const authClient = createAuthClient({
 	basePath: AUTH_BASE_PATH,
-	plugins: [passkeyClient(), jwtClient()]
+	plugins: [passkeyClient(), jwtClient(), adminClient()]
 });
 
 /** Where a provider returns the browser. Both land on the sign-in page, which
@@ -184,10 +184,15 @@ export async function resendVerification(email: string) {
  */
 export class AuthFailure extends Error {
 	readonly code: string | undefined;
+	/** The HTTP status the identity service answered with, where it answered
+	 * with one. The admin surface's 403 is a distinct fact from a fault, and
+	 * `identityAdminRefusal` is what reads it. */
+	readonly status: number | undefined;
 
-	constructor(message: string, code?: string) {
+	constructor(message: string, code?: string, status?: number) {
 		super(message);
 		this.code = code;
+		this.status = status;
 	}
 }
 
@@ -202,13 +207,15 @@ export const ALREADY_REGISTERED = 'ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED';
 interface ClientRefusal {
 	message?: string | undefined;
 	code?: string | undefined;
+	status?: number | undefined;
 }
 
 function refused(error: ClientRefusal | null | undefined, fallback: string): AuthFailure {
 	const message = error?.message;
 	return new AuthFailure(
 		typeof message === 'string' && message.length > 0 ? message : fallback,
-		error?.code
+		error?.code,
+		error?.status
 	);
 }
 
@@ -281,4 +288,146 @@ export async function deletePasskey(id: string): Promise<void> {
 	if (error) {
 		throw refused(error, 'The passkey was not removed.');
 	}
+}
+
+// ------------------------------- the identity plane's administration surface
+
+/**
+ * One identity-plane account as the admin plugin lists it.
+ *
+ * Not a platform user. These are `auth."user"` rows, which reach `app_user`
+ * only through the `auth_subject` join, so an id here names a subject and
+ * never an organisation's member.
+ */
+export interface IdentityUser {
+	id: string;
+	email: string;
+	name: string;
+	emailVerified: boolean;
+	role?: string | null;
+	banned?: boolean | null;
+	banReason?: string | null;
+	createdAt?: string | Date | null;
+}
+
+/** The two roles this console sets. better-auth's plugin accepts any string;
+ * the console offers only the pair its server configuration defines, so a
+ * typo cannot mint a role nothing grants. */
+export const IDENTITY_ROLES = ['admin', 'user'] as const;
+export type IdentityRole = (typeof IDENTITY_ROLES)[number];
+
+/**
+ * The identity plane's accounts, optionally filtered.
+ *
+ * The search is a `contains` match on the address, which is the field an
+ * operator has when a human writes in. A blank search lists the newest
+ * accounts rather than none.
+ *
+ * Refused with 403 for a signed-in human whose identity account carries no
+ * admin role — a distinct fact from the platform operator marking, and one the
+ * page explains rather than reports as an error.
+ */
+export async function listIdentityUsers(search: string, limit: number): Promise<IdentityUser[]> {
+	const trimmed = search.trim();
+	const { data, error } = await authClient.admin.listUsers({
+		query: {
+			limit,
+			sortBy: 'createdAt',
+			sortDirection: 'desc',
+			...(trimmed.length === 0
+				? {}
+				: { searchField: 'email' as const, searchOperator: 'contains' as const, searchValue: trimmed })
+		}
+	});
+	if (error) {
+		throw refused(error, 'The identity accounts could not be listed.');
+	}
+	return (data?.users ?? []) as IdentityUser[];
+}
+
+/** Ban an account, recording why. better-auth stores the reason and shows it
+ * back on the row; the ban has no expiry unless the server configures one. */
+export async function banIdentityUser(userId: string, reason: string): Promise<void> {
+	const trimmed = reason.trim();
+	const { error } = await authClient.admin.banUser({
+		userId,
+		...(trimmed.length === 0 ? {} : { banReason: trimmed })
+	});
+	if (error) {
+		throw refused(error, 'The account was not banned.');
+	}
+}
+
+export async function unbanIdentityUser(userId: string): Promise<void> {
+	const { error } = await authClient.admin.unbanUser({ userId });
+	if (error) {
+		throw refused(error, 'The account was not unbanned.');
+	}
+}
+
+export async function setIdentityRole(userId: string, role: IdentityRole): Promise<void> {
+	const { error } = await authClient.admin.setRole({ userId, role });
+	if (error) {
+		throw refused(error, 'The role was not changed.');
+	}
+}
+
+/**
+ * Sign in as another identity account, and carry the console with it.
+ *
+ * Two steps, and the second is the one that matters. `impersonateUser` moves
+ * the *identity* session onto the target and nothing more; the console's own
+ * session is a separate cookie the API minted, and until it is re-established
+ * every page would still be reading the operator's organisation while the
+ * banner claimed otherwise. `establishSession` is what makes the two agree.
+ *
+ * The exchange can refuse — an unverified target is the case that will actually
+ * occur — and a refusal here leaves the identity session impersonating with no
+ * matching app session, which is the one state that must not persist. So a
+ * refusal is undone rather than reported: the impersonation is stopped, the
+ * operator's own app session is restored, and the refusal is raised for the
+ * page to render.
+ */
+export async function impersonateAndCarry(userId: string): Promise<Whoami> {
+	const { error } = await authClient.admin.impersonateUser({ userId });
+	if (error) {
+		throw refused(error, 'The impersonation was refused.');
+	}
+	try {
+		return await establishSession();
+	} catch (failure) {
+		await stopImpersonatingAndRestore().catch(() => undefined);
+		throw failure;
+	}
+}
+
+/**
+ * End an impersonation and return the console to the operator's own session.
+ *
+ * The same two steps in reverse, and the second is again what keeps the two
+ * planes in agreement: `stopImpersonating` restores the identity session, and
+ * the app session is re-minted from it.
+ */
+export async function stopImpersonatingAndRestore(): Promise<Whoami> {
+	const { error } = await authClient.admin.stopImpersonating();
+	if (error) {
+		throw refused(error, 'The impersonation was not stopped.');
+	}
+	return establishSession();
+}
+
+/** The identity session as the impersonation banner reads it: who the console
+ * is acting as, and whether anybody is acting at all. */
+export async function impersonatedSession(): Promise<{
+	user: { name?: string | null; email?: string | null };
+	session: { impersonatedBy?: string | null };
+} | null> {
+	const { data } = await authClient.getSession();
+	if (!data) {
+		return null;
+	}
+	return {
+		user: { name: data.user.name, email: data.user.email },
+		session: { impersonatedBy: data.session.impersonatedBy ?? null }
+	};
 }

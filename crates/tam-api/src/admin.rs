@@ -41,14 +41,16 @@ fn storage_fault(state: &AppState, error: &tam_storage::StorageError) -> APIErro
 ///
 /// Reached only after [`OperatorContext`] has already accepted the caller, so
 /// a non-operator learns nothing from it: they are refused with the blank 401
-/// before this runs. No closed error code names this condition, because the
-/// code vocabulary is a cross-layer contract the client generates from, and
-/// widening it is a change to the client's build rather than to this file.
+/// before this runs. [`APIErrorCode::BackofficeUnavailable`] names the
+/// condition so the client can tell an unconfigured operator surface from a
+/// fault, which is the difference between a page that explains itself and one
+/// that reports an error nobody can act on.
 fn backoffice(state: &AppState) -> Result<PgPool, APIError> {
     state.backoffice.clone().ok_or_else(|| {
         APIError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             APIErrorEntry::new("no backoffice database is configured; nothing was read")
+                .code(APIErrorCode::BackofficeUnavailable)
                 .kind(APIErrorKind::Internal),
         )
     })
@@ -180,11 +182,41 @@ pub struct HaltView {
     pub raised_at: Timestamp,
 }
 
+/// What Paddle last said about this organisation's subscription.
+///
+/// Three fields and no identifier. Paddle's subscription and customer ids are
+/// what the tenant's own billing page needs to resume a checkout; an operator
+/// reading every tenant is answering "is this one paying, and as of when",
+/// which these three answer whole.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SubscriptionStateView {
+    /// Paddle's own vocabulary, passed through rather than translated, for
+    /// the reason `billing::SubscriptionView` gives.
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_period_end: Option<Timestamp>,
+    pub occurred_at: Timestamp,
+}
+
+impl SubscriptionStateView {
+    fn of(record: tam_storage::SubscriptionRecord) -> Self {
+        Self {
+            status: record.status,
+            current_period_end: record.current_period_end,
+            occurred_at: record.occurred_at,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OrgDetailView {
     pub org: OrgSummaryView,
     pub connections: Vec<ConnectionView>,
     pub halts: Vec<HaltView>,
+    /// Absent for a tenant that has never reached checkout, which is a
+    /// different fact from a cancelled subscription.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<SubscriptionStateView>,
 }
 
 pub(crate) async fn org_detail(
@@ -222,6 +254,7 @@ pub(crate) async fn org_detail(
                 raised_at: halt.raised_at,
             })
             .collect(),
+        subscription: detail.subscription.map(SubscriptionStateView::of),
     }))
 }
 

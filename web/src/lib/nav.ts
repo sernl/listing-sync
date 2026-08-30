@@ -51,22 +51,49 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 	}
 ];
 
+/** The operator's own group, rendered under the others and only for a human
+ *  the operator probe admitted.
+ *
+ *  Separate from `NAV_GROUPS` rather than a flag inside it, because every
+ *  entry there is unconditional: a seller sees exactly that sidebar, and a
+ *  conditional item mixed into the same list is one `if` away from leaking a
+ *  destination that answers 401. Its destinations still refuse a
+ *  non-operator on their own — the hiding is courtesy, never the fence. */
+export const ADMIN_GROUP: NavGroup = {
+	label: 'Admin',
+	items: [
+		{ href: '/admin', label: 'Overview', icon: '◈' },
+		{ href: '/admin/orgs', label: 'Organisations', icon: '⌂' },
+		{ href: '/admin/health', label: 'Sync health', icon: '❤' },
+		{ href: '/admin/failures', label: 'Failed writes', icon: '✕' },
+		{ href: '/admin/users', label: 'Identity users', icon: '☺' },
+		{ href: '/admin/impersonations', label: 'Impersonations', icon: '⧉' }
+	]
+};
+
 /** Pinned below the groups, beside the account card. */
 export const SETTINGS_ITEM: NavItem = { href: '/settings', label: 'Settings', icon: '⚙' };
 
 const ALL_ITEMS: readonly NavItem[] = [
 	...NAV_GROUPS.flatMap((group) => group.items),
+	...ADMIN_GROUP.items,
 	SETTINGS_ITEM
 ];
 
+/** Destinations matched exactly rather than by prefix, because each one has
+ *  sibling destinations of its own beneath it in the same sidebar: every path
+ *  is under `/`, and every operator page is under `/admin`. A prefix match on
+ *  either would light two entries at once. */
+const EXACT_ONLY: readonly string[] = ['/', '/admin'];
+
 /** Whether a nav destination is the one the browser is on.
  *
- * A prefix match everywhere but the dashboard, so a job detail under `/sync`
- * still lights its parent; the dashboard is matched exactly, because every
- * path is under `/`. */
+ * A prefix match except for the destinations above, so a job detail under
+ * `/sync` still lights its parent and an organisation under `/admin/orgs`
+ * lights that group's own entry rather than the overview beside it. */
 export function isCurrent(pathname: string, href: string): boolean {
-	if (href === '/') {
-		return pathname === '/';
+	if (EXACT_ONLY.includes(href)) {
+		return pathname === href;
 	}
 	return pathname === href || pathname.startsWith(`${href}/`);
 }

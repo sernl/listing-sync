@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	ADMIN_GROUP,
 	NAV_GROUPS,
 	SETTINGS_ITEM,
 	breadcrumbFor,
@@ -9,7 +10,11 @@ import {
 	searchHref
 } from './nav';
 
-const EVERY_ITEM = [...NAV_GROUPS.flatMap((group) => group.items), SETTINGS_ITEM];
+const EVERY_ITEM = [
+	...NAV_GROUPS.flatMap((group) => group.items),
+	...ADMIN_GROUP.items,
+	SETTINGS_ITEM
+];
 
 describe('the sidebar', () => {
 	it('names every destination once', () => {
@@ -41,6 +46,33 @@ describe('the current destination', () => {
 	it('does not light a destination that merely shares a prefix', () => {
 		expect(isCurrent('/syncing', '/sync')).toBe(false);
 	});
+
+	it('lights one operator entry at a time, not the overview beside it', () => {
+		expect(isCurrent('/admin/orgs', '/admin')).toBe(false);
+		expect(isCurrent('/admin/orgs', '/admin/orgs')).toBe(true);
+		expect(isCurrent('/admin', '/admin')).toBe(true);
+	});
+
+	it('keeps an organisation detail under its own group entry', () => {
+		expect(isCurrent('/admin/orgs/9f2c', '/admin/orgs')).toBe(true);
+		expect(isCurrent('/admin/orgs/9f2c', '/admin')).toBe(false);
+	});
+});
+
+describe('the operator group', () => {
+	it('is not one of the groups every seller sees', () => {
+		expect(NAV_GROUPS.map((group) => group.label)).not.toContain(ADMIN_GROUP.label);
+	});
+
+	it('sends every entry into the operator subtree', () => {
+		for (const item of ADMIN_GROUP.items) {
+			expect(item.href.startsWith('/admin')).toBe(true);
+		}
+	});
+
+	it('marks no operator destination unbuilt', () => {
+		expect(ADMIN_GROUP.items.filter((item) => item.soon)).toEqual([]);
+	});
 });
 
 describe('the breadcrumb', () => {
@@ -53,6 +85,13 @@ describe('the breadcrumb', () => {
 
 	it('names the parent of a detail page rather than the dashboard', () => {
 		expect(breadcrumbFor('/sync/9f2c8a11')).toBe('Sync');
+	});
+
+	it('names the operator page rather than its group', () => {
+		expect(breadcrumbFor('/admin')).toBe('Overview');
+		expect(breadcrumbFor('/admin/orgs')).toBe('Organisations');
+		expect(breadcrumbFor('/admin/orgs/9f2c8a11')).toBe('Organisations');
+		expect(breadcrumbFor('/admin/users')).toBe('Identity users');
 	});
 
 	it('falls back to the console for a path the sidebar does not name', () => {

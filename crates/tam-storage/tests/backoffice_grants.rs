@@ -82,6 +82,21 @@ async fn seed_two_tenants(app: &PgPool) -> Result<(), sqlx::Error> {
         .bind(&hash)
         .execute(&mut *tx)
         .await?;
+        // One subscription per tenant, so the read policy migration 0039 adds
+        // is asserted by rows rather than by an empty count: row-level
+        // security filters rows and does not deny the statement, so a table
+        // holding nothing answers zero whether or not the policy is there.
+        sqlx::query(
+            "INSERT INTO billing_subscription \
+             (org_id, paddle_subscription_id, paddle_customer_id, status, \
+              current_period_end, occurred_at, updated_at) \
+             VALUES ($1, $2, $3, 'active', now(), now(), now())",
+        )
+        .bind(org_uuid)
+        .bind(format!("sub_{name}"))
+        .bind(format!("ctm_{name}"))
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
     }
     Ok(())
@@ -109,6 +124,26 @@ async fn the_backoffice_role_reads_across_tenants_and_the_app_role_does_not(app:
     assert_eq!(
         across, 2,
         "the backoffice role reads both tenants' products in one unpinned query"
+    );
+
+    let unpinned_subscriptions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM billing_subscription")
+            .fetch_one(&app)
+            .await
+            .expect("the application role may run the query");
+    assert_eq!(
+        unpinned_subscriptions, 0,
+        "the application role with no tenant pinned must see no subscription; \
+         without this contrast the backoffice count below proves nothing"
+    );
+    let subscriptions: i64 = sqlx::query_scalar("SELECT count(*) FROM billing_subscription")
+        .fetch_one(&backoffice)
+        .await
+        .expect("the backoffice role may read billing state");
+    assert_eq!(
+        subscriptions, 2,
+        "migration 0039's grant and read policy together let this role see \
+         both tenants' subscriptions past the fence migration 0038 raised"
     );
 }
 
@@ -141,6 +176,8 @@ async fn the_backoffice_role_cannot_write_a_table_it_reads(app: PgPool) {
         "DELETE FROM product",
         "UPDATE job_item SET state = 'settled'",
         "DELETE FROM write_attempt",
+        "UPDATE billing_subscription SET status = 'active'",
+        "DELETE FROM billing_subscription",
         "INSERT INTO org_halt (org_id, raised_by, reason, raised_at) \
          VALUES (gen_random_uuid(), 'nobody', 'because', now())",
     ] {
@@ -188,13 +225,15 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "org_inventory_halt",
         "organisation",
         "app_user",
+        "billing_subscription",
     ] {
         let allowed = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)
             .await;
         assert!(
             allowed.is_ok(),
-            "migration 0037 grants SELECT on {table}; the grant and the policy must both be there"
+            "the grant list must name {table}, and the read policy beside it; \
+             one without the other shows this role nothing"
         );
     }
 }

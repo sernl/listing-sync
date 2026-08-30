@@ -1,12 +1,16 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { impersonationState, operatorVerdict } from '$lib/admin';
 	import { api } from '$lib/api';
+	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
+	import ImpersonationBanner from '$lib/ImpersonationBanner.svelte';
 	import { normaliseQuery } from '$lib/listings-view';
 	import {
+		ADMIN_GROUP,
 		NAV_GROUPS,
 		SETTINGS_ITEM,
 		breadcrumbFor,
@@ -27,6 +31,57 @@
 		queryKey: queryKeys.drainStats,
 		queryFn: () => api.drainStats()
 	}));
+
+	// The operator probe: one read of the cheapest operator route, cached for
+	// the session. A 401 is the deliberate blank refusal every non-operator
+	// gets, so it is not retried and never surfaces as a fault -- it is simply
+	// how this client learns the human is not an operator.
+	const probe = createQuery(() => ({
+		queryKey: queryKeys.operator,
+		queryFn: () => api.adminSyncHealth(),
+		retry: false,
+		staleTime: Infinity,
+		gcTime: Infinity
+	}));
+	const verdict = $derived(
+		operatorVerdict({ answered: probe.data !== undefined, failure: probe.error ?? null })
+	);
+
+	// The identity session, read rather than remembered: a reload mid
+	// impersonation must raise the banner from what it finds.
+	const identity = createQuery(() => ({
+		queryKey: queryKeys.identitySession,
+		queryFn: () => impersonatedSession()
+	}));
+	const impersonation = $derived(impersonationState(identity.data ?? null));
+
+	const queryClient = useQueryClient();
+	let stopping = $state(false);
+	let stopRefusal = $state<string | null>(null);
+
+	async function stopImpersonating() {
+		stopping = true;
+		stopRefusal = null;
+		try {
+			await stopImpersonatingAndRestore();
+			// Everything cached was read as the impersonated tenant. Clearing is
+			// not tidiness: a stale organisation left in the cache would render
+			// somebody else's workspace under the operator's own session.
+			queryClient.clear();
+			await invalidateAll();
+			await goto('/admin/users');
+		} catch (failure) {
+			// The banner stays up rather than being dismissed, and the identity
+			// session is deliberately not re-read: a failure here can leave the two
+			// planes disagreeing, and a banner that vanished over that would hide
+			// the one state that must stay visible. Logging out ends both.
+			const said =
+				failure instanceof Error ? failure.message : 'The impersonation was not stopped.';
+			stopRefusal = `${said} You are still signed in as them — log out to end both sessions.`;
+		} finally {
+			stopping = false;
+		}
+	}
 
 	const pathname = $derived(page.url.pathname);
 	const crumb = $derived(breadcrumbFor(pathname));
@@ -86,6 +141,15 @@
 <svelte:window onkeydown={shortcut} />
 
 <div class="app">
+	{#if impersonation}
+		<ImpersonationBanner
+			who={impersonation.who}
+			{stopping}
+			refusal={stopRefusal}
+			onStop={stopImpersonating}
+		/>
+	{/if}
+
 	<aside class="side">
 		<div class="wordmark"><span class="leaf" aria-hidden="true">T</span> Teachouse</div>
 
@@ -109,6 +173,22 @@
 				{/each}
 			</nav>
 		{/each}
+
+		{#if verdict === 'operator'}
+			<div class="group-label" id={`nav-${ADMIN_GROUP.label}`}>{ADMIN_GROUP.label}</div>
+			<nav aria-labelledby={`nav-${ADMIN_GROUP.label}`}>
+				{#each ADMIN_GROUP.items as item (item.href)}
+					<a
+						class="nav-item"
+						href={item.href}
+						aria-current={isCurrent(pathname, item.href) ? 'page' : undefined}
+					>
+						<i class="ico" aria-hidden="true">{item.icon}</i>
+						{item.label}
+					</a>
+				{/each}
+			</nav>
+		{/if}
 
 		<div class="foot">
 			<nav aria-label="Account">
