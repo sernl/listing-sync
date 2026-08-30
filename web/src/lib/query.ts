@@ -34,5 +34,10 @@ export const queryKeys = {
 	status: ['status'] as const,
 	org: ['org'] as const,
 	identity: ['identity'] as const,
-	passkeys: ['passkeys'] as const
+	passkeys: ['passkeys'] as const,
+	billing: ['billing'] as const,
+	drainStats: ['drain-stats'] as const,
+	/** The newest runs read in full, which the jobs list alone cannot give:
+	 *  its heads carry no phase and no counts. */
+	activity: ['job-activity'] as const
 };

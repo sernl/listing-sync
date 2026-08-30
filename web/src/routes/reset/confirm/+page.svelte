@@ -59,21 +59,17 @@
 	}
 </script>
 
-<div class="mx-auto max-w-md">
+<div class="auth-card">
 	{#if unusable}
-		<h1 class="mb-2 text-xl font-semibold">That link no longer works</h1>
-		<p class="mb-4 text-sm text-slate-600">
-			A reset link expires, and each one can be spent once. Ask for a fresh one.
-		</p>
-		<a class="rounded bg-slate-900 px-4 py-2 text-sm text-white" href="/reset">Send a new link</a>
+		<h1>That link no longer works</h1>
+		<p>A reset link expires, and each one can be spent once. Ask for a fresh one.</p>
+		<div class="actions"><a class="cta" href="/reset">Send a new link</a></div>
 	{:else}
-		<h1 class="mb-2 text-xl font-semibold">Choose a new password</h1>
-		<p class="mb-4 text-sm text-slate-600">
-			This link signs off the change. Type the new password twice.
-		</p>
+		<h1>Choose a new password</h1>
+		<p>This link signs off the change. Type the new password twice.</p>
 
-		<form onsubmit={choose} class="flex flex-col gap-3">
-			<label class="flex flex-col gap-1 text-sm" for="password">
+		<form onsubmit={choose} class="form">
+			<label class="field" for="password">
 				New password
 				<input
 					id="password"
@@ -81,11 +77,10 @@
 					type="password"
 					required
 					autocomplete="new-password"
-					class="rounded border border-slate-300 px-3 py-2"
 					bind:value={password}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-sm" for="confirmation">
+			<label class="field" for="confirmation">
 				Repeat it
 				<input
 					id="confirmation"
@@ -93,20 +88,16 @@
 					type="password"
 					required
 					autocomplete="new-password"
-					class="rounded border border-slate-300 px-3 py-2"
 					bind:value={confirmation}
 				/>
 			</label>
-			<button
-				class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
-				disabled={busy}
-			>
+			<button class="cta" disabled={busy}>
 				{busy ? 'Saving…' : 'Change password'}
 			</button>
 		</form>
 
-		<p class="mt-6 text-sm text-slate-600">
-			Remembered it after all? <a class="underline" href="/login">Sign in</a>.
+		<p class="auth-foot">
+			Remembered it after all? <a class="link" href="/login">Sign in</a>.
 		</p>
 	{/if}
 </div>

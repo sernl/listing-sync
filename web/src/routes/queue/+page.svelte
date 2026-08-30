@@ -2,6 +2,8 @@
 	import { api, type DrainStats, type QueueItem } from '$lib/api';
 	import { formatShare, gateWindow, readMeasurement, toRun, type DrainRun } from '$lib/drain';
 	import { createLedger } from '$lib/ledger';
+	import PageHead from '$lib/PageHead.svelte';
+	import Panel from '$lib/Panel.svelte';
 	import { toast } from '$lib/toast';
 
 	let items = $state<QueueItem[]>([]);
@@ -100,133 +102,135 @@
 	}
 </script>
 
-<div class="mb-4 flex items-center gap-4">
-	<h1 class="text-xl font-semibold">Reconciliation</h1>
-	{#if stats}
-		<span class="text-sm text-slate-500">
-			open {stats.open} · resolved {stats.resolved} · no counterpart {stats.no_counterpart}
-		</span>
-	{/if}
-</div>
-
-<section class="mb-6 rounded border border-slate-200 bg-white p-4">
-	<div class="mb-2 flex items-baseline gap-3">
-		<h2 class="text-sm font-medium">Import drain</h2>
-		<span class="text-xs text-slate-500">
-			the share of canonical terms each import raised a new item for
-		</span>
-	</div>
-
-	{#if runs.length === 0}
-		<p class="text-xs text-slate-500">
-			No import has recorded a drain report yet. Each run records one, and
-			the ledger keeps 30 days of them.
-		</p>
-	{:else}
-		<p class="mb-3 text-xs text-slate-600">
-			{#if gate.fall === null}
-				{runs.length} of 10 migrations recorded; the gate compares the first
-				against the tenth.
-			{:else}
-				First {formatShare(gate.first?.share ?? null)} → tenth
-				{formatShare(gate.tenth?.share ?? null)}: a fall of
-				{formatShare(gate.fall)}.
+<div class="page">
+	<PageHead
+		icon="☰"
+		title="Reconciliation"
+		description="The few questions sync cannot answer for you."
+	>
+		{#snippet aside()}
+			{#if stats}
+				<span class="tag-note">
+					open {stats.open} · resolved {stats.resolved} · no counterpart {stats.no_counterpart}
+				</span>
 			{/if}
-		</p>
+		{/snippet}
+	</PageHead>
 
-		<div class="overflow-x-auto">
-			<table class="w-full text-left text-xs">
-				<thead class="text-slate-500">
-					<tr>
-						<th class="py-1 pr-3 font-medium">#</th>
-						<th class="py-1 pr-3 font-medium">Direction</th>
-						<th class="py-1 pr-3 font-medium">Rows</th>
-						<th class="py-1 pr-3 font-medium">Terms seen</th>
-						<th class="py-1 pr-3 font-medium">Unmapped</th>
-						<th class="py-1 pr-3 font-medium">Covered</th>
-						<th class="py-1 pr-3 font-medium">New</th>
-						<th class="py-1 pr-3 font-medium">Already open</th>
-						<th class="py-1 font-medium">Share</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-slate-100">
-					{#each runs as run, index (run.seq)}
-						<tr class={index === 0 || index === 9 ? 'font-medium' : ''}>
-							<td class="py-1 pr-3 text-slate-400">{index + 1}</td>
-							<td class="py-1 pr-3">{run.source} → {run.target}</td>
-							<td class="py-1 pr-3">{run.rows}</td>
-							<td class="py-1 pr-3">{run.terms_seen}</td>
-							<td class="py-1 pr-3 {run.terms_unmapped > 0 ? 'text-orange-700' : ''}">
-								{run.terms_unmapped}
-							</td>
-							<td class="py-1 pr-3">{run.terms_covered}</td>
-							<td class="py-1 pr-3">{run.items_new}</td>
-							<td class="py-1 pr-3">{run.items_already_open}</td>
-							<td class="py-1">{formatShare(run.share)}</td>
+	<Panel
+		title="Import drain"
+		description="The share of canonical terms each import raised a new item for."
+	>
+		{#if runs.length === 0}
+			<p class="quiet">
+				No import has recorded a drain report yet. Each run records one, and the ledger keeps
+				30 days of them.
+			</p>
+		{:else}
+			<p class="s">
+				{#if gate.fall === null}
+					{runs.length} of 10 migrations recorded; the gate compares the first against the
+					tenth.
+				{:else}
+					First {formatShare(gate.first?.share ?? null)} → tenth
+					{formatShare(gate.tenth?.share ?? null)}: a fall of {formatShare(gate.fall)}.
+				{/if}
+			</p>
+
+			<div class="tbl-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th class="num">#</th>
+							<th>Direction</th>
+							<th class="num">Rows</th>
+							<th class="num">Terms seen</th>
+							<th class="num">Unmapped</th>
+							<th class="num">Covered</th>
+							<th class="num">New</th>
+							<th class="num">Already open</th>
+							<th class="num">Share</th>
 						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+					</thead>
+					<tbody>
+						{#each runs as run, index (run.seq)}
+							<tr class={index === 0 || index === 9 ? 'gate-row' : ''}>
+								<td class="num">{index + 1}</td>
+								<td>{run.source} → {run.target}</td>
+								<td class="num">{run.rows}</td>
+								<td class="num">{run.terms_seen}</td>
+								<td class="num {run.terms_unmapped > 0 ? 'flag' : ''}">
+									{run.terms_unmapped}
+								</td>
+								<td class="num">{run.terms_covered}</td>
+								<td class="num">{run.items_new}</td>
+								<td class="num">{run.items_already_open}</td>
+								<td class="num">{formatShare(run.share)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 
-		<p class="mt-2 text-xs text-slate-500">
-			Unmapped terms never became canonical, so they are outside the share:
-			a share that falls while that column rises is an ingest gap rather
-			than a converging crosswalk.
-		</p>
-	{/if}
+			<p class="foot-note">
+				Unmapped terms never became canonical, so they are outside the share: a share that
+				falls while that column rises is an ingest gap rather than a converging crosswalk.
+			</p>
+		{/if}
 
-	{#if truncated}
-		<p class="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
-			The ledger was pruned past the start of this stream, so runs older
-			than the 30-day window are not shown and the first row above may not
-			be the first migration.
-		</p>
-	{/if}
-</section>
+		{#if truncated}
+			<p class="notice">
+				The ledger was pruned past the start of this stream, so runs older than the 30-day
+				window are not shown and the first row above may not be the first migration.
+			</p>
+		{/if}
+	</Panel>
 
-{#if !loaded}
-	<p class="text-slate-500">Loading the queue…</p>
-{:else if items.length === 0}
-	<p class="rounded border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-		The queue is drained. New items appear only when a listing carries a term
-		with no translation yet — and each one you resolve stays resolved.
-	</p>
-{:else}
-	<ul class="flex flex-col gap-3">
-		{#each items as item (item.id)}
-			<li class="rounded border border-slate-200 bg-white p-4">
-				<div class="mb-2 flex items-center gap-3">
-					<span class="font-mono text-xs text-slate-500">{item.term.slice(0, 8)}…</span>
-					<span class="rounded bg-slate-100 px-2 py-0.5 text-xs">
-						{item.kind} → {item.inventory}
-					</span>
-					<span class="text-xs text-slate-400">
-						raised {new Date(item.raised_at).toLocaleDateString()}
-					</span>
+	<Panel title="Open questions" description="Each one you answer stays answered.">
+		{#if !loaded}
+			<p class="quiet">Loading the queue…</p>
+		{:else if items.length === 0}
+			<div class="placeholder">
+				<span class="big" aria-hidden="true">✓</span>
+				<b>The queue is drained.</b>
+				<p>
+					New items appear only when a listing carries a term with no translation yet — and
+					each one you resolve stays resolved.
+				</p>
+			</div>
+		{:else}
+			{#each items as item (item.id)}
+				<div class="question">
+					<div class="head-row">
+						<span class="mono">{item.term.slice(0, 8)}…</span>
+						<span class="badge">{item.kind} → {item.inventory}</span>
+						<span class="grow"></span>
+						<span class="when">
+							raised {new Date(item.raised_at).toLocaleDateString()}
+						</span>
+					</div>
+					<div class="actions">
+						<label class="sr-only" for={`target-${item.id}`}>Target path</label>
+						<input
+							id={`target-${item.id}`}
+							class="grow"
+							type="text"
+							placeholder="Target path, e.g. Mathematics / Algebra"
+							bind:value={drafts[item.id]}
+						/>
+						<button class="cta" disabled={busy === item.id} onclick={() => resolve(item)}>
+							Resolve
+						</button>
+						<button
+							class="btn"
+							disabled={busy === item.id}
+							onclick={() => noCounterpart(item)}
+						>
+							No counterpart
+						</button>
+					</div>
 				</div>
-				<div class="flex items-center gap-2">
-					<input
-						class="grow rounded border border-slate-300 px-3 py-1.5 text-sm"
-						placeholder="Target path, e.g. Mathematics / Algebra"
-						bind:value={drafts[item.id]}
-					/>
-					<button
-						class="rounded bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
-						disabled={busy === item.id}
-						onclick={() => resolve(item)}
-					>
-						Resolve
-					</button>
-					<button
-						class="rounded border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50"
-						disabled={busy === item.id}
-						onclick={() => noCounterpart(item)}
-					>
-						No counterpart
-					</button>
-				</div>
-			</li>
-		{/each}
-	</ul>
-{/if}
+			{/each}
+		{/if}
+	</Panel>
+</div>

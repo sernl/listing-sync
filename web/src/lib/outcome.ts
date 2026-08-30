@@ -12,15 +12,15 @@ export interface Segment {
 }
 
 const SEGMENTS: Array<{ label: string; pick: (c: Counts) => number; tone: string }> = [
-	{ label: 'succeeded', pick: (c) => c.succeeded, tone: 'bg-emerald-500' },
-	{ label: 'degraded', pick: (c) => c.degraded, tone: 'bg-amber-500' },
-	{ label: 'failed', pick: (c) => c.failed, tone: 'bg-red-500' },
-	{ label: 'ambiguous', pick: (c) => c.ambiguous, tone: 'bg-purple-500' },
-	{ label: 'skipped', pick: (c) => c.skipped, tone: 'bg-slate-400' },
-	{ label: 'blocked', pick: (c) => c.outcome_blocked + c.blocked, tone: 'bg-orange-500' },
-	{ label: 'in flight', pick: (c) => c.in_flight, tone: 'bg-sky-500' },
-	{ label: 'parked', pick: (c) => c.parked, tone: 'bg-slate-500' },
-	{ label: 'queued', pick: (c) => c.queued, tone: 'bg-slate-300' }
+	{ label: 'succeeded', pick: (c) => c.succeeded, tone: 'seg-ok' },
+	{ label: 'degraded', pick: (c) => c.degraded, tone: 'seg-warn' },
+	{ label: 'failed', pick: (c) => c.failed, tone: 'seg-bad' },
+	{ label: 'ambiguous', pick: (c) => c.ambiguous, tone: 'seg-odd' },
+	{ label: 'skipped', pick: (c) => c.skipped, tone: 'seg-mut' },
+	{ label: 'blocked', pick: (c) => c.outcome_blocked + c.blocked, tone: 'seg-block' },
+	{ label: 'in flight', pick: (c) => c.in_flight, tone: 'seg-run' },
+	{ label: 'parked', pick: (c) => c.parked, tone: 'seg-park' },
+	{ label: 'queued', pick: (c) => c.queued, tone: 'seg-queue' }
 ];
 
 export function segments(counts: Counts): Segment[] {

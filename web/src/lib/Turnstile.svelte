@@ -103,7 +103,7 @@
 {#if TURNSTILE_SITE_KEY !== null}
 	<div bind:this={host}></div>
 	{#if unavailable}
-		<p class="text-sm text-red-600">
+		<p class="refusal">
 			The challenge could not be loaded. Reload the page to try again.
 		</p>
 	{/if}

@@ -2,6 +2,9 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { api, ApiFailure, type ConnectionView } from '$lib/api';
 	import { present } from '$lib/connection-status';
+	import { agoLabel } from '$lib/elapsed';
+	import PageHead from '$lib/PageHead.svelte';
+	import Panel from '$lib/Panel.svelte';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
 
@@ -43,56 +46,66 @@
 	}
 </script>
 
-<h1 class="mb-4 text-xl font-semibold">Connections</h1>
+<div class="page">
+	<PageHead
+		icon="⚲"
+		title="Connections"
+		description="Your marketplace sign-ins and their health."
+	/>
 
-{#if needsReauth.length > 0}
-	<div class="mb-4 rounded border-2 border-orange-400 bg-orange-50 p-4">
-		<h2 class="font-semibold text-orange-900">Waiting on you</h2>
-		<p class="text-sm text-orange-800">
-			{needsReauth.length === 1 ? 'A connection needs' : `${needsReauth.length} connections need`}
-			re-linking before queued work can continue. Nothing is lost; items are
-			paused with their identities intact and resume exactly where they stopped.
-		</p>
-	</div>
-{/if}
+	{#if needsReauth.length > 0}
+		<div class="attn">
+			<div class="t">Waiting on you</div>
+			<p>
+				{needsReauth.length === 1
+					? 'A connection needs'
+					: `${needsReauth.length} connections need`}
+				re-linking before queued work can continue. Nothing is lost; items are paused with
+				their identities intact and resume exactly where they stopped.
+			</p>
+		</div>
+	{/if}
 
-{#if listing.isPending}
-	<p class="text-slate-500">Loading…</p>
-{:else if listing.isError}
-	<p class="text-slate-500">The connections could not be read.</p>
-{:else if connections.length === 0}
-	<p class="text-slate-500">No marketplace connections yet.</p>
-{:else}
-	<ul class="divide-y divide-slate-100 rounded border border-slate-200 bg-white">
-		{#each connections as connection (connection.id)}
-			<li class="flex items-center gap-4 px-4 py-3">
-				<span class="font-medium">{connection.marketplace}</span>
-				<span
-					class="rounded px-2 py-0.5 text-xs {present(connection.status).tone}"
-					title={present(connection.status).explanation}
-				>
-					{connection.status}
-				</span>
-				<span class="text-xs text-slate-500">
-					{present(connection.status).explanation}
-				</span>
-				<span class="grow"></span>
-				{#if connection.state !== 'revoked'}
-					<button
-						class="rounded border border-red-300 px-3 py-1 text-sm text-red-700 disabled:opacity-50"
-						disabled={revoking.isPending && revoking.variables === connection.id}
-						onclick={() => revoke(connection)}
-					>
-						{revoking.isPending && revoking.variables === connection.id
-							? 'Revoking…'
-							: 'Revoke'}
-					</button>
-				{/if}
-			</li>
-		{/each}
-	</ul>
-	<p class="mt-3 text-xs text-slate-500">
-		Deleting a connection record is not offered yet; revocation destroys the
-		credential, which is the part that matters.
-	</p>
-{/if}
+	<Panel>
+		{#if listing.isPending}
+			<p class="quiet">Loading…</p>
+		{:else if listing.isError}
+			<p class="quiet">The connections could not be read.</p>
+		{:else if connections.length === 0}
+			<div class="placeholder">
+				<span class="big" aria-hidden="true">⚲</span>
+				<b>No marketplace connections yet.</b>
+				<p>
+					A connection is your sign-in to one marketplace, held on our side so the engine can
+					work without you. Once one is linked, its health shows here and in the top bar.
+				</p>
+			</div>
+		{:else}
+			{#each connections as connection (connection.id)}
+				{@const shown = present(connection.status)}
+				<div class="row">
+					<span class="t">{connection.marketplace}</span>
+					<span class="pill {shown.tone}">{connection.status}</span>
+					<span class="s">{shown.explanation}</span>
+					<span class="grow"></span>
+					<span class="when">linked {agoLabel(connection.created_at, Date.now())}</span>
+					{#if connection.state !== 'revoked'}
+						<button
+							class="btn small danger"
+							disabled={revoking.isPending && revoking.variables === connection.id}
+							onclick={() => revoke(connection)}
+						>
+							{revoking.isPending && revoking.variables === connection.id
+								? 'Revoking…'
+								: 'Revoke'}
+						</button>
+					{/if}
+				</div>
+			{/each}
+			<p class="foot-note">
+				Deleting a connection record is not offered yet; revocation destroys the credential,
+				which is the part that matters.
+			</p>
+		{/if}
+	</Panel>
+</div>

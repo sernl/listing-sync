@@ -9,27 +9,28 @@ import type { ConnectionStatus } from '$lib/generated/vocab';
 
 export interface StatusPresentation {
 	label: ConnectionStatus;
-	tone: string;
+	/// The pill modifier the design system renders this status under.
+	tone: 'ok' | 'mut' | 'run' | 'bad';
 	/// What the value means for the seller, in one sentence.
 	explanation: string;
 }
 
 const PRESENTATION: Record<ConnectionStatus, Omit<StatusPresentation, 'label'>> = {
 	connected: {
-		tone: 'bg-emerald-100 text-emerald-800',
+		tone: 'ok',
 		explanation: 'Verified against the marketplace recently. Work is flowing.'
 	},
 	checking: {
-		tone: 'bg-slate-100 text-slate-700',
+		tone: 'mut',
 		explanation: 'Linked, but not verified right now. Nothing for you to do.'
 	},
 	unstable: {
-		tone: 'bg-amber-100 text-amber-900',
+		tone: 'run',
 		explanation:
 			'Verification is failing. We are still retrying, and re-linking is not known to be the fix.'
 	},
 	disconnected: {
-		tone: 'bg-orange-100 text-orange-800',
+		tone: 'bad',
 		explanation: 'Nothing usable is stored. Re-link to let queued work continue.'
 	}
 };

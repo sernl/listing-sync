@@ -43,44 +43,32 @@
 	}
 </script>
 
-<div class="mx-auto max-w-md">
+<div class="auth-card">
 	{#if sent}
-		<h1 class="mb-2 text-xl font-semibold">Check your email</h1>
-		<p class="mb-4 text-sm text-slate-600">
-			If <span class="font-medium">{email.trim()}</span> has an account, a link to choose a
-			new password is on its way.
+		<h1>Check your email</h1>
+		<p>
+			If <b>{email.trim()}</b> has an account, a link to choose a new password is on its way.
 		</p>
-		<a class="rounded border border-slate-300 px-4 py-2 text-sm" href="/login">Go to sign in</a>
+		<div class="actions"><a class="btn" href="/login">Go to sign in</a></div>
 	{:else}
-		<h1 class="mb-2 text-xl font-semibold">Reset your password</h1>
-		<p class="mb-4 text-sm text-slate-600">
+		<h1>Reset your password</h1>
+		<p>
 			Give the address you signed up with and we will send a link for choosing a new password.
 		</p>
 
-		<form onsubmit={request} class="flex flex-col gap-3">
-			<label class="flex flex-col gap-1 text-sm" for="email">
+		<form onsubmit={request} class="form">
+			<label class="field" for="email">
 				Email
-				<input
-					id="email"
-					name="email"
-					type="email"
-					required
-					autocomplete="username"
-					class="rounded border border-slate-300 px-3 py-2"
-					bind:value={email}
-				/>
+				<input id="email" name="email" type="email" required autocomplete="username" bind:value={email} />
 			</label>
 			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
-			<button
-				class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
-				disabled={busy || challengePending}
-			>
+			<button class="cta" disabled={busy || challengePending}>
 				{busy ? 'Sending…' : 'Send the link'}
 			</button>
 		</form>
 
-		<p class="mt-6 text-sm text-slate-600">
-			Remembered it? <a class="underline" href="/login">Sign in</a>.
+		<p class="auth-foot">
+			Remembered it? <a class="link" href="/login">Sign in</a>.
 		</p>
 	{/if}
 </div>

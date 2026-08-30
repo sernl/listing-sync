@@ -3,6 +3,7 @@
 // a row names. Pure, so it tests without a component.
 
 import type { MappingHead, ProductHead } from '$lib/api';
+import { agoLabel } from '$lib/elapsed';
 
 export interface MetricColumn {
 	/** The name the capture stored the figure under, which is the map key. */
@@ -33,29 +34,13 @@ export function formatMetric(value: number | undefined): string {
 	return typeof value === 'number' && Number.isFinite(value) ? NUMBER.format(value) : '—';
 }
 
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
-
 /** How old a row's figures are, in the words the table shows.
  *
  * The instant is the oldest of the figures in the row, which is what the
  * server sends, so this wording understates freshness and never overstates
- * it. A reading ahead of `now` is clock skew rather than a figure from the
- * future, and reads as just captured rather than as a negative age. */
+ * it. */
 export function capturedAgo(observedAt: number, now: number): string {
-	const elapsed = Math.max(0, now - observedAt);
-	if (elapsed < MINUTE) {
-		return 'captured just now';
-	}
-	if (elapsed < HOUR) {
-		return `captured ${Math.floor(elapsed / MINUTE)} min ago`;
-	}
-	if (elapsed < DAY) {
-		return `captured ${Math.floor(elapsed / HOUR)} h ago`;
-	}
-	const days = Math.floor(elapsed / DAY);
-	return `captured ${days} ${days === 1 ? 'day' : 'days'} ago`;
+	return `captured ${agoLabel(observedAt, now)}`;
 }
 
 /** Mapping id to the title of the product that mapping lists.

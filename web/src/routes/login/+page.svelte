@@ -155,25 +155,20 @@
 	}
 </script>
 
-<div class="mx-auto max-w-md">
+<div class="auth-card">
 	{#if awaitingVerification !== null}
-		<h1 class="mb-2 text-xl font-semibold">Verify your email</h1>
-		<p class="mb-4 text-sm text-slate-600">
-			We sent a link to <span class="font-medium">{awaitingVerification}</span>.
-			The dashboard opens once that address is confirmed.
+		<h1>Verify your email</h1>
+		<p>
+			We sent a link to <b>{awaitingVerification}</b>. The console opens once that address is
+			confirmed.
 		</p>
-		<div class="flex gap-3">
-			<button
-				type="button"
-				class="rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-				disabled={busy !== null}
-				onclick={resend}
-			>
+		<div class="actions">
+			<button class="cta" type="button" disabled={busy !== null} onclick={resend}>
 				{busy === 'resend' ? 'Sending…' : 'Send it again'}
 			</button>
 			<button
+				class="btn"
 				type="button"
-				class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
 				disabled={busy !== null}
 				onclick={() => (awaitingVerification = null)}
 			>
@@ -181,25 +176,15 @@
 			</button>
 		</div>
 	{:else}
-		<h1 class="mb-2 text-xl font-semibold">Sign in</h1>
-		<p class="mb-4 text-sm text-slate-600">
-			{busy === 'resume' ? 'Completing sign-in…' : SIGN_IN_PROMPT}
-		</p>
+		<h1>Sign in</h1>
+		<p>{busy === 'resume' ? 'Completing sign-in…' : SIGN_IN_PROMPT}</p>
 
-		<form onsubmit={withPassword} class="flex flex-col gap-3">
-			<label class="flex flex-col gap-1 text-sm" for="email">
+		<form onsubmit={withPassword} class="form">
+			<label class="field" for="email">
 				Email
-				<input
-					id="email"
-					name="email"
-					type="email"
-					required
-					autocomplete="username"
-					class="rounded border border-slate-300 px-3 py-2"
-					bind:value={email}
-				/>
+				<input id="email" name="email" type="email" required autocomplete="username" bind:value={email} />
 			</label>
-			<label class="flex flex-col gap-1 text-sm" for="password">
+			<label class="field" for="password">
 				Password
 				<input
 					id="password"
@@ -207,42 +192,27 @@
 					type="password"
 					required
 					autocomplete="current-password"
-					class="rounded border border-slate-300 px-3 py-2"
 					bind:value={password}
 				/>
 			</label>
 			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
-			<button
-				class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
-				disabled={busy !== null || challengePending}
-			>
+			<button class="cta" disabled={busy !== null || challengePending}>
 				{busy === 'password' ? 'Signing in…' : 'Sign in'}
 			</button>
 		</form>
 
-		<p class="mt-3 text-sm text-slate-600">
-			<a class="underline" href="/reset">Forgot your password?</a>
-		</p>
+		<p class="auth-foot"><a class="link" href="/reset">Forgot your password?</a></p>
 
-		<div class="my-5 flex items-center gap-3 text-xs text-slate-400">
-			<span class="h-px grow bg-slate-200"></span>
-			or
-			<span class="h-px grow bg-slate-200"></span>
-		</div>
+		<div class="divider">or</div>
 
-		<div class="flex flex-col gap-2">
-			<button
-				type="button"
-				class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
-				disabled={busy !== null}
-				onclick={withPasskey}
-			>
+		<div class="form">
+			<button class="btn" type="button" disabled={busy !== null} onclick={withPasskey}>
 				{busy === 'passkey' ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
 			</button>
 			{#each ENABLED_SOCIAL_PROVIDERS as provider (provider.id)}
 				<button
+					class="btn"
 					type="button"
-					class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
 					disabled={busy !== null}
 					onclick={() => withProvider(provider.id)}
 				>
@@ -251,8 +221,8 @@
 			{/each}
 		</div>
 
-		<p class="mt-6 text-sm text-slate-600">
-			No account yet? <a class="underline" href="/signup">Create one</a>.
+		<p class="auth-foot">
+			No account yet? <a class="link" href="/signup">Create one</a>.
 		</p>
 	{/if}
 </div>

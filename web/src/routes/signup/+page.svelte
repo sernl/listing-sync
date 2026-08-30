@@ -91,32 +91,24 @@
 	}
 </script>
 
-<div class="mx-auto max-w-md">
+<div class="auth-card">
 	{#if awaitingVerification !== null}
-		<h1 class="mb-2 text-xl font-semibold">Check your email</h1>
-		<p class="mb-4 text-sm text-slate-600">
-			We sent a link to <span class="font-medium">{awaitingVerification}</span>.
-			Confirm that address, then sign in.
+		<h1>Check your email</h1>
+		<p>
+			We sent a link to <b>{awaitingVerification}</b>. Confirm that address, then sign in.
 		</p>
-		<div class="flex gap-3">
-			<button
-				type="button"
-				class="rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-				disabled={busy !== null}
-				onclick={resend}
-			>
+		<div class="actions">
+			<button class="cta" type="button" disabled={busy !== null} onclick={resend}>
 				{busy === 'resend' ? 'Sending…' : 'Send it again'}
 			</button>
-			<a class="rounded border border-slate-300 px-4 py-2 text-sm" href="/login">Go to sign in</a>
+			<a class="btn" href="/login">Go to sign in</a>
 		</div>
 	{:else}
-		<h1 class="mb-2 text-xl font-semibold">Create an account</h1>
-		<p class="mb-4 text-sm text-slate-600">
-			Signing up creates your organisation. You can invite people to it later.
-		</p>
+		<h1>Create an account</h1>
+		<p>Signing up creates your organisation. You can invite people to it later.</p>
 
-		<form onsubmit={register} class="flex flex-col gap-3">
-			<label class="flex flex-col gap-1 text-sm" for="name">
+		<form onsubmit={register} class="form">
+			<label class="field" for="name">
 				Name
 				<input
 					id="name"
@@ -125,23 +117,14 @@
 					required
 					maxlength={NAME_LIMIT}
 					autocomplete="name"
-					class="rounded border border-slate-300 px-3 py-2"
 					bind:value={name}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-sm" for="email">
+			<label class="field" for="email">
 				Email
-				<input
-					id="email"
-					name="email"
-					type="email"
-					required
-					autocomplete="email"
-					class="rounded border border-slate-300 px-3 py-2"
-					bind:value={email}
-				/>
+				<input id="email" name="email" type="email" required autocomplete="email" bind:value={email} />
 			</label>
-			<label class="flex flex-col gap-1 text-sm" for="password">
+			<label class="field" for="password">
 				Password
 				<input
 					id="password"
@@ -149,31 +132,22 @@
 					type="password"
 					required
 					autocomplete="new-password"
-					class="rounded border border-slate-300 px-3 py-2"
 					bind:value={password}
 				/>
 			</label>
 			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
-			<button
-				class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
-				disabled={busy !== null || challengePending}
-			>
+			<button class="cta" disabled={busy !== null || challengePending}>
 				{busy === 'register' ? 'Creating…' : 'Create account'}
 			</button>
 		</form>
 
 		{#if ENABLED_SOCIAL_PROVIDERS.length > 0}
-			<div class="my-5 flex items-center gap-3 text-xs text-slate-400">
-				<span class="h-px grow bg-slate-200"></span>
-				or
-				<span class="h-px grow bg-slate-200"></span>
-			</div>
-
-			<div class="flex flex-col gap-2">
+			<div class="divider">or</div>
+			<div class="form">
 				{#each ENABLED_SOCIAL_PROVIDERS as provider (provider.id)}
 					<button
+						class="btn"
 						type="button"
-						class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
 						disabled={busy !== null}
 						onclick={() => withProvider(provider.id)}
 					>
@@ -183,8 +157,8 @@
 			</div>
 		{/if}
 
-		<p class="mt-6 text-sm text-slate-600">
-			Already have an account? <a class="underline" href="/login">Sign in</a>.
+		<p class="auth-foot">
+			Already have an account? <a class="link" href="/login">Sign in</a>.
 		</p>
 	{/if}
 </div>

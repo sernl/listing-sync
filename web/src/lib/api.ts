@@ -236,6 +236,26 @@ export interface AnalyticsSummary {
 	listings: ListingMetricsView[];
 }
 
+/** One organisation's billing state, as `/v1/billing` serves it.
+ *
+ *  `status` is Paddle's own vocabulary, passed through by the server rather
+ *  than translated, so a value this client does not recognise is displayed
+ *  rather than swallowed. */
+export interface SubscriptionView {
+	paddle_subscription_id: string;
+	paddle_customer_id: string;
+	status: string;
+	current_period_end: number | null;
+	occurred_at: number;
+}
+
+/** Absent for an organisation that has never reached checkout, which is a
+ *  different fact from a cancelled subscription: that one is present, and
+ *  carries Paddle's cancelled status. */
+export interface BillingView {
+	subscription: SubscriptionView | null;
+}
+
 // --------------------------------------------------------------- endpoints
 
 export const api = {
@@ -283,7 +303,9 @@ export const api = {
 		post<void>(`/v1/reconciliation/items/${item}/no-counterpart`, {}),
 	drainStats: () => request<DrainStats>('/v1/reconciliation/stats'),
 
-	status: () => request<{ inventories: InventoryStatus[] }>('/v1/status')
+	status: () => request<{ inventories: InventoryStatus[] }>('/v1/status'),
+
+	billing: () => request<BillingView>('/v1/billing')
 };
 
 /** Walks every page of a cursor-paginated endpoint, accumulating rows. */
