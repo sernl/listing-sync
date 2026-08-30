@@ -2,6 +2,14 @@
   "extends": "./.svelte-kit/tsconfig.json",
   "compilerOptions": {
     "strict": true,
-    "moduleResolution": "bundler"
+    "moduleResolution": "bundler",
+    // better-auth publishes declarations that reference ambient types it only
+    // optionally supports (`bun:sqlite`, `@cloudflare/workers-types`, bun's
+    // `Timer`), and its organization plugin — which this client does not use —
+    // ships a declaration that does not type-check. None of that is reachable
+    // from here, and installing those runtimes' types to satisfy a checker
+    // would put their globals in this project's type environment. Our own
+    // sources stay fully checked under `strict`.
+    "skipLibCheck": true
   }
 }

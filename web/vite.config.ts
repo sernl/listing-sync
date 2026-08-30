@@ -10,7 +10,8 @@ export default defineConfig({
     // EventSource behave exactly as they will behind ServeDir.
     proxy: {
       '/v1': 'http://127.0.0.1:8080',
-      '/healthz': 'http://127.0.0.1:8080'
+      '/healthz': 'http://127.0.0.1:8080',
+      '/api/auth': 'http://127.0.0.1:8081'
     }
   },
   test: {

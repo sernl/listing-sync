@@ -1,51 +1,236 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
-	import { api, ApiFailure } from '$lib/api';
+	import { ApiFailure } from '$lib/api';
+	import {
+		BridgeFailure,
+		SOCIAL_PROVIDERS,
+		establishSession,
+		identity,
+		resendVerification,
+		signInWithPasskey,
+		signInWithPassword,
+		signInWithProvider,
+		type SocialProvider
+	} from '$lib/auth-client';
 	import { toast } from '$lib/toast';
 
-	let token = $state('');
-	let busy = $state(false);
+	type Busy = 'password' | 'passkey' | 'resend' | 'resume' | SocialProvider;
 
-	async function exchange(event: SubmitEvent) {
-		event.preventDefault();
-		busy = true;
+	let email = $state('');
+	let password = $state('');
+	let busy = $state<Busy | null>(null);
+	let awaitingVerification = $state<string | null>(null);
+
+	function messageOf(error: unknown, fallback: string): string {
+		if (error !== null && typeof error === 'object' && 'message' in error) {
+			const message = (error as { message?: unknown }).message;
+			if (typeof message === 'string' && message.length > 0) {
+				return message;
+			}
+		}
+		return fallback;
+	}
+
+	// The exchange, and the two places it can end other than signed in. An
+	// unverified address is named because the browser knows it first-hand; the
+	// API's own refusal stays blank on purpose and so gets a blank message.
+	async function finish(fallbackAddress: string) {
 		try {
-			const who = await api.exchange(token.trim());
-			toast('info', `Signed in for organisation ${who.org.slice(0, 8)}…`);
+			await establishSession();
 			await invalidateAll();
-			goto('/');
+			await goto('/');
 		} catch (failure) {
-			const message =
+			if (failure instanceof BridgeFailure && failure.refusal === 'unverified-email') {
+				awaitingVerification = (await identity())?.email ?? fallbackAddress;
+				return;
+			}
+			toast(
+				'error',
 				failure instanceof ApiFailure && failure.status === 401
-					? 'That token was not accepted. Mint a fresh one and paste the whole line.'
-					: 'Something went wrong reaching the server.';
-			toast('error', message);
+					? 'Signed in, but the API did not accept the login. Try again.'
+					: 'Signed in, but the session could not be established. Try again.'
+			);
+		}
+	}
+
+	// A social provider returns the browser here, and an expired API session
+	// leaves the identity session standing. Both arrive holding a live
+	// identity, so finishing the exchange on arrival is what makes them a
+	// sign-in rather than a dead end.
+	onMount(() => {
+		void (async () => {
+			const who = await identity();
+			if (!who) {
+				return;
+			}
+			if (!who.emailVerified) {
+				awaitingVerification = who.email;
+				return;
+			}
+			busy = 'resume';
+			try {
+				await finish(who.email);
+			} finally {
+				busy = null;
+			}
+		})();
+	});
+
+	async function withPassword(event: SubmitEvent) {
+		event.preventDefault();
+		busy = 'password';
+		try {
+			const { error } = await signInWithPassword(email.trim(), password);
+			if (error) {
+				toast('error', messageOf(error, 'That email and password did not match.'));
+				return;
+			}
+			password = '';
+			await finish(email.trim());
 		} finally {
-			busy = false;
+			busy = null;
+		}
+	}
+
+	async function withPasskey() {
+		busy = 'passkey';
+		try {
+			const { error } = await signInWithPasskey();
+			if (error) {
+				toast('error', messageOf(error, 'The passkey sign-in did not complete.'));
+				return;
+			}
+			await finish('');
+		} finally {
+			busy = null;
+		}
+	}
+
+	// On success the client's redirect plugin is already navigating to the
+	// provider, so `busy` is deliberately left set.
+	async function withProvider(provider: SocialProvider) {
+		busy = provider;
+		const { error } = await signInWithProvider(provider);
+		if (error) {
+			busy = null;
+			toast('error', messageOf(error, `Signing in with ${provider} is unavailable.`));
+		}
+	}
+
+	async function resend() {
+		const address = awaitingVerification;
+		if (address === null) {
+			return;
+		}
+		busy = 'resend';
+		try {
+			const { error } = await resendVerification(address);
+			toast(
+				error ? 'error' : 'info',
+				error
+					? messageOf(error, 'The verification email could not be sent.')
+					: 'Verification email sent.'
+			);
+		} finally {
+			busy = null;
 		}
 	}
 </script>
 
 <div class="mx-auto max-w-md">
-	<h1 class="mb-2 text-xl font-semibold">Sign in</h1>
-	<p class="mb-4 text-sm text-slate-600">
-		Paste the session line the operator minted for you — the whole
-		<code>tam_session=…</code> line works as-is. The exchange sets a secure
-		cookie; the token itself is never stored here. Developing locally? Run
-		<code>just dev-session</code> and paste what it prints.
-	</p>
-	<form onsubmit={exchange} class="flex flex-col gap-3">
-		<input
-			class="rounded border border-slate-300 px-3 py-2 font-mono text-sm"
-			placeholder="tam_session=…"
-			bind:value={token}
-			autocomplete="off"
-		/>
-		<button
-			class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
-			disabled={busy || token.trim().length === 0}
-		>
-			{busy ? 'Signing in…' : 'Sign in'}
-		</button>
-	</form>
+	{#if awaitingVerification !== null}
+		<h1 class="mb-2 text-xl font-semibold">Verify your email</h1>
+		<p class="mb-4 text-sm text-slate-600">
+			We sent a link to <span class="font-medium">{awaitingVerification}</span>.
+			The dashboard opens once that address is confirmed.
+		</p>
+		<div class="flex gap-3">
+			<button
+				type="button"
+				class="rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+				disabled={busy !== null}
+				onclick={resend}
+			>
+				{busy === 'resend' ? 'Sending…' : 'Send it again'}
+			</button>
+			<button
+				type="button"
+				class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+				disabled={busy !== null}
+				onclick={() => (awaitingVerification = null)}
+			>
+				Use a different account
+			</button>
+		</div>
+	{:else}
+		<h1 class="mb-2 text-xl font-semibold">Sign in</h1>
+		<p class="mb-4 text-sm text-slate-600">
+			{busy === 'resume' ? 'Completing sign-in…' : 'Use your email, a passkey, or a linked account.'}
+		</p>
+
+		<form onsubmit={withPassword} class="flex flex-col gap-3">
+			<label class="flex flex-col gap-1 text-sm" for="email">
+				Email
+				<input
+					id="email"
+					name="email"
+					type="email"
+					required
+					autocomplete="username"
+					class="rounded border border-slate-300 px-3 py-2"
+					bind:value={email}
+				/>
+			</label>
+			<label class="flex flex-col gap-1 text-sm" for="password">
+				Password
+				<input
+					id="password"
+					name="password"
+					type="password"
+					required
+					autocomplete="current-password"
+					class="rounded border border-slate-300 px-3 py-2"
+					bind:value={password}
+				/>
+			</label>
+			<button
+				class="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50"
+				disabled={busy !== null}
+			>
+				{busy === 'password' ? 'Signing in…' : 'Sign in'}
+			</button>
+		</form>
+
+		<div class="my-5 flex items-center gap-3 text-xs text-slate-400">
+			<span class="h-px grow bg-slate-200"></span>
+			or
+			<span class="h-px grow bg-slate-200"></span>
+		</div>
+
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+				disabled={busy !== null}
+				onclick={withPasskey}
+			>
+				{busy === 'passkey' ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
+			</button>
+			{#each SOCIAL_PROVIDERS as provider (provider.id)}
+				<button
+					type="button"
+					class="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+					disabled={busy !== null}
+					onclick={() => withProvider(provider.id)}
+				>
+					{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}
+				</button>
+			{/each}
+		</div>
+
+		<p class="mt-6 text-sm text-slate-600">
+			No account yet? <a class="underline" href="/signup">Create one</a>.
+		</p>
+	{/if}
 </div>

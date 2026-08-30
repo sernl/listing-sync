@@ -1,24 +1,37 @@
 <script lang="ts">
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { api, ApiFailure, type ConnectionView } from '$lib/api';
 	import { present } from '$lib/connection-status';
+	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
 
-	let connections = $state<ConnectionView[]>([]);
-	let loaded = $state(false);
-	let revoking = $state<string | null>(null);
+	const queryClient = useQueryClient();
 
-	async function refetch() {
-		connections = (await api.connections()).connections;
-		loaded = true;
-	}
+	const listing = createQuery(() => ({
+		queryKey: queryKeys.connections,
+		queryFn: () => api.connections()
+	}));
 
-	$effect(() => {
-		void refetch();
-	});
-
+	const connections = $derived(listing.data?.connections ?? []);
 	const needsReauth = $derived(connections.filter((c) => c.state === 'needs_reauth'));
 
-	async function revoke(connection: ConnectionView) {
+	const revoking = createMutation(() => ({
+		mutationFn: (connection: string) => api.revoke(connection),
+		onSuccess: async (done: { elapsed_ms: number }) => {
+			toast('info', `Revoked in ${done.elapsed_ms}ms.`);
+			await queryClient.invalidateQueries({ queryKey: queryKeys.connections });
+		},
+		onError: (failure: Error) => {
+			toast(
+				'error',
+				failure instanceof ApiFailure && failure.code() === 'broker_unavailable'
+					? 'The credential broker is not running; nothing was revoked.'
+					: 'The revoke did not complete.'
+			);
+		}
+	}));
+
+	function revoke(connection: ConnectionView) {
 		const sure = confirm(
 			'Revoke this connection? The stored credential is destroyed and every ' +
 				'queued item for it pauses until you re-link.'
@@ -26,20 +39,7 @@
 		if (!sure) {
 			return;
 		}
-		revoking = connection.id;
-		try {
-			const done = await api.revoke(connection.id);
-			toast('info', `Revoked in ${done.elapsed_ms}ms.`);
-			await refetch();
-		} catch (failure) {
-			const message =
-				failure instanceof ApiFailure && failure.code() === 'broker_unavailable'
-					? 'The credential broker is not running; nothing was revoked.'
-					: 'The revoke did not complete.';
-			toast('error', message);
-		} finally {
-			revoking = null;
-		}
+		revoking.mutate(connection.id);
 	}
 </script>
 
@@ -56,8 +56,10 @@
 	</div>
 {/if}
 
-{#if !loaded}
+{#if listing.isPending}
 	<p class="text-slate-500">Loading…</p>
+{:else if listing.isError}
+	<p class="text-slate-500">The connections could not be read.</p>
 {:else if connections.length === 0}
 	<p class="text-slate-500">No marketplace connections yet.</p>
 {:else}
@@ -78,10 +80,12 @@
 				{#if connection.state !== 'revoked'}
 					<button
 						class="rounded border border-red-300 px-3 py-1 text-sm text-red-700 disabled:opacity-50"
-						disabled={revoking === connection.id}
+						disabled={revoking.isPending && revoking.variables === connection.id}
 						onclick={() => revoke(connection)}
 					>
-						{revoking === connection.id ? 'Revoking…' : 'Revoke'}
+						{revoking.isPending && revoking.variables === connection.id
+							? 'Revoking…'
+							: 'Revoke'}
 					</button>
 				{/if}
 			</li>

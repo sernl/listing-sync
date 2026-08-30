@@ -1,21 +1,22 @@
 <script lang="ts">
-	import { api, type InventoryStatus } from '$lib/api';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { api } from '$lib/api';
+	import { queryKeys } from '$lib/query';
 
-	let inventories = $state<InventoryStatus[]>([]);
-	let loaded = $state(false);
+	const status = createQuery(() => ({
+		queryKey: queryKeys.status,
+		queryFn: () => api.status()
+	}));
 
-	$effect(() => {
-		void api.status().then((view) => {
-			inventories = view.inventories;
-			loaded = true;
-		});
-	});
+	const inventories = $derived(status.data?.inventories ?? []);
 </script>
 
 <h1 class="mb-4 text-xl font-semibold">Marketplace status</h1>
 
-{#if !loaded}
+{#if status.isPending}
 	<p class="text-slate-500">Loading…</p>
+{:else if status.isError}
+	<p class="text-slate-500">The status could not be read.</p>
 {:else}
 	<ul class="divide-y divide-slate-100 rounded border border-slate-200 bg-white">
 		{#each inventories as entry (entry.inventory)}
