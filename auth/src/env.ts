@@ -100,6 +100,20 @@ const DEVELOPMENT_ORIGINS: readonly string[] = [
 // as https://*.example.com survives this check unchanged, which is what lets
 // better-auth's own wildcard matching still be reachable.
 const readTrustedOrigins = (mode: Mode): readonly string[] => {
+  // better-auth splits BETTER_AUTH_TRUSTED_ORIGINS on commas and appends it to
+  // its own trust list without consulting this module at all
+  // (packages/better-auth/src/context/helpers.ts, getTrustedOrigins), which
+  // would put an origin past the validation below. Refused rather than merged,
+  // so that every trusted origin arrives through one checked path. The
+  // condition is exactly the one better-auth acts on: it ignores an empty
+  // value, so an empty assignment grants nothing and is left alone.
+  const upstream = process.env.BETTER_AUTH_TRUSTED_ORIGINS;
+  if (upstream !== undefined && upstream !== '') {
+    throw new ConfigurationError(
+      'tam-auth: BETTER_AUTH_TRUSTED_ORIGINS is not supported, because better-auth would trust it unvalidated; ' +
+        'set TAM_AUTH_TRUSTED_ORIGINS instead, which is the one knob this service checks at startup',
+    );
+  }
   const configured = (read('TAM_AUTH_TRUSTED_ORIGINS') ?? '')
     .split(',')
     .map((entry) => entry.trim())
