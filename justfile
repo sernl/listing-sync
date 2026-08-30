@@ -7,6 +7,10 @@ export SQLX_OFFLINE := "true"
 # Local-dev Postgres on both provisioning paths; dev-only credential
 db_url := "postgres://tam_app:tam_dev_password@127.0.0.1:5433/tam"
 
+# The identity role, whose search_path is auth and whose grants stop at that
+# schema; dev-only credential, matching db/init/02-auth-role.sql
+auth_db_url := "postgres://tam_auth:tam_auth_dev@127.0.0.1:5433/tam"
+
 # The pg-gated crates and the feature spelled per crate, shared by the two
 # database-backed lanes so a crate cannot be added to one and missed by the other
 pg_tests := "-p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests"
@@ -150,6 +154,44 @@ web-check:
 # The client dev server, proxying /v1 to a locally running tam-server
 web-dev:
     cd web && npm run dev
+
+# Fail with instructions when tam-auth has no environment file
+auth-env:
+    #!/usr/bin/env sh
+    set -eu
+    # tam-auth's secrets are not defaulted here the way the dev database
+    # credentials are: node's --env-file loses to anything already in the
+    # environment, so a default exported by this recipe would silently shadow
+    # a developer's own auth/.env rather than yield to it.
+    if [ -f auth/.env ]; then
+        exit 0
+    fi
+    echo 'auth/.env is missing. Create it from the documented template:' >&2
+    echo '  cp auth/.env.example auth/.env' >&2
+    echo '  then set BETTER_AUTH_SECRET to `openssl rand -base64 32`' >&2
+    exit 1
+
+# The auth lane: lockfile install, types
+auth-check:
+    cd auth && npm ci --no-audit --no-fund
+    cd auth && npx tsc --noEmit
+
+# Emit the DDL auth/src/auth.ts implies, to diff against db/auth/
+auth-ddl: db-wait auth-env
+    cd auth && npm run --silent ddl
+
+# Apply the reviewed identity DDL as tam_auth, which owns the auth schema
+auth-migrate: db-wait
+    #!/usr/bin/env sh
+    set -eu
+    for file in db/auth/*.sql; do
+        echo "applying $file"
+        psql '{{auth_db_url}}' -v ON_ERROR_STOP=1 -q -f "$file"
+    done
+
+# The identity service: better-auth over /api/auth/*, nothing else
+auth-dev: auth-env
+    cd auth && npm run dev
 
 # Mint a development login: ensures the dev organisation and founder user
 # exist, then prints the tam_session=... line the login page asks for
