@@ -32,16 +32,24 @@ use tokio_util::sync::CancellationToken;
 use crate::jar::{CookieJar, JarChange};
 
 /// The Tes prefixes a lease may reach, and nothing else. Adding one is a
-/// deliberate edit here, guarded by the refusal test. The middle three are the
-/// first-party reads — the seller's own catalogue and the two-step published
-/// bundle download — distinct from the write paths above them, and the last is
-/// the session-renewal route the longevity probe drives.
+/// deliberate edit here, guarded by the refusal test. The first two are the
+/// write paths; the next three are the first-party reads — the seller's own
+/// catalogue and the two-step published bundle download; then the identity
+/// read the exclusivity claim names the account through; and the last is the
+/// session-renewal route the longevity probe drives.
+///
+/// Every entry is matched as a prefix bounded at a path separator, so each
+/// admits itself and whatever sits beneath it. The first five are named at the
+/// depth the connector walks ids beneath; the last two are named at full depth,
+/// so what they open is one route and its descendants rather than a family of
+/// sibling routes.
 const TES_PREFIXES: &[&str] = &[
     "/api/v2/resources",
     "/api/resources/v3/draft",
     "/api/v2/dashboard",
     "/resource-detail/api/download",
     "/teaching-resource/download",
+    TES_IDENTITY_ROUTE,
     TES_REFRESH_ROUTE,
 ];
 
@@ -65,6 +73,25 @@ const TPT_PREFIXES: &[&str] = &[
     "/converter/generate_thumbs",
     "/Download",
 ];
+
+/// Tes names the account a connection speaks for on this route, and it is the
+/// identity the global exclusivity lock is taken on — the one thing Tes's
+/// one-account-one-seller line was missing.
+///
+/// The whole route and not the `/api/tier` subtree above it, which is the
+/// difference between widening the allow-list by one read and widening it by
+/// an unsurveyed family. The tier record the read returns carries
+/// `isOverridden` beside `royaltyRate` and `transactionFee`, so a tier-override
+/// route plausibly lives under that subtree; tier governs the seller's royalty
+/// rate, which is payout-adjacent, and payout routes are exactly what this
+/// allow-list exists to keep structurally unreachable. The identity read needs
+/// this one path, so this one path is what it gets.
+///
+/// Matching is still prefix-based, so descendants of this route are admitted
+/// too. That residual is bounded to whatever Tes may hang under `/me` — the
+/// session's own principal — rather than to the tier family beside it, and no
+/// capture shows anything there.
+const TES_IDENTITY_ROUTE: &str = "/api/tier/gmv/me";
 
 /// Tes renews a session on this route, and the longevity probe's four-and-a-
 /// half-day run is entirely what it buys: an hourly hit here with cookie
@@ -609,7 +636,7 @@ mod tests {
 
     use super::{
         path_is_allowed, refresh_route, resolve, spawn, LeaseGateway, SessionSink, SinkFuture,
-        TES_REFRESH_ROUTE,
+        TES_IDENTITY_ROUTE, TES_REFRESH_ROUTE,
     };
 
     #[test]
@@ -644,6 +671,11 @@ mod tests {
             "the bundle download is admitted"
         );
         assert!(
+            path_is_allowed(tes, TES_IDENTITY_ROUTE),
+            "the identity read the exclusivity claim names the account through must be \
+             reachable, or Tes's one-account-one-seller line stays unenforced"
+        );
+        assert!(
             path_is_allowed(tes, TES_REFRESH_ROUTE),
             "the renewal route the longevity probe drives must be reachable through a lease"
         );
@@ -662,6 +694,36 @@ mod tests {
         assert!(
             !path_is_allowed(tes, "/api/v2/dashboardX"),
             "the read prefixes are bounded at a path separator too"
+        );
+        assert!(
+            !path_is_allowed(tes, "/api/tier"),
+            "the identity read is admitted as a whole route, not as the subtree above it: a \
+             bare /api/tier reaching a lease would be the widening this entry exists to avoid"
+        );
+        assert!(
+            !path_is_allowed(tes, "/api/tier/override"),
+            "the tier record carries isOverridden beside royaltyRate, so a tier-override route \
+             plausibly lives under this subtree; tier governs the seller's royalty rate, and \
+             payout-adjacent routes stay structurally unreachable"
+        );
+        assert!(
+            !path_is_allowed(tes, "/api/tier/gmv"),
+            "not even the segment above the identity read is admitted"
+        );
+        assert!(
+            !path_is_allowed(tes, "/api/tiers"),
+            "matching is bounded at a path separator, so a route whose name merely begins with \
+             those bytes is refused"
+        );
+        assert!(
+            !path_is_allowed(tes, "/api"),
+            "the identity read widened the allow-list by one route and not by the whole API"
+        );
+        assert!(
+            path_is_allowed(tes, "/api/tier/gmv/me/anything"),
+            "stated rather than assumed: matching is prefix-based, so this entry admits its \
+             own descendants too. The widening that buys is bounded to whatever Tes hangs \
+             under the session's own principal, which is not the tier family beside it"
         );
     }
 
@@ -705,6 +767,10 @@ mod tests {
         assert!(
             !path_is_allowed(Marketplace::Tes, "/graph/graphql"),
             "a Tes lease must not reach a Tpt route"
+        );
+        assert!(
+            !path_is_allowed(Marketplace::Tpt, TES_IDENTITY_ROUTE),
+            "the Tes identity read is a Tes surface; a Tpt lease must not reach it"
         );
         assert!(
             !path_is_allowed(Marketplace::Etsy, "/api/v2/resources"),

@@ -764,6 +764,19 @@ pub fn list_drafts_request(page: u32, limit: u32) -> HttpRequest {
     ))
 }
 
+/// The seller's own tier record, and the only identity read the exclusivity
+/// claim may issue.
+///
+/// The route names its principal as `me` and takes nothing else: no path
+/// segment, no query, no body. There is therefore no parameter through which a
+/// caller could point this at another seller's account, which is what makes
+/// the `userId` it answers admissible as the value the global exclusivity lock
+/// is taken on. See [`crate::identity`] for what is read off it.
+#[must_use]
+pub fn seller_tier_request() -> HttpRequest {
+    HttpRequest::get(format!("{ORIGIN}/api/tier/gmv/me"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CataloguePageError(pub String);
 

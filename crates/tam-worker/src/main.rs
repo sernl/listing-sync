@@ -57,9 +57,11 @@ use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::{claim_account, request_lease, ClaimError, LeasePurpose};
 use tam_engine::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
-use tam_marketplace::transport::Transport;
+use tam_marketplace::transport::{Transport, TransportError};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
-use tam_marketplace_tes::{GatewayTransport as TesGatewayTransport, TesAdapter};
+use tam_marketplace_tes::{
+    read_seller_user_id, GatewayTransport as TesGatewayTransport, TesAdapter,
+};
 use tam_marketplace_tpt::{
     read_seller_store_id, AuthorshipDeclaration, GatewayTransport as TptGatewayTransport,
     TptAdapter,
@@ -332,6 +334,12 @@ impl Pump {
                 return None;
             }
         };
+        if !self
+            .claim_account_if_pending(worker, item, connection, &transport)
+            .await
+        {
+            return None;
+        }
         match TesAdapter::new(item.inventory, transport, self.files(item)) {
             Ok(adapter) => Some(adapter),
             Err(error) => {
@@ -448,16 +456,16 @@ impl Pump {
     /// own, and driving its items would write one seller's listings into
     /// another's store. Every other outcome proceeds — an unread identity
     /// costs the lock, not the item.
-    async fn claim_account_if_pending(
+    async fn claim_account_if_pending<T: NamesItsAccount>(
         &self,
         worker: &str,
         item: &LeasedItem,
         connection: ConnectionId,
-        transport: &TptGatewayTransport,
+        transport: &T,
     ) -> bool {
         match self
             .facts
-            .account_claim_pending(item.org, Marketplace::Tpt)
+            .account_claim_pending(item.org, T::MARKETPLACE)
             .await
         {
             Ok(false) => return true,
@@ -559,6 +567,44 @@ enum ClaimVerdict {
     Unresolved,
 }
 
+/// A live transport bound to the marketplace whose identity it can read back.
+///
+/// The claim is one shape on both platforms — one server-scoped read, then the
+/// identity that read asserted handed to the broker — and they differ only in
+/// which route names the account and how the answer is spelled. Binding the
+/// pair to the transport keeps [`claim_account_through`] a single body, so the
+/// claim a custody proof runs stays the claim an item runs, on either
+/// marketplace, minus the write.
+///
+/// The return type is written out rather than left to `async fn` because the
+/// pump spawns the futures that await it, so the read must be `Send` by the
+/// trait's own contract rather than by inference at each call site.
+trait NamesItsAccount: Transport {
+    const MARKETPLACE: Marketplace;
+
+    /// The account this session belongs to, as the marketplace itself asserts
+    /// it. `None` where it asserts none yet, which is a state and not a fault.
+    fn read_account_ref(
+        &self,
+    ) -> impl core::future::Future<Output = Result<Option<String>, TransportError>> + Send;
+}
+
+impl NamesItsAccount for TptGatewayTransport {
+    const MARKETPLACE: Marketplace = Marketplace::Tpt;
+
+    async fn read_account_ref(&self) -> Result<Option<String>, TransportError> {
+        Ok(read_seller_store_id(self).await?.map(|store| store.0))
+    }
+}
+
+impl NamesItsAccount for TesGatewayTransport {
+    const MARKETPLACE: Marketplace = Marketplace::Tes;
+
+    async fn read_account_ref(&self) -> Result<Option<String>, TransportError> {
+        Ok(read_seller_user_id(self).await?.map(|seller| seller.0))
+    }
+}
+
 /// Runs the identity read and the claim it admits, over a transport already
 /// bound to a live session.
 ///
@@ -566,36 +612,37 @@ enum ClaimVerdict {
 /// it: one read, then the identity the server asserted handed to the broker.
 /// Both callers go through here, so the claim a custody proof runs is the
 /// claim an item runs, minus the write.
-async fn claim_account_through<T: Transport>(
+async fn claim_account_through<T: NamesItsAccount>(
     label: &str,
     broker_socket: &std::path::Path,
     org: OrgId,
     connection: ConnectionId,
     transport: &T,
 ) -> ClaimVerdict {
-    let store = match read_seller_store_id(transport).await {
+    let marketplace = T::MARKETPLACE;
+    let account = match transport.read_account_ref().await {
         Ok(None) => return ClaimVerdict::NothingToName,
-        Ok(Some(store)) => store,
+        Ok(Some(account)) => account,
         Err(error) => {
             eprintln!(
-                "tam-worker {label}: the Tpt identity read failed, so the account stays \
-                 unclaimed: {error:?}"
+                "tam-worker {label}: the {marketplace:?} identity read failed, so the account \
+                 stays unclaimed: {error:?}"
             );
             return ClaimVerdict::Unresolved;
         }
     };
-    match claim_account(broker_socket, org, connection, Marketplace::Tpt, &store.0).await {
+    match claim_account(broker_socket, org, connection, marketplace, &account).await {
         Ok(()) => {
             eprintln!(
-                "tam-worker {label}: the Tpt connection for organisation {} now names its \
-                 account and holds the exclusivity lock",
+                "tam-worker {label}: the {marketplace:?} connection for organisation {} now \
+                 names its account and holds the exclusivity lock",
                 org.0.to_hyphenated()
             );
             ClaimVerdict::Claimed
         }
-        Err(ClaimError::AccountAlreadyLinked(marketplace)) => {
+        Err(ClaimError::AccountAlreadyLinked(refused)) => {
             eprintln!(
-                "tam-worker {label}: this {marketplace:?} account is already linked to another \
+                "tam-worker {label}: this {refused:?} account is already linked to another \
                  organisation, so the connection is blocked and nothing is written into a store \
                  this tenant does not own"
             );
@@ -603,8 +650,8 @@ async fn claim_account_through<T: Transport>(
         }
         Err(error) => {
             eprintln!(
-                "tam-worker {label}: the Tpt account claim did not complete, so the account \
-                 stays unclaimed: {error}"
+                "tam-worker {label}: the {marketplace:?} account claim did not complete, so the \
+                 account stays unclaimed: {error}"
             );
             ClaimVerdict::Unresolved
         }
@@ -629,17 +676,30 @@ fn mode_of(arguments: &[String]) -> Mode<'_> {
     }
 }
 
-/// Whether a marketplace asserts an account identity a claim can name.
+/// Which live transport the claim mode leases through, where the marketplace
+/// asserts an account identity at all.
 ///
-/// Tpt alone does. The broker refuses a claim for any other marketplace,
-/// because a claim it accepted could only carry a value nothing
-/// server-asserted — the seller-typed input the exclusivity lock must never be
-/// taken on. Stating the same rule here refuses before a lease is taken and
-/// tells the operator why.
-const fn claimable(marketplace: Marketplace) -> bool {
+/// Both connected marketplaces do: Tpt names the store on every authored
+/// product, Tes names its own principal on its tier record. The broker refuses
+/// a claim for any other, because a claim it accepted could only carry a value
+/// nothing server-asserted — the seller-typed input the exclusivity lock must
+/// never be taken on. Answering `None` here refuses before a lease is taken
+/// and tells the operator why.
+///
+/// A variant rather than a bool because the answer also selects which
+/// transport is built, and one decision that does both cannot disagree with
+/// itself the way a predicate beside a second match could.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimTransport {
+    Tes,
+    Tpt,
+}
+
+const fn claim_transport(marketplace: Marketplace) -> Option<ClaimTransport> {
     match marketplace {
-        Marketplace::Tpt => true,
-        Marketplace::Tes | Marketplace::Etsy => false,
+        Marketplace::Tes => Some(ClaimTransport::Tes),
+        Marketplace::Tpt => Some(ClaimTransport::Tpt),
+        Marketplace::Etsy => None,
     }
 }
 
@@ -676,13 +736,13 @@ async fn run_claim(arguments: &[String]) -> Result<(), Box<dyn std::error::Error
     );
     let marketplace = claim_marketplace(arguments.get(2).ok_or(USAGE)?)?;
     let broker_socket = std::path::PathBuf::from(arguments.get(3).ok_or(USAGE)?);
-    if !claimable(marketplace) {
+    let Some(transport_kind) = claim_transport(marketplace) else {
         return Err(format!(
             "{marketplace:?} asserts no account identity through any captured read, so there is \
              nothing a claim could name and the broker refuses one"
         )
         .into());
-    }
+    };
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -715,8 +775,10 @@ async fn run_claim(arguments: &[String]) -> Result<(), Box<dyn std::error::Error
 
     // The drain's purpose, because a claim reads. The broker keys a gateway on
     // (tenant, connection, purpose), so leasing as the pump would abort a live
-    // item pump's gateway for this tenant mid-write; the drain serves Tes
-    // sources only, so on a Tpt connection this purpose collides with nothing.
+    // item pump's gateway for this tenant mid-write. On a Tes connection the
+    // import drain is a real second user of this purpose, so running the claim
+    // mode against a tenant whose Tes import is mid-run aborts that run's
+    // gateway; the import leases once per run, so the next run recovers.
     let gateway = request_lease(
         &broker_socket,
         org,
@@ -725,8 +787,17 @@ async fn run_claim(arguments: &[String]) -> Result<(), Box<dyn std::error::Error
         LeasePurpose::Drain,
     )
     .await?;
-    let transport = TptGatewayTransport::new(gateway.endpoint.clone(), &gateway.token)?;
-    match claim_account_through("claim", &broker_socket, org, connection, &transport).await {
+    let verdict = match transport_kind {
+        ClaimTransport::Tes => {
+            let transport = TesGatewayTransport::new(gateway.endpoint.clone(), &gateway.token)?;
+            claim_account_through("claim", &broker_socket, org, connection, &transport).await
+        }
+        ClaimTransport::Tpt => {
+            let transport = TptGatewayTransport::new(gateway.endpoint.clone(), &gateway.token)?;
+            claim_account_through("claim", &broker_socket, org, connection, &transport).await
+        }
+    };
+    match verdict {
         ClaimVerdict::Claimed => Ok(()),
         ClaimVerdict::NothingToName => {
             eprintln!(
@@ -856,10 +927,14 @@ async fn run_pump(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
 #[cfg(test)]
 mod tests {
     use tam_marketplace::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+    use tam_marketplace_tes::endpoints::seller_tier_request;
     use tam_marketplace_tpt::endpoints::my_product_listings_request;
     use tam_types::{ConnectionId, Marketplace, OrgId, Uuid};
 
-    use super::{claim_account_through, claimable, mode_of, ClaimVerdict, Mode, OncePerPass};
+    use super::{
+        claim_account_through, claim_transport, mode_of, ClaimTransport, ClaimVerdict, Mode,
+        NamesItsAccount, OncePerPass,
+    };
 
     /// A `MyProductListings` answer for a seller who has published something:
     /// the author object the claim reads its identity off, at `author.id`
@@ -891,6 +966,16 @@ mod tests {
         }
     }
 
+    impl NamesItsAccount for OnlyTheIdentityRead {
+        const MARKETPLACE: Marketplace = Marketplace::Tpt;
+
+        async fn read_account_ref(&self) -> Result<Option<String>, TransportError> {
+            Ok(super::read_seller_store_id(self)
+                .await?
+                .map(|store| store.0))
+        }
+    }
+
     impl Transport for OnlyTheIdentityRead {
         async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
             self.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -899,6 +984,53 @@ mod tests {
                 my_product_listings_request(1, 0),
                 "the claim may issue the seller's own catalogue read and nothing else; a form \
                  scrape, an upload or a create arriving here is the write the claim mode exists \
+                 to never make"
+            );
+            Ok(HttpResponse::plain(200, self.body.to_vec()))
+        }
+    }
+
+    /// The Tes half of the same double: the tier record a seller's own
+    /// session answers, and a shape that names nobody.
+    const TIER_RECORD: &[u8] = br#"{"userId":28000001,"tier":{"name":"Bronze"}}"#;
+    const TIER_WITHOUT_PRINCIPAL: &[u8] = br#"{"tier":{"name":"Bronze"}}"#;
+
+    struct OnlyTheTesIdentityRead {
+        body: &'static [u8],
+        sent: std::sync::atomic::AtomicUsize,
+    }
+
+    impl OnlyTheTesIdentityRead {
+        const fn new(body: &'static [u8]) -> Self {
+            Self {
+                body,
+                sent: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn sent(&self) -> usize {
+            self.sent.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl NamesItsAccount for OnlyTheTesIdentityRead {
+        const MARKETPLACE: Marketplace = Marketplace::Tes;
+
+        async fn read_account_ref(&self) -> Result<Option<String>, TransportError> {
+            Ok(super::read_seller_user_id(self)
+                .await?
+                .map(|seller| seller.0))
+        }
+    }
+
+    impl Transport for OnlyTheTesIdentityRead {
+        async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+            self.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(
+                request,
+                seller_tier_request(),
+                "the claim may issue the session's own tier read and nothing else; a create, a \
+                 metadata write or a publish arriving here is the write the claim mode exists \
                  to never make"
             );
             Ok(HttpResponse::plain(200, self.body.to_vec()))
@@ -950,6 +1082,42 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_tes_claim_reads_the_identity_and_submits_nothing() {
+        let transport = OnlyTheTesIdentityRead::new(TIER_RECORD);
+        let verdict =
+            claim_account_through("test", unreachable_broker(), ORG, CONNECTION, &transport).await;
+        assert_eq!(
+            verdict,
+            ClaimVerdict::Unresolved,
+            "the account the tier read named was carried into a broker claim, which an \
+             unreachable socket leaves unresolved"
+        );
+        assert_eq!(
+            transport.sent(),
+            1,
+            "the claim costs exactly one request on Tes too: the identity read"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tes_record_naming_no_principal_claims_nothing() {
+        let transport = OnlyTheTesIdentityRead::new(TIER_WITHOUT_PRINCIPAL);
+        let verdict =
+            claim_account_through("test", unreachable_broker(), ORG, CONNECTION, &transport).await;
+        assert_eq!(
+            verdict,
+            ClaimVerdict::NothingToName,
+            "an answer that names nobody costs the lock and not the item; the connection stays \
+             usable and a later read may still claim it"
+        );
+        assert_eq!(
+            transport.sent(),
+            1,
+            "the read happened and nothing followed it"
+        );
+    }
+
     #[test]
     fn the_verb_selects_the_claim_and_every_other_invocation_is_still_the_pump() {
         let pump = [
@@ -978,18 +1146,23 @@ mod tests {
     }
 
     #[test]
-    fn only_tpt_asserts_an_identity_a_claim_can_name() {
-        assert!(
-            claimable(Marketplace::Tpt),
+    fn both_connected_marketplaces_assert_an_identity_a_claim_can_name() {
+        assert_eq!(
+            claim_transport(Marketplace::Tpt),
+            Some(ClaimTransport::Tpt),
             "Tpt names its store on every authored product"
         );
-        assert!(
-            !claimable(Marketplace::Tes),
-            "Tes parses no author identity, so a claim could only carry a seller-typed value"
+        assert_eq!(
+            claim_transport(Marketplace::Tes),
+            Some(ClaimTransport::Tes),
+            "Tes names its own principal on its tier record, which is what turns the \
+             one-account-one-seller line from a rule into an enforced one"
         );
-        assert!(
-            !claimable(Marketplace::Etsy),
-            "Etsy has no adapter and no identity read"
+        assert_eq!(
+            claim_transport(Marketplace::Etsy),
+            None,
+            "Etsy has no adapter and no identity read, so a claim could only carry a \
+             seller-typed value"
         );
     }
 

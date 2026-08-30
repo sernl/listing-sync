@@ -36,17 +36,16 @@ pub(crate) enum IdentitySource {
 /// Tpt's seller identity is `author { id }` on the `Store` type, present in
 /// every committed cassette of `UploadPageProductQuery` and `MyProductListings`.
 ///
-/// Tes parses no author identity today. Every Tes response the connector reads
-/// is a resource or a dashboard listing, none of which names the account that
-/// owns it, so there is nothing to claim; the pending capture is the body of
-/// `GET /api/tier/gmv/me`, which the longevity probe already reaches and which
-/// no cassette records. Until that capture exists this arm is deliberately
-/// `Unavailable` rather than a guess, and a Tes link therefore takes no
-/// exclusivity lock. Etsy has no connector at all.
+/// Tes's is the `userId` on its own tier record, which `GET /api/tier/gmv/me`
+/// answers for the session's principal and for nobody else — the route names
+/// its subject in the path and takes no selector, so unlike Tpt's author field
+/// there is no request shape through which a caller could point it at somebody
+/// else's account. Etsy has no connector at all, so nothing there asserts an
+/// identity and nothing may be claimed on one.
 pub(crate) const fn identity_source(marketplace: Marketplace) -> IdentitySource {
     match marketplace {
-        Marketplace::Tpt => IdentitySource::Claimed,
-        Marketplace::Tes | Marketplace::Etsy => IdentitySource::Unavailable,
+        Marketplace::Tes | Marketplace::Tpt => IdentitySource::Claimed,
+        Marketplace::Etsy => IdentitySource::Unavailable,
     }
 }
 
@@ -322,10 +321,10 @@ impl Vault {
     ) -> Result<(), VaultError> {
         // A marketplace whose responses name no account cannot be claimed, and
         // the socket surface is reachable by any caller holding the socket, so
-        // the refusal is here rather than trusted to callers. Tes today parses
-        // no author identity at all; a Tes claim could therefore only be
-        // carrying a value nothing server-asserted, which is exactly the
-        // seller-typed input the lock must never be taken on.
+        // the refusal is here rather than trusted to callers. Etsy has no
+        // connector and no identity read; a claim naming an Etsy account could
+        // therefore only carry a value nothing server-asserted, which is
+        // exactly the seller-typed input the lock must never be taken on.
         if identity_source(marketplace) == IdentitySource::Unavailable {
             return Err(VaultError::NotClaimable);
         }
@@ -651,7 +650,7 @@ mod identity_tests {
     use tam_types::Marketplace;
 
     #[test]
-    fn only_tpt_can_name_the_account_a_link_speaks_for() {
+    fn both_connected_marketplaces_can_name_the_account_a_link_speaks_for() {
         assert_eq!(
             identity_source(Marketplace::Tpt),
             IdentitySource::Claimed,
@@ -659,9 +658,9 @@ mod identity_tests {
         );
         assert_eq!(
             identity_source(Marketplace::Tes),
-            IdentitySource::Unavailable,
-            "Tes parses no author identity yet, so a Tes link must complete without a lock \
-             rather than guess at one"
+            IdentitySource::Claimed,
+            "Tes's tier record names its own principal, so a Tes link takes a lock too and \
+             one marketplace account stays one seller on both platforms"
         );
         assert_eq!(
             identity_source(Marketplace::Etsy),
@@ -681,6 +680,11 @@ mod tests {
     /// The account both tenants in the exclusivity tests try to claim; the
     /// store id `UploadPageProductQuery` returns in the committed cassette.
     const SHARED_ACCOUNT: &str = "900000001";
+
+    /// The Tes equivalent: the `userId` the committed `seller_tier` cassette
+    /// carries, which is what `tam-marketplace-tes` parses off the live tier
+    /// record and hands to a claim.
+    const SHARED_TES_ACCOUNT: &str = "28000001";
 
     /// `allow-expect-in-tests` reaches `#[test]` functions, not the free
     /// helpers beside them; a broken fixture should panic.
@@ -721,6 +725,39 @@ mod tests {
             })
             .await
             .expect("the Tpt link seals");
+    }
+
+    /// Reports rather than unwrapping, because one caller asserts the refusal:
+    /// a second Tes connection row for one organisation is a constraint
+    /// violation rather than a link.
+    async fn link_tes(
+        vault: &Vault,
+        org: [u8; 16],
+        connection: [u8; 16],
+    ) -> Result<(), VaultError> {
+        vault
+            .link(LinkRequest {
+                org: OrgId(Uuid(org)),
+                connection: ConnectionId(Uuid(connection)),
+                marketplace: Marketplace::Tes,
+                secret: Secret::new("TESSession=abc".to_owned()),
+                authorship: None,
+            })
+            .await
+    }
+
+    /// The exclusivity lock as the database actually holds it.
+    #[expect(clippy::expect_used, reason = "a broken test fixture should panic")]
+    async fn stored_digest(broker: &PgPool, org: [u8; 16], connection: [u8; 16]) -> Vec<u8> {
+        let (digest,): (Option<Vec<u8>>,) = sqlx::query_as(
+            "SELECT platform_account_digest FROM connection WHERE org_id = $1 AND id = $2",
+        )
+        .bind(uuid::Uuid::from_bytes(org))
+        .bind(uuid::Uuid::from_bytes(connection))
+        .fetch_one(broker)
+        .await
+        .expect("the claimed row reads");
+        digest.expect("the claim wrote a digest")
     }
 
     #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -1045,7 +1082,7 @@ mod tests {
     #[sqlx::test(migrations = "../tam-storage/migrations")]
     async fn a_marketplace_with_no_identity_source_cannot_be_claimed(app: PgPool) {
         let org = [0xCC; 16];
-        seed_org(&app, org, "org-tes-claim").await;
+        seed_org(&app, org, "org-etsy-claim").await;
         let vault = Vault::new(
             broker_pool(&app).await,
             Kek::from_bytes(&[0x38; 32]).expect("kek"),
@@ -1054,12 +1091,12 @@ mod tests {
             .link(LinkRequest {
                 org: OrgId(Uuid(org)),
                 connection: ConnectionId(Uuid([0xDC; 16])),
-                marketplace: Marketplace::Tes,
+                marketplace: Marketplace::Etsy,
                 secret: Secret::new("session=live".to_owned()),
                 authorship: None,
             })
             .await
-            .expect("the Tes link seals");
+            .expect("the Etsy link seals");
 
         assert!(
             matches!(
@@ -1067,15 +1104,212 @@ mod tests {
                     .claim(
                         OrgId(Uuid(org)),
                         ConnectionId(Uuid([0xDC; 16])),
-                        Marketplace::Tes,
+                        Marketplace::Etsy,
                         "whatever-a-caller-typed",
                     )
                     .await,
                 Err(VaultError::NotClaimable)
             ),
-            "Tes parses no author identity, so any value offered as one came from the caller \
-             rather than the server; taking the global lock on it would let anybody lock a \
-             storefront they do not own"
+            "Etsy has no connector and so asserts no identity; any value offered as one came \
+             from the caller rather than the server, and taking the global lock on it would \
+             let anybody lock a storefront they do not own"
+        );
+    }
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn two_organisations_cannot_hold_the_same_tes_account(app: PgPool) {
+        let first = [0xE1; 16];
+        let second = [0xE2; 16];
+        seed_org(&app, first, "org-tes-first").await;
+        seed_org(&app, second, "org-tes-second").await;
+        let broker = broker_pool(&app).await;
+        let vault = Vault::new(broker.clone(), Kek::from_bytes(&[0x41; 32]).expect("kek"));
+
+        link_tes(&vault, first, [0xF1; 16])
+            .await
+            .expect("the Tes link seals");
+        vault
+            .claim(
+                OrgId(Uuid(first)),
+                ConnectionId(Uuid([0xF1; 16])),
+                Marketplace::Tes,
+                SHARED_TES_ACCOUNT,
+            )
+            .await
+            .expect("the first organisation claims the Tes account");
+
+        link_tes(&vault, second, [0xF2; 16])
+            .await
+            .expect("the Tes link seals");
+        let collision = vault
+            .claim(
+                OrgId(Uuid(second)),
+                ConnectionId(Uuid([0xF2; 16])),
+                Marketplace::Tes,
+                SHARED_TES_ACCOUNT,
+            )
+            .await;
+        assert!(
+            matches!(
+                collision,
+                Err(VaultError::AccountAlreadyLinked(Marketplace::Tes))
+            ),
+            "one Tes account is one seller, and the second tenant must be refused by the \
+             name-matched constraint rather than by a read-then-write race, and got \
+             {collision:?}"
+        );
+        let Err(refusal) = collision else {
+            panic!("the collision must be an error");
+        };
+        let message = refusal.to_string();
+        assert!(
+            message.contains("tes"),
+            "the refusal names the marketplace so the seller knows which link failed: {message}"
+        );
+        assert!(
+            !message.contains(&uuid::Uuid::from_bytes(first).to_string()),
+            "the refusal must never name the holder, or the constraint becomes a directory \
+             of every seller on the platform: {message}"
+        );
+
+        let (second_state,): (String,) =
+            sqlx::query_as("SELECT state FROM connection WHERE org_id = $1 AND id = $2")
+                .bind(uuid::Uuid::from_bytes(second))
+                .bind(uuid::Uuid::from_bytes([0xF2; 16]))
+                .fetch_one(&broker)
+                .await
+                .expect("the refused connection still exists");
+        assert_eq!(
+            second_state, "needs_reauth",
+            "a connection holding a credential for somebody else's Tes account must be \
+             stopped: left linked, the lease scan would keep driving the first seller's \
+             resources from the second organisation's queue"
+        );
+    }
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn the_same_organisation_relinks_its_own_tes_account_after_revoking_it(app: PgPool) {
+        let org = [0xE3; 16];
+        seed_org(&app, org, "org-tes-relink").await;
+        let broker = broker_pool(&app).await;
+        let vault = Vault::new(broker.clone(), Kek::from_bytes(&[0x42; 32]).expect("kek"));
+
+        link_tes(&vault, org, [0xF3; 16])
+            .await
+            .expect("the Tes link seals");
+        vault
+            .claim(
+                OrgId(Uuid(org)),
+                ConnectionId(Uuid([0xF3; 16])),
+                Marketplace::Tes,
+                SHARED_TES_ACCOUNT,
+            )
+            .await
+            .expect("the organisation claims its own Tes account");
+        let first_digest = stored_digest(&broker, org, [0xF3; 16]).await;
+
+        vault
+            .revoke(OrgId(Uuid(org)), ConnectionId(Uuid([0xF3; 16])))
+            .await
+            .expect("the seller unlinks");
+
+        // The same seller, the same Tes account, over the same connection row.
+        // The ordinary re-link, and the one a Connect action against an
+        // existing row takes.
+        link_tes(&vault, org, [0xF3; 16])
+            .await
+            .expect("the Tes link seals");
+        vault
+            .claim(
+                OrgId(Uuid(org)),
+                ConnectionId(Uuid([0xF3; 16])),
+                Marketplace::Tes,
+                SHARED_TES_ACCOUNT,
+            )
+            .await
+            .expect(
+                "a seller re-linking the account they already own must not be blocked by the \
+                 lock they themselves released",
+            );
+        assert_eq!(
+            stored_digest(&broker, org, [0xF3; 16]).await,
+            first_digest,
+            "the digest is a pure function of (marketplace, account, key version) under the \
+             broker's pepper, so the same account must name itself identically across links; \
+             a digest that drifted would silently release the exclusivity lock"
+        );
+
+        // A second connection row would be the other shape of this scenario
+        // and it does not exist: `connection_one_per_marketplace` is a plain
+        // unique on `(org_id, marketplace)`, so a revoked row keeps the slot
+        // and a re-link is always this same row. What makes the re-claim above
+        // possible is therefore the revoke clearing the digest, not the index
+        // predicate — a revoke that stopped clearing it would leave the second
+        // claim with nothing to write and answer `NotClaimable`.
+        let second = link_tes(&vault, org, [0xF5; 16]).await;
+        assert!(
+            matches!(second, Err(VaultError::Db(_))),
+            "one organisation holds at most one Tes connection row, ever: {second:?}"
+        );
+    }
+
+    #[sqlx::test(migrations = "../tam-storage/migrations")]
+    async fn the_stored_tes_account_is_a_digest_rather_than_the_identifier(app: PgPool) {
+        let org = [0xE4; 16];
+        seed_org(&app, org, "org-tes-digest").await;
+        let broker = broker_pool(&app).await;
+        let vault = Vault::new(broker.clone(), Kek::from_bytes(&[0x43; 32]).expect("kek"));
+
+        link_tes(&vault, org, [0xF4; 16])
+            .await
+            .expect("the Tes link seals");
+        vault
+            .claim(
+                OrgId(Uuid(org)),
+                ConnectionId(Uuid([0xF4; 16])),
+                Marketplace::Tes,
+                SHARED_TES_ACCOUNT,
+            )
+            .await
+            .expect("the claim takes the lock");
+
+        let digest = stored_digest(&broker, org, [0xF4; 16]).await;
+        assert_eq!(
+            digest.len(),
+            32,
+            "the stored value is an HMAC-SHA-256 tag, which is 32 bytes whatever the account \
+             reference's own length was"
+        );
+        assert_ne!(
+            digest,
+            SHARED_TES_ACCOUNT.as_bytes(),
+            "the account reference itself is never stored"
+        );
+        assert!(
+            !digest
+                .windows(SHARED_TES_ACCOUNT.len())
+                .any(|window| window == SHARED_TES_ACCOUNT.as_bytes()),
+            "a database dump must yield no Tes storefront identifier, so the reference must \
+             not survive anywhere inside the stored bytes either"
+        );
+
+        // The audit trail is the other place a claim could leak the reference,
+        // and it is the one a support conversation actually reads.
+        let details: Vec<(Option<String>,)> = sqlx::query_as(
+            "SELECT detail FROM connection_audit WHERE org_id = $1 AND connection_id = $2",
+        )
+        .bind(uuid::Uuid::from_bytes(org))
+        .bind(uuid::Uuid::from_bytes([0xF4; 16]))
+        .fetch_all(&broker)
+        .await
+        .expect("the audit rows read");
+        assert!(
+            !details
+                .iter()
+                .filter_map(|(detail,)| detail.as_deref())
+                .any(|detail| detail.contains(SHARED_TES_ACCOUNT)),
+            "the audit names the marketplace and not the account; a row naming one would undo \
+             the digest the column exists for: {details:?}"
         );
     }
 

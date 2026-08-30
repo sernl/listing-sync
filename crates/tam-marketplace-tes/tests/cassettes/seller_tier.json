@@ -1,0 +1,15 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "Get",
+        "url": "https://www.tes.com/api/tier/gmv/me",
+        "body": "Empty"
+      },
+      "response": {
+        "status": 200,
+        "body": "{\"userId\":28000001,\"tier\":{\"id\":0,\"rank\":0,\"name\":\"Bronze\",\"sellerGmvMinimum\":0,\"sellerGmvMaximum\":999.99,\"royaltyRate\":0.6,\"transactionFee\":0.2,\"maximumTransactionValueWithFee\":2.99,\"features\":[\"bundles\",\"shop\"]},\"isOverridden\":false,\"next\":{\"name\":\"Silver\",\"difference\":1000,\"tier\":{\"id\":1,\"rank\":10,\"name\":\"Silver\",\"sellerGmvMinimum\":1000,\"sellerGmvMaximum\":5999.99,\"royaltyRate\":0.7,\"transactionFee\":0.2,\"maximumTransactionValueWithFee\":2.99,\"features\":[\"bundles\",\"shop\"]}},\"expectedTier\":{\"tier\":{\"name\":\"Bronze\"},\"next\":{\"name\":\"Silver\",\"difference\":1000}}}"
+      }
+    }
+  ]
+}
