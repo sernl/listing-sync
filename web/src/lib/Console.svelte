@@ -249,7 +249,7 @@
 				/>
 				<kbd>ctrl K</kbd>
 			</form>
-			<a class="cta" href="/listings">Sync listings</a>
+			<a class="cta" href="/listings/new">New listing</a>
 		</div>
 
 		{@render children()}

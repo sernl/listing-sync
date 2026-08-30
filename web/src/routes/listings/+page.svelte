@@ -145,9 +145,10 @@
 					{products.length} in the catalogue
 				{/if}
 			</span>
-			<button class="cta" disabled={selected.size === 0 || syncing} onclick={startSync}>
+			<button class="btn" disabled={selected.size === 0 || syncing} onclick={startSync}>
 				{syncing ? 'Starting…' : `Sync ${selected.size} to Tes NZ`}
 			</button>
+			<a class="cta" href="/listings/new">New listing</a>
 		{/snippet}
 	</PageHead>
 
@@ -161,9 +162,12 @@
 				<span class="big" aria-hidden="true">▤</span>
 				<b>No products yet</b>
 				<p>
-					The pipeline ingests them. Once a resource is in your catalogue it appears here, and
-					sync keeps every marketplace matching it.
+					Author one here, or let an import bring your existing listings in. Once a resource is in
+					your catalogue it appears here, and sync keeps every marketplace matching it.
 				</p>
+				<div class="actions" style="justify-content: center; margin-top: 14px">
+					<a class="cta" href="/listings/new">New listing</a>
+				</div>
 			</div>
 		{:else if rows.length === 0}
 			<div class="placeholder">
@@ -210,7 +214,9 @@
 									{/if}
 								</td>
 								<td class="title-cell">
-									<div class="t" title={row.product.title}>{row.product.title}</div>
+									<a class="t" href={`/listings/${row.product.id}`} title={row.product.title}>
+										{row.product.title}
+									</a>
 								</td>
 								<td>
 									{#each row.badges as badge (badge.inventory)}

@@ -6,13 +6,26 @@
 import type {
 	APIErrorCode,
 	APIErrorKind,
+	BodyWire,
+	Cardinality,
 	ConnectionStatus,
+	CopyFormat,
+	Delegation,
+	ElectionTriggerKind,
 	FailureCode,
+	FileKind,
+	FileRole,
 	InventoryId,
 	ItemOutcome,
 	ItemState,
 	JobPhase,
-	Marketplace
+	LengthUnit,
+	Marketplace,
+	NativeDirection,
+	NativeVocabularyKind,
+	NonDelegableReason,
+	PayloadFileRule,
+	TermKind
 } from '$lib/generated/vocab';
 
 export interface APIErrorEntry {
@@ -375,6 +388,319 @@ export interface ImpersonationsView {
 	impersonations?: ImpersonationView[];
 }
 
+// ---------------------------------------------------------------- authoring
+
+/** Where the seller asked a publish to leave the listing. The server's own
+ *  default is `draft`, and `live` is a deliberate second choice. */
+export type PublishIntent = 'draft' | 'live';
+
+
+/** A price as `PriceIntent` crosses the wire: the bare string, or the tagged
+ *  object carrying the amount in the denomination's minor units.
+ *
+ *  The read side of the catalogue still serves this as `unknown` (see
+ *  `ProductHead.price`) because `formatPrice` is written to refuse a shape it
+ *  does not recognise rather than guess at one. The write side is typed,
+ *  because a body this client composes is a body it fully controls. */
+export type PriceIntent = 'Free' | { Paid: { minor_units: number; currency: string } };
+
+/** One byte handle as `POST /v1/uploads` returns it and a create names back.
+ *  The hash is the whole handle: bytes are content-addressed per tenant, so a
+ *  hash this organisation never stored resolves to no blob and the create is
+ *  refused. */
+export interface FileHandle {
+	hash: string;
+	kind: FileKind;
+	byte_len: number;
+}
+
+/** What one upload landed, plus this tenant's storage headroom, which the
+ *  server reports so a client renders it without a second call. */
+export interface UploadedView {
+	payload: FileHandle[];
+	cover: FileHandle;
+	previews: FileHandle[];
+	stored_bytes: number;
+	storage_bytes_max: number;
+}
+
+/** How an archive upload is treated. `keep_whole` is the mode a bundle bound
+ *  for TPT needs, because a TPT create takes exactly one file. */
+export type ArchiveMode = 'explode' | 'keep_whole';
+
+/** One vocabulary value as a create or an edit names it, matching the shape
+ *  `PathView` reads back. */
+export interface PathInput {
+	inventory: InventoryId;
+	kind: TermKind;
+	segments: string[];
+	native_id?: string | null;
+}
+
+/** The rights grant the seller stated. No axis is carried: a rights
+ *  declaration is a licence by construction. */
+export interface RightsInput {
+	inventory: InventoryId;
+	segments: string[];
+	native_id?: string | null;
+}
+
+export interface AnswerInput {
+	segments: string[];
+	native_id?: string | null;
+}
+
+/** One answer the seller gave on the form, before any mapping exists.
+ *
+ *  `trigger_key` is `free` or `paid` for a supply and the source value's
+ *  native id for a narrow; the other two kinds generalise to nothing and the
+ *  server refuses a key on them. */
+export interface ElectionInput {
+	inventory: InventoryId;
+	axis: TermKind;
+	trigger: ElectionTriggerKind;
+	trigger_key?: string | null;
+	answers: AnswerInput[];
+}
+
+export interface CreateProductBody {
+	title: string;
+	body?: string;
+	body_format?: CopyFormat;
+	price: PriceIntent;
+	payload: FileHandle[];
+	cover?: FileHandle | null;
+	previews?: FileHandle[];
+	subjects?: string[];
+	grades?: PathInput[];
+	rights?: RightsInput | null;
+	inventories?: InventoryId[];
+	elections?: ElectionInput[];
+}
+
+export interface MappingView {
+	inventory: InventoryId;
+	mapping: string;
+}
+
+export interface CreatedProductView {
+	product: string;
+	mappings: MappingView[];
+	/** How many already-answered elections were written. A question this
+	 *  product had already settled writes no second answer, and the seller is
+	 *  told rather than left to assume. */
+	elections_recorded: number;
+}
+
+/** Every field is optional and an absent one is left alone. `body_format`
+ *  travels only alongside the body it describes; the server refuses it on its
+ *  own. */
+export interface PatchProductBody {
+	title?: string;
+	body?: string;
+	body_format?: CopyFormat;
+	price?: PriceIntent;
+	subjects?: string[];
+	grades?: PathInput[];
+	rights?: RightsInput;
+}
+
+export interface PatchedProductView {
+	product: string;
+	/** The platforms this edit reaches when it is next synced. */
+	reaches: InventoryId[];
+}
+
+export interface DeleteProductBody {
+	/** The platforms whose listing is removed too. One removal job per entry,
+	 *  on the same ledger every other write travels. */
+	remove_from?: InventoryId[];
+	/** Whether a bound listing this delete does not remove may be left
+	 *  standing. Explicit and defaulted off. */
+	leave_live?: boolean;
+}
+
+export interface RemovalView {
+	inventory: InventoryId;
+	job: string;
+	mapping: string;
+}
+
+export interface DeletedProductView {
+	product: string;
+	removals: RemovalView[];
+	left_live: InventoryId[];
+}
+
+export interface FileView {
+	id: string;
+	role: FileRole;
+	kind: FileKind;
+	byte_len: number;
+	scan: string;
+}
+
+export interface PathView {
+	inventory: InventoryId;
+	kind: TermKind;
+	segments: string[];
+	native_id?: string;
+}
+
+export interface AgeView {
+	low_years: number;
+	high_years: number;
+}
+
+export interface GradesView {
+	/** `seller`, or `imported:<inventory>:<axis>`. Passed through rather than
+	 *  parsed: the provenance is displayed, never branched on. */
+	source: string;
+	raw: PathView[];
+	derived?: AgeView;
+}
+
+/** The product aggregate. `files` is payload, cover and previews alike, so a
+ *  consumer filters on `role` rather than assuming the array is one kind. */
+export interface ProductView {
+	id: string;
+	title: string;
+	body: string;
+	body_format: CopyFormat;
+	price: unknown;
+	files: FileView[];
+	subjects: string[];
+	grades: GradesView;
+	rights?: PathView;
+	created_at: number;
+	updated_at: number;
+}
+
+// --------------------------------------------------------------- vocabulary
+
+export interface CapView {
+	limit: number;
+	unit: LengthUnit;
+}
+
+/** `cap` absent means unmeasured, never unlimited. `required` is true only
+ *  where a refusal is measured or documented; false records no such finding,
+ *  which is not evidence the field is optional. */
+export interface CanonicalFieldView {
+	field: string;
+	cap?: CapView;
+	required: boolean;
+}
+
+export interface DelegationView {
+	kind: Delegation;
+	reason?: NonDelegableReason;
+}
+
+/** `values` is present only for a `closed` vocabulary. A `closed_uncaptured`
+ *  one is closed and unheld, so a form must render it as a value the seller
+ *  supplies at their own risk rather than as a select with no options. */
+export interface NativeFieldView {
+	name: string;
+	direction: NativeDirection;
+	required: boolean;
+	vocabulary: NativeVocabularyKind;
+	values?: string[];
+	delegation: DelegationView;
+}
+
+export interface AxisView {
+	axis: TermKind;
+	/** The native field this axis lands in, which is the key into `natives`. */
+	native: string;
+	cardinality: Cardinality;
+	cap?: number;
+	delegation: DelegationView;
+	required: boolean;
+}
+
+/** Which licence values a create may carry, split by the branch the platform
+ *  gates the write on. */
+export interface LicenceGateView {
+	native: string;
+	free: string[];
+	paid: string[];
+}
+
+export interface AttestationView {
+	native: string;
+	held_per_connection: boolean;
+}
+
+/** The write-side facts a form needs that the field registry does not record. */
+export interface AuthoringView {
+	payload_files: PayloadFileRule;
+	body_wire: BodyWire;
+	body_formats: CopyFormat[];
+	price_floor_minor_units?: number;
+	licence?: LicenceGateView;
+	attestation?: AttestationView;
+}
+
+/** One marketplace's authoring vocabulary, served as data so the create form
+ *  is driven by the registry rather than by a second copy of it here.
+ *
+ *  An axis in `absent_axes` is a disclosed loss the form states up front; an
+ *  axis merely missing from `axes` is unmeasured and blocks at projection
+ *  instead. */
+export interface VocabularyView {
+	inventory: InventoryId;
+	marketplace: Marketplace;
+	canonical: CanonicalFieldView[];
+	natives: NativeFieldView[];
+	axes: AxisView[];
+	absent_axes: TermKind[];
+	authoring: AuthoringView;
+}
+
+/** Bytes to `POST /v1/uploads`, with the fraction sent reported as it goes.
+ *
+ *  XMLHttpRequest rather than `fetch` for one reason: a payload file is up to
+ *  256 MiB and `fetch` reports no upload progress, so a seller watching a
+ *  large ZIP would see nothing at all until it landed. The body is the raw
+ *  `File` either way — not a multipart part — because the handler reads the
+ *  whole body as bytes and a multipart wrapper would be prefix noise it would
+ *  then ingest as the file. */
+export function upload(
+	file: File,
+	archive: ArchiveMode,
+	onProgress?: (fraction: number) => void
+): Promise<UploadedView> {
+	return new Promise((resolve, reject) => {
+		const request = new XMLHttpRequest();
+		request.open('POST', `/v1/uploads?archive=${archive}`);
+		request.setRequestHeader('accept', 'application/json');
+		request.upload.addEventListener('progress', (event) => {
+			if (onProgress && event.lengthComputable && event.total > 0) {
+				onProgress(event.loaded / event.total);
+			}
+		});
+		request.addEventListener('load', () => {
+			let body: unknown = null;
+			try {
+				body = JSON.parse(request.responseText);
+			} catch {
+				body = null;
+			}
+			if (request.status >= 200 && request.status < 300) {
+				resolve(body as UploadedView);
+				return;
+			}
+			reject(new ApiFailure(request.status, body as APIErrorBody | null));
+		});
+		// A transport failure carries no status of its own; 0 is the one this
+		// client already reads as "the request never reached a server".
+		request.addEventListener('error', () => reject(new ApiFailure(0, null)));
+		request.addEventListener('abort', () => reject(new ApiFailure(0, null)));
+		request.send(file);
+	});
+}
+
 // --------------------------------------------------------------- endpoints
 
 export const api = {
@@ -387,13 +713,41 @@ export const api = {
 
 	products: (cursor?: string | null) =>
 		request<ProductsPage>(`/v1/products${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
+	product: (id: string) => request<ProductView>(`/v1/products/${id}`),
 	mappings: () => request<{ mappings: MappingHead[] }>('/v1/mappings'),
 	analytics: () => request<AnalyticsSummary>('/v1/analytics/summary'),
 
-	createJob: (inventory: InventoryId, mappings: string[], idempotencyKey: string) =>
+	/** One marketplace's authoring vocabulary. Cached per inventory: it is
+	 *  the registry rendered onto the wire and changes only when the server
+	 *  does. */
+	vocabulary: (inventory: InventoryId) =>
+		request<VocabularyView>(`/v1/vocabulary/${inventory}`),
+	upload,
+	createProduct: (body: CreateProductBody) =>
+		post<CreatedProductView>('/v1/products', body),
+	patchProduct: (id: string, body: PatchProductBody) =>
+		patch<PatchedProductView>(`/v1/products/${id}`, body),
+	/** The body is mandatory in practice even though the server defaults it:
+	 *  a delete that removes nothing remotely has to say so, and `leave_live`
+	 *  is the only way to say it. */
+	deleteProduct: (id: string, body: DeleteProductBody) =>
+		request<DeletedProductView>(`/v1/products/${id}`, {
+			method: 'DELETE',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		}),
+
+	/** `intent` is where the seller asked the listing to end up. Absent keeps
+	 *  the endpoint's own default, which is a draft. */
+	createJob: (
+		inventory: InventoryId,
+		mappings: string[],
+		idempotencyKey: string,
+		intent?: PublishIntent
+	) =>
 		post<CreatedJob>(
 			'/v1/jobs',
-			{ inventory, mappings },
+			{ inventory, mappings, intent },
 			{ 'idempotency-key': idempotencyKey }
 		),
 	jobs: (cursor?: string | null) =>

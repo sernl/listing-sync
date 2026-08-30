@@ -94,7 +94,7 @@ export function rowStatus(mappings: readonly MappingHead[]): RowStatus {
  *  its minor units are counted in. A denomination absent from here is one
  *  this client cannot write out, and reads as unreadable rather than as a
  *  number under the wrong symbol. */
-const CURRENCIES: Record<string, { code: string; exponent: number }> = {
+export const CURRENCIES: Record<string, { code: string; exponent: number }> = {
 	Gbp: { code: 'GBP', exponent: 2 },
 	Usd: { code: 'USD', exponent: 2 }
 };

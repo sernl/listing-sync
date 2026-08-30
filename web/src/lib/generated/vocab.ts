@@ -29,6 +29,13 @@ export type APIErrorCode =
   | "broker_unavailable"
   | "backoffice_unavailable"
   | "platform_account_already_linked"
+  | "blob_store_unavailable"
+  | "upload_rejected"
+  | "payload_missing"
+  | "required_field_missing"
+  | "quota_exceeded"
+  | "uncaptured_transition"
+  | "listing_still_bound"
   | "internal";
 
 export type APIErrorKind =
@@ -93,6 +100,63 @@ export type TermKind =
   | "resource_type"
   | "phase"
   | "licence";
+
+export type CopyFormat =
+  | "Markdown"
+  | "Html";
+
+export type LengthUnit =
+  | "Bytes"
+  | "Utf16CodeUnits"
+  | "Codepoints"
+  | "GraphemeClusters";
+
+export type FileKind =
+  | "pdf"
+  | "pptx"
+  | "docx"
+  | "zip"
+  | "image";
+
+export type FileRole =
+  | "payload"
+  | "preview"
+  | "cover";
+
+export type QuotaKind =
+  | "listings_max"
+  | "storage_bytes_max";
+
+export type NativeDirection =
+  | "written"
+  | "read_only"
+  | "both";
+
+export type NativeVocabularyKind =
+  | "closed"
+  | "closed_uncaptured"
+  | "free"
+  | "numeric"
+  | "unmeasured";
+
+export type Cardinality =
+  | "one"
+  | "many";
+
+export type Delegation =
+  | "by_opt_in"
+  | "never";
+
+export type NonDelegableReason =
+  | "legal_content";
+
+export type PayloadFileRule =
+  | "every_payload_file"
+  | "exactly_one";
+
+export type BodyWire =
+  | "carries_declared_format"
+  | "renders_to_html";
 
 export type ElectionTriggerKind =
   | "supply"

@@ -30,6 +30,12 @@ export const queryKeys = {
 	connections: ['connections'] as const,
 	analytics: ['analytics'] as const,
 	products: ['products'] as const,
+	/** One product's aggregate, keyed by its identifier. */
+	product: (id: string) => ['product', id] as const,
+	/** One marketplace's authoring vocabulary, keyed by inventory: the create
+	 *  form reads several at once and each is a separate cache entry, so
+	 *  selecting a second platform fetches only the one it added. */
+	vocabulary: (inventory: string) => ['vocabulary', inventory] as const,
 	mappings: ['mappings'] as const,
 	status: ['status'] as const,
 	org: ['org'] as const,
