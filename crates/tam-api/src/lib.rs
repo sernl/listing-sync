@@ -15,6 +15,7 @@ pub mod auth;
 pub mod error;
 pub mod jobs;
 pub mod openapi;
+pub mod org;
 pub mod resources;
 pub mod session;
 pub mod stream;
@@ -108,6 +109,7 @@ pub fn router(state: AppState) -> Router {
             "/{version}/session",
             post(session::exchange).delete(session::logout),
         )
+        .route("/{version}/org", get(org::org_view).patch(org::rename_org))
         .route(
             "/{version}/jobs",
             post(jobs::create_job).get(jobs::list_jobs),

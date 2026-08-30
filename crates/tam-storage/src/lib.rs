@@ -17,6 +17,7 @@ pub mod job_reads;
 pub mod jobs;
 pub mod lowering;
 mod mapping;
+pub mod org;
 mod product;
 pub mod pruning;
 pub mod sessions;
@@ -44,6 +45,7 @@ pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
+pub use org::{OrgRecord, OrgRepo};
 pub use product::{ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};

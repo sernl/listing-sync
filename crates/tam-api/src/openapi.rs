@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 28] = [
+pub const ROUTES: [Route; 30] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -48,6 +48,16 @@ pub const ROUTES: [Route; 28] = [
         method: "delete",
         path: "/{version}/session",
         summary: "Expire the session and clear the cookie",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/org",
+        summary: "The calling organisation's own settings",
+    },
+    Route {
+        method: "patch",
+        path: "/{version}/org",
+        summary: "Rename the calling organisation",
     },
     Route {
         method: "get",
@@ -224,11 +234,11 @@ mod tests {
             .get("paths")
             .and_then(|paths| paths.as_object())
             .map(serde_json::Map::len);
-        // /v1/jobs carries two operations and /v1/session carries two, so
-        // distinct paths are two fewer than the operations in the table.
+        // /v1/jobs, /v1/session and /v1/org each carry two operations, so
+        // distinct paths are three fewer than the operations in the table.
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 2),
+            Some(ROUTES.len() - 3),
             "each operation lands in the document exactly once"
         );
     }
