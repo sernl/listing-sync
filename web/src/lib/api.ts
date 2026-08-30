@@ -217,6 +217,25 @@ export interface InventoryStatus {
 	raised_at?: number;
 }
 
+/** One listing's newest captured figures.
+ *
+ *  `observed_at` is the *oldest* instant among the figures in this row, which
+ *  the server chooses so that no number is presented fresher than it is.
+ *
+ *  `metrics` is keyed by the names the capture stored, deliberately open
+ *  rather than a closed union: the captured shortlist can widen without a
+ *  coordinated client release, and a client renders the keys it recognises. */
+export interface ListingMetricsView {
+	mapping: string;
+	inventory: InventoryId;
+	observed_at: number;
+	metrics: Record<string, number>;
+}
+
+export interface AnalyticsSummary {
+	listings: ListingMetricsView[];
+}
+
 // --------------------------------------------------------------- endpoints
 
 export const api = {
@@ -230,6 +249,7 @@ export const api = {
 	products: (cursor?: string | null) =>
 		request<ProductsPage>(`/v1/products${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
 	mappings: () => request<{ mappings: MappingHead[] }>('/v1/mappings'),
+	analytics: () => request<AnalyticsSummary>('/v1/analytics/summary'),
 
 	createJob: (inventory: InventoryId, mappings: string[], idempotencyKey: string) =>
 		post<CreatedJob>(
