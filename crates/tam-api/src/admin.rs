@@ -238,6 +238,7 @@ pub(crate) async fn org_detail(
             .map(|row| ConnectionView {
                 id: row.id,
                 marketplace: row.marketplace,
+                transport: row.marketplace.transport_class(),
                 state: row.state,
                 status: row.status,
                 created_at: row.created_at,

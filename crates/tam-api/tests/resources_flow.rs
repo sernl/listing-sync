@@ -28,7 +28,7 @@ use tam_storage::{
 use tam_types::{
     AttemptId, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
     ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
-    ScanOutcome, Timestamp, Title, UserId, Uuid,
+    ScanOutcome, Timestamp, Title, TransportClass, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -244,6 +244,11 @@ async fn connections_list_and_revocation_travels_the_broker_socket(pool: PgPool)
         (view.connections.len(), view.connections[0].state.as_str()),
         (1, "linked"),
         "the linked connection lists"
+    );
+    assert_eq!(
+        view.connections[0].transport,
+        TransportClass::SellerDevice,
+        "Tes publishes no official API, so its row carries the seller-device badge"
     );
 
     // Revocation without a configured socket refuses honestly.

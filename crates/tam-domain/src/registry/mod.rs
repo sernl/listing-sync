@@ -24,7 +24,7 @@ mod tes;
 mod tpt;
 
 use crate::TermKind;
-use tam_types::{FieldKey, InventoryId, LengthUnit};
+use tam_types::{FieldKey, InventoryId, LengthUnit, TransportClass};
 
 /// A length limit and the unit the marketplace counts it in. The unit is part
 /// of the fact: a cap whose counting unit is unverified is not recordable.
@@ -234,6 +234,14 @@ impl InventoryRegistry {
         self.absent_axes.iter().any(|absent| absent.0 == axis)
     }
 
+    /// Which branch of the automation rule this inventory's marketplace falls
+    /// in. Read off the marketplace rather than restated here, so the registry
+    /// and `tam_types::Marketplace` cannot disagree about a transport.
+    #[must_use]
+    pub const fn transport_class(&self) -> TransportClass {
+        self.inventory.marketplace().transport_class()
+    }
+
     /// The native field one of this inventory's wire names refers to.
     #[must_use]
     pub fn native(&self, name: &str) -> Option<NativeField> {
@@ -289,7 +297,7 @@ pub fn truncate(text: &str, cap: LengthCap) -> String {
 #[cfg(test)]
 mod tests {
     use super::{registry, truncate, Delegation, FieldSpec, LengthCap, NativeVocabulary};
-    use tam_types::{FieldKey, InventoryId, LengthUnit};
+    use tam_types::{FieldKey, InventoryId, LengthUnit, TransportClass};
 
     fn cap(limit: usize, unit: LengthUnit) -> LengthCap {
         LengthCap { limit, unit }
@@ -302,6 +310,27 @@ mod tests {
                 registry(inventory).inventory,
                 inventory,
                 "the registry is total over InventoryId::ALL and keyed on its own inventory"
+            );
+        }
+    }
+
+    /// The registry is where a reader finds the transport class, and every
+    /// inventory of a no-API marketplace reads as the seller-device branch.
+    /// The expected value is a literal rather than a second call, so an
+    /// inventory re-pointed at another marketplace fails here.
+    #[test]
+    fn every_registered_inventory_reads_its_marketplaces_transport_class() {
+        for inventory in InventoryId::ALL {
+            let expected = match inventory {
+                InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz | InventoryId::Tpt => {
+                    TransportClass::SellerDevice
+                }
+                InventoryId::Etsy => TransportClass::OfficialApi,
+            };
+            assert_eq!(
+                registry(inventory).transport_class(),
+                expected,
+                "{inventory:?} must read the branch its marketplace declares"
             );
         }
     }

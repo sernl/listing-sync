@@ -18,7 +18,7 @@ use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_storage::ItemStateKind;
 use tam_types::{
     ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,
-    JobEventPayload, LengthUnit, Marketplace, TermKind,
+    JobEventPayload, LengthUnit, Marketplace, TermKind, TransportClass,
 };
 
 fn union<T, F: Fn(&T) -> String>(name: &str, values: &[T], render: F) -> String {
@@ -42,6 +42,8 @@ fn main() {
     out.push_str(&union("InventoryId", &InventoryId::ALL, serde_name));
     out.push('\n');
     out.push_str(&union("Marketplace", &Marketplace::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union("TransportClass", &TransportClass::ALL, serde_name));
     out.push('\n');
     out.push_str(&union(
         "ConnectionStatus",

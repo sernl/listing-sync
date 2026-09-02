@@ -117,6 +117,49 @@ pub enum Marketplace {
 impl Marketplace {
     /// The closed set, in a stable order, for the vocabulary generator.
     pub const ALL: [Self; 3] = [Self::Tes, Self::Etsy, Self::Tpt];
+
+    /// Which branch of the automation rule this marketplace falls in. Total by
+    /// exhaustive match, so a marketplace cannot be added without its branch
+    /// being decided for it.
+    #[must_use]
+    pub const fn transport_class(self) -> TransportClass {
+        match self {
+            // Neither publishes a seller API, so both are the seller-device
+            // branch.
+            Self::Tes | Self::Tpt => TransportClass::SellerDevice,
+            Self::Etsy => TransportClass::OfficialApi,
+        }
+    }
+}
+
+/// Which branch of the automation rule a marketplace falls in, decided by
+/// whether the marketplace sanctions the automation. Where it publishes an
+/// official API and issues a token for the purpose, automation runs
+/// server-side under that token; where it publishes none, every marketplace
+/// request originates on the seller's own device under the seller's own
+/// session and the server never composes, signs or issues one.
+///
+/// The rule is the first non-negotiable in `CLAUDE.md` and decision D1 in
+/// `docs/notes/design/vendoo-for-teachers-rethink.md`.
+///
+/// D1 also requires a test that fails the build if a no-API marketplace gains
+/// a server transport. That test is deliberately not here yet: the server
+/// still drives both seller-device marketplaces through `tam-session-broker`,
+/// so a structural check would fail until that path is removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TransportClass {
+    /// The marketplace publishes an official API and issues a token for the
+    /// purpose, so automation runs server-side on infrastructure we operate.
+    OfficialApi,
+    /// The marketplace publishes no official API, so every request originates
+    /// on the seller's own device under the seller's own session, and the
+    /// server is a control plane sending declarative intent instead.
+    SellerDevice,
+}
+
+impl TransportClass {
+    /// The closed set, in a stable order.
+    pub const ALL: [Self; 2] = [Self::OfficialApi, Self::SellerDevice];
 }
 
 /// The inventory a listing is actually created in, which is the unit the model
@@ -777,7 +820,7 @@ impl JobEventPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::{Currency, FailureCode, Money};
+    use super::{Currency, FailureCode, Marketplace, Money, TransportClass};
 
     /// The closed set shared with the client. The single or-pattern arm carries
     /// no wildcard, so adding or removing a variant fails compilation here and
@@ -807,6 +850,57 @@ mod tests {
             FailureCode::ALL.len(),
             15,
             "FailureCode is a closed cross-layer contract; a change must update the client alongside this count"
+        );
+    }
+
+    /// Total over `Marketplace::ALL` by a wildcard-free match, so a
+    /// marketplace added without a decided branch fails compilation here as
+    /// well as at the declaration. The expected value is a literal rather
+    /// than a second call, so a flipped branch fails rather than agreeing
+    /// with itself.
+    #[test]
+    fn every_marketplace_declares_the_branch_the_automation_rule_puts_it_in() {
+        for marketplace in Marketplace::ALL {
+            let expected = match marketplace {
+                // Neither publishes a seller API, so every request must
+                // originate on the seller's own device.
+                Marketplace::Tes | Marketplace::Tpt => TransportClass::SellerDevice,
+                Marketplace::Etsy => TransportClass::OfficialApi,
+            };
+            assert_eq!(
+                marketplace.transport_class(),
+                expected,
+                "{marketplace:?} must declare the branch the automation rule puts it in"
+            );
+        }
+    }
+
+    /// The closed set shared with the client. The wildcard-free match means a
+    /// variant added or removed fails compilation here, and the literal wire
+    /// spellings pin the tokens a client branches on.
+    #[test]
+    fn the_transport_class_is_a_closed_pair_with_a_stable_wire_spelling() {
+        for class in TransportClass::ALL {
+            let wire = match class {
+                TransportClass::OfficialApi => "\"OfficialApi\"",
+                TransportClass::SellerDevice => "\"SellerDevice\"",
+            };
+            assert_eq!(
+                serde_json::to_string(&class).expect("TransportClass serialises"),
+                wire,
+                "the wire spelling is a cross-layer contract and must not drift"
+            );
+            let back: TransportClass = serde_json::from_str(wire)
+                .expect("TransportClass deserialises from its own output");
+            assert_eq!(
+                back, class,
+                "the class must survive a serde round trip unchanged"
+            );
+        }
+        assert_eq!(
+            TransportClass::ALL.len(),
+            2,
+            "the automation rule has exactly two branches"
         );
     }
 

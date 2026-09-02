@@ -56,6 +56,10 @@ export type Marketplace =
   | "Etsy"
   | "Tpt";
 
+export type TransportClass =
+  | "OfficialApi"
+  | "SellerDevice";
+
 export type ConnectionStatus =
   | "connected"
   | "checking"

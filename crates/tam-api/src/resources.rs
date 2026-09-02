@@ -21,7 +21,7 @@ use tam_storage::{
 use tam_taxonomy::check_native_ids;
 use tam_types::{
     CanonicalTermId, ConnectionId, ConnectionStatus, CopyFormat, InventoryId, MappingId,
-    Marketplace, OrgId, PriceIntent, ProductId, ScanOutcome, Timestamp, Uuid,
+    Marketplace, OrgId, PriceIntent, ProductId, ScanOutcome, Timestamp, TransportClass, Uuid,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -316,6 +316,11 @@ pub struct ConnectionsView {
 pub struct ConnectionView {
     pub id: ConnectionId,
     pub marketplace: Marketplace,
+    /// Which branch of the automation rule this row's marketplace falls in,
+    /// so the client renders the badge from the server's decision rather than
+    /// from a second copy of the mapping in TypeScript. Derived from
+    /// `marketplace`, never stored.
+    pub transport: TransportClass,
     /// The stored link state, unchanged. Kept beside `status` rather than
     /// replaced by it: the two answer different questions, and an operator
     /// reading this resource still needs the row's own state.
@@ -342,6 +347,7 @@ pub(crate) async fn list_connections(
             .map(|row| ConnectionView {
                 id: row.id,
                 marketplace: row.marketplace,
+                transport: row.marketplace.transport_class(),
                 state: row.state,
                 status: row.status,
                 created_at: row.created_at,
