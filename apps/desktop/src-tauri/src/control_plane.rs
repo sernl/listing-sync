@@ -90,18 +90,42 @@ pub struct Reply {
     pub body: String,
 }
 
+/// What one fetch returned. The body is bytes rather than a string for the
+/// reason `tam_marketplace::transport::HttpResponse` gives: `text()` decodes
+/// lossily rather than failing, so a payload carried as `String` would have
+/// every non-UTF-8 byte silently replaced, and a payload is a seller's own
+/// file rather than JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytesReply {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
 pub type TransportFuture<'a> = Pin<Box<dyn Future<Output = Result<Reply, String>> + Send + 'a>>;
 
-/// One POST to our control plane, as the protocol above needs it.
+pub type BytesFuture<'a> = Pin<Box<dyn Future<Output = Result<BytesReply, String>> + Send + 'a>>;
+
+/// Our control plane, as the protocols above need it.
 ///
-/// Deliberately narrow. There is no GET, no header argument and no host
+/// Deliberately narrow. Neither method takes a header argument or a host
 /// argument, so the only thing a caller can vary is which of our own paths it
-/// posts to and what metadata it sends.
+/// reaches and what metadata it sends. Two verbs rather than one because the
+/// payload fetch is a read of bytes and cannot be a POST of metadata; it is
+/// still one host, still one session per call, and still nothing a marketplace
+/// would accept as authentication.
 pub trait Transport: Send + Sync {
     /// `session` is the console session cookie value this request speaks
     /// under. A parameter rather than a field, so no implementation can retain
     /// one and none has to be invalidated when the seller signs out.
     fn post<'a>(&'a self, path: &'a str, session: &'a str, body: String) -> TransportFuture<'a>;
+
+    /// Reads one of our own paths as bytes, under the same per-call session.
+    ///
+    /// The one thing this is for is the interim payload fetch: D27 puts file
+    /// ingest on the seller's device, and until it does the bytes an upload
+    /// needs are on our servers and have to come down. See
+    /// `docs/notes/design/desktop-data-plane.md`.
+    fn fetch<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a>;
 }
 
 /// The socket-opening [`Transport`].
@@ -184,6 +208,25 @@ impl Transport for HttpTransport {
             Ok(Reply { status, body })
         })
     }
+
+    fn fetch<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a> {
+        Box::pin(async move {
+            let response = self
+                .client
+                .get(format!("{}{path}", self.base))
+                .header("accept", "application/octet-stream")
+                .header("cookie", format!("{SESSION_COOKIE}={session}"))
+                .send()
+                .await
+                .map_err(|why| why.to_string())?;
+            let status = response.status().as_u16();
+            let body = response.bytes().await.map_err(|why| why.to_string())?;
+            Ok(BytesReply {
+                status,
+                body: body.to_vec(),
+            })
+        })
+    }
 }
 
 /// What `POST /v1/devices` takes. The keys are the server's `RegisterBody`.
@@ -261,6 +304,53 @@ impl HttpControlPlane {
             .post(path, &session, body)
             .await
             .map_err(ControlPlaneError::Refused)
+    }
+
+    /// Resolves the session, then reads. The same order and the same reason as
+    /// [`Self::dispatch`].
+    async fn read(&self, path: &str) -> Result<BytesReply, ControlPlaneError> {
+        let session = self
+            .sessions
+            .session()
+            .await
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))?
+            .ok_or(ControlPlaneError::NoSession)?;
+        self.transport
+            .fetch(path, &session)
+            .await
+            .map_err(ControlPlaneError::Refused)
+    }
+}
+
+impl crate::ledger::LedgerTransport for HttpControlPlane {
+    fn post<'a>(&'a self, path: &'a str, body: String) -> PlaneFuture<'a, String> {
+        Box::pin(async move {
+            let reply = self.dispatch(path, body).await?;
+            match reply.status {
+                200 | 202 => Ok(reply.body),
+                404 => Err(ControlPlaneError::Unregistered),
+                status => Err(ControlPlaneError::Refused(format!(
+                    "{status}: {}",
+                    excerpt(&reply.body)
+                ))),
+            }
+        })
+    }
+}
+
+impl crate::payload::PayloadTransport for HttpControlPlane {
+    fn fetch<'a>(&'a self, path: &'a str) -> PlaneFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            let reply = self.read(path).await?;
+            match reply.status {
+                200 => Ok(reply.body),
+                404 => Err(ControlPlaneError::Unregistered),
+                status => Err(ControlPlaneError::Refused(format!(
+                    "{status}: {}",
+                    excerpt(&String::from_utf8_lossy(&reply.body))
+                ))),
+            }
+        })
     }
 }
 
@@ -351,8 +441,8 @@ impl ControlPlane for HttpControlPlane {
 #[cfg(test)]
 mod tests {
     use super::{
-        base_url, heartbeat_path, HttpControlPlane, HttpTransport, Reply, Transport,
-        TransportFuture, DEFAULT_BASE_URL, REGISTER_PATH,
+        base_url, heartbeat_path, BytesFuture, BytesReply, HttpControlPlane, HttpTransport, Reply,
+        Transport, TransportFuture, DEFAULT_BASE_URL, REGISTER_PATH,
     };
     use crate::console_session::{NoSession, SessionFuture, SessionSource, SessionUnreadable};
     use crate::device::{DeviceId, DeviceIdentity};
@@ -437,6 +527,21 @@ mod tests {
                     body,
                 });
                 reply
+            })
+        }
+
+        fn fetch<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a> {
+            let reply = self.reply.clone();
+            Box::pin(async move {
+                self.seen.lock().await.push(Sent {
+                    path: path.to_owned(),
+                    session: session.to_owned(),
+                    body: String::new(),
+                });
+                reply.map(|answer| BytesReply {
+                    status: answer.status,
+                    body: answer.body.into_bytes(),
+                })
             })
         }
     }

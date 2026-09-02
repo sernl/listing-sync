@@ -29,8 +29,19 @@ tauri-plugin-updater = "2.11"
 
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio      = { version = "1", features = ["time", "rt", "sync"] }
+# `fs` is the interim payload cache: the bytes an upload needs come down from
+# the control plane, are verified against the envelope's digest, live in one
+# directory for the length of one run, and are removed when the item settles.
+tokio      = { version = "1", features = ["time", "rt", "sync", "fs"] }
 uuid       = { version = "1", features = ["v4"] }
+
+# The digest the payload fetch is checked against. Blake3 because that is what
+# the ingest pipeline computed and what the blob is keyed on, and `pure` for
+# the same founder decision `tam-pipeline` records: it drops the C and asm
+# paths, so this cross-compiles to Windows without a C toolchain. The crate
+# and the feature are already in the workspace tree, so the two resolve to one
+# build.
+blake3     = { version = "1", features = ["pure"] }
 
 # The entitlement token is a compact JWS with `alg: EdDSA`, which is the
 # format and the crate `tam-api` already verifies better-auth's assertions
@@ -74,6 +85,30 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 tam-types = { path = "../../../crates/tam-types" }
 
+# The data plane. D1 puts every request to a no-API marketplace on this
+# machine, so the adapters that compose those requests are compiled into this
+# binary rather than into a server one, and the interpreter that decides which
+# request to make comes with them.
+#
+# The adapters are taken with their `live` feature, which is their reqwest
+# transport and nothing else. That is a second reqwest major in the bundle
+# beside the 0.13 the check-in and the updater share, and it is deliberate:
+# the alternative is a third implementation of TPT's measured request shaping
+# -- the double-submit CSRF header, the per-hop sec-fetch envelope and the
+# browser identity that decide whether Cloudflare answers with the form or an
+# interstitial -- written here and kept true by hand. Both resolve to one
+# rustls 0.23 over ring, so this adds no second TLS stack and no C toolchain
+# to the Windows cross-compile, which is what the reqwest note above is
+# protecting.
+# The item vocabulary the ledger and the machine share. A direct edge rather
+# than a re-export through the driver crate, because this crate names
+# `SellerEvent` and `JobItemId` in its own signatures.
+tam-domain          = { path = "../../../crates/tam-domain" }
+tam-engine-driver   = { path = "../../../crates/tam-engine-driver" }
+tam-marketplace     = { path = "../../../crates/tam-marketplace" }
+tam-marketplace-tes = { path = "../../../crates/tam-marketplace-tes" }
+tam-marketplace-tpt = { path = "../../../crates/tam-marketplace-tpt" }
+
 # One keychain backend per platform rather than the crate's umbrella feature,
 # so a Windows build never compiles D-Bus and a Linux build never compiles
 # Security Framework. `linux-native` is deliberately not used: linux-keyutils
@@ -90,6 +125,12 @@ keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 ring  = { version = "0.17", features = ["std"] }
+# The scripted adapter and the fixtures the interpreter's own conformance suite
+# uses, so the end-to-end test drives the real pull, the real interpreter and
+# the real settle without a marketplace.
+tam-engine-driver = { path = "../../../crates/tam-engine-driver", features = [
+  "testing",
+] }
 tokio = { version = "1", features = ["macros", "rt", "time", "test-util"] }
 
 [lints]

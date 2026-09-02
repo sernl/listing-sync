@@ -1,5 +1,5 @@
-//! The three commands the console calls, and the login webview behind the
-//! first of them.
+//! The commands the console calls, and the login webview behind the first of
+//! them.
 //!
 //! One rule governs the login window: the marketplace page gets no capability
 //! at all. It is not listed in `capabilities/default.json`, so `invoke` is
@@ -10,13 +10,14 @@
 use core::time::Duration;
 
 use serde::Serialize;
-use tam_types::{Marketplace, Timestamp};
+use tam_types::Marketplace;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::connect::login_target;
 use crate::heartbeat::{check_in, first_run, CheckInError};
+use crate::run::wall_now;
 use crate::session::{Cookie, CookieJar, SessionRecord, SessionStatus};
-use crate::state::DesktopState;
+use crate::state::{DesktopState, DeviceActivity};
 
 /// How often the login window's cookie store is read while waiting.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -179,6 +180,16 @@ pub async fn device_check_in(app: AppHandle) -> Result<DeviceState, CommandError
     }
 }
 
+/// What this device has been doing, oldest first.
+///
+/// Every entry names the device that produced it. With the work running on the
+/// seller's own machines, "which device did this" is a question the seller can
+/// now ask, and D1's interface rule is that they must be able to answer it.
+#[tauri::command]
+pub async fn device_activity(app: AppHandle) -> Result<Vec<DeviceActivity>, CommandError> {
+    Ok(app.state::<DesktopState>().activity().await)
+}
+
 /// Whether this device holds a session for a marketplace, and nothing about
 /// what is in it.
 #[tauri::command]
@@ -218,19 +229,4 @@ fn read_jar(window: &tauri::WebviewWindow, origin: &tauri::Url) -> Result<Cookie
             })
             .collect(),
     ))
-}
-
-/// The client is a clock-reading process boundary in the same sense the
-/// serving binary is: time enters the record as data from here. A clock before
-/// the epoch saturates to zero, which reads as "captured at the epoch" rather
-/// than as something stranger.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the desktop client is a clock-reading process boundary; time enters the session record as data from here"
-)]
-fn wall_now() -> Timestamp {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis());
-    Timestamp(i64::try_from(millis).unwrap_or(0))
 }

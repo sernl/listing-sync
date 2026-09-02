@@ -32,7 +32,7 @@ use tam_types::{Marketplace, Timestamp, TransportClass};
 
 use crate::device::{DeviceId, DeviceIdentity};
 use crate::entitlement::EntitlementGate;
-use crate::scheduler::{Scheduler, TickReport, WorkSource};
+use crate::scheduler::{Readiness, Scheduler, TickReport, WorkSource};
 use crate::session::{SessionStore, StoreError};
 use crate::state::DesktopState;
 
@@ -303,7 +303,26 @@ pub async fn cycle<W: WorkSource + ?Sized>(
     now: Timestamp,
 ) -> TickReport {
     check_in(state, plane).await.ok();
-    scheduler.tick(&state.gate().await, source, now).await
+    let gate = state.gate().await;
+    let report = scheduler
+        .tick(
+            &Readiness {
+                revoked: state.revoked(),
+                signed_in: state.signed_in(),
+                gate: &gate,
+                sessions: state.store(),
+            },
+            source,
+            now,
+        )
+        .await;
+    // Stamped with the tick's instant rather than each event's own: this is
+    // the interface's record of what the device did, and the ledger on the
+    // server is the record of what happened to an item.
+    for (marketplace, event) in &report.events {
+        state.record(*marketplace, now, event.clone()).await;
+    }
+    report
 }
 
 /// Forgets every marketplace session on this device and closes the gate.
@@ -524,7 +543,7 @@ mod tests {
         impl WorkSource for CountingSource {
             fn pull(&self, _marketplace: Marketplace) -> PullFuture<'_> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async { Ok(1) })
+                Box::pin(async { Ok(vec![crate::state::WorkEvent::Idle]) })
             }
         }
 
@@ -550,9 +569,17 @@ mod tests {
         .await;
 
         assert_eq!(
-            report.blocked,
-            vec![Marketplace::Tpt, Marketplace::Tes],
-            "a revoked device works nothing, and the seller is told which marketplaces"
+            report.blocked(),
+            vec![
+                (Marketplace::Tpt, crate::state::BlockReason::Revoked),
+                (Marketplace::Tes, crate::state::BlockReason::Revoked),
+            ],
+            "a revoked device works nothing, and the seller is told which marketplaces and why"
+        );
+        assert_eq!(
+            state.activity().await.len(),
+            2,
+            "and the console can read back what this device did, naming the device that did it"
         );
         assert_eq!(
             source.0.load(Ordering::SeqCst),

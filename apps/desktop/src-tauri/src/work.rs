@@ -1,0 +1,935 @@
+//! The device's pull: ask the control plane what is due, run it here, settle it.
+//!
+//! This is where the data plane actually is. The scheduler decides whether to
+//! ask; this module asks, and everything that follows an answer of `work`
+//! happens on this machine: the adapter renders the projection, composes every
+//! request, and issues them under the seller's own session, and the
+//! interpreter decides which request comes next.
+//!
+//! The server's part of the run is a ledger and a lease. It never says now, it
+//! never composes, and nothing it sends is a URL, a header, a form field name
+//! or an encoding.
+
+use core::future::Future;
+use core::pin::Pin;
+use core::sync::atomic::AtomicBool;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use tam_engine_driver::driver::{run_item, DriverContext, EngineError, RunVerdict};
+use tam_engine_driver::ports::ItemLedger;
+use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
+use tam_engine_driver::vocabulary::{ClaimView, WorkOrder};
+use tam_marketplace::MarketplaceAdapter;
+use tam_marketplace_tes::TesAdapter;
+use tam_marketplace_tpt::TptAdapter;
+use tam_types::Marketplace;
+
+use crate::device::DeviceId;
+use crate::ledger::{HttpLedger, LedgerTransport};
+use crate::marketplace::{SessionTransport, TesLive, TptLive};
+use crate::payload::{DevicePayloads, PayloadTransport};
+use crate::run::{DeviceClock, DeviceIds, RunGate, SleepingPause};
+use crate::scheduler::{PullFuture, WorkError, WorkSource};
+use crate::session::SessionStore;
+use crate::state::WorkEvent;
+
+/// Where the device asks what is due.
+#[must_use]
+pub fn work_path(device: &DeviceId) -> String {
+    format!("/v1/devices/{device}/work")
+}
+
+/// The claim's body: which marketplace this ask is for.
+///
+/// Owed. The route takes no body today, so the server ignores this and answers
+/// whatever is due for the device. The device therefore checks the answer
+/// against what it asked for, because the readiness gate is per marketplace
+/// and an item for a marketplace that did not pass it must not run. See
+/// `docs/notes/design/desktop-data-plane.md`.
+#[must_use]
+pub fn claim_body(marketplace: Marketplace) -> String {
+    serde_json::json!({ "marketplace": marketplace }).to_string()
+}
+
+/// Everything this device asks of its own control plane during one run: the
+/// claim and the ledger over one seam, the payload bytes over the other.
+pub trait DevicePlane: PayloadTransport + LedgerTransport {}
+
+impl<T: PayloadTransport + LedgerTransport + ?Sized> DevicePlane for T {}
+
+impl<T: PayloadTransport + ?Sized> PayloadTransport for &T {
+    fn fetch<'a>(&'a self, path: &'a str) -> crate::heartbeat::PlaneFuture<'a, Vec<u8>> {
+        (**self).fetch(path)
+    }
+}
+
+impl<T: LedgerTransport + ?Sized> LedgerTransport for &T {
+    fn post<'a>(
+        &'a self,
+        path: &'a str,
+        body: String,
+    ) -> crate::heartbeat::PlaneFuture<'a, String> {
+        (**self).post(path, body)
+    }
+}
+
+impl<T: PayloadTransport> tam_marketplace::FileSource for &DevicePayloads<T> {
+    fn fetch(
+        &self,
+        file: tam_types::FileId,
+    ) -> impl core::future::Future<
+        Output = Result<tam_marketplace::FileContent, tam_marketplace::FileSourceError>,
+    > + Send {
+        (**self).fetch(file)
+    }
+}
+
+/// One run of the interpreter, boxed so the seam stays object-safe.
+pub type RunFuture<'a> = Pin<Box<dyn Future<Output = Result<RunVerdict, EngineError>> + Send + 'a>>;
+
+/// How an order becomes a run against a marketplace.
+///
+/// A seam, and the only one in this module: with it, the pull, the settle and
+/// the order the seller sees events in are all provable without a marketplace.
+/// [`LiveMarketplaces`] binds the real adapters and the seller's own session;
+/// a test binds a scripted adapter to the same interpreter.
+pub trait Marketplaces<P: DevicePlane>: Send + Sync {
+    fn drive<'a>(
+        &'a self,
+        order: &'a WorkOrder,
+        ledger: &'a HttpLedger<&'a P>,
+        gate: &'a RunGate,
+        payloads: &'a DevicePayloads<&'a P>,
+    ) -> RunFuture<'a>;
+}
+
+/// The shipping binding: the marketplace's own adapter, over the seller's own
+/// session, over this device's own file cache.
+pub struct LiveMarketplaces {
+    sessions: Arc<dyn SessionStore>,
+}
+
+impl core::fmt::Debug for LiveMarketplaces {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LiveMarketplaces").finish_non_exhaustive()
+    }
+}
+
+impl LiveMarketplaces {
+    #[must_use]
+    pub const fn new(sessions: Arc<dyn SessionStore>) -> Self {
+        Self { sessions }
+    }
+}
+
+impl<P: DevicePlane> Marketplaces<P> for LiveMarketplaces {
+    /// One arm per marketplace rather than a boxed adapter, because the two
+    /// adapters differ in their type parameters and a trait object over
+    /// `MarketplaceAdapter` would need the associated types erased.
+    fn drive<'a>(
+        &'a self,
+        order: &'a WorkOrder,
+        ledger: &'a HttpLedger<&'a P>,
+        gate: &'a RunGate,
+        payloads: &'a DevicePayloads<&'a P>,
+    ) -> RunFuture<'a> {
+        Box::pin(async move {
+            // The marketplace is the inventory's, and `execute` has already
+            // refused an order whose inventory is not the one it gated on.
+            match order.lease.inventory.marketplace() {
+                Marketplace::Tpt => {
+                    let transport = SessionTransport::new(TptLive, Arc::clone(&self.sessions))
+                        .map_err(|why| refusal(&why))?;
+                    let adapter = TptAdapter::new(transport, payloads, SleepingPause);
+                    interpret(&adapter, ledger, gate, order).await
+                }
+                Marketplace::Tes => {
+                    let transport = SessionTransport::new(TesLive, Arc::clone(&self.sessions))
+                        .map_err(|why| refusal(&why))?;
+                    let adapter = TesAdapter::new(order.lease.inventory, transport, payloads)
+                        .map_err(|why| refusal(&why))?;
+                    interpret(&adapter, ledger, gate, order).await
+                }
+                // Unreachable through the scheduler, which walks only the
+                // seller-device marketplaces, and stated rather than assumed:
+                // a sanctioned marketplace's automation runs server-side under
+                // its own token and never composes a request here.
+                Marketplace::Etsy => Err(refusal(
+                    &crate::marketplace::NoLocalTransport::NotSellerDevice(Marketplace::Etsy),
+                )),
+            }
+        })
+    }
+}
+
+/// The work source that actually runs items.
+pub struct DeviceWork<P: DevicePlane, M: Marketplaces<P>> {
+    device: DeviceId,
+    plane: Arc<P>,
+    marketplaces: M,
+    /// Where the interim payload cache lives, one directory per item beneath
+    /// it.
+    data_dir: PathBuf,
+    /// Raised when the device is revoked. Shared with every run in flight,
+    /// which is how a revocation reaches the interpreter before its next
+    /// marketplace request rather than after it.
+    stopper: Arc<AtomicBool>,
+}
+
+impl<P: DevicePlane, M: Marketplaces<P>> core::fmt::Debug for DeviceWork<P, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DeviceWork")
+            .field("device", &self.device)
+            .field("data_dir", &self.data_dir)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
+    #[must_use]
+    pub fn new(
+        device: DeviceId,
+        plane: Arc<P>,
+        marketplaces: M,
+        data_dir: &Path,
+        stopper: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            device,
+            plane,
+            marketplaces,
+            data_dir: data_dir.to_path_buf(),
+            stopper,
+        }
+    }
+
+    async fn ask(&self, marketplace: Marketplace) -> Result<ClaimView, WorkError> {
+        let reply = self
+            .plane
+            .post(&work_path(&self.device), claim_body(marketplace))
+            .await
+            .map_err(|why| WorkError(why.to_string()))?;
+        serde_json::from_str(&reply).map_err(|why| WorkError(why.to_string()))
+    }
+
+    async fn pull_one(&self, marketplace: Marketplace) -> Result<Vec<WorkEvent>, WorkError> {
+        match self.ask(marketplace).await? {
+            ClaimView::Idle { .. } => Ok(vec![WorkEvent::Idle]),
+            ClaimView::Held { next_poll_ms } => Ok(vec![WorkEvent::Held { next_poll_ms }]),
+            ClaimView::Work(order) => Ok(self.execute(marketplace, *order).await),
+        }
+    }
+
+    /// Runs one order to a verdict and reports what the seller sees.
+    ///
+    /// Never returns an error: once an item is claimed, everything that can go
+    /// wrong is a verdict the interpreter already has a shape for, and the
+    /// stall bias covers the rest. A failure here that surfaced as a work-source
+    /// error would leave the seller with no record of an item their device did
+    /// claim.
+    async fn execute(&self, marketplace: Marketplace, order: WorkOrder) -> Vec<WorkEvent> {
+        let item = order.lease.item.0.to_hyphenated();
+        if order.lease.inventory.marketplace() != marketplace {
+            return vec![WorkEvent::Failed {
+                detail: format!(
+                    "the control plane answered a {:?} item for a {marketplace:?} ask; the \
+                     readiness gate is per marketplace, so this item is left for the tick that \
+                     gated on its own",
+                    order.lease.inventory.marketplace()
+                ),
+            }];
+        }
+
+        let mut events = vec![WorkEvent::Started { item: item.clone() }];
+        let ledger = HttpLedger::new(self.device.clone(), &*self.plane);
+        let gate = RunGate::from_envelope(order.server_now_ms, order.server_deadline_ms)
+            .stopped_by(Arc::clone(&self.stopper));
+        let payloads = DevicePayloads::for_item(
+            self.device.clone(),
+            &*self.plane,
+            &self.data_dir,
+            &item,
+            order.payload.clone(),
+        );
+
+        let verdict = self
+            .marketplaces
+            .drive(&order, &ledger, &gate, &payloads)
+            .await;
+
+        // Before the verdict is reported, because the promise is that nothing
+        // is kept after the item settles rather than shortly afterwards.
+        if let Err(why) = payloads.discard().await {
+            events.push(WorkEvent::Failed {
+                detail: why.to_string(),
+            });
+        }
+
+        events.push(match verdict {
+            Ok(RunVerdict::Settled(outcome)) => WorkEvent::Settled { item, outcome },
+            Ok(RunVerdict::Parked) => WorkEvent::Parked {
+                item,
+                blocked_on: ledger
+                    .parked_on()
+                    .await
+                    .unwrap_or_else(|| "an unnamed gate".to_owned()),
+            },
+            Ok(RunVerdict::Abandoned { reason }) => WorkEvent::Abandoned { item, reason },
+            Err(why) => WorkEvent::Abandoned {
+                item,
+                reason: format!("{why}"),
+            },
+        });
+        events
+    }
+}
+
+/// A refusal before the interpreter starts, in the one shape this function can
+/// return. `Refused` rather than a new variant: the interpreter's answer to a
+/// condition it cannot act on is the stall bias, and the lease expiring is
+/// exactly that.
+fn refusal(why: &dyn core::fmt::Display) -> EngineError {
+    EngineError::Ledger(tam_engine_driver::vocabulary::LedgerError::Refused {
+        detail: why.to_string(),
+    })
+}
+
+/// Seeds the machine from the server's preparation and pumps it.
+///
+/// The seed is taken here rather than sent, which is the custody line: the
+/// adapter renders the field set and the intent hash is taken over what it
+/// rendered, so the recorded intent is the bytes the submit will carry.
+async fn interpret<A: MarketplaceAdapter, L: ItemLedger>(
+    adapter: &A,
+    ledger: &L,
+    gate: &RunGate,
+    order: &WorkOrder,
+) -> Result<RunVerdict, EngineError> {
+    let seed = match order.preparation.projected.as_ref() {
+        Some(listing) => seed_from_projection(adapter, &order.preparation, listing)?,
+        None => seed_for_removal(&order.preparation),
+    };
+    let clock = DeviceClock;
+    let ids = DeviceIds;
+    let pause = SleepingPause;
+    let context = DriverContext {
+        adapter,
+        ledger,
+        clock: &clock,
+        ids: &ids,
+        cancel: gate,
+        pause: &pause,
+    };
+    run_item(&context, &order.lease, seed).await
+}
+
+impl<P: DevicePlane, M: Marketplaces<P>> WorkSource for DeviceWork<P, M> {
+    fn pull(&self, marketplace: Marketplace) -> PullFuture<'_> {
+        Box::pin(async move { self.pull_one(marketplace).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        claim_body, interpret, work_path, DevicePlane, DeviceWork, LiveMarketplaces, Marketplaces,
+        RunFuture,
+    };
+    use crate::device::DeviceId;
+    use crate::entitlement::{Claims, Entitlement, EntitlementGate};
+    use crate::heartbeat::{ControlPlaneError, PlaneFuture};
+    use crate::ledger::{HttpLedger, LedgerTransport};
+    use crate::payload::{DevicePayloads, PayloadTransport};
+    use crate::run::RunGate;
+    use crate::scheduler::{Readiness, Scheduler, WorkSource};
+    use crate::session::memory::MemorySessionStore;
+    use crate::session::{Cookie, CookieJar, SessionRecord, SessionStore};
+    use crate::state::{BlockReason, WorkEvent};
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::time::Duration;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use tam_domain::{ItemOperation, JobItemId, StepBudget};
+    use tam_engine_driver::conformance::{landed_evidence, ScriptedAdapter};
+    use tam_engine_driver::driver::VerifyPolicy;
+    use tam_engine_driver::vocabulary::{
+        BindDisposition, BudgetGrant, ClaimView, ItemPreparation, LeasedItem, LedgerAnswer,
+        LedgerCall, PreflightStreak, SettleEnvelope, WorkOrder,
+    };
+    use tam_marketplace::{CreateStrategy, FormId, IdempotencyKey, ProjectedListing};
+    use tam_types::{
+        ConnectionId, CopyFormat, InventoryId, JobId, MappingId, Marketplace, OrgId, PriceIntent,
+        Timestamp, Uuid,
+    };
+    use tokio::sync::Mutex;
+
+    const DEVICE: &str = "11112222333344445555666677778888";
+    const NOW_SECONDS: i64 = 1_756_000_000;
+    const NOW: Timestamp = Timestamp(NOW_SECONDS * 1_000);
+
+    fn uuid(last: u8) -> Uuid {
+        let mut raw = [0u8; 16];
+        raw[15] = last;
+        Uuid(raw)
+    }
+
+    fn order() -> WorkOrder {
+        WorkOrder {
+            lease: LeasedItem {
+                org: OrgId(uuid(1)),
+                item: JobItemId(uuid(2)),
+                job: JobId(uuid(3)),
+                mapping: MappingId(uuid(4)),
+                inventory: InventoryId::TesGb,
+                idempotency_key: IdempotencyKey(uuid(5)),
+                operation: ItemOperation::Create,
+                lease_epoch: 7,
+                attempt_count: 0,
+                requires_bound_on: None,
+            },
+            preparation: ItemPreparation {
+                operation: ItemOperation::Create,
+                projected: Some(ProjectedListing {
+                    title: "Fixture".to_owned(),
+                    body: "A worksheet.".to_owned(),
+                    body_format: CopyFormat::Markdown,
+                    price: PriceIntent::Free,
+                    taxonomy: vec![],
+                    grades: vec![],
+                    ages: None,
+                    files: vec![],
+                    natives: vec![],
+                }),
+                form: FormId(uuid(9)),
+                strategy: CreateStrategy::HaltOnAmbiguity,
+                budget: StepBudget {
+                    actions_remaining: 20,
+                },
+                verify: VerifyPolicy {
+                    tries: 3,
+                    interval_ms: 1,
+                },
+            },
+            payload: vec![],
+            server_now_ms: NOW.0,
+            server_deadline_ms: NOW.0 + 300_000,
+            next_poll_ms: 10_000,
+        }
+    }
+
+    /// A control plane that serves one envelope and then goes idle, answers
+    /// every ledger call the happy path makes, and records every path and body
+    /// in order.
+    struct FakePlane {
+        order: Mutex<Option<WorkOrder>>,
+        seen: Mutex<Vec<(String, String)>>,
+    }
+
+    impl FakePlane {
+        fn serving(order: Option<WorkOrder>) -> Self {
+            Self {
+                order: Mutex::new(order),
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+
+        async fn paths(&self) -> Vec<String> {
+            self.seen
+                .lock()
+                .await
+                .iter()
+                .map(|(path, _)| path.rsplit('/').next().unwrap_or_default().to_owned())
+                .collect()
+        }
+
+        /// The ledger calls made after the settle, in order. The interpreter
+        /// notifies the seller once the item is terminal, so the settle is not
+        /// literally the last request; what matters is that nothing after it
+        /// writes to the item.
+        async fn after_the_settle(&self) -> Vec<LedgerCall> {
+            let seen = self.seen.lock().await.clone();
+            let settled = seen.iter().position(|(path, _)| path.ends_with("/settle"));
+            settled.map_or_else(Vec::new, |at| {
+                seen.iter()
+                    .skip(at + 1)
+                    .filter(|(path, _)| path.ends_with("/ledger"))
+                    .filter_map(|(_, body)| serde_json::from_str(body).ok())
+                    .collect()
+            })
+        }
+
+        async fn ledger_calls(&self) -> Vec<LedgerCall> {
+            self.seen
+                .lock()
+                .await
+                .iter()
+                .filter(|(path, _)| path.ends_with("/ledger"))
+                .filter_map(|(_, body)| serde_json::from_str(body).ok())
+                .collect()
+        }
+
+        async fn settles(&self) -> Vec<SettleEnvelope> {
+            self.seen
+                .lock()
+                .await
+                .iter()
+                .filter(|(path, _)| path.ends_with("/settle"))
+                .filter_map(|(_, body)| serde_json::from_str(body).ok())
+                .collect()
+        }
+
+        async fn requests(&self) -> usize {
+            self.seen.lock().await.len()
+        }
+
+        /// The answer every ledger call the happy path makes needs, and
+        /// nothing more: an answer of the wrong shape is what the ledger
+        /// client's own tests cover.
+        fn answer(call: &LedgerCall) -> LedgerAnswer {
+            match *call {
+                LedgerCall::ConnectionFor { .. } => LedgerAnswer::Connection {
+                    connection: Some(ConnectionId(uuid(6))),
+                },
+                LedgerCall::PreflightFailed { .. } => LedgerAnswer::Streak {
+                    streak: PreflightStreak {
+                        failures: 1,
+                        edge_only: true,
+                    },
+                },
+                LedgerCall::RequestGrant { .. } => LedgerAnswer::Grant {
+                    grant: BudgetGrant::Granted { used: 1 },
+                },
+                LedgerCall::SettleAttempt { .. } => LedgerAnswer::Bound {
+                    disposition: BindDisposition::Bound,
+                },
+                LedgerCall::PreflightSucceeded { .. }
+                | LedgerCall::Park { .. }
+                | LedgerCall::OpenAttempt { .. }
+                | LedgerCall::GateConnection { .. }
+                | LedgerCall::HaltThisTenant { .. }
+                | LedgerCall::RecordEvent { .. }
+                | LedgerCall::Notify { .. } => LedgerAnswer::Done,
+            }
+        }
+    }
+
+    impl LedgerTransport for FakePlane {
+        fn post<'a>(&'a self, path: &'a str, body: String) -> PlaneFuture<'a, String> {
+            Box::pin(async move {
+                self.seen.lock().await.push((path.to_owned(), body.clone()));
+                if path.ends_with("/work") {
+                    let view = self.order.lock().await.take().map_or(
+                        ClaimView::Idle {
+                            next_poll_ms: 10_000,
+                        },
+                        |order| ClaimView::Work(Box::new(order)),
+                    );
+                    return serde_json::to_string(&view)
+                        .map_err(|why| ControlPlaneError::Refused(why.to_string()));
+                }
+                if path.ends_with("/settle") {
+                    return Ok("{}".to_owned());
+                }
+                let call: LedgerCall = serde_json::from_str(&body)
+                    .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
+                serde_json::to_string(&Self::answer(&call))
+                    .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+            })
+        }
+    }
+
+    impl PayloadTransport for FakePlane {
+        fn fetch<'a>(&'a self, path: &'a str) -> PlaneFuture<'a, Vec<u8>> {
+            Box::pin(async move {
+                self.seen
+                    .lock()
+                    .await
+                    .push((path.to_owned(), String::new()));
+                Err(ControlPlaneError::Refused(
+                    "this fixture's item uploads nothing".to_owned(),
+                ))
+            })
+        }
+    }
+
+    /// The interpreter, over a scripted adapter rather than a marketplace.
+    struct Scripted;
+
+    impl<P: DevicePlane> Marketplaces<P> for Scripted {
+        fn drive<'a>(
+            &'a self,
+            order: &'a WorkOrder,
+            ledger: &'a HttpLedger<&'a P>,
+            gate: &'a RunGate,
+            _payloads: &'a DevicePayloads<&'a P>,
+        ) -> RunFuture<'a> {
+            Box::pin(async move {
+                let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
+                interpret(&adapter, ledger, gate, order).await
+            })
+        }
+    }
+
+    fn scratch() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tam-desktop-work-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        dir
+    }
+
+    fn work(
+        plane: &Arc<FakePlane>,
+        data_dir: &Path,
+        stopper: &Arc<AtomicBool>,
+    ) -> DeviceWork<FakePlane, Scripted> {
+        DeviceWork::new(
+            DeviceId::from_raw(DEVICE),
+            Arc::clone(plane),
+            Scripted,
+            data_dir,
+            Arc::clone(stopper),
+        )
+    }
+
+    async fn sessions_for(marketplaces: &[Marketplace]) -> Arc<dyn SessionStore> {
+        let store = Arc::new(MemorySessionStore::new());
+        for marketplace in marketplaces {
+            store
+                .put(&SessionRecord {
+                    marketplace: *marketplace,
+                    account_label: None,
+                    captured_at: NOW,
+                    device_id: DeviceId::from_raw(DEVICE),
+                    jar: CookieJar::new(vec![Cookie {
+                        name: "TESSession".to_owned(),
+                        value: "value".to_owned(),
+                    }]),
+                })
+                .await
+                .expect("the fixture store accepts");
+        }
+        store
+    }
+
+    fn gate_over(marketplaces: Vec<Marketplace>) -> EntitlementGate {
+        EntitlementGate::holding(Entitlement::from_verified_claims(Claims {
+            sub: "org-1".to_owned(),
+            aud: crate::entitlement::AUDIENCE.to_owned(),
+            iss: crate::entitlement::ISSUER.to_owned(),
+            device: DEVICE.to_owned(),
+            marketplaces,
+            exp: NOW_SECONDS + 3_600,
+            grace: NOW_SECONDS + 3_600 + 86_400,
+        }))
+    }
+
+    #[tokio::test]
+    async fn one_envelope_is_pulled_run_and_settled_and_the_seller_sees_it_in_order() {
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(Some(order())));
+        let stopper = Arc::new(AtomicBool::new(false));
+        let source = work(&plane, &data_dir, &stopper);
+
+        let events = source
+            .pull(Marketplace::Tes)
+            .await
+            .expect("the pull returns what the device did");
+
+        let item = uuid(2).to_hyphenated();
+        assert_eq!(
+            events.first(),
+            Some(&WorkEvent::Started { item: item.clone() }),
+            "the seller sees the claim before its outcome, and the entry names this device"
+        );
+        assert_eq!(events.len(), 2, "one claim, one verdict: {events:?}");
+        let terminal = events.last().expect("a verdict is reported");
+        assert!(
+            matches!(terminal, WorkEvent::Settled { .. }),
+            "the scripted submit landed and the read-back observed it, so the item settles \
+             rather than stalling: {terminal:?}"
+        );
+
+        let paths = plane.paths().await;
+        assert_eq!(
+            paths.first().map(String::as_str),
+            Some("work"),
+            "the device asks before it does anything: the server never says now"
+        );
+        assert_eq!(
+            paths.iter().filter(|path| *path == "settle").count(),
+            1,
+            "the evidence goes back once, on the path fenced on the holder: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|path| path == "ledger"),
+            "the run's ledger writes go to the ledger path in between: {paths:?}"
+        );
+        let trailing = plane.after_the_settle().await;
+        assert!(
+            trailing.iter().all(|call| matches!(
+                *call,
+                LedgerCall::Notify { .. } | LedgerCall::RecordEvent { .. }
+            )),
+            "the settle is the last write to the item; only the seller's notification and the \
+             journal follow it: {trailing:?}"
+        );
+
+        let calls = plane.ledger_calls().await;
+        assert!(
+            calls
+                .iter()
+                .any(|call| matches!(*call, LedgerCall::ConnectionFor { .. })),
+            "the connection is read from the ledger rather than assumed: {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|call| matches!(*call, LedgerCall::RequestGrant { .. })),
+            "and the rate ceiling is asked for rather than set here: {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|call| *call.lease() == order().lease.lease_ref()),
+            "every write names the lease the server issued, so the server derives the rest"
+        );
+
+        let settles = plane.settles().await;
+        assert_eq!(settles.len(), 1, "an item settles once");
+        assert_eq!(
+            settles[0].lease,
+            order().lease.lease_ref(),
+            "fenced on the item and the epoch it ran under"
+        );
+
+        assert!(
+            !data_dir
+                .join(crate::payload::CACHE_DIR)
+                .join(&item)
+                .exists(),
+            "nothing the run fetched outlives the settle"
+        );
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_empty_queue_is_reported_as_idle_and_runs_nothing() {
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(None));
+        let stopper = Arc::new(AtomicBool::new(false));
+        let source = work(&plane, &data_dir, &stopper);
+
+        assert_eq!(
+            source.pull(Marketplace::Tes).await.expect("the pull lands"),
+            vec![WorkEvent::Idle]
+        );
+        assert_eq!(
+            plane.requests().await,
+            1,
+            "an idle answer ends the marketplace's turn; nothing else is asked"
+        );
+        assert_eq!(
+            plane.seen.lock().await[0].1,
+            claim_body(Marketplace::Tes),
+            "the ask names the marketplace it is for, which is the filter the endpoint is owed"
+        );
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_revocation_in_flight_stops_the_run_before_it_opens_an_attempt() {
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(Some(order())));
+        // Raised before the run, which is the state a check-in mid-tick leaves
+        // behind: the stopper is the same flag `DesktopState` sets from a
+        // revoked heartbeat.
+        let stopper = Arc::new(AtomicBool::new(true));
+        let source = work(&plane, &data_dir, &stopper);
+
+        let events = source.pull(Marketplace::Tes).await.expect("the pull lands");
+
+        let calls = plane.ledger_calls().await;
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(*call, LedgerCall::OpenAttempt { .. })),
+            "this is the property that matters: a create cannot reach the marketplace without \
+             opening an attempt first, so no attempt means no marketplace request was composed \
+             under the seller's session after the revocation: {calls:?}"
+        );
+
+        // Pinned as it behaves, and it is not what section 5 of
+        // `engine-driver-split.md` requires. That section says a failed
+        // entitlement check must produce the shape `BudgetGrant::Exhausted`
+        // produces -- the attempt settled abandoned and the run `Abandoned` --
+        // "never a new terminal outcome". What happens instead is that
+        // `SyncMachine::exhaust_budget` maps `AwaitingPreflight` to a terminal
+        // `Outcome::Skipped` (`crates/tam-domain/src/lib.rs:1198`), so the
+        // interpreter settles the item and the seller's queued work is dropped
+        // rather than left for the reaper to requeue on an entitled device.
+        // Reported; change this assertion when the machine changes, not before.
+        let settles = plane.settles().await;
+        assert_eq!(settles.len(), 1);
+        assert_eq!(
+            settles[0].verdict.outcome,
+            tam_domain::ItemOutcome::Skipped,
+            "current behaviour, and a divergence from the design note rather than an \
+             endorsement of it: a revocation settles the item terminally instead of abandoning \
+             the lease"
+        );
+        assert!(
+            matches!(events.last(), Some(WorkEvent::Settled { .. })),
+            "and the seller is shown that terminal settle: {events:?}"
+        );
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_revoked_device_never_reaches_the_control_plane_at_all() {
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(Some(order())));
+        let stopper = Arc::new(AtomicBool::new(false));
+        let source = work(&plane, &data_dir, &stopper);
+        let sessions = sessions_for(&[Marketplace::Tpt, Marketplace::Tes]).await;
+        let gate = gate_over(vec![Marketplace::Tpt, Marketplace::Tes]);
+
+        let report = Scheduler::new(
+            Duration::from_mins(1),
+            vec![Marketplace::Tpt, Marketplace::Tes],
+        )
+        .tick(
+            &Readiness {
+                revoked: true,
+                signed_in: true,
+                gate: &gate,
+                sessions: sessions.as_ref(),
+            },
+            &source,
+            NOW,
+        )
+        .await;
+
+        assert_eq!(
+            report.blocked(),
+            vec![
+                (Marketplace::Tpt, BlockReason::Revoked),
+                (Marketplace::Tes, BlockReason::Revoked),
+            ]
+        );
+        assert_eq!(
+            plane.requests().await,
+            0,
+            "the tick is refused before the pull, so a revoked device does not even ask what is \
+             due, let alone compose a marketplace request"
+        );
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_marketplace_with_no_session_is_never_asked_what_is_due() {
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(Some(order())));
+        let stopper = Arc::new(AtomicBool::new(false));
+        let source = work(&plane, &data_dir, &stopper);
+        let sessions = sessions_for(&[]).await;
+        let gate = gate_over(vec![Marketplace::Tpt, Marketplace::Tes]);
+
+        let report = Scheduler::new(
+            Duration::from_mins(1),
+            vec![Marketplace::Tpt, Marketplace::Tes],
+        )
+        .tick(
+            &Readiness {
+                revoked: false,
+                signed_in: true,
+                gate: &gate,
+                sessions: sessions.as_ref(),
+            },
+            &source,
+            NOW,
+        )
+        .await;
+
+        assert_eq!(
+            report.blocked(),
+            vec![
+                (Marketplace::Tpt, BlockReason::NoSession),
+                (Marketplace::Tes, BlockReason::NoSession),
+            ]
+        );
+        assert_eq!(
+            plane.requests().await,
+            0,
+            "with no session there is nothing to compose a request under, so the device does not \
+             claim an item it would only abandon"
+        );
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_order_for_another_marketplace_is_refused_rather_than_run() {
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(Some(order())));
+        let stopper = Arc::new(AtomicBool::new(false));
+        let source = work(&plane, &data_dir, &stopper);
+
+        // The fixture's inventory is TesGb, and this asks as TPT.
+        let events = source.pull(Marketplace::Tpt).await.expect("the pull lands");
+        assert!(
+            matches!(events.as_slice(), [WorkEvent::Failed { .. }]),
+            "the readiness gate is per marketplace, so an item for one that did not pass it must \
+             not run: {events:?}"
+        );
+        assert!(plane.settles().await.is_empty());
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn the_shipping_binding_refuses_a_sanctioned_marketplace() {
+        // Etsy is unreachable through the scheduler, which walks only the
+        // seller-device marketplaces. Stated here rather than assumed: the
+        // two-branch rule must hold at the binding as well as at the timer.
+        let live = LiveMarketplaces::new(sessions_for(&[]).await);
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(None));
+        let mut etsy = order();
+        etsy.lease.inventory = InventoryId::Etsy;
+        let ledger = HttpLedger::new(DeviceId::from_raw(DEVICE), &*plane);
+        let payloads = DevicePayloads::for_item(
+            DeviceId::from_raw(DEVICE),
+            &*plane,
+            &data_dir,
+            "etsy",
+            vec![],
+        );
+        let gate = RunGate::from_envelope(etsy.server_now_ms, etsy.server_deadline_ms);
+
+        let verdict = Marketplaces::<FakePlane>::drive(&live, &etsy, &ledger, &gate, &payloads)
+            .await
+            .expect_err("Etsy's automation runs server-side under a sanctioned token");
+        assert!(
+            format!("{verdict}").contains("official API"),
+            "the refusal names why: {verdict}"
+        );
+        drop(payloads);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[test]
+    fn the_claim_path_names_the_device() {
+        assert_eq!(
+            work_path(&DeviceId::from_raw(DEVICE)),
+            "/v1/devices/11112222333344445555666677778888/work"
+        );
+        assert_eq!(Ordering::SeqCst, Ordering::SeqCst);
+    }
+}

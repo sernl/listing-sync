@@ -7,10 +7,12 @@
 //! pulls whatever declarative work is pending; the server never says "do it
 //! now", which is the causation the legal analysis turns on.
 //!
-//! Nothing in this slice contacts a marketplace. [`WorkSource`] is the seam
-//! where that will eventually happen and its only implementation is
-//! [`NoWork`], which does nothing at all. The engine driver split that gives
-//! it a real implementation is a separate stream.
+//! Everything a tick may refuse on is decided here, before [`WorkSource`] is
+//! touched at all. That ordering is the whole of the gate: a check made after
+//! the request has gone out is not one. The four refusals are the seller's
+//! sign-out, the absent console session, the entitlement, and the absent
+//! marketplace session, and each is reported as itself rather than as a
+//! generic "not syncing", because the seller acts on each differently.
 
 use core::future::Future;
 use core::pin::Pin;
@@ -19,10 +21,13 @@ use core::time::Duration;
 use tam_types::{Marketplace, Timestamp};
 
 use crate::entitlement::EntitlementGate;
+use crate::session::SessionStore;
+use crate::state::{BlockReason, WorkEvent};
 
 /// What one pull of pending work returns, boxed so the trait stays
 /// object-safe. The same shape `tam-api`'s `JwksSource` uses.
-pub type PullFuture<'a> = Pin<Box<dyn Future<Output = Result<usize, WorkError>> + Send + 'a>>;
+pub type PullFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<WorkEvent>, WorkError>> + Send + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkError(pub String);
@@ -35,34 +40,70 @@ impl core::fmt::Display for WorkError {
 
 impl core::error::Error for WorkError {}
 
-/// Where the declarative work the control plane has queued comes from.
+/// Where the declarative work the control plane has queued comes from, and
+/// what running it came to.
 ///
-/// The count returned is items accepted, and is reported rather than acted on;
-/// executing an item is the driver's job, not the scheduler's.
+/// The events returned are what the seller is shown: what was claimed, what it
+/// settled as, and what it stopped on. They are returned rather than written,
+/// so the scheduler owns the order they are recorded in and a test can assert
+/// that order without a running application.
 pub trait WorkSource: Send + Sync {
     fn pull(&self, marketplace: Marketplace) -> PullFuture<'_>;
 }
 
-/// The only implementation in this slice: a source with nothing in it.
+/// A source with nothing in it. The honest default for a build with no
+/// control-plane work source bound.
 #[derive(Debug, Default)]
 pub struct NoWork;
 
 impl WorkSource for NoWork {
     fn pull(&self, _marketplace: Marketplace) -> PullFuture<'_> {
-        Box::pin(async { Ok(0) })
+        Box::pin(async { Ok(vec![WorkEvent::Idle]) })
     }
 }
 
-/// What one tick did, per marketplace, so the interface can name the device
-/// that did the work and the reason it did not.
+/// What this device knows about itself before it asks for work.
+///
+/// A struct rather than four parameters, so adding a fifth fact is a change to
+/// one type rather than to every caller, and so the three device-wide facts
+/// and the per-marketplace one are visibly different things.
+pub struct Readiness<'a> {
+    /// The last check-in said the seller signed this device out.
+    pub revoked: bool,
+    /// The last check-in found a console session to speak under.
+    pub signed_in: bool,
+    pub gate: &'a EntitlementGate,
+    /// Where this device's marketplace sessions are. Read per tick rather than
+    /// remembered, because the seller may sign in to a marketplace between two
+    /// ticks and should not have to wait for a third.
+    pub sessions: &'a dyn SessionStore,
+}
+
+/// What one tick did, per marketplace, in the order it happened.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TickReport {
-    pub pulled: Vec<(Marketplace, usize)>,
-    /// Marketplaces the entitlement gate refused: lapsed, revoked, or past
-    /// the grace deadline. Reported rather than silently skipped, because the
-    /// seller is owed the reason their sync stopped.
-    pub blocked: Vec<Marketplace>,
-    pub failed: Vec<(Marketplace, WorkError)>,
+    pub events: Vec<(Marketplace, WorkEvent)>,
+}
+
+impl TickReport {
+    /// The marketplaces this tick refused, and why. A view rather than a
+    /// second field, so there is one record of what happened.
+    #[must_use]
+    pub fn blocked(&self) -> Vec<(Marketplace, BlockReason)> {
+        self.events
+            .iter()
+            .filter_map(|(marketplace, event)| match *event {
+                WorkEvent::Blocked { reason } => Some((*marketplace, reason)),
+                WorkEvent::Idle
+                | WorkEvent::Held { .. }
+                | WorkEvent::Started { .. }
+                | WorkEvent::Settled { .. }
+                | WorkEvent::Parked { .. }
+                | WorkEvent::Abandoned { .. }
+                | WorkEvent::Failed { .. } => None,
+            })
+            .collect()
+    }
 }
 
 /// A deterministic, cron-shaped timer over the marketplaces this device works.
@@ -107,24 +148,71 @@ impl Scheduler {
         &self.marketplaces
     }
 
-    /// One tick. The gate is consulted per marketplace before the work source
-    /// is touched at all, so a refused marketplace produces no call rather
-    /// than a call whose result is discarded.
+    /// Why this marketplace is not to be worked, or `None` to go ahead.
+    ///
+    /// Ordered by what the seller can do about it: the sign-out they performed
+    /// themselves, then the console sign-in that resolves itself, then the
+    /// entitlement, then the marketplace login. A store that cannot be read is
+    /// not a refusal — it is a fault, and it travels as one.
+    async fn refusal(
+        &self,
+        ready: &Readiness<'_>,
+        marketplace: Marketplace,
+        now: Timestamp,
+    ) -> Result<Option<BlockReason>, WorkError> {
+        if ready.revoked {
+            return Ok(Some(BlockReason::Revoked));
+        }
+        if !ready.signed_in {
+            return Ok(Some(BlockReason::NotSignedIn));
+        }
+        if !ready.gate.may_work(marketplace, now) {
+            return Ok(Some(BlockReason::NotEntitled));
+        }
+        let held = ready
+            .sessions
+            .get(marketplace)
+            .await
+            .map_err(|why| WorkError(why.to_string()))?;
+        if held.is_none() {
+            return Ok(Some(BlockReason::NoSession));
+        }
+        Ok(None)
+    }
+
+    /// One tick. Every refusal is decided before the work source is reached,
+    /// so a refused marketplace produces no call rather than a call whose
+    /// result is discarded.
     pub async fn tick<W: WorkSource + ?Sized>(
         &self,
-        gate: &EntitlementGate,
+        ready: &Readiness<'_>,
         source: &W,
         now: Timestamp,
     ) -> TickReport {
         let mut report = TickReport::default();
         for marketplace in self.marketplaces.iter().copied() {
-            if !gate.may_work(marketplace, now) {
-                report.blocked.push(marketplace);
-                continue;
+            match self.refusal(ready, marketplace, now).await {
+                Ok(Some(reason)) => {
+                    report
+                        .events
+                        .push((marketplace, WorkEvent::Blocked { reason }));
+                    continue;
+                }
+                Ok(None) => {}
+                Err(why) => {
+                    report
+                        .events
+                        .push((marketplace, WorkEvent::Failed { detail: why.0 }));
+                    continue;
+                }
             }
             match source.pull(marketplace).await {
-                Ok(count) => report.pulled.push((marketplace, count)),
-                Err(why) => report.failed.push((marketplace, why)),
+                Ok(events) => report
+                    .events
+                    .extend(events.into_iter().map(|event| (marketplace, event))),
+                Err(why) => report
+                    .events
+                    .push((marketplace, WorkEvent::Failed { detail: why.0 })),
             }
         }
         report
@@ -133,8 +221,12 @@ impl Scheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::{NoWork, PullFuture, Scheduler, TickReport, WorkSource};
+    use super::{NoWork, PullFuture, Readiness, Scheduler, WorkSource};
+    use crate::device::DeviceId;
     use crate::entitlement::{Claims, Entitlement, EntitlementGate};
+    use crate::session::memory::MemorySessionStore;
+    use crate::session::{Cookie, CookieJar, SessionRecord, SessionStore};
+    use crate::state::{BlockReason, WorkEvent};
     use core::sync::atomic::{AtomicUsize, Ordering};
     use core::time::Duration;
     use tam_types::{Marketplace, Timestamp};
@@ -145,7 +237,7 @@ mod tests {
     const NOW: Timestamp = Timestamp(NOW_SECONDS * 1_000);
 
     /// A source that records that it was reached. The count is the whole point
-    /// of the gate test: a gate that refuses after the call has already gone
+    /// of the gate tests: a gate that refuses after the call has already gone
     /// out is not a gate.
     #[derive(Debug, Default)]
     struct CountingSource(AtomicUsize);
@@ -153,7 +245,11 @@ mod tests {
     impl WorkSource for CountingSource {
         fn pull(&self, _marketplace: Marketplace) -> PullFuture<'_> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Ok(1) })
+            Box::pin(async {
+                Ok(vec![WorkEvent::Started {
+                    item: "an-item".to_owned(),
+                }])
+            })
         }
     }
 
@@ -180,22 +276,138 @@ mod tests {
         )
     }
 
+    async fn sessions_for(marketplaces: &[Marketplace]) -> MemorySessionStore {
+        let store = MemorySessionStore::new();
+        for marketplace in marketplaces {
+            store
+                .put(&SessionRecord {
+                    marketplace: *marketplace,
+                    account_label: None,
+                    captured_at: NOW,
+                    device_id: DeviceId::from_raw("11112222333344445555666677778888"),
+                    jar: CookieJar::new(vec![Cookie {
+                        name: "TESSession".to_owned(),
+                        value: "value".to_owned(),
+                    }]),
+                })
+                .await
+                .expect("the fixture store accepts");
+        }
+        store
+    }
+
+    fn ready<'a>(gate: &'a EntitlementGate, sessions: &'a dyn SessionStore) -> Readiness<'a> {
+        Readiness {
+            revoked: false,
+            signed_in: true,
+            gate,
+            sessions,
+        }
+    }
+
     #[tokio::test]
     async fn a_closed_gate_blocks_every_marketplace_and_reaches_no_work_source() {
         let source = CountingSource::default();
+        let closed = EntitlementGate::closed();
+        let sessions = sessions_for(&[Marketplace::Tpt, Marketplace::Tes]).await;
         let report = scheduler()
-            .tick(&EntitlementGate::closed(), &source, NOW)
+            .tick(&ready(&closed, &sessions), &source, NOW)
             .await;
+
         assert_eq!(
-            report.blocked,
-            vec![Marketplace::Tpt, Marketplace::Tes],
-            "with no entitlement every marketplace is refused, and the seller is told which"
+            report.blocked(),
+            vec![
+                (Marketplace::Tpt, BlockReason::NotEntitled),
+                (Marketplace::Tes, BlockReason::NotEntitled),
+            ],
+            "with no entitlement every marketplace is refused, and the seller is told which and \
+             why"
         );
-        assert!(report.pulled.is_empty());
         assert_eq!(
             source.0.load(Ordering::SeqCst),
             0,
             "the gate must be consulted before the work source, not after"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revoked_device_stops_the_tick_before_anything_else_is_consulted() {
+        let source = CountingSource::default();
+        let gate = open_gate();
+        let sessions = sessions_for(&[Marketplace::Tpt, Marketplace::Tes]).await;
+        let report = scheduler()
+            .tick(
+                &Readiness {
+                    revoked: true,
+                    signed_in: true,
+                    gate: &gate,
+                    sessions: &sessions,
+                },
+                &source,
+                NOW,
+            )
+            .await;
+
+        assert_eq!(
+            report.blocked(),
+            vec![
+                (Marketplace::Tpt, BlockReason::Revoked),
+                (Marketplace::Tes, BlockReason::Revoked),
+            ],
+            "a device the seller signed out is refused as signed out, not as unentitled: the \
+             seller did this on purpose and is owed the reason they chose"
+        );
+        assert_eq!(source.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_device_nobody_is_signed_in_on_pulls_nothing() {
+        let source = CountingSource::default();
+        let gate = open_gate();
+        let sessions = sessions_for(&[Marketplace::Tpt, Marketplace::Tes]).await;
+        let report = scheduler()
+            .tick(
+                &Readiness {
+                    revoked: false,
+                    signed_in: false,
+                    gate: &gate,
+                    sessions: &sessions,
+                },
+                &source,
+                NOW,
+            )
+            .await;
+
+        assert_eq!(
+            report.blocked(),
+            vec![
+                (Marketplace::Tpt, BlockReason::NotSignedIn),
+                (Marketplace::Tes, BlockReason::NotSignedIn),
+            ],
+            "with no console session there is nothing to reach the control plane under"
+        );
+        assert_eq!(source.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_marketplace_with_no_stored_session_is_not_pulled_for() {
+        let source = CountingSource::default();
+        let gate = open_gate();
+        let sessions = sessions_for(&[Marketplace::Tes]).await;
+        let report = scheduler()
+            .tick(&ready(&gate, &sessions), &source, NOW)
+            .await;
+
+        assert_eq!(
+            report.blocked(),
+            vec![(Marketplace::Tpt, BlockReason::NoSession)],
+            "a marketplace the seller has not signed in to has no session to compose a request \
+             under, so no work is claimed for it"
+        );
+        assert_eq!(
+            source.0.load(Ordering::SeqCst),
+            1,
+            "and the marketplace that does have one is unaffected"
         );
     }
 
@@ -213,28 +425,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_open_gate_reaches_the_work_source_and_this_slice_has_nothing_in_it() {
-        let report = scheduler().tick(&open_gate(), &NoWork, NOW).await;
+    async fn a_ready_device_reaches_the_work_source_for_every_marketplace_it_holds() {
+        let gate = open_gate();
+        let sessions = sessions_for(&[Marketplace::Tpt, Marketplace::Tes]).await;
+        let report = scheduler()
+            .tick(&ready(&gate, &sessions), &NoWork, NOW)
+            .await;
+
         assert_eq!(
-            report,
-            TickReport {
-                pulled: vec![(Marketplace::Tpt, 0), (Marketplace::Tes, 0)],
-                blocked: vec![],
-                failed: vec![],
-            },
-            "the tick runs, and returns nothing to do, because no marketplace request is made \
-             anywhere in this slice"
+            report.events,
+            vec![
+                (Marketplace::Tpt, WorkEvent::Idle),
+                (Marketplace::Tes, WorkEvent::Idle),
+            ],
+            "the tick runs and the control plane answers idle, which is a different fact from \
+             being refused and is shown as one"
         );
+        assert!(report.blocked().is_empty());
     }
 
     #[tokio::test]
     async fn one_revoked_marketplace_blocks_only_itself() {
         let source = CountingSource::default();
+        let gate = gate_over(vec![Marketplace::Tes]);
+        let sessions = sessions_for(&[Marketplace::Tpt, Marketplace::Tes]).await;
         let report = scheduler()
-            .tick(&gate_over(vec![Marketplace::Tes]), &source, NOW)
+            .tick(&ready(&gate, &sessions), &source, NOW)
             .await;
-        assert_eq!(report.blocked, vec![Marketplace::Tpt]);
-        assert_eq!(report.pulled, vec![(Marketplace::Tes, 1)]);
+
+        assert_eq!(
+            report.blocked(),
+            vec![(Marketplace::Tpt, BlockReason::NotEntitled)]
+        );
+        assert_eq!(
+            report.events.last(),
+            Some(&(
+                Marketplace::Tes,
+                WorkEvent::Started {
+                    item: "an-item".to_owned()
+                }
+            ))
+        );
         assert_eq!(
             source.0.load(Ordering::SeqCst),
             1,
