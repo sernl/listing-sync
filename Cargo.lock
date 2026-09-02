@@ -2502,6 +2502,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-standards"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "tam-standards-fetch"
+version = "0.0.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tam-standards",
+ "tokio",
+]
+
+[[package]]
 name = "tam-storage"
 version = "0.0.0"
 dependencies = [
