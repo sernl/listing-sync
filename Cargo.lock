@@ -4966,6 +4966,7 @@ dependencies = [
  "subtle",
  "tam-authoring",
  "tam-domain",
+ "tam-engine",
  "tam-limits",
  "tam-marketplace",
  "tam-pipeline",

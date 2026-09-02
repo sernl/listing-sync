@@ -34,8 +34,8 @@ use tam_marketplace::{
 };
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
-    BudgetGrant, ElectionRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo,
-    RateBudgetRepo, TaxonomyRepo,
+    BudgetGrant, DeviceRef, ElectionRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem,
+    ProductRepo, RateBudgetRepo, TaxonomyRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
@@ -737,11 +737,8 @@ async fn pump(
     lease_state: Lease,
 ) -> (Result<RunVerdict, EngineError>, u32) {
     let pool = &engine_pool(app).await;
-    let leases = LeaseRepo::new(pool.clone());
-    let item = leases
-        .acquire("gauntlet", 300)
+    let item = claim(app, DEVICE, 300)
         .await
-        .expect("the acquire runs")
         .expect("the enqueued item leases");
     if lease_state == Lease::Stolen {
         sqlx::query(
@@ -1434,4 +1431,45 @@ async fn a_removal_that_does_not_take_records_what_it_addressed(pool: PgPool) {
          severing here releases the bound claim and the next create mints a duplicate \
          the ledger cannot reconcile"
     );
+}
+
+/// The seller's device, which the seller-device claim admits only if it is
+/// registered and unrevoked.
+const DEVICE: &str = "engine-test-device";
+
+/// Tes is the seller-device branch, so a fixture that means to lease claims as
+/// a device rather than through `acquire`, which no longer sees these items.
+/// The claim is org-pinned by forced row-level security, so it runs on the app
+/// pool; the engine pool is BYPASSRLS and would not be pinned by it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::LeasedItem> {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, \
+                             first_seen_at, last_seen_at) \
+         VALUES ($1, $2, 'fixture', 'linux', 'x86_64', '0.0.0', now(), now()) \
+         ON CONFLICT (org_id, id) DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(device)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture device registers");
+    tx.commit().await.expect("the fixture device commits");
+    match tam_storage::LeaseRepo::new(app.clone())
+        .claim_for_device(&DeviceRef { org: ORG, device }, ttl, 24, NOW)
+        .await
+        .expect("the claim runs")
+    {
+        tam_storage::DeviceClaim::Leased(item) => Some(*item),
+        tam_storage::DeviceClaim::Empty | tam_storage::DeviceClaim::HeldByAnotherDevice => None,
+    }
 }

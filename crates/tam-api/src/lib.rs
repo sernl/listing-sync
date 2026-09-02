@@ -34,6 +34,7 @@ pub mod stream;
 pub mod taxonomy;
 pub mod version;
 pub mod vocabulary;
+pub mod work;
 
 use axum::{
     http::StatusCode,
@@ -209,6 +210,10 @@ pub fn router(state: AppState) -> Router {
             "/{version}/devices/{device}/revoke",
             post(devices::revoke_device),
         )
+        // D1's declarative-intent surface: the device asks what is due and
+        // reports what it did. The server never says now.
+        .route("/{version}/devices/{device}/work", post(work::claim))
+        .route("/{version}/devices/{device}/settle", post(work::settle))
         .route("/{version}/connections", get(resources::list_connections))
         .route(
             "/{version}/connections/{connection}/revoke",

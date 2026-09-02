@@ -782,6 +782,30 @@ pub struct PreflightStreak {
     pub edge_only: bool,
 }
 
+/// Who is claiming: the tenant the claim speaks for and the device asking.
+///
+/// A pair rather than two parameters, because neither is meaningful alone —
+/// a device id is only ever read against the organisation that registered it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceRef<'a> {
+    pub org: OrgId,
+    pub device: &'a str,
+}
+
+/// What a device's claim came to.
+///
+/// `Empty` and `HeldByAnotherDevice` are deliberately different answers. Under
+/// the per-connection mutex a seller's second device loses at the index, and
+/// returning it the same `None` an empty queue returns would have it hot-poll
+/// a queue it can never win. Told the slot is taken, it backs off until the
+/// holder settles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceClaim {
+    Leased(Box<LeasedItem>),
+    Empty,
+    HeldByAnotherDevice,
+}
+
 pub struct LeaseRepo {
     pool: PgPool,
 }
@@ -796,12 +820,12 @@ impl LeaseRepo {
     ///
     /// Halts and the connection gate fail closed in the candidate filter.
     ///
-    /// The transport-class predicate that will confine this scan to
-    /// `official_api` items is deliberately not here yet: it strands the
-    /// seller-device branch until `claim_for_device` exists to drain it, so
-    /// the two land together. `marketplace_inventory.transport_class` and the
-    /// test binding it to `Marketplace::transport_class()` are already in
-    /// place, which is the half that makes the rule enforceable.
+    /// The transport predicate is what keeps the two branches off one queue:
+    /// this scan sees `official_api` items only, so a no-API marketplace
+    /// cannot be drained by a server process however the Rust side is wired.
+    /// `claim_for_device` drains the other branch, and the test binding the
+    /// column to `Marketplace::transport_class()` is what stops the two
+    /// disagreeing.
     ///
     /// The live-lease mutex is the partial unique index from migration 0044,
     /// scoped to the connection, so a seller's second device contends only
@@ -823,7 +847,10 @@ impl LeaseRepo {
                  SELECT ji.org_id, ji.id
                  FROM job_item ji
                  JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
+                 JOIN marketplace_inventory mi
+                   ON mi.code = j.inventory AND mi.marketplace = j.marketplace
                  WHERE ji.state = 'queued'
+                   AND mi.transport_class = 'official_api'
                    AND NOT EXISTS (SELECT 1 FROM inventory_halt ih
                          WHERE ih.inventory = j.inventory
                            AND ih.marketplace = j.marketplace)
@@ -901,6 +928,177 @@ impl LeaseRepo {
                 })
             })
             .transpose()
+    }
+
+    /// The seller's own device claiming its own tenant's work.
+    ///
+    /// Four things separate this from [`Self::acquire`], and each is a
+    /// capability the caller must not hold. The statement is org-pinned, so
+    /// forced row-level security fixes the tenant rather than trusting an
+    /// argument. It sees `seller_device` items only, which is the other half
+    /// of the transport split. It admits only a registered, unrevoked device.
+    /// And it carries the entitlement predicate beside the halts, so a forged
+    /// token still selects zero rows.
+    ///
+    /// Entitlement here is not "has paid". It is whether this organisation and
+    /// this device may work a marketplace right now, which is what D10 and D11
+    /// decide: a Free organisation is entitled within its quotas exactly as
+    /// `tam-limits` says, and what blocks is a plan that lapsed and stayed
+    /// lapsed past the grace. An organisation that never subscribed has no
+    /// row and is never blocked by this; only one that had a paid plan and let
+    /// it go stale is.
+    pub async fn claim_for_device(
+        &self,
+        claimant: &DeviceRef<'_>,
+        ttl_seconds: i64,
+        grace_hours: i64,
+        at: Timestamp,
+    ) -> Result<DeviceClaim, StorageError> {
+        let DeviceRef { org, device } = *claimant;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let leased = sqlx::query!(
+            r#"WITH candidate AS (
+                 SELECT ji.org_id, ji.id
+                 FROM job_item ji
+                 JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
+                 JOIN marketplace_inventory mi
+                   ON mi.code = j.inventory AND mi.marketplace = j.marketplace
+                 WHERE ji.state = 'queued'
+                   -- Defence in depth beside the row-level security this
+                   -- statement is meant to run under. Forced RLS pins the
+                   -- tenant for free under `tam_app`, but the pin is the only
+                   -- tenancy this statement has, and a pool wired to a
+                   -- BYPASSRLS role would silently claim another tenant's
+                   -- work. Reading the pinned setting rather than an argument
+                   -- keeps the tenant the server's, never the caller's.
+                   -- The two-argument form answers NULL rather than raising
+                   -- when the setting is absent, and a NULL comparison selects
+                   -- nothing: an unpinned caller claims no work at all, which
+                   -- is the fail-closed direction.
+                   AND ji.org_id = nullif(current_setting('app.current_org', true), '')::uuid
+                   AND mi.transport_class = 'seller_device'
+                   AND EXISTS (SELECT 1 FROM device d
+                         WHERE d.org_id = ji.org_id AND d.id = $1
+                           AND d.revoked_at IS NULL)
+                   AND NOT EXISTS (SELECT 1 FROM billing_subscription bs
+                         WHERE bs.org_id = ji.org_id
+                           AND bs.status NOT IN ('active', 'trialing')
+                           AND bs.current_period_end IS NOT NULL
+                           AND bs.current_period_end < now() - make_interval(hours => $3))
+                   AND NOT EXISTS (SELECT 1 FROM inventory_halt ih
+                         WHERE ih.inventory = j.inventory
+                           AND ih.marketplace = j.marketplace)
+                   AND NOT EXISTS (SELECT 1 FROM org_halt oh
+                         WHERE oh.org_id = ji.org_id)
+                   AND NOT EXISTS (SELECT 1 FROM org_inventory_halt oih
+                         WHERE oih.org_id = ji.org_id
+                           AND oih.inventory = j.inventory
+                           AND oih.marketplace = j.marketplace)
+                   AND EXISTS (SELECT 1 FROM connection c
+                         WHERE c.org_id = ji.org_id
+                           AND c.marketplace = j.marketplace
+                           AND c.state = 'linked')
+                   AND NOT EXISTS (SELECT 1 FROM job_item live
+                         WHERE live.org_id = ji.org_id
+                           AND live.marketplace = ji.marketplace
+                           AND live.state IN ('leased', 'running', 'verifying'))
+                 ORDER BY ji.created_at, ji.id
+                 LIMIT 1
+                 FOR UPDATE OF ji SKIP LOCKED
+               )
+               UPDATE job_item AS item
+               SET state = 'leased', lease_owner = $1,
+                   lease_expires_at = now() + make_interval(secs => $2)
+               FROM candidate, job j2
+               WHERE item.org_id = candidate.org_id AND item.id = candidate.id
+                 AND j2.org_id = item.org_id AND j2.id = item.job_id
+               RETURNING item.org_id, item.id, item.job_id, item.mapping_id,
+                 item.idempotency_key, item.lease_epoch, item.attempt_count,
+                 item.operation, item.subject_kind, item.subject_url,
+                 item.subject_numeric_id, item.state_from, item.state_to,
+                 item.requires_bound_on,
+                 j2.inventory AS "inventory!""#,
+            device,
+            f64::from(i32::try_from(ttl_seconds).unwrap_or(i32::MAX)),
+            i32::try_from(grace_hours).unwrap_or(i32::MAX),
+        )
+        .fetch_optional(&mut *tx)
+        .await;
+        let leased = match map_unique(leased, "job_item_one_live_lease_per_connection", || {
+            StorageError::StaleLease
+        }) {
+            Ok(row) => row,
+            // The mutex index fired between the candidate read and the write:
+            // a sibling device took the slot, which is the same answer the
+            // read below gives and never an empty queue.
+            Err(StorageError::StaleLease) => return Ok(DeviceClaim::HeldByAnotherDevice),
+            Err(error) => return Err(error),
+        };
+        let Some(row) = leased else {
+            // Nothing claimable. Whether that is an empty queue or a sibling
+            // device holding the slot is the difference between polling again
+            // soon and backing off, so it is read rather than assumed.
+            let held: Option<String> = sqlx::query_scalar!(
+                "SELECT lease_owner FROM job_item \
+                 WHERE org_id = $1 AND state IN ('leased', 'running', 'verifying') \
+                   AND lease_owner IS DISTINCT FROM $2 LIMIT 1",
+                uuid_to_db(org.0),
+                device,
+            )
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten();
+            tx.commit().await?;
+            return Ok(if held.is_some() {
+                DeviceClaim::HeldByAnotherDevice
+            } else {
+                DeviceClaim::Empty
+            });
+        };
+        let item = JobItemId(uuid_from_db(row.id));
+        let job = JobId(uuid_from_db(row.job_id));
+        // In the claim's own transaction, so progress names the device doing
+        // the work the moment the work is its to do.
+        append_event(
+            &mut tx,
+            &EventScope {
+                org,
+                job,
+                item: Some(item),
+            },
+            &JobEventPayload::ItemLeased {
+                worker: device.to_owned(),
+                lease_epoch: row.lease_epoch,
+            },
+            Stamp::system(SystemComponent::Device, at),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(DeviceClaim::Leased(Box::new(LeasedItem {
+            org: OrgId(uuid_from_db(row.org_id)),
+            item,
+            job,
+            mapping: MappingId(uuid_from_db(row.mapping_id)),
+            inventory: inventory_from_db(&row.inventory)?,
+            idempotency_key: IdempotencyKey(uuid_from_db(row.idempotency_key)),
+            operation: StoredOperation {
+                operation: row.operation,
+                subject_kind: row.subject_kind,
+                subject_url: row.subject_url,
+                subject_numeric_id: row.subject_numeric_id,
+                state_from: row.state_from,
+                state_to: row.state_to,
+            }
+            .decode()?,
+            lease_epoch: row.lease_epoch,
+            attempt_count: row.attempt_count,
+            requires_bound_on: row
+                .requires_bound_on
+                .as_deref()
+                .map(inventory_from_db)
+                .transpose()?,
+        })))
     }
 
     /// Every fenced write shares this shape: the epoch must still match, and

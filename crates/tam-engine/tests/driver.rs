@@ -24,7 +24,7 @@ use tam_marketplace::{
     ListingState, MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle,
     RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
 };
-use tam_storage::{JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
+use tam_storage::{DeviceRef, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
 use tam_types::{
     Actor, ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId, Stamp,
     SystemComponent, Timestamp, Uuid,
@@ -356,16 +356,14 @@ const LEASE_SECONDS: i64 = 600;
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
 async fn drive(
+    app: &PgPool,
     engine: &PgPool,
-    leases: &LeaseRepo,
     adapter: &ScriptedAdapter,
     strategy: CreateStrategy,
     at: Timestamp,
 ) -> RunVerdict {
-    let lease = leases
-        .acquire("driver-test", LEASE_SECONDS)
+    let lease = claim(app, DEVICE, LEASE_SECONDS)
         .await
-        .expect("the scan runs")
         .expect("the item leases");
     let clock = SteppingClock(AtomicI64::new(at.0 + 1_000));
     let ledger = PgLedger::new(engine.clone(), lease.job);
@@ -392,7 +390,8 @@ async fn drive(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn requeue(engine: &PgPool, leases: &LeaseRepo, at: Timestamp) -> Timestamp {
+async fn requeue(engine: &PgPool, at: Timestamp) -> Timestamp {
+    let leases = LeaseRepo::new(engine.clone());
     // The lease expiry is the database's own fact now, so a fixture cannot
     // reach it by advancing its clock: it ages the row instead, which is the
     // same condition a worker that went away leaves behind.
@@ -438,24 +437,14 @@ async fn a_preflight_that_stays_indeterminate_stops_wedging_the_queue(app: PgPoo
         )]);
     let engine = engine_pool(&app).await;
     seed(&app, &engine).await;
-    let leases = LeaseRepo::new(engine.clone());
 
     let mut at = T0;
     let mut verdicts = Vec::new();
     for lease in 0..PREFLIGHT_FAILURES_MAX {
         if lease > 0 {
-            at = requeue(&engine, &leases, at).await;
+            at = requeue(&engine, at).await;
         }
-        verdicts.push(
-            drive(
-                &engine,
-                &leases,
-                &adapter,
-                CreateStrategy::HaltOnAmbiguity,
-                at,
-            )
-            .await,
-        );
+        verdicts.push(drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, at).await);
     }
 
     let (last, earlier) = verdicts.split_last().expect("the loop ran at least once");
@@ -521,11 +510,7 @@ async fn a_preflight_that_stays_indeterminate_stops_wedging_the_queue(app: PgPoo
     assert_eq!(notified, 1, "the seller is asked to re-link exactly once");
 
     assert!(
-        leases
-            .acquire("driver-test", LEASE_SECONDS)
-            .await
-            .expect("the scan runs")
-            .is_none(),
+        claim(&app, DEVICE, LEASE_SECONDS).await.is_none(),
         "the gated connection holds the tenant's queue back rather than burning it"
     );
     sqlx::query("UPDATE connection SET state = 'linked'")
@@ -533,11 +518,7 @@ async fn a_preflight_that_stays_indeterminate_stops_wedging_the_queue(app: PgPoo
         .await
         .expect("the seller re-links");
     assert!(
-        leases
-            .acquire("driver-test", LEASE_SECONDS)
-            .await
-            .expect("the scan runs")
-            .is_none(),
+        claim(&app, DEVICE, LEASE_SECONDS).await.is_none(),
         "and the settled item is never re-selected, so the queue drains past it once the \
          connection is healthy again"
     );
@@ -559,25 +540,10 @@ async fn a_healthy_preflight_wipes_the_streak(app: PgPool) {
     ]);
     let engine = engine_pool(&app).await;
     seed(&app, &engine).await;
-    let leases = LeaseRepo::new(engine.clone());
 
-    let first = drive(
-        &engine,
-        &leases,
-        &adapter,
-        CreateStrategy::HaltOnAmbiguity,
-        T0,
-    )
-    .await;
-    let at = requeue(&engine, &leases, T0).await;
-    let second = drive(
-        &engine,
-        &leases,
-        &adapter,
-        CreateStrategy::HaltOnAmbiguity,
-        at,
-    )
-    .await;
+    let first = drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, T0).await;
+    let at = requeue(&engine, T0).await;
+    let second = drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, at).await;
     assert!(
         matches!(first, RunVerdict::Abandoned { .. })
             && matches!(second, RunVerdict::Abandoned { .. }),
@@ -589,15 +555,8 @@ async fn a_healthy_preflight_wipes_the_streak(app: PgPool) {
         .expect("the item row reads");
     assert_eq!(streak, 2, "both failures counted");
 
-    let at = requeue(&engine, &leases, at).await;
-    let third = drive(
-        &engine,
-        &leases,
-        &adapter,
-        CreateStrategy::HaltOnAmbiguity,
-        at,
-    )
-    .await;
+    let at = requeue(&engine, at).await;
+    let third = drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, at).await;
     assert_eq!(
         third,
         RunVerdict::Settled(ItemOutcome::Succeeded),
@@ -643,29 +602,14 @@ async fn an_item_out_of_attempt_budget_still_settles_on_the_connection(app: PgPo
         .execute(&engine)
         .await
         .expect("the item takes its history");
-    let leases = LeaseRepo::new(engine.clone());
 
-    let first = drive(
-        &engine,
-        &leases,
-        &adapter,
-        CreateStrategy::HaltOnAmbiguity,
-        T0,
-    )
-    .await;
+    let first = drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, T0).await;
     assert!(
         matches!(first, RunVerdict::Abandoned { .. }),
         "a fourth attempt is still affordable, so the stall bias holds: {first:?}"
     );
-    let at = requeue(&engine, &leases, T0).await;
-    let second = drive(
-        &engine,
-        &leases,
-        &adapter,
-        CreateStrategy::HaltOnAmbiguity,
-        at,
-    )
-    .await;
+    let at = requeue(&engine, T0).await;
+    let second = drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, at).await;
     assert_eq!(
         second,
         RunVerdict::Settled(ItemOutcome::Blocked),
@@ -726,16 +670,8 @@ async fn a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further(app: 
     let engine = engine_pool(&app).await;
     let mapping = seed(&app, &engine).await;
     enqueue_sibling(&engine, mapping, tam_domain::ItemOperation::Create).await;
-    let leases = LeaseRepo::new(engine.clone());
 
-    let verdict = drive(
-        &engine,
-        &leases,
-        &adapter,
-        CreateStrategy::HaltOnAmbiguity,
-        T0,
-    )
-    .await;
+    let verdict = drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, T0).await;
     assert_eq!(
         verdict,
         RunVerdict::Settled(ItemOutcome::Ambiguous),
@@ -757,11 +693,7 @@ async fn a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further(app: 
     // the same mapping; if the scan hands it out, the next run posts a second
     // draft over a listing that already exists.
     assert!(
-        leases
-            .acquire("driver-test", LEASE_SECONDS)
-            .await
-            .expect("the scan runs")
-            .is_none(),
+        claim(&app, DEVICE, LEASE_SECONDS).await.is_none(),
         "no second create is leasable while the ambiguity stands"
     );
     let binding: String = sqlx::query_scalar("SELECT binding_state FROM mapping LIMIT 1")
@@ -797,26 +729,18 @@ async fn a_challenge_on_a_revise_settles_blocked_and_leaves_the_connection_linke
     let engine = engine_pool(&app).await;
     let mapping = seed(&app, &engine).await;
     enqueue_sibling(&engine, mapping, revision()).await;
-    let leases = LeaseRepo::new(engine.clone());
 
     // The create leases first (FIFO on created_at); settle it out of the way
     // so the revise is what the next scan hands over.
-    let first = drive(
-        &engine,
-        &leases,
-        &adapter,
-        CreateStrategy::HaltOnAmbiguity,
-        T0,
-    )
-    .await;
+    let first = drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, T0).await;
     assert_eq!(
         first,
         RunVerdict::Settled(ItemOutcome::Succeeded),
         "the create is fixture, not subject: {first:?}"
     );
     let verdict = drive(
+        &app,
         &engine,
-        &leases,
         &adapter,
         CreateStrategy::HaltOnAmbiguity,
         Timestamp(T0.0 + 1_000),
@@ -880,24 +804,14 @@ async fn a_preflight_challenge_settles_blocked_without_gating(app: PgPool) {
         )]);
     let engine = engine_pool(&app).await;
     seed(&app, &engine).await;
-    let leases = LeaseRepo::new(engine.clone());
 
     let mut at = T0;
     let mut verdicts = Vec::new();
     for lease in 0..PREFLIGHT_FAILURES_MAX {
         if lease > 0 {
-            at = requeue(&engine, &leases, at).await;
+            at = requeue(&engine, at).await;
         }
-        verdicts.push(
-            drive(
-                &engine,
-                &leases,
-                &adapter,
-                CreateStrategy::HaltOnAmbiguity,
-                at,
-            )
-            .await,
-        );
+        verdicts.push(drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, at).await);
     }
     let last = verdicts.last().expect("the loop ran at least once");
     assert_eq!(
@@ -1008,24 +922,14 @@ async fn a_mixed_preflight_streak_takes_the_seller_actionable_floor(app: PgPool)
     ]);
     let engine = engine_pool(&app).await;
     seed(&app, &engine).await;
-    let leases = LeaseRepo::new(engine.clone());
 
     let mut at = T0;
     let mut verdicts = Vec::new();
     for lease in 0..PREFLIGHT_FAILURES_MAX {
         if lease > 0 {
-            at = requeue(&engine, &leases, at).await;
+            at = requeue(&engine, at).await;
         }
-        verdicts.push(
-            drive(
-                &engine,
-                &leases,
-                &adapter,
-                CreateStrategy::HaltOnAmbiguity,
-                at,
-            )
-            .await,
-        );
+        verdicts.push(drive(&app, &engine, &adapter, CreateStrategy::HaltOnAmbiguity, at).await);
     }
     assert_eq!(
         verdicts.last(),
@@ -1061,4 +965,45 @@ async fn a_mixed_preflight_streak_takes_the_seller_actionable_floor(app: PgPool)
         connection, "needs_reauth",
         "and the gate goes up, because a re-link is what clears the half we can name"
     );
+}
+
+/// The seller's device, which the seller-device claim admits only if it is
+/// registered and unrevoked.
+const DEVICE: &str = "engine-test-device";
+
+/// Tes is the seller-device branch, so a fixture that means to lease claims as
+/// a device rather than through `acquire`, which no longer sees these items.
+/// The claim is org-pinned by forced row-level security, so it runs on the app
+/// pool; the engine pool is BYPASSRLS and would not be pinned by it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::LeasedItem> {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, \
+                             first_seen_at, last_seen_at) \
+         VALUES ($1, $2, 'fixture', 'linux', 'x86_64', '0.0.0', now(), now()) \
+         ON CONFLICT (org_id, id) DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(device)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture device registers");
+    tx.commit().await.expect("the fixture device commits");
+    match tam_storage::LeaseRepo::new(app.clone())
+        .claim_for_device(&DeviceRef { org: ORG, device }, ttl, 24, T0)
+        .await
+        .expect("the claim runs")
+    {
+        tam_storage::DeviceClaim::Leased(item) => Some(*item),
+        tam_storage::DeviceClaim::Empty | tam_storage::DeviceClaim::HeldByAnotherDevice => None,
+    }
 }

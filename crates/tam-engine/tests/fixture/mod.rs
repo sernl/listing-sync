@@ -7,7 +7,7 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
-use tam_storage::{JobRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
+use tam_storage::{DeviceRef, JobRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
 use tam_types::{
     Actor, ContentHash, CopyFormat, InventoryId, JobId, MappingId, OrgId, Stamp, SystemComponent,
     Timestamp, Uuid,
@@ -149,4 +149,46 @@ pub(crate) async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
         .await
         .expect("the job enqueues");
     mapping
+}
+
+/// The seller's device, which the seller-device claim admits only if it is
+/// registered and unrevoked.
+pub(crate) const DEVICE: &str = "engine-test-device";
+
+/// Tes is the seller-device branch, so a fixture that means to lease claims as
+/// a device rather than through `acquire`, which no longer sees these items.
+///
+/// The claim is org-pinned by forced row-level security, so it runs on the app
+/// pool; the engine pool is BYPASSRLS and would not be pinned by it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+pub(crate) async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::LeasedItem> {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, \
+                             first_seen_at, last_seen_at) \
+         VALUES ($1, $2, 'fixture', 'linux', 'x86_64', '0.0.0', now(), now()) \
+         ON CONFLICT (org_id, id) DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(device)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture device registers");
+    tx.commit().await.expect("the fixture device commits");
+    match tam_storage::LeaseRepo::new(app.clone())
+        .claim_for_device(&DeviceRef { org: ORG, device }, ttl, 24, T0)
+        .await
+        .expect("the claim runs")
+    {
+        tam_storage::DeviceClaim::Leased(item) => Some(*item),
+        tam_storage::DeviceClaim::Empty | tam_storage::DeviceClaim::HeldByAnotherDevice => None,
+    }
 }

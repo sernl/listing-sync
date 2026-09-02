@@ -14,9 +14,9 @@ use tam_domain::{
 };
 use tam_marketplace::{IdempotencyKey, ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
-    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, ItemVerdict, JobRepo,
-    LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewAttempt, NewJob, NewJobItem, ProductRepo,
-    StorageError, WriteAttemptRepo,
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, DeviceClaim, DeviceRef,
+    ItemVerdict, JobRepo, LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewAttempt, NewJob,
+    NewJobItem, ProductRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
@@ -191,15 +191,53 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
             }],
         )
         .await?;
+    // Tes is the seller-device branch, so the fixture claims as a device
+    // rather than through the server scan, which no longer sees these items.
+    let mut tx = app.begin().await?;
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, \
+                             first_seen_at, last_seen_at) \
+         VALUES ($1, $2, 'fixture', 'linux', 'x86_64', '0.0.0', now(), now()) \
+         ON CONFLICT (org_id, id) DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(DEVICE)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(())
+}
+
+const DEVICE: &str = "bind-test";
+
+/// The seller-device claim, mapped back to the shape these fixtures expect.
+async fn claim_lease(app: &PgPool) -> Result<Option<LeaseRef>, StorageError> {
+    Ok(
+        match LeaseRepo::new(app.clone())
+            .claim_for_device(
+                &DeviceRef {
+                    org: ORG,
+                    device: DEVICE,
+                },
+                600,
+                24,
+                T0,
+            )
+            .await?
+        {
+            DeviceClaim::Leased(item) => Some(item.lease_ref()),
+            DeviceClaim::Empty | DeviceClaim::HeldByAnotherDevice => None,
+        },
+    )
 }
 
 async fn seeded_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, StorageError> {
     seed(app, engine).await?;
-    Ok(LeaseRepo::new(engine.clone())
-        .acquire("bind-test", 600)
-        .await?
-        .map(|leased| leased.lease_ref()))
+    claim_lease(app).await
 }
 
 /// A second product and mapping in the same organisation and inventory, so
@@ -241,10 +279,7 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
             }],
         )
         .await?;
-    Ok(LeaseRepo::new(engine.clone())
-        .acquire("bind-test", 600)
-        .await?
-        .map(|leased| leased.lease_ref()))
+    claim_lease(app).await
 }
 
 /// One whole write attempt: opened against the mapping, then settled

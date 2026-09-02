@@ -17,9 +17,9 @@ use tam_marketplace::{
 };
 use tam_storage::{
     revive_by_gap, revive_on, settle_if_complete, AttemptIntent, BudgetGrant, ConnectionAudit,
-    HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LeaseRepo, MappingRepo, NewAttempt,
-    NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo, StorageError,
-    WriteAttemptRepo, REAUTH_REQUIRED,
+    DeviceClaim, DeviceRef, HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LeaseRepo,
+    LeasedItem, MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
+    ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, REAUTH_REQUIRED,
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -156,10 +156,62 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
         .expect("the fixture connection inserts");
         tx.commit().await.expect("the fixture connection commits");
     }
+    register_device(app, org, DEVICE).await;
     Tenant {
         org,
         product,
         mapping,
+    }
+}
+
+/// The seller's device, which the seller-device claim admits only if it is
+/// registered and unrevoked.
+const DEVICE: &str = "fixture-device";
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn register_device(app: &PgPool, org: OrgId, device: &str) {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, \
+                             first_seen_at, last_seen_at) \
+         VALUES ($1, $2, 'fixture', 'linux', 'x86_64', '0.0.0', now(), now()) \
+         ON CONFLICT (org_id, id) DO NOTHING",
+    )
+    .bind(db_uuid(org.0))
+    .bind(device)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture device registers");
+    tx.commit().await.expect("the fixture device commits");
+}
+
+/// The seller-device claim, as the tests take it. `acquire` is the other
+/// branch's scan and no longer sees a Tes or Tpt item at all, so a fixture
+/// that means to lease one claims as a device.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn claim(app: &PgPool, org: OrgId, device: &str, ttl: i64) -> Option<LeasedItem> {
+    // Each worker name is a device now, so the fixture registers whichever one
+    // is claiming. Registration is what these tests assume rather than what
+    // they are about; the tests that are about it revoke explicitly.
+    register_device(app, org, device).await;
+    match LeaseRepo::new(app.clone())
+        .claim_for_device(&DeviceRef { org, device }, ttl, 24, T0)
+        .await
+        .expect("the claim runs")
+    {
+        DeviceClaim::Leased(item) => Some(*item),
+        DeviceClaim::Empty | DeviceClaim::HeldByAnotherDevice => None,
     }
 }
 
@@ -236,22 +288,17 @@ async fn the_tenant_mutex_holds_and_parallelism_is_inter_tenant(app: PgPool) {
     enqueue_one(&engine, &tenant_b, 0x13, 0x23).await;
     let expected_orgs = [tenant_a.org, tenant_b.org];
 
-    let leases = LeaseRepo::new(engine.clone());
-    let first = leases
-        .acquire("w1", 60)
+    let first = claim(&app, tenant_a.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("something is leasable");
-    let second = leases
-        .acquire("w2", 60)
+    let second = claim(&app, tenant_b.org, "w2", 60)
         .await
-        .expect("the scan runs")
         .expect("the other tenant is leasable");
     assert_ne!(
         first.org, second.org,
         "one live lease per tenant: the second lease must come from the other org"
     );
-    let third = leases.acquire("w3", 60).await.expect("the scan runs");
+    let third = claim(&app, tenant_a.org, "w3", 60).await;
     assert!(
         third.is_none(),
         "both tenants hold a live lease, so nothing is leasable"
@@ -270,11 +317,18 @@ async fn the_tenant_mutex_holds_and_parallelism_is_inter_tenant(app: PgPool) {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn park_leased(leases: &LeaseRepo, worker: &str, gate: &str, park_for: i64) {
-    let lease = leases
-        .acquire(worker, 60)
+async fn park_leased(
+    app: &PgPool,
+    engine: &PgPool,
+    claimant: DeviceRef<'_>,
+    gate: &str,
+    park_for: i64,
+) {
+    // The claim is org-pinned and runs as the app role; the park is the
+    // engine's fenced write and runs as the engine role, which needs no pin.
+    let leases = LeaseRepo::new(engine.clone());
+    let lease = claim(app, claimant.org, claimant.device, 60)
         .await
-        .expect("the scan runs")
         .expect("the item leases");
     leases
         .park(&lease.lease_ref(), gate, park_for)
@@ -314,7 +368,17 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
     let tenant = seed_tenant(&app, 0xC1, true).await;
     enqueue_one(&engine, &tenant, 0x51, 0x52).await;
     let leases = LeaseRepo::new(engine.clone());
-    park_leased(&leases, "w1", "reconciliation", 1).await;
+    park_leased(
+        &app,
+        &engine,
+        DeviceRef {
+            org: tenant.org,
+            device: "w1",
+        },
+        "reconciliation",
+        1,
+    )
+    .await;
 
     assert_eq!(
         leases
@@ -367,7 +431,17 @@ async fn a_gate_that_never_clears_settles_into_a_row_the_item_page_can_still_rea
     let job = JobId(Uuid([0x59; 16]));
     let item = enqueue_operation(&engine, &tenant, 0x59, 0x5A, ItemOperation::Create).await;
     let leases = LeaseRepo::new(engine.clone());
-    park_leased(&leases, "w1", "reconciliation", 1).await;
+    park_leased(
+        &app,
+        &engine,
+        DeviceRef {
+            org: tenant.org,
+            device: "w1",
+        },
+        "reconciliation",
+        1,
+    )
+    .await;
 
     // The park expiry is the database's own fact now, so a fixture that means
     // to expire one ages the row rather than naming a later instant.
@@ -413,7 +487,17 @@ async fn an_expired_challenge_park_is_left_where_the_driver_put_it(app: PgPool) 
     enqueue_one(&engine, &tenant, 0x53, 0x54).await;
     let leases = LeaseRepo::new(engine.clone());
     // The driver writes the challenge's own debug form here, never a gate.
-    park_leased(&leases, "w1", "Captcha", 1).await;
+    park_leased(
+        &app,
+        &engine,
+        DeviceRef {
+            org: tenant.org,
+            device: "w1",
+        },
+        "Captcha",
+        1,
+    )
+    .await;
 
     assert_eq!(
         leases
@@ -440,9 +524,18 @@ async fn resolving_one_gap_revives_every_item_parked_behind_it(app: PgPool) {
     for seed in [0x61_u8, 0x63, 0x65] {
         enqueue_one(&engine, &tenant, seed, seed.wrapping_add(1)).await;
     }
-    let leases = LeaseRepo::new(engine.clone());
     for worker in ["w1", "w2", "w3"] {
-        park_leased(&leases, worker, "reconciliation", 86_400).await;
+        park_leased(
+            &app,
+            &engine,
+            DeviceRef {
+                org: tenant.org,
+                device: worker,
+            },
+            "reconciliation",
+            86_400,
+        )
+        .await;
     }
 
     let mut tx = app.begin().await.expect("the answering transaction opens");
@@ -471,9 +564,28 @@ async fn an_election_revive_touches_only_its_own_mapping(app: PgPool) {
     let second = seed_tenant(&app, 0xC8, true).await;
     enqueue_one(&engine, &first, 0x71, 0x72).await;
     enqueue_one(&engine, &second, 0x73, 0x74).await;
-    let leases = LeaseRepo::new(engine.clone());
-    park_leased(&leases, "w1", "election", 86400).await;
-    park_leased(&leases, "w2", "election", 86400).await;
+    park_leased(
+        &app,
+        &engine,
+        DeviceRef {
+            org: first.org,
+            device: "w1",
+        },
+        "election",
+        86400,
+    )
+    .await;
+    park_leased(
+        &app,
+        &engine,
+        DeviceRef {
+            org: second.org,
+            device: "w2",
+        },
+        "election",
+        86400,
+    )
+    .await;
 
     let mut tx = app.begin().await.expect("the answering transaction opens");
     let revived = revive_on(&mut tx, first.org, first.mapping, "election", T0)
@@ -517,10 +629,8 @@ async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
         .expect("the two-item job enqueues");
 
     let leases = LeaseRepo::new(engine.clone());
-    let one = leases
-        .acquire("w1", 60)
+    let one = claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the first item leases");
     leases
         .settle(&one.lease_ref(), &verdict(ItemOutcome::Succeeded), T0)
@@ -533,10 +643,8 @@ async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
         "a job with an unsettled item has not finished"
     );
 
-    let two = leases
-        .acquire("w1", 60)
+    let two = claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the second item leases");
     leases
         .settle(&two.lease_ref(), &verdict(ItemOutcome::Failed), T0)
@@ -569,10 +677,8 @@ async fn a_job_whose_last_item_exhausts_its_attempts_still_says_it_finished(app:
     let tenant = seed_tenant(&app, 0xC6, true).await;
     enqueue_one(&engine, &tenant, 0x91, 0x92).await;
     let leases = LeaseRepo::new(engine.clone());
-    leases
-        .acquire("w1", 60)
+    claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the item leases");
 
     // The commonest bulk failure: the item dies in the maintenance loop's own
@@ -606,10 +712,8 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
     enqueue_one(&engine, &tenant, 0x11, 0x21).await;
 
     let leases = LeaseRepo::new(engine.clone());
-    let lease = leases
-        .acquire("w1", 60)
+    let lease = claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the item leases");
     // The lease expiry is the database's own fact now, so a fixture that means
     // to expire one ages the row rather than naming a later instant.
@@ -636,10 +740,8 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
         "the previous holder's write must be fenced out, not raced"
     );
 
-    let release = leases
-        .acquire("w2", 60)
+    let release = claim(&app, tenant.org, "w2", 60)
         .await
-        .expect("the scan runs")
         .expect("the stolen item re-leases");
     assert_eq!(
         release.lease_epoch,
@@ -678,7 +780,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
         .expect("the halt raises");
 
     let leases = LeaseRepo::new(engine.clone());
-    let nothing = leases.acquire("w1", 60).await.expect("the scan runs");
+    let nothing = claim(&app, halted.org, "w1", 60).await;
     assert!(
         nothing.is_none(),
         "one tenant is halted and the other has no linked connection; both must be refused"
@@ -700,10 +802,16 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
     .await
     .expect("linking the connection");
     tx.commit().await.expect("the link commits");
-    let leased = leases
-        .acquire("w1", 60)
+    // The device claim is org-pinned, so each tenant is asked separately
+    // rather than one cross-tenant scan choosing between them. The gate's
+    // meaning is unchanged: the halted tenant is still refused, and the one
+    // whose connection was just linked is not.
+    assert!(
+        claim(&app, halted.org, "w1", 60).await.is_none(),
+        "the halt still stands, so that tenant is still refused"
+    );
+    let leased = claim(&app, unlinked.org, "w2", 60)
         .await
-        .expect("the scan runs")
         .expect("the linked tenant now leases");
     assert_eq!(leased.org, unlinked.org, "only the linked tenant leases");
 
@@ -739,7 +847,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
         .await
         .expect("the item settles");
     enqueue_one(&engine, &unlinked, 0x13, 0x23).await;
-    let gated = leases.acquire("w1", 60).await.expect("the scan runs");
+    let gated = claim(&app, halted.org, "w1", 60).await;
     assert!(
         gated.is_none(),
         "needs_reauth is the gate: nothing leases behind it"
@@ -753,10 +861,8 @@ async fn the_attempt_budget_settles_failed_rather_than_looping(app: PgPool) {
     let item_id = enqueue_one(&engine, &tenant, 0x11, 0x21).await;
 
     let leases = LeaseRepo::new(engine.clone());
-    leases
-        .acquire("w1", 60)
+    claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the item leases");
     // The lease expiry is the database's own fact now, so a fixture that means
     // to expire one ages the row rather than naming a later instant.
@@ -815,10 +921,8 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
         .expect("the fixture job enqueues");
 
     let leases = LeaseRepo::new(engine.clone());
-    let first = leases
-        .acquire("w1", 60)
+    let first = claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the first item leases");
     assert_eq!(first.item, rejected, "the oldest item leases first");
     leases
@@ -834,10 +938,8 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
         .await
         .expect("the rejected item settles");
 
-    let second = leases
-        .acquire("w2", 60)
+    let second = claim(&app, tenant.org, "w2", 60)
         .await
-        .expect("the scan runs")
         .expect("the second item leases");
     assert_eq!(
         second.item, succeeded,
@@ -1067,16 +1169,11 @@ async fn an_enqueued_removal_leases_as_a_removal(app: PgPool) {
     enqueue_operation(&engine, &remover, 0x11, 0x21, removal.clone()).await;
     enqueue_operation(&engine, &reviser, 0x12, 0x22, revision.clone()).await;
 
-    let leases = LeaseRepo::new(engine.clone());
-    let first = leases
-        .acquire("w1", 60)
+    let first = claim(&app, remover.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("something is leasable");
-    let second = leases
-        .acquire("w2", 60)
+    let second = claim(&app, reviser.org, "w2", 60)
         .await
-        .expect("the scan runs")
         .expect("the other tenant is leasable");
     for leased in [first, second] {
         let expected = if leased.org == remover.org {
@@ -1128,10 +1225,8 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
         "the first carrier of the key creates a job"
     );
 
-    let leased = LeaseRepo::new(engine.clone())
-        .acquire("w1", 60)
+    let leased = claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the enqueued removal is leasable");
     assert_eq!(
         leased.operation, removal,
@@ -1391,13 +1486,15 @@ async fn enqueue_on(engine: &PgPool, tenant: &Tenant, onto: &EnqueueOnto) -> Job
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn park_mid_submit(engine: &PgPool, worker: &str, mapping: MappingId) -> JobItemId {
+async fn park_mid_submit(
+    app: &PgPool,
+    engine: &PgPool,
+    org: OrgId,
+    worker: &str,
+    mapping: MappingId,
+) -> JobItemId {
     let leases = LeaseRepo::new(engine.clone());
-    let lease = leases
-        .acquire(worker, 60)
-        .await
-        .expect("the scan runs")
-        .expect("the item leases");
+    let lease = claim(app, org, worker, 60).await.expect("the item leases");
     assert_eq!(
         lease.mapping, mapping,
         "the fixture depends on FIFO order, so the expected item must be the one leased"
@@ -1521,10 +1618,13 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     assert_eq!(
-        park_mid_submit(&engine, "w1", tenant.mapping).await,
+        park_mid_submit(&app, &engine, tenant.org, "w1", tenant.mapping).await,
         tes_item
     );
-    assert_eq!(park_mid_submit(&engine, "w2", tpt_mapping).await, tpt_item);
+    assert_eq!(
+        park_mid_submit(&app, &engine, tenant.org, "w2", tpt_mapping).await,
+        tpt_item
+    );
     // What `Effect::RequeueBehindGate` does the moment the machine parks.
     leases
         .gate_connection(tenant.org, InventoryId::TesGb, T0)
@@ -1579,10 +1679,8 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
         "a marketplace that was not re-linked keeps both its park and its fence"
     );
 
-    let resumed = leases
-        .acquire("w3", 60)
+    let resumed = claim(&app, tenant.org, "w3", 60)
         .await
-        .expect("the scan runs")
         .expect("the revived item leases again");
     assert_eq!(
         resumed.item, tes_item,
@@ -1650,7 +1748,7 @@ async fn a_relinked_create_stays_parked_behind_its_own_duplicate_fence(app: PgPo
 
     let leases = LeaseRepo::new(engine.clone());
     assert_eq!(
-        park_mid_submit(&engine, "w1", tenant.mapping).await,
+        park_mid_submit(&app, &engine, tenant.org, "w1", tenant.mapping).await,
         created
     );
     leases
@@ -1725,7 +1823,7 @@ async fn a_released_publish_names_no_listing(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     assert_eq!(
-        park_mid_submit(&engine, "w1", tenant.mapping).await,
+        park_mid_submit(&app, &engine, tenant.org, "w1", tenant.mapping).await,
         published
     );
     leases
@@ -1844,18 +1942,15 @@ async fn two_inventories_of_one_marketplace_cannot_both_hold_a_live_lease(app: P
     )
     .await;
 
-    let leases = LeaseRepo::new(engine.clone());
-    let first = leases
-        .acquire("w1", 60)
+    let first = claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the first item leases");
     assert_eq!(
         first.inventory,
         InventoryId::TesGb,
         "the fixture depends on FIFO order"
     );
-    let second = leases.acquire("w2", 60).await.expect("the scan runs");
+    let second = claim(&app, tenant.org, "w2", 60).await;
     assert!(
         second.is_none(),
         "tes_gb and tes_us are one Tes login, so the second claimant must find the slot \
@@ -1904,16 +1999,11 @@ async fn two_marketplaces_can_each_hold_a_live_lease(app: PgPool) {
     )
     .await;
 
-    let leases = LeaseRepo::new(engine.clone());
-    let first = leases
-        .acquire("w1", 60)
+    let first = claim(&app, tenant.org, "w1", 60)
         .await
-        .expect("the scan runs")
         .expect("the first item leases");
-    let second = leases
-        .acquire("w2", 60)
+    let second = claim(&app, tenant.org, "w2", 60)
         .await
-        .expect("the scan runs")
         .expect("a second marketplace is a second session, so it leases too");
     assert_ne!(
         first.inventory, second.inventory,
@@ -1933,11 +2023,8 @@ async fn exactly_one_open_per_mapping_survives_two_devices(app: PgPool) {
     let engine = engine_pool(&app).await;
     let tenant = seed_tenant(&app, 0xB1, true).await;
     enqueue_one(&engine, &tenant, 0xB2, 0xB3).await;
-    let leases = LeaseRepo::new(engine.clone());
-    let lease = leases
-        .acquire("device-a", 60)
+    let lease = claim(&app, tenant.org, "device-a", 60)
         .await
-        .expect("the scan runs")
         .expect("the item leases");
     let attempts = WriteAttemptRepo::new(engine.clone());
     let first = Uuid([0xB4; 16]);
@@ -1982,4 +2069,201 @@ fn new_attempt(mapping: MappingId) -> NewAttempt<'static> {
             actor: Actor::System(SystemComponent::Engine),
         },
     }
+}
+
+/// A revoked device claims nothing.
+///
+/// The seller's own sign-out on the "Your devices" page sets `revoked_at`, and
+/// the claim reads it. Nothing else has to happen for the device to stop
+/// working: it learns of the revocation when its next claim comes back empty.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_revoked_device_claims_nothing(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xD1, true).await;
+    enqueue_one(&engine, &tenant, 0xD2, 0xD3).await;
+    assert!(
+        claim(&app, tenant.org, "revoked-device", 60)
+            .await
+            .is_some(),
+        "the fixture must be claimable before revocation, or the assertion below proves \
+         nothing"
+    );
+    settle_back_to_queued(&engine).await;
+    revoke_device(&app, tenant.org, "revoked-device").await;
+
+    assert!(
+        claim(&app, tenant.org, "revoked-device", 60)
+            .await
+            .is_none(),
+        "a revoked device is refused at the claim, which is the only enforcement a device \
+         that has already stopped checking in would ever see"
+    );
+    assert!(
+        claim(&app, tenant.org, "another-device", 60)
+            .await
+            .is_some(),
+        "and the revocation is of that device rather than of the tenant: an unrevoked \
+         device still claims the same work"
+    );
+}
+
+/// A free-tier organisation still claims.
+///
+/// Entitlement is not "has paid". An organisation that never subscribed has no
+/// billing row at all and is entitled within the Free quotas `tam-limits`
+/// already grants it, so the predicate must not touch it.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_free_tier_organisation_still_claims(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xD5, true).await;
+    enqueue_one(&engine, &tenant, 0xD6, 0xD7).await;
+    let billed: i64 = sqlx::query_scalar("SELECT count(*) FROM billing_subscription")
+        .fetch_one(&app)
+        .await
+        .expect("the billing table reads");
+    assert_eq!(
+        billed, 0,
+        "the fixture must be a tenant that never subscribed"
+    );
+
+    assert!(
+        claim(&app, tenant.org, "free-device", 60).await.is_some(),
+        "a Free organisation syncs within its quotas, so the entitlement predicate must \
+         not be reading this as unpaid-and-therefore-blocked"
+    );
+}
+
+/// A plan that lapsed and stayed lapsed past the grace claims nothing.
+///
+/// This is the only thing the plan side of the predicate blocks. A status that
+/// stopped entitling within the grace still claims, so a card that failed on
+/// Monday does not stop a seller's Monday.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_plan_lapsed_past_the_grace_claims_nothing(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xD9, true).await;
+    enqueue_one(&engine, &tenant, 0xDA, 0xDB).await;
+    subscribe(&app, tenant.org, "canceled", "now() - interval '1 hour'").await;
+    assert!(
+        claim(&app, tenant.org, "lapsed-device", 60).await.is_some(),
+        "inside the grace the plan has lapsed but the seller has not lost the day"
+    );
+    settle_back_to_queued(&engine).await;
+
+    subscribe(&app, tenant.org, "canceled", "now() - interval '48 hours'").await;
+    assert!(
+        claim(&app, tenant.org, "lapsed-device", 60).await.is_none(),
+        "past the grace the plan blocks, which is the only subscription enforcement left \
+         for work that runs on the seller's own machine"
+    );
+}
+
+/// A sibling device holding the slot is a different answer from an empty queue.
+///
+/// Told `Empty`, an idle device polls again soon; told the slot is taken, it
+/// backs off until the holder settles. Collapsing the two would have it
+/// hot-poll a queue it cannot win.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_second_device_is_told_the_slot_is_held_rather_than_that_nothing_is_queued(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xE9, true).await;
+    enqueue_one(&engine, &tenant, 0xEA, 0xEB).await;
+    register_device(&app, tenant.org, "device-a").await;
+    register_device(&app, tenant.org, "device-b").await;
+    let leases = LeaseRepo::new(app.clone());
+    assert!(matches!(
+        leases
+            .claim_for_device(
+                &DeviceRef {
+                    org: tenant.org,
+                    device: "device-a"
+                },
+                60,
+                24,
+                T0
+            )
+            .await
+            .expect("the first claim runs"),
+        DeviceClaim::Leased(_)
+    ));
+
+    let second = leases
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-b",
+            },
+            60,
+            24,
+            T0,
+        )
+        .await
+        .expect("the second claim runs");
+    assert_eq!(
+        second,
+        DeviceClaim::HeldByAnotherDevice,
+        "the sibling holds the only slot for this marketplace account, and saying so is \
+         what lets the idle device back off instead of polling"
+    );
+}
+
+/// Returns every item to the queue, so one fixture can be claimed twice.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn settle_back_to_queued(engine: &PgPool) {
+    sqlx::query(
+        "UPDATE job_item SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL",
+    )
+    .execute(engine)
+    .await
+    .expect("the item returns to the queue");
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn revoke_device(app: &PgPool, org: OrgId, device: &str) {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query("UPDATE device SET revoked_at = now() WHERE org_id = $1 AND id = $2")
+        .bind(db_uuid(org.0))
+        .bind(device)
+        .execute(&mut *tx)
+        .await
+        .expect("the device revokes");
+    tx.commit().await.expect("the revocation commits");
+}
+
+/// A billing row in a stated status whose period ended a stated interval ago.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn subscribe(app: &PgPool, org: OrgId, status: &str, period_end: &str) {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(&format!(
+        "INSERT INTO billing_subscription \
+           (org_id, paddle_subscription_id, paddle_customer_id, status, \
+            current_period_end, occurred_at, updated_at) \
+         VALUES ($1, 'sub_fixture', 'ctm_fixture', $2, {period_end}, now(), now()) \
+         ON CONFLICT (org_id) DO UPDATE SET status = $2, current_period_end = {period_end}"
+    ))
+    .bind(db_uuid(org.0))
+    .bind(status)
+    .execute(&mut *tx)
+    .await
+    .expect("the subscription row writes");
+    tx.commit().await.expect("the subscription commits");
 }

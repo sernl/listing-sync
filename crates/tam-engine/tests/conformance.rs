@@ -11,7 +11,6 @@
 use sqlx::PgPool;
 use tam_engine::ledger::{to_wire_item, PgLedger};
 use tam_engine_driver::conformance;
-use tam_storage::LeaseRepo;
 
 mod fixture;
 
@@ -23,11 +22,11 @@ mod fixture;
 async fn leased(app: &PgPool) -> (PgLedger, tam_engine_driver::vocabulary::LeasedItem) {
     let engine = fixture::engine_pool(app).await;
     fixture::seed(app, &engine).await;
-    let leases = LeaseRepo::new(engine.clone());
-    let item = leases
-        .acquire("conformance", 600)
+    // Tes is the seller-device branch, so the Postgres instantiation claims as
+    // a device exactly as a real one would; the in-memory instantiation seeds
+    // the same lease directly.
+    let item = fixture::claim(app, fixture::DEVICE, 600)
         .await
-        .expect("the scan runs")
         .expect("the item leases");
     let lease = to_wire_item(&item);
     (PgLedger::new(engine, item.job), lease)

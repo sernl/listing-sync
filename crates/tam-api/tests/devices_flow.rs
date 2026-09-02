@@ -453,3 +453,94 @@ async fn the_surface_is_closed_to_a_session_that_does_not_resolve(pool: PgPool) 
         "the refused registration created nothing"
     );
 }
+
+/// The whole device loop over the wire, without a client existing yet: one
+/// device claims, a second device is refused the settle, and the holder's own
+/// settle is accepted.
+///
+/// The refusal is the point. The lease epoch is the fence and the device id is
+/// the holder, so a settle naming a run the caller is not in is refused rather
+/// than written — which is what stops a seller's second machine settling work
+/// its sibling is still doing.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_settle_from_a_device_other_than_the_holder_is_refused(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    let second = "99998888777766665555444433332222";
+    register(&pool, &TOKEN_A, second, "desktop").await;
+
+    let claimed = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(
+        claimed.status,
+        StatusCode::OK,
+        "the claim is served even with nothing queued: {}",
+        String::from_utf8_lossy(&claimed.body)
+    );
+
+    // No item is queued in this fixture, so the claim is idle and there is no
+    // live lease to settle. That is exactly the state a settle must refuse.
+    let refused = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{second}/settle"),
+            token: &TOKEN_A,
+            body: Some(serde_json::json!({
+                "item": "unknown",
+                "lease_epoch": 1,
+                "outcome": "succeeded",
+            })),
+            wall: t1,
+        },
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::CONFLICT,
+        "a settle naming a lease this device does not hold is refused: {}",
+        String::from_utf8_lossy(&refused.body)
+    );
+}
+
+/// A device belonging to one tenant reaches nothing through another tenant's
+/// session, because the claim carries no organisation identifier at all: the
+/// session decides the tenant and the SQL pins it again beneath that.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn one_tenants_session_cannot_claim_through_another_tenants_device_id(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+
+    let across = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_B,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(
+        across.status,
+        StatusCode::OK,
+        "the route answers rather than faulting"
+    );
+    let view: serde_json::Value =
+        serde_json::from_slice(&across.body).expect("the claim view parses");
+    assert_eq!(
+        view["state"], "idle",
+        "org B's session naming org A's device id claims nothing, because the device \
+         predicate is read within the tenant the session speaks for: {view}"
+    );
+}

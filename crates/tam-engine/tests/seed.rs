@@ -23,7 +23,7 @@ use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
 use tam_marketplace_tes::TesAdapter;
-use tam_storage::{ElectionRepo, LeaseRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
+use tam_storage::{DeviceRef, ElectionRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole,
     InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule,
@@ -1182,11 +1182,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
         .expect("the live intent enqueues");
 
     let leases = tam_storage::LeaseRepo::new(engine.clone());
-    let publish = leases
-        .acquire("w1", 600)
-        .await
-        .expect("the scan runs")
-        .expect("an item leases");
+    let publish = claim(&pool, "w1", 600).await.expect("an item leases");
     assert_eq!(
         (publish.item, publish.requires_bound_on),
         (ids[1], Some(InventoryId::TesNz)),
@@ -1205,10 +1201,8 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
         .await
         .expect("the publish parks");
 
-    let create = leases
-        .acquire("w1", 600)
+    let create = claim(&pool, "w1", 600)
         .await
-        .expect("the scan runs")
         .expect("the create leases next");
     assert_eq!(create.item, ids[0]);
     let attempts = tam_storage::WriteAttemptRepo::new(engine.clone());
@@ -1274,10 +1268,8 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
         .await
         .expect("the create's item settles");
 
-    let woken = leases
-        .acquire("w1", 600)
+    let woken = claim(&pool, "w1", 600)
         .await
-        .expect("the scan runs")
         .expect("the revived publish leases");
     assert_eq!(woken.item, ids[1]);
     let ItemPreparation::Ready { operation, .. } = prepare_item(&pool, &woken, NOW)
@@ -1388,11 +1380,9 @@ async fn provision_refusing_queue(app: &PgPool, engine: &PgPool) {
     clippy::panic,
     reason = "allow-expect-in-tests and allow-panic-in-tests reach #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn refuse_one(app: &PgPool, engine: &PgPool, leases: &LeaseRepo) -> (LeasedItem, RunVerdict) {
-    let held = leases
-        .acquire("seed-refusal-test", 600)
+async fn refuse_one(app: &PgPool, engine: &PgPool) -> (LeasedItem, RunVerdict) {
+    let held = claim(app, "seed-refusal-test", 600)
         .await
-        .expect("the scan runs")
         .expect("an item leases");
     let ItemPreparation::Ready {
         projected: Some(projected),
@@ -1440,9 +1430,8 @@ async fn a_projection_the_adapter_refuses_settles_the_item_rather_than_holding_t
 ) {
     let engine = engine_pool(&app).await;
     provision_refusing_queue(&app, &engine).await;
-    let leases = LeaseRepo::new(engine.clone());
 
-    let (first, verdict) = refuse_one(&app, &engine, &leases).await;
+    let (first, verdict) = refuse_one(&app, &engine).await;
     assert_eq!(
         verdict,
         RunVerdict::Settled(tam_domain::ItemOutcome::Failed),
@@ -1473,7 +1462,7 @@ async fn a_projection_the_adapter_refuses_settles_the_item_rather_than_holding_t
 
     // The same instant, no expiry, no stealer: the mutex is free because the
     // item settled rather than because a lease ran out.
-    let (second, verdict) = refuse_one(&app, &engine, &leases).await;
+    let (second, verdict) = refuse_one(&app, &engine).await;
     assert_ne!(
         second.item, first.item,
         "the organisation's queue moved on within the same scan"
@@ -1500,4 +1489,41 @@ async fn a_projection_the_adapter_refuses_settles_the_item_rather_than_holding_t
         (Some(2), Some(0)),
         "and the tally the seller reads counts both refusals: {payload}"
     );
+}
+
+/// Tes is the seller-device branch, so a fixture that means to lease claims as
+/// a device rather than through `acquire`, which no longer sees these items.
+/// The claim is org-pinned by forced row-level security, so it runs on the app
+/// pool; the engine pool is BYPASSRLS and would not be pinned by it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::LeasedItem> {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, \
+                             first_seen_at, last_seen_at) \
+         VALUES ($1, $2, 'fixture', 'linux', 'x86_64', '0.0.0', now(), now()) \
+         ON CONFLICT (org_id, id) DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(device)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture device registers");
+    tx.commit().await.expect("the fixture device commits");
+    match tam_storage::LeaseRepo::new(app.clone())
+        .claim_for_device(&DeviceRef { org: ORG, device }, ttl, 24, NOW)
+        .await
+        .expect("the claim runs")
+    {
+        tam_storage::DeviceClaim::Leased(item) => Some(*item),
+        tam_storage::DeviceClaim::Empty | tam_storage::DeviceClaim::HeldByAnotherDevice => None,
+    }
 }

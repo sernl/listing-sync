@@ -131,6 +131,11 @@ The endpoint verifies the signature, the one-hour validity and the 24-hour grace
 Independently, an entitlement predicate joins the candidate CTE beside the three halt tables, so a forged token still selects zero rows.
 D11's per-marketplace kill switch needs no new mechanism: `org_inventory_halt` and `inventory_halt` are already in the candidate filter and already fail closed (`crates/tam-storage/src/jobs.rs:807`), and they only need a new writer.
 
+Implemented 2026-09-03, and the line is worth stating plainly for the founder: entitlement here is not "has paid".
+The predicate admits a device that is registered and unrevoked, and it blocks on the plan only when a subscription lapsed and stayed lapsed past the grace.
+An organisation that never subscribed has no billing row and is never blocked by it, because the Free tier is entitled within its own quotas exactly as `tam-limits` already grants them; a card that failed this morning still syncs this morning.
+The three tests that pin those edges are `a_revoked_device_claims_nothing`, `a_free_tier_organisation_still_claims` and `a_plan_lapsed_past_the_grace_claims_nothing` in `crates/tam-storage/tests/leases.rs`.
+
 ## 5. Custody
 
 The line D1 draws is not the transport seam, which is a genuine single network door whose `HttpRequest` carries no header field, so no session material is representable there (`crates/tam-marketplace/src/transport.rs:293`).

@@ -19,6 +19,9 @@ subtle = { workspace = true }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-authoring  = { path = "../tam-authoring" }
 tam-domain = { path = "../tam-domain" }
+# The declarative-intent surface answers a projected listing, and
+# `prepare_item` is the server-side producer of one.
+tam-engine = { path = "../tam-engine" }
 tam-limits = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-pipeline = { path = "../tam-pipeline" }
