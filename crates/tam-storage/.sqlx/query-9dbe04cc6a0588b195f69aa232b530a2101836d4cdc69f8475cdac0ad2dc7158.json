@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pf.kind, pf.hash, b.byte_len FROM product_file pf JOIN blob b ON b.org_id = pf.org_id AND b.hash = pf.hash WHERE pf.org_id = $1 AND pf.id = $2 AND pf.deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "byte_len",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9dbe04cc6a0588b195f69aa232b530a2101836d4cdc69f8475cdac0ad2dc7158"
+}

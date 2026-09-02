@@ -9,6 +9,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tam-domain = { path = "../tam-domain" }
 tam-limits = { path = "../tam-limits" }
+# The intent hash is blake3 over the rendered field set, and the device
+# takes it, so the hash lives here with the rendering.
+tam-pipeline = { path = "../tam-pipeline" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-types = { path = "../tam-types" }
 

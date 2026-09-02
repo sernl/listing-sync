@@ -15,14 +15,10 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::{Deserialize, Serialize};
-use tam_domain::ItemOperation;
 use tam_engine::ledger::to_wire_item;
-use tam_engine::seed::{prepare_item, ItemPreparation};
-use tam_engine_driver::vocabulary::{ItemVerdict, LeaseRef};
-use tam_marketplace::IdempotencyKey;
-use tam_storage::{DeviceClaim, DeviceRef, LeaseRepo};
-use tam_types::{InventoryId, JobId, MappingId};
+use tam_engine::seed::{preparation as preparation_for, prepare_item, ItemPreparation};
+use tam_engine_driver::vocabulary::{ClaimView, PayloadManifest, SettleEnvelope, WorkOrder};
+use tam_storage::{describe_files, DeviceClaim, DeviceRef, LeaseRepo};
 
 use crate::error::{APIError, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
@@ -32,48 +28,6 @@ const CLAIM_TTL_SECS: i64 = 300;
 
 /// How long a lapsed plan keeps working. D11's grace, stated once.
 const ENTITLEMENT_GRACE_HOURS: i64 = 24;
-
-/// What the device is told when it asks for work.
-///
-/// The three answers are distinct on purpose. `work` carries an item; `idle`
-/// says the queue is empty; `held` says a sibling device holds the only slot
-/// for this marketplace account, which is what lets the asking device back off
-/// rather than poll a queue it cannot win.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum ClaimView {
-    Work(Box<WorkOrder>),
-    Idle { next_poll_ms: u64 },
-    Held { next_poll_ms: u64 },
-}
-
-/// One item's declarative intent.
-///
-/// The lease and the operation are the interpreter's own types rather than
-/// strings restated here, so the envelope on the wire and the envelope the
-/// driver runs against have exactly one definition. A field that drifted would
-/// be a compile error rather than a client that parses the wrong shape.
-///
-/// `server_now_ms` travels beside `server_deadline_ms` so the device drives its
-/// budgets off the difference rather than off its local clock: the two together
-/// are a duration the server vouches for, where an absolute instant alone would
-/// be two clocks being compared.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct WorkOrder {
-    /// The lease this work is done under, and the fence every write carries.
-    pub lease: LeaseRef,
-    pub job: JobId,
-    pub mapping: MappingId,
-    pub inventory: InventoryId,
-    /// What to do, in the ledger's vocabulary rather than any marketplace's.
-    pub operation: ItemOperation,
-    pub idempotency_key: IdempotencyKey,
-    /// The projected listing, absent for a removal, which describes nothing.
-    pub listing: Option<serde_json::Value>,
-    pub server_now_ms: i64,
-    pub server_deadline_ms: i64,
-    pub next_poll_ms: u64,
-}
 
 /// The jittered wait before the next ask. The server suggests; the device's own
 /// timer decides, which is the half of the cron move that matters legally.
@@ -126,16 +80,11 @@ pub(crate) async fn claim(
     let prepared = prepare_item(&state.pool, &leased, now)
         .await
         .map_err(|error| state.internal(&format!("{error:?}")))?;
-    let (operation, listing) = match prepared {
+    let (operation, projected) = match prepared {
         ItemPreparation::Ready {
             operation,
             projected,
-        } => (
-            operation,
-            projected
-                .as_ref()
-                .map(|listing| serde_json::json!({ "title": listing.title })),
-        ),
+        } => (operation, projected),
         // A blocked item, or one whose counterpart can never bind, is not the
         // device's to run. Both are already recorded server-side, so the
         // device is told the queue is idle rather than handed work it would
@@ -146,29 +95,33 @@ pub(crate) async fn claim(
             }))
         }
     };
+    // The server commits to the bytes before they move: the device fetches
+    // them separately and checks what arrived against these hashes and
+    // lengths, so a truncated transfer is caught on the device.
+    let preparation = preparation_for(&leased, operation, projected);
+    let payload = match preparation.projected.as_ref() {
+        Some(listing) => describe_files(&state.pool, context.org, &listing.files)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?
+            .into_iter()
+            .map(|file| PayloadManifest {
+                file: file.id,
+                file_name: file.file_name,
+                content_type: file.content_type,
+                hash: file.hash,
+                byte_len: file.byte_len,
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     Ok(Json(ClaimView::Work(Box::new(WorkOrder {
-        lease: driven.lease_ref(),
-        job: driven.job,
-        mapping: driven.mapping,
-        inventory: driven.inventory,
-        operation,
-        idempotency_key: driven.idempotency_key,
-        listing,
+        lease: driven,
+        preparation,
+        payload,
         server_now_ms: now.0,
         server_deadline_ms: now.0 + CLAIM_TTL_SECS * 1_000,
         next_poll_ms: next_poll_ms(false),
     }))))
-}
-
-/// What the device reports back when it is done.
-///
-/// The lease is the interpreter's own `LeaseRef` and the verdict its own
-/// `ItemVerdict`, for the same reason the work order carries the operation
-/// rather than a string: the device settles with the value it ran against.
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
-pub struct SettleBody {
-    pub lease: LeaseRef,
-    pub verdict: ItemVerdict,
 }
 
 /// The device settles what it claimed.
@@ -180,7 +133,7 @@ pub(crate) async fn settle(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, device)): Path<(String, String)>,
-    Json(body): Json<SettleBody>,
+    Json(body): Json<SettleEnvelope>,
 ) -> Result<StatusCode, APIError> {
     let holder: Option<String> = sqlx::query_scalar(
         "SELECT lease_owner FROM job_item \

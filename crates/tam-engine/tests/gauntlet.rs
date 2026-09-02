@@ -22,8 +22,9 @@ use tam_domain::{
     VocabularyId, VocabularyPath,
 };
 use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
-use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
+use tam_engine::seed::{prepare_item, ItemPreparation};
 use tam_engine_driver::driver::{run_item, DriverContext, EngineError, NowSource, RunVerdict};
+use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
@@ -770,9 +771,10 @@ async fn pump(
         }
     };
     let adapter = TesAdapter::new(InventoryId::TesNz, fake, OneFile).expect("a Tes inventory");
-    let seed = projected.as_ref().map_or_else(
-        || seed_for_removal(&item, &operation),
-        |projected| seed_from_projection(&adapter, &item, projected).expect("the adapter renders"),
+    let prepared = tam_engine::seed::preparation(&item, operation.clone(), projected.clone());
+    let seed = prepared.projected.as_ref().map_or_else(
+        || seed_for_removal(&prepared),
+        |listing| seed_from_projection(&adapter, &prepared, listing).expect("the adapter renders"),
     );
     let cancel = CancellationToken::new();
     let pause = CountingPause::default();

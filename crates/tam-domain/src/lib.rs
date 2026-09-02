@@ -449,7 +449,7 @@ pub enum BlockCause {
 
 /// The remaining interpreter-action allowance for this job. Distinct from the
 /// machine's own `step`, which is the transition function.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepBudget {
     pub actions_remaining: u32,
 }

@@ -29,4 +29,5 @@ pub mod driver;
 #[cfg(any(test, feature = "testing"))]
 pub mod memory;
 pub mod ports;
+pub mod seed;
 pub mod vocabulary;

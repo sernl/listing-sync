@@ -36,7 +36,7 @@ pub use backoffice::{
     OrgDetail, OrgSummary, SignupsRepo, SubscriptionRecord, SyncHealth,
 };
 pub use billing::{BillingRepo, SubscriptionState};
-pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
+pub use blobs::{describe_files, BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,
     ConnectionRepo, ConnectionRow,

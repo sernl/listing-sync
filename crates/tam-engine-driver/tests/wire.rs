@@ -7,9 +7,11 @@
 //! and it would otherwise not be noticed until a device existed.
 
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
+use tam_engine_driver::driver::VerifyPolicy;
 use tam_engine_driver::vocabulary::{
-    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind,
-    ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerError, NewAttempt, PreflightStreak,
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, GrantKind,
+    ItemPreparation, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerError, NewAttempt,
+    PayloadManifest, PreflightStreak, SettleEnvelope, WorkOrder,
 };
 use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
@@ -178,5 +180,95 @@ fn every_ledger_answer_round_trips() {
         round_trip(&disposition),
         disposition,
         "the bind disposition carries a remote id in three of its variants"
+    );
+}
+
+fn leased() -> LeasedItem {
+    LeasedItem {
+        org: OrgId(Uuid([0xAA; 16])),
+        item: JobItemId(Uuid([0x11; 16])),
+        job: JobId(Uuid([0x22; 16])),
+        mapping: MappingId(Uuid([0x33; 16])),
+        inventory: InventoryId::TesGb,
+        idempotency_key: IdempotencyKey(Uuid([0x55; 16])),
+        operation: revision(),
+        lease_epoch: 7,
+        attempt_count: 2,
+        requires_bound_on: Some(InventoryId::Tpt),
+    }
+}
+
+/// The whole claim view, as `tam-api` serves it and the desktop client reads
+/// it, including the payload the server commits to before the bytes move.
+#[test]
+fn the_whole_claim_view_round_trips() {
+    let order = WorkOrder {
+        lease: leased(),
+        preparation: ItemPreparation {
+            operation: revision(),
+            // A revise carries no projection in this fixture; the projected
+            // listing has its own round trip through `ProjectedListing`.
+            projected: None,
+            form: tam_marketplace::FormId(Uuid([0x09; 16])),
+            strategy: tam_marketplace::CreateStrategy::DraftThenPublish {
+                draft_state: tam_marketplace::RemoteLifecycleKind::Draft,
+            },
+            budget: tam_domain::StepBudget {
+                actions_remaining: 32,
+            },
+            verify: VerifyPolicy {
+                tries: 3,
+                interval_ms: 2_000,
+            },
+        },
+        payload: vec![PayloadManifest {
+            file: tam_types::FileId(Uuid([0x0F; 16])),
+            file_name: "abc.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            hash: tam_types::ContentHash([0x0A; 32]),
+            byte_len: 4_096,
+        }],
+        server_now_ms: 1_756_000_000_000,
+        server_deadline_ms: 1_756_000_300_000,
+        next_poll_ms: 10_000,
+    };
+    let view = ClaimView::Work(Box::new(order));
+    assert_eq!(
+        round_trip(&view),
+        view,
+        "the whole work order must survive the wire: the manifest is the server's \
+         commitment to the bytes, so a field lost here is a transfer the device cannot check"
+    );
+    for idle in [
+        ClaimView::Idle {
+            next_poll_ms: 10_000,
+        },
+        ClaimView::Held {
+            next_poll_ms: 30_000,
+        },
+    ] {
+        assert_eq!(
+            round_trip(&idle),
+            idle,
+            "the device branches on these three states, so each must read back as itself"
+        );
+    }
+}
+
+/// The settle, fenced on the lease it ran under.
+#[test]
+fn the_whole_settle_envelope_round_trips() {
+    let envelope = SettleEnvelope {
+        lease: lease(),
+        verdict: ItemVerdict {
+            outcome: ItemOutcome::Succeeded,
+            failure_code: None,
+            failure_detail: None,
+        },
+    };
+    assert_eq!(
+        round_trip(&envelope),
+        envelope,
+        "the fence the device carries back must be the fence it was issued"
     );
 }

@@ -48,7 +48,7 @@ pub trait NowSource: Send + Sync {
 /// spend 360s. That is a pre-existing hazard the poll narrows the margin on
 /// rather than one it creates, and Phase 3 asserts the inequality rather than
 /// raising a limit to hide it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VerifyPolicy {
     pub tries: u32,
     pub interval_ms: u32,

@@ -23,7 +23,7 @@ use tam_types::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WriteAttemptId(pub Uuid);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FormId(pub Uuid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -241,21 +241,23 @@ pub enum DraftSupport {
 /// Code prohibits external URLs in descriptions, titles and previews, so a
 /// marker is never URL-shaped, and the title is excluded because listing copy
 /// must read as the seller's own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MarkerField {
     DescriptionTail,
     InternalReference,
 }
 
 /// How long a marker stays in the field before a scheduled pass removes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkerLifetime {
     pub seconds: u32,
 }
 
 /// Configured per inventory, never branched on in code, so the M-1 probe result
 /// changes a value rather than a control flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CreateStrategy {
     /// Create as draft, then publish; an ambiguous publish is safely repeatable.
     /// Configurable only where `DraftSupport::Supported`.
@@ -273,7 +275,8 @@ pub enum CreateStrategy {
 
 /// The discriminant of `RemoteLifecycle`, usable in `Copy` configuration where
 /// the timestamped variant payloads are not wanted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteLifecycleKind {
     Absent,
     Draft,
@@ -405,7 +408,7 @@ pub struct FieldSet {
 /// own identifier where the crosswalk holds one, and the path it named. The
 /// canonical term stays on the domain side; an adapter sees only what the
 /// marketplace itself would recognise.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeTerm {
     pub native_id: Option<String>,
     pub segments: Vec<String>,
@@ -413,7 +416,7 @@ pub struct NativeTerm {
 
 /// A product's derived age span in years, where its grade declaration
 /// resolved to one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgeSpan {
     pub low_years: u8,
     pub high_years: u8,
@@ -428,7 +431,7 @@ pub struct AgeSpan {
 /// This is the seam-side image of the domain's listing projection. The domain
 /// crate depends on this one, so the projection type itself cannot appear
 /// here; the engine lowers it at the call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectedListing {
     pub title: String,
     pub body: String,
@@ -457,7 +460,7 @@ pub struct ProjectedListing {
 /// value lands in and how it is framed on the wire, not the identifier: an
 /// adapter that read a display label out of `segments` and re-derived a token
 /// from it would reintroduce the guess the election exists to remove.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeAxis {
     pub axis: TermKind,
     pub value: NativeTerm,

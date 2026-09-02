@@ -14,9 +14,15 @@
 //! envelope in the interpreter cannot drift apart.
 
 use serde::{Deserialize, Serialize};
-use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
-use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
-use tam_types::{FailureCode, FailureDetail, InventoryId, JobId, MappingId, OrgId, Uuid};
+
+use crate::driver::VerifyPolicy;
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
+use tam_marketplace::{
+    CreateStrategy, FormId, IdempotencyKey, ProjectedListing, RemoteLifecycle, RemoteListingId,
+};
+use tam_types::{
+    ContentHash, FailureCode, FailureDetail, FileId, InventoryId, JobId, MappingId, OrgId, Uuid,
+};
 
 /// Which organisation, item and epoch a fenced write speaks for. Every ledger
 /// method is keyed on one, so the server derives org, connection, inventory
@@ -194,3 +200,80 @@ impl core::fmt::Display for LedgerError {
 }
 
 impl core::error::Error for LedgerError {}
+
+/// One file the operation uploads, as the server commits to it before the
+/// bytes move.
+///
+/// The hash and the length are the commitment: the device fetches the bytes
+/// separately and checks what arrived against these before it uploads
+/// anything, so a truncated or substituted transfer is caught on the device
+/// rather than discovered on the marketplace. The name and the content type
+/// are what the upload form carries, derived from the file's kind by the same
+/// rule the server's own file source uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadManifest {
+    pub file: FileId,
+    pub file_name: String,
+    pub content_type: String,
+    /// The blake3 content hash of the stored bytes.
+    pub hash: ContentHash,
+    pub byte_len: i64,
+}
+
+/// What the server has decided about an item, which is everything the device
+/// needs to run it and nothing about how to ask a marketplace for it.
+///
+/// This is the preparation rather than the seed, and the distinction is the
+/// custody line. The device renders the field set through its own adapter and
+/// derives the intent hash over what it rendered, so the recorded intent is
+/// the bytes the submit will carry. A server that shipped the rendered field
+/// set would be composing, which is the architecture at S3 rather than S1.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ItemPreparation {
+    pub operation: ItemOperation,
+    /// The projected listing, absent for a removal, which describes nothing.
+    pub projected: Option<ProjectedListing>,
+    pub form: FormId,
+    pub strategy: CreateStrategy,
+    pub budget: StepBudget,
+    pub verify: VerifyPolicy,
+}
+
+/// One item's whole work order.
+///
+/// `server_now_ms` travels beside `server_deadline_ms` so the device drives
+/// its budgets off the difference rather than off its own clock: the two
+/// together are a duration the server vouches for, where an absolute instant
+/// alone would be two clocks being compared.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkOrder {
+    pub lease: LeasedItem,
+    pub preparation: ItemPreparation,
+    pub payload: Vec<PayloadManifest>,
+    pub server_now_ms: i64,
+    pub server_deadline_ms: i64,
+    pub next_poll_ms: u64,
+}
+
+/// What the device is told when it asks for work.
+///
+/// The three answers are distinct on purpose. `Work` carries an item; `Idle`
+/// says the queue is empty; `Held` says a sibling device holds the only slot
+/// for this marketplace account, which is what lets the asking device back off
+/// rather than poll a queue it cannot win.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ClaimView {
+    Work(Box<WorkOrder>),
+    Idle { next_poll_ms: u64 },
+    Held { next_poll_ms: u64 },
+}
+
+/// What the device reports when the run is over, fenced on the lease it ran
+/// under: a settle naming a run the caller is not in is refused rather than
+/// written.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettleEnvelope {
+    pub lease: LeaseRef,
+    pub verdict: ItemVerdict,
+}

@@ -56,8 +56,9 @@ use tam_domain::{ItemOperation, ItemOutcome};
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::{claim_account, request_lease, ClaimError, LeasePurpose};
 use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
-use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
+use tam_engine::seed::{preparation, prepare_item, ItemPreparation};
 use tam_engine_driver::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
+use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
 use tam_marketplace::transport::{Transport, TransportError};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
 use tam_marketplace_tes::{
@@ -520,11 +521,14 @@ impl Pump {
         // The lease scan is the server's, so the crossing into the
         // interpreter's own vocabulary happens once, here.
         let driven = to_wire_item(item);
+        // The worker takes the same preparation a device would be sent, so
+        // the in-process path and the device path seed identically.
+        let prepared = preparation(item, operation.clone(), projected.cloned());
         // A removal renders nothing, so it never reaches the adapter's
         // projection: the listing is being taken down rather than described.
-        let seeded = projected.map_or_else(
-            || Ok(seed_for_removal(item, operation)),
-            |projected| seed_from_projection(adapter, item, projected),
+        let seeded = prepared.projected.as_ref().map_or_else(
+            || Ok(seed_for_removal(&prepared)),
+            |listing| seed_from_projection(adapter, &prepared, listing),
         );
         // Both arms answer the same way, so a refusal the adapter raised
         // before the write settles the item through the path a refusal

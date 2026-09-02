@@ -5029,6 +5029,8 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tam-domain",
+ "tam-engine-driver",
  "tam-marketplace",
  "tam-marketplace-tes",
  "tam-marketplace-tpt",
@@ -5085,6 +5087,7 @@ dependencies = [
  "tam-engine-driver",
  "tam-limits",
  "tam-marketplace",
+ "tam-pipeline",
  "tam-types",
 ]
 

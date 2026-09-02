@@ -18,9 +18,8 @@ use tam_domain::{
     Binding, ItemOperation, ProjectionBlocked, StepBudget, VocabularyId, VocabularyPath,
 };
 use tam_marketplace::{
-    AgeSpan, CreateStrategy, FieldSet, FormId, LifecycleTransition, ListingState,
-    MarketplaceAdapter, NativeAxis, NativeTerm, ProjectedListing, RemoteLifecycle,
-    RemoteLifecycleKind,
+    AgeSpan, CreateStrategy, FormId, LifecycleTransition, ListingState, NativeAxis, NativeTerm,
+    ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
 };
 use tam_storage::{
     ElectionRepo, LeasedItem, LossScope, MappingRepo, ProductRepo, RaiseReport, RaiseScope,
@@ -29,11 +28,12 @@ use tam_storage::{
 use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
 use tam_types::{AttemptId, InventoryId, OrgId, Timestamp, Uuid};
 
-use tam_engine_driver::driver::{intent_as_json, EngineError, MachineSeed, VerifyPolicy};
+use tam_engine_driver::driver::{EngineError, VerifyPolicy};
+use tam_engine_driver::vocabulary::ItemPreparation as WirePreparation;
 
 /// Per-item action ceiling; generous against the longest measured flow
 /// (create, metadata, three-step file upload per file, read-back).
-const ACTIONS_PER_ITEM: u32 = 32;
+pub const ACTIONS_PER_ITEM: u32 = 32;
 
 /// The verification poll's budget, per inventory, sized to the slowest
 /// convergence each platform was measured at: Tpt twenty seconds
@@ -64,7 +64,7 @@ pub const fn verify_policy(inventory: InventoryId) -> VerifyPolicy {
 
 /// One form identity per inventory, deterministic: byte one is the
 /// idempotency module's durable inventory ordinal reused as a tag.
-const fn form_id(inventory: InventoryId) -> FormId {
+pub const fn form_id(inventory: InventoryId) -> FormId {
     let tag = match inventory {
         InventoryId::TesGb => 0x01,
         InventoryId::TesUs => 0x02,
@@ -516,66 +516,22 @@ fn native_term(path: &VocabularyPath) -> NativeTerm {
     }
 }
 
-/// The adapter half: it renders the field set, and the intent hash is taken
-/// over what it rendered, so the recorded intent is the bytes the submit will
-/// carry rather than a shape the engine guessed at.
-pub fn seed_from_projection<A: MarketplaceAdapter>(
-    adapter: &A,
-    lease: &LeasedItem,
-    listing: &ProjectedListing,
-) -> Result<MachineSeed, EngineError> {
-    let fields = adapter.project_fields(listing)?;
-    let intent_hash = tam_pipeline::hash::content_hash(
-        serde_json::json!({
-            "entries": fields
-                .entries
-                .iter()
-                .map(|(key, value)| (format!("{key:?}"), value))
-                .collect::<Vec<_>>(),
-            "files": fields
-                .files
-                .iter()
-                .map(|file| file.0.to_hyphenated())
-                .collect::<Vec<_>>(),
-        })
-        .to_string()
-        .as_bytes(),
-    );
-
-    Ok(MachineSeed {
-        form: form_id(lease.inventory),
-        fields,
-        intent_hash,
-        strategy: CreateStrategy::DraftThenPublish {
-            draft_state: RemoteLifecycleKind::Draft,
-        },
-        budget: StepBudget {
-            actions_remaining: ACTIONS_PER_ITEM,
-        },
-        verify: verify_policy(lease.inventory),
-    })
-}
-
-/// The removal's seed. A sibling of [`seed_from_projection`] rather than an
-/// `Option` argument on it, because a removal has nothing for an adapter to
-/// render: `project_fields` renders a listing, and a removal describes none.
-/// The intent hash is taken over the removal's own recorded intent, so what
-/// the ledger fingerprints is what the ledger stores.
+/// The server's decisions about one item, as the device receives them.
+///
+/// The form, the create strategy, the step budget and the verify policy are
+/// all policy: a device that recomputed them would be setting its own budget.
+/// They are gathered here, once, so the claim endpoint and the in-process
+/// worker hand the interpreter the same preparation.
 #[must_use]
-pub fn seed_for_removal(lease: &LeasedItem, operation: &ItemOperation) -> MachineSeed {
-    let fields = FieldSet {
-        entries: vec![],
-        files: vec![],
-        // A removal renders no listing, so there are no body bytes for a
-        // format to describe.
-        body_format: None,
-    };
-    let intent_hash =
-        tam_pipeline::hash::content_hash(intent_as_json(operation, &fields).to_string().as_bytes());
-    MachineSeed {
+pub fn preparation(
+    lease: &LeasedItem,
+    operation: ItemOperation,
+    projected: Option<ProjectedListing>,
+) -> WirePreparation {
+    WirePreparation {
+        operation,
+        projected,
         form: form_id(lease.inventory),
-        fields,
-        intent_hash,
         strategy: CreateStrategy::DraftThenPublish {
             draft_state: RemoteLifecycleKind::Draft,
         },

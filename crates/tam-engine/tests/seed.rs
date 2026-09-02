@@ -13,12 +13,14 @@ use sqlx::PgPool;
 use tam_domain::equivalence::{
     ElectionAnswer, ElectionRule, ElectionTriggerKind, NewElectionRule, PricingBranch,
 };
+use tam_domain::ItemOperation;
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
 use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
-use tam_engine::seed::{prepare_item, seed_from_projection, ItemPreparation};
+use tam_engine::seed::{preparation, prepare_item, ItemPreparation};
 use tam_engine_driver::driver::{seed_refused, DriverContext, NowSource, RunVerdict};
+use tam_engine_driver::seed::seed_from_projection;
 use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
@@ -365,7 +367,8 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
         NoFiles,
     )
     .expect("a Tes inventory");
-    let seed = seed_from_projection(&adapter, &lease(), &projected).expect("the adapter renders");
+    let prepared = preparation(&lease(), ItemOperation::Create, Some(projected.clone()));
+    let seed = seed_from_projection(&adapter, &prepared, &projected).expect("the adapter renders");
     assert_eq!(entry(&seed, FieldKey::Title), "Fractions practice");
     assert_eq!(
         entry(&seed, FieldKey::Price),
@@ -1399,7 +1402,8 @@ async fn refuse_one(app: &PgPool, engine: &PgPool) -> (LeasedItem, RunVerdict) {
         NoFiles,
     )
     .expect("a Tes inventory");
-    let error = seed_from_projection(&adapter, &held, &projected)
+    let prepared = preparation(&held, ItemOperation::Create, Some(projected.clone()));
+    let error = seed_from_projection(&adapter, &prepared, &projected)
         .expect_err("a path Tes cannot address is refused rather than rendered");
     let cancel = tokio_util::sync::CancellationToken::new();
     let ledger = PgLedger::new(engine.clone(), held.job);

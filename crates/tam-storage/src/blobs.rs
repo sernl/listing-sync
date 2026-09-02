@@ -9,7 +9,7 @@
 use sqlx::PgPool;
 use tam_pipeline::store::{ObjectStore, StoreError};
 use tam_secrets::{open_bytes, seal_bytes, BlobAad, Kek, Sealed};
-use tam_types::{ContentHash, OrgId, Timestamp};
+use tam_types::{ContentHash, FileId, OrgId, Timestamp};
 
 use crate::codec::{hash_hex, hash_to_db, timestamp_to_db, uuid_to_db};
 use crate::StorageError;
@@ -287,4 +287,57 @@ fn decode_object(wrapped_dek: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Sealed 
         nonce: nonce.to_vec(),
         ciphertext: ciphertext.to_vec(),
     }
+}
+
+/// One stored file, as the payload manifest needs to describe it.
+///
+/// The name and the content type are derived from the file's kind exactly as
+/// [`PipelineFileSource::fetch`] derives them, so the manifest describes the
+/// same bytes the upload would send under the same name. The hash and the
+/// length are the commitment: a device that fetched the bytes checks what
+/// arrived against these before it uploads anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredFile {
+    pub id: FileId,
+    pub file_name: String,
+    pub content_type: String,
+    pub hash: ContentHash,
+    pub byte_len: i64,
+}
+
+/// Describes the stated files, in the order asked for, skipping any the tenant
+/// does not hold.
+///
+/// One join keyed on the tenant: `product_file` carries the kind and the hash,
+/// and `blob` carries the length against that hash.
+pub async fn describe_files(
+    pool: &PgPool,
+    org: OrgId,
+    files: &[FileId],
+) -> Result<Vec<StoredFile>, StorageError> {
+    let mut described = Vec::with_capacity(files.len());
+    let mut tx = pool.begin().await?;
+    crate::pin_org(&mut tx, org).await?;
+    for file in files {
+        let row = sqlx::query!(
+            "SELECT pf.kind, pf.hash, b.byte_len \
+             FROM product_file pf JOIN blob b ON b.org_id = pf.org_id AND b.hash = pf.hash \
+             WHERE pf.org_id = $1 AND pf.id = $2 AND pf.deleted_at IS NULL",
+            uuid_to_db(org.0),
+            uuid_to_db(file.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else { continue };
+        let hash = crate::codec::hash_from_db(&row.hash)?;
+        described.push(StoredFile {
+            id: *file,
+            file_name: format!("{}.{}", crate::codec::hash_hex(hash), extension(&row.kind)),
+            content_type: content_type(&row.kind),
+            hash,
+            byte_len: row.byte_len,
+        });
+    }
+    tx.commit().await?;
+    Ok(described)
 }
