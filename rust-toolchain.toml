@@ -1,3 +1,14 @@
 [toolchain]
 channel    = "1.97.1"
 components = [ "rustfmt", "clippy" ]
+# The client surfaces the two-branch automation rule puts on the seller's own
+# device: wasm for the web and extension, and one triple per desktop and
+# mobile OS. `just check-portable` proves the pure core and the
+# transport-free adapters against each of them.
+targets = [
+  "wasm32-unknown-unknown",
+  "x86_64-pc-windows-msvc",
+  "aarch64-apple-darwin",
+  "aarch64-apple-ios",
+  "aarch64-linux-android",
+]

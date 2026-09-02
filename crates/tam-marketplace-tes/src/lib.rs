@@ -14,6 +14,7 @@ pub mod classify;
 pub mod endpoints;
 pub mod flows;
 pub mod identity;
+#[cfg(feature = "live")]
 pub mod live;
 pub mod schema;
 pub mod session;
@@ -21,5 +22,6 @@ pub mod session;
 pub use endpoints::{CatalogueEntry, DraftId};
 pub use flows::{route_name, NotATesInventory, TesAdapter};
 pub use identity::{read_seller_user_id, seller_user_id, SellerId};
+#[cfg(feature = "live")]
 pub use live::{GatewayTransport, ReqwestTransport};
 pub use session::{SessionError, TesSession};

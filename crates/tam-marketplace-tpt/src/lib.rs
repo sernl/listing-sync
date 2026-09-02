@@ -39,6 +39,7 @@ pub mod endpoints;
 pub mod flows;
 pub mod form;
 pub mod identity;
+#[cfg(feature = "live")]
 pub mod live;
 pub mod read_model;
 pub mod s3;
@@ -53,6 +54,7 @@ pub use endpoints::{
 pub use flows::{listing_state_from_status, TptAdapter};
 pub use form::{TptFormPage, TptFormTokens};
 pub use identity::{read_seller_store_id, seller_store_id, StoreId};
+#[cfg(feature = "live")]
 pub use live::{GatewayTransport, ReqwestTransport};
 pub use read_model::{
     parse_upload_page_product, ProductId, ResourceStat, TptCatalogueEntry, TptCategory, TptPrice,

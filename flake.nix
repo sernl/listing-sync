@@ -132,6 +132,32 @@
             deny = craneLib.cargoDeny commonArgs;
 
             fmt = craneLib.cargoFmt { inherit src; };
+
+            # The client-target gate, the same five triples and the same two
+            # crate sets `just check-portable` runs. No cargoArtifacts: crane's
+            # host-target artifacts are not reusable across a --target, so this
+            # compiles its own from the vendored source.
+            portable = craneLib.mkCargoDerivation (
+              commonArgs
+              // {
+                cargoArtifacts = null;
+                pnameSuffix = "-portable";
+                doInstallCargoArtifacts = false;
+                buildPhaseCargoCommand = ''
+                  crates="-p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
+                  for target in wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-apple-ios aarch64-linux-android; do
+                    # tam-limits asserts usize::BITS >= 64, which wasm32 is not
+                    case "$target" in
+                      wasm32-*) extra="" ;;
+                      *) extra="-p tam-limits" ;;
+                    esac
+                    cargo check --target "$target" --no-default-features $crates $extra
+                  done
+                '';
+                installPhaseCommand = "touch $out";
+              }
+            );
+
             nextest = craneLib.cargoNextest (commonArgs // { inherit cargoArtifacts; });
           };
 

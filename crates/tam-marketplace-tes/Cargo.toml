@@ -4,9 +4,18 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+# `live` is the reqwest-backed transport and nothing else: the endpoints,
+# flows, classifiers and schema are generic over the seam. Without it the
+# crate carries no HTTP client and compiles for the client targets
+# `just check-portable` proves; every workspace consumer takes default
+# features and is unaffected.
+[features]
+default = ["live"]
+live    = ["dep:reqwest"]
+
 [dependencies]
 base64 = "0.22"
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.12", optional = true, default-features = false, features = [
   "rustls-tls",
   "json",
   "multipart",
@@ -20,6 +29,10 @@ tam-types = { path = "../tam-types" }
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[example]]
+name              = "live_smoke"
+required-features = ["live"]
 
 [lints]
 workspace = true

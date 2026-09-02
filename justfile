@@ -42,6 +42,43 @@ purity:
     fi
     echo 'purity: the pure-core subgraph is clean'
 
+# The client surfaces the pure core and the adapters must reach, one triple
+# each: web and extension, Windows, macOS, iOS, Android. Kept out of `check`
+# because it compiles the same crates five more times.
+portable_targets := "wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-apple-ios aarch64-linux-android"
+
+# The transport-free set. --no-default-features drops the adapters' `live`
+# feature, which is reqwest and nothing else; reqwest, tokio and rustls are
+# native-only and stay behind it. The server-bound crates are absent by
+# design: they hold sqlx, axum and a runtime, and no client compiles them.
+#
+# tam-pipeline is absent for a reason that is not design: blake3 builds
+# blake3_neon.c through cc on every aarch64 target and assembles through
+# ml64.exe on windows-msvc, so it needs the crate's `pure` feature to cross
+# at all. That is a dependency change and therefore a founder decision.
+portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
+
+# tam-limits asserts usize::BITS >= 64 at compile time, which is true of every
+# target here except wasm32. Widening that claim is a change to a founder-gated
+# limits file, so the wasm leg omits the crate rather than relaxing it.
+portable_crates_64 := "-p tam-limits"
+
+# Prove every client target still compiles. The standard libraries come from
+# rust-toolchain.toml's `targets`, so this needs the devshell rather than a
+# rustup install.
+check-portable:
+    #!/usr/bin/env sh
+    set -eu
+    for target in {{portable_targets}}; do
+        crates="{{portable_crates}}"
+        case "$target" in
+            wasm32-*) ;;
+            *) crates="$crates {{portable_crates_64}}" ;;
+        esac
+        echo "==> $target"
+        cargo check --target "$target" --no-default-features $crates
+    done
+
 # Everything CI runs
 ready: check
     nix flake check
@@ -138,7 +175,7 @@ db-test-all: db-wait db-verify
 # vocabulary diff, and a Rust enum that moved leaves vocab.ts stale without
 # failing anything in `check` -- cheaper to learn that before the database
 # lane than after it.
-pre-push: check web-check db-verify db-test-all
+pre-push: check web-check db-verify db-test-all check-portable
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:
