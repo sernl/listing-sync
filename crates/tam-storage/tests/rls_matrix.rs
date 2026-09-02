@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 31] = [
+const TENANT_TABLES: [&str; 32] = [
     "billing_subscription",
     "binding_candidate",
     "blob",
@@ -37,6 +37,7 @@ const TENANT_TABLES: [&str; 31] = [
     "product",
     "product_file",
     "product_term",
+    "product_tpt_base",
     "rate_budget",
     "reconciliation_item",
     "sync_request",
@@ -50,9 +51,12 @@ const TENANT_TABLES: [&str; 31] = [
 /// row must be readable before any tenant pin exists, the stored token digest
 /// is the capability's verifier rather than tenant data, and an operator
 /// marking is a platform fact about a human rather than a row any tenant
-/// owns. The rest are genuinely global: reference data, the canonical
-/// taxonomy, the fleet kill switch, and sqlx's migration bookkeeping.
-const GLOBAL_TABLES: [&str; 10] = [
+/// owns. standards_node is the mirrored standards catalogue: public data
+/// shared by every tenant, carrying no organisation column, per
+/// docs/notes/design/standards-ingestion.md. The rest are genuinely global:
+/// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
+/// migration bookkeeping.
+const GLOBAL_TABLES: [&str; 11] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
@@ -62,6 +66,7 @@ const GLOBAL_TABLES: [&str; 10] = [
     "platform_operator",
     "projection_edge",
     "projection_no_counterpart",
+    "standards_node",
     "user_session",
 ];
 

@@ -33,7 +33,7 @@ use tam_pipeline::scan::EicarScanner;
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
     intent_digest, AnsweredElection, BlobRepo, ElectionRepo, JobRepo, MappingRecord, MappingRepo,
-    NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink,
+    NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink, TptBaseRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileRole, InventoryId, JobId,
@@ -42,6 +42,7 @@ use tam_types::{
 };
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
+use crate::product::{record_of, verdict, DraftHead, TptBaseInput};
 use crate::quota::{quota_for, QuotaKind};
 use crate::resources::{kind_from_str, kind_str};
 use crate::{AppState, OrgContext};
@@ -406,6 +407,12 @@ pub struct CreateProductBody {
     pub inventories: Vec<InventoryId>,
     #[serde(default)]
     pub elections: Vec<ElectionInput>,
+    /// The TPT-base fields `product` has no column for, which land in the
+    /// sidecar migration 0040 declares. Absent is a create from a path that
+    /// does not carry them — the operator import is one — and writes no row,
+    /// which is why every read of that table is an outer join.
+    #[serde(default)]
+    pub tpt_base: Option<TptBaseInput>,
 }
 
 const fn markdown() -> CopyFormat {
@@ -507,6 +514,61 @@ fn trigger_kind_of(raw: &str) -> Option<ElectionTriggerKind> {
         .find(|kind| kind.as_str() == raw)
 }
 
+/// The draft the model validates, assembled from the create body's own fields
+/// and the TPT-base block beside them.
+///
+/// One source per field: the title, description, price, payload handle and
+/// grades come from the body that already carries them, and the block carries
+/// only what `product` has no column for. Sending either twice is how two
+/// copies come to disagree.
+fn draft_head(
+    title: &str,
+    body: &str,
+    price: PriceIntent,
+    payload: &[FileHandle],
+    grades: &[PathInput],
+) -> DraftHead {
+    DraftHead {
+        name: title.to_owned(),
+        description: body.to_owned(),
+        free: matches!(price, PriceIntent::Free),
+        price_minor_units: match price {
+            PriceIntent::Free => None,
+            PriceIntent::Paid(money) => Some(money.minor_units()),
+        },
+        payload_hash: payload.first().map(|handle| handle.hash.clone()),
+        grades: grades
+            .iter()
+            .map(|path| {
+                path.native_id
+                    .clone()
+                    .or_else(|| path.segments.first().cloned())
+                    .unwrap_or_default()
+            })
+            .collect(),
+    }
+}
+
+/// Everything the model refuses about this draft, as the seller's own
+/// refusals rather than a database fault.
+///
+/// The same function `POST /{version}/authoring/check` answers with, so the
+/// endpoint that reports a refusal and the endpoint that acts on one cannot
+/// come to different conclusions.
+fn refuse_unsubmittable(draft: &crate::product::DraftInput) -> Result<(), APIError> {
+    let view = verdict(draft);
+    if view.submittable {
+        return Ok(());
+    }
+    Err(APIError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        APIErrorEntry::new("the product does not satisfy the create form's own rules")
+            .code(APIErrorCode::RequiredFieldMissing)
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({ "refusals": view.refusals })),
+    ))
+}
+
 pub(crate) async fn create_product(
     State(state): State<AppState>,
     context: OrgContext,
@@ -527,6 +589,25 @@ pub(crate) async fn create_product(
     };
     let price = checked_price(body.price)?;
     required_fields_answered(&body.inventories, body.rights.as_ref(), &body.elections)?;
+    // The TPT-base block is validated before anything is written, against the
+    // same rules the form ran inline and the check endpoint answers with. A
+    // create that carries no block is one from a path that does not author on
+    // this form, and it is left alone rather than being refused for missing
+    // controls it never had.
+    let sidecar = match body.tpt_base.clone() {
+        None => None,
+        Some(base) => {
+            let draft = base.into_draft(draft_head(
+                &body.title,
+                &body.body,
+                price,
+                &body.payload,
+                &body.grades,
+            ));
+            refuse_unsubmittable(&draft)?;
+            Some(record_of(&draft)?)
+        }
+    };
 
     let now = (state.wall)();
     let products = ProductRepo::new(state.pool.clone());
@@ -648,6 +729,14 @@ pub(crate) async fn create_product(
         )
         .await
         .map_err(|error| create_fault(&state, &error))?;
+
+    if let Some(record) = &sidecar {
+        // After the product row, because the sidecar's foreign key names it.
+        TptBaseRepo::new(state.pool.clone())
+            .upsert(context.org, product, record, now)
+            .await
+            .map_err(|error| create_fault(&state, &error))?;
+    }
 
     let mappings = MappingRepo::new(state.pool.clone());
     let mut written = Vec::with_capacity(body.inventories.len());
@@ -803,6 +892,11 @@ pub struct PatchProductBody {
     pub grades: Option<Vec<PathInput>>,
     #[serde(default)]
     pub rights: Option<RightsInput>,
+    /// Given whole or not at all. The sidecar row is replaced rather than
+    /// merged, because a field the seller cleared is a field they cleared and
+    /// a merge would make clearing a control impossible to express.
+    #[serde(default)]
+    pub tpt_base: Option<TptBaseInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -928,6 +1022,32 @@ pub(crate) async fn patch_product(
         .map_err(|error| storage_fault(&state, &error))?;
     if !touched {
         return Err(missing("no such product"));
+    }
+
+    // The sidecar is replaced whole where the edit carries one. It is written
+    // after the product update rather than before, so an edit refused as a
+    // missing product leaves no orphaned row behind.
+    if let Some(base) = body.tpt_base.clone() {
+        let record = record_of(&base.into_draft(DraftHead {
+            // The edit carries only what it changes, so the parts the model
+            // validates against — the title, the price, the payload — are not
+            // all present. The sidecar's own shapes are still refused by
+            // `record_of`; the whole-product rules were answered at create and
+            // are re-answered by the form before it sends this.
+            name: body.title.clone().unwrap_or_default(),
+            description: body.body.clone().unwrap_or_default(),
+            free: matches!(price, Some(PriceIntent::Free) | None),
+            price_minor_units: match price {
+                Some(PriceIntent::Paid(money)) => Some(money.minor_units()),
+                Some(PriceIntent::Free) | None => None,
+            },
+            payload_hash: None,
+            grades: vec![],
+        }))?;
+        TptBaseRepo::new(state.pool.clone())
+            .upsert(context.org, product, &record, now)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
     }
     Ok(Json(PatchedProductView {
         product,

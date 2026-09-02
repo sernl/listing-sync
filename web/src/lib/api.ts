@@ -25,6 +25,8 @@ import type {
 	NativeVocabularyKind,
 	NonDelegableReason,
 	PayloadFileRule,
+	FormGroup,
+	StandardsState,
 	TermKind
 } from '$lib/generated/vocab';
 
@@ -463,6 +465,29 @@ export interface ElectionInput {
 	answers: AnswerInput[];
 }
 
+/** The TPT-base fields `product` has no column for, which land in the sidecar
+ *  migration 0040 declares. Deliberately a subset: the title, description,
+ *  price, payload handles and grades travel on the create body itself, and a
+ *  second copy of any of them is a second thing to disagree with. */
+export interface TptBaseInput {
+	thumbnail_mode?: number | null;
+	thumbnail_hashes?: string[];
+	video_preview_hash?: string | null;
+	additional_licence_minor_units?: number | null;
+	bundle_discount_minor_units?: number | null;
+	tax_code_id?: number | null;
+	subject_areas?: string[];
+	tags?: string[];
+	formats?: string[];
+	custom_categories?: string[];
+	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
+	teaching_duration_id?: number | null;
+	pages_or_slides?: number | null;
+	answer_key_id?: number | null;
+	copyright_declaration_id?: number | null;
+	status_user?: number | null;
+}
+
 export interface CreateProductBody {
 	title: string;
 	body?: string;
@@ -476,6 +501,7 @@ export interface CreateProductBody {
 	rights?: RightsInput | null;
 	inventories?: InventoryId[];
 	elections?: ElectionInput[];
+	tpt_base?: TptBaseInput;
 }
 
 export interface MappingView {
@@ -669,6 +695,159 @@ export interface VocabularyView {
 	authoring: AuthoringView;
 }
 
+// -------------------------------------------------- the canonical form
+
+/** One member of a `data[TaxonomyTags][]` picker.
+ *
+ *  `seller_writable` is false only where the capture measured that TPT's own
+ *  create form renders no control for the facet: the three grade roll-ups
+ *  drive buyer-facing browse filters and no seller can pick one. They are
+ *  served rather than omitted so the form can explain the absence. */
+export interface FacetView {
+	slug: string;
+	label: string;
+	parent?: string;
+	seller_writable: boolean;
+}
+
+/** One option of a listbox, radio group or switch.
+ *
+ *  `id` is the wire value and the list is ordered by it. `menu_index` is where
+ *  TPT's own menu puts the option, which for Answer Key is not the same thing:
+ *  its positions 3 and 5 carry ids 4 and 3, so a client that derived an id
+ *  from a position would write "Included with Rubric" as "Does Not Apply". */
+export interface FormOption {
+	id: string;
+	label: string;
+	menu_index?: number;
+	code?: string;
+}
+
+/** A picker's measured limit. An absent field is unmeasured, never unlimited:
+ *  `subject_areas` has none because a capture TPT accepted already exceeded
+ *  the number its form states. */
+export interface FormCaps {
+	grades?: number;
+	subject_areas?: number;
+	tags?: number;
+	formats?: number;
+	thumbnails?: number;
+}
+
+export interface SlotView {
+	label: string;
+	max_size_bytes: number;
+	file_extensions: string[];
+}
+
+export interface FormLimits {
+	title_max_utf16_units: number;
+	description_max_length: number;
+	min_price_minor_units: number;
+	additional_licence_percentage: number;
+	free_resource_page_guidance: number;
+	product_file: SlotView;
+	preview: SlotView;
+	video_preview: SlotView;
+	thumbnail: SlotView;
+}
+
+/** The copyright group. `preselect` is always false and is served rather than
+ *  assumed: TPT arrives with its first attestation ticked, and a default here
+ *  would make the seller's legal statement ours. */
+export interface CopyrightView {
+	preamble: string;
+	options: FormOption[];
+	preselect: boolean;
+}
+
+export interface FrameworkView {
+	jurisdiction_id: number;
+	name: string;
+	button_label: string;
+}
+
+/** Every controlled list the canonical create form renders. */
+export interface FormVocabularyView {
+	grades: FacetView[];
+	grade_columns: number[];
+	subject_areas: FacetView[];
+	tags: FacetView[];
+	formats: FacetView[];
+	tax_codes: FormOption[];
+	teaching_durations: FormOption[];
+	answer_keys: FormOption[];
+	thumbnail_modes: FormOption[];
+	copyright: CopyrightView;
+	statuses: FormOption[];
+	standards_frameworks: FrameworkView[];
+	caps: FormCaps;
+	limits: FormLimits;
+}
+
+/** The draft as the form holds it, sent to the server for the verdict. */
+export interface DraftInput {
+	name?: string;
+	payload_hash?: string | null;
+	preview_hash?: string | null;
+	video_preview_hash?: string | null;
+	thumbnail_mode?: number | null;
+	thumbnail_hashes?: string[];
+	description?: string;
+	free?: boolean;
+	price_minor_units?: number | null;
+	additional_licence_minor_units?: number | null;
+	bundle_discount_minor_units?: number | null;
+	tax_code_id?: number | null;
+	grades?: string[];
+	subject_areas?: string[];
+	tags?: string[];
+	formats?: string[];
+	custom_categories?: string[];
+	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
+	teaching_duration_id?: number | null;
+	pages_or_slides?: number | null;
+	answer_key_id?: number | null;
+	copyright_declaration_id?: number | null;
+	status_user?: number | null;
+}
+
+export interface RefusalView {
+	group: FormGroup;
+	control?: string;
+	message: string;
+}
+
+export interface AdvisoryView {
+	group: FormGroup;
+	message: string;
+}
+
+/** What the server says the form must refuse. The client runs the same rules
+ *  as the seller types; this is the authority. */
+export interface CheckView {
+	submittable: boolean;
+	refusals: RefusalView[];
+	advisories: AdvisoryView[];
+}
+
+export interface StandardView {
+	framework: number;
+	code: string;
+	statement: string;
+	tpt_node_id?: number;
+}
+
+/** `not_ingested` is a state rather than an empty result: no standard matched
+ *  your words, against no standard exists here yet. `attribution` travels with
+ *  the results because the licence obliges it wherever a standard is shown. */
+export interface StandardsSearchView {
+	state: StandardsState;
+	framework: number;
+	items: StandardView[];
+	attribution: string;
+}
+
 // ----------------------------------------------------------------- taxonomy
 
 /** One canonical term: the relation above the marketplaces' own field tables,
@@ -757,6 +936,19 @@ export const api = {
 	 *  like a vocabulary: the taxonomy is ours rather than an organisation's and
 	 *  changes only when the server does. */
 	terms: (kind: TermKind) => request<TermsView>(`/v1/taxonomy/terms?kind=${kind}`),
+
+	/** Every controlled list the canonical create form renders. One read for
+	 *  the whole form, cached like a vocabulary: it is the committed TPT
+	 *  capture rendered onto the wire and changes only when the server does. */
+	formVocabulary: () => request<FormVocabularyView>('/v1/authoring/vocabulary'),
+	/** The server's verdict on a draft. The form runs the same rules inline so
+	 *  a seller sees a message as they type; this is what decides. */
+	checkDraft: (draft: DraftInput) => post<CheckView>('/v1/authoring/check', draft),
+	/** One jurisdiction's standards, or the honest not-ingested state. */
+	standardsSearch: (framework: number, query: string) =>
+		request<StandardsSearchView>(
+			`/v1/standards/search?framework=${framework}&q=${encodeURIComponent(query)}`
+		),
 	upload,
 	createProduct: (body: CreateProductBody) =>
 		post<CreatedProductView>('/v1/products', body),

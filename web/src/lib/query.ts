@@ -36,6 +36,10 @@ export const queryKeys = {
 	 *  form reads several at once and each is a separate cache entry, so
 	 *  selecting a second platform fetches only the one it added. */
 	vocabulary: (inventory: string) => ['vocabulary', inventory] as const,
+	/** Every controlled list the canonical create form renders. One entry for
+	 *  the whole form: it is the committed TPT capture rendered onto the wire
+	 *  and changes only when the server does. */
+	formVocabulary: ['form-vocabulary'] as const,
 	/** The canonical terms of one kind. Keyed by the kind because the create
 	 *  form reads the subjects alone, and a second kind is a second entry
 	 *  rather than a refetch of this one. */

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 45] = [
+pub const ROUTES: [Route; 48] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -158,6 +158,21 @@ pub const ROUTES: [Route; 45] = [
         method: "get",
         path: "/{version}/vocabulary/{inventory}",
         summary: "One marketplace's authoring vocabulary, so the form is data-driven",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/authoring/vocabulary",
+        summary: "Every controlled list the canonical create form renders",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/authoring/check",
+        summary: "What the create form refuses, decided by the server rather than the client",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/standards/search",
+        summary: "Education standards for one jurisdiction, or the not-ingested state",
     },
     Route {
         method: "get",

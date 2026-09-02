@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
+use tam_api::product::StandardsState;
 use tam_api::quota::QuotaKind;
 use tam_api::resources::{kind_str, role_str};
 use tam_api::vocabulary::{
@@ -15,6 +16,7 @@ use tam_api::vocabulary::{
 };
 use tam_api::{APIErrorCode, APIErrorKind};
 use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
+use tam_domain::product::FormGroup;
 use tam_storage::ItemStateKind;
 use tam_types::{
     ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,
@@ -109,6 +111,22 @@ fn main() {
     out.push_str(&union("PayloadFileRule", &PayloadFileRule::ALL, serde_name));
     out.push('\n');
     out.push_str(&union("BodyWire", &BodyWire::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union("StandardsState", &StandardsState::ALL, serde_name));
+    out.push('\n');
+    // From `token` rather than from serde: `FormGroup` lives in tam-domain,
+    // which carries no serde dependency and does not acquire one to shorten a
+    // generator.
+    out.push_str(&union("FormGroup", &FormGroup::ALL, |group| {
+        format!("\"{}\"", group.token())
+    }));
+    out.push_str("\nexport const FORM_GROUPS: readonly FormGroup[] = [\n");
+    for group in FormGroup::ALL {
+        use core::fmt::Write;
+        // infallible on String; the Result is the trait's, not the writer's
+        let _unused: core::fmt::Result = writeln!(out, "  \"{}\",", group.token());
+    }
+    out.push_str("];\n");
     out.push('\n');
     // Emitted from `as_str` rather than from serde, because these two live in
     // tam-domain, which carries no serde dependency and does not acquire one

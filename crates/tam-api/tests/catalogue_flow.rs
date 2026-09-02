@@ -19,8 +19,9 @@ use tam_api::resources::ProductView;
 use tam_api::taxonomy::TermsView;
 use tam_api::vocabulary::VocabularyView;
 use tam_api::{router, APIError, APIErrorCode, AppState, BlobStore, Config, SESSION_COOKIE};
+use tam_domain::product::{AnswerKey, TaxCode};
 use tam_storage::{
-    ElectionRepo, MappingRepo, ProductRepo, SessionRepo, SessionToken, TaxonomyRepo,
+    ElectionRepo, MappingRepo, ProductRepo, SessionRepo, SessionToken, TaxonomyRepo, TptBaseRepo,
 };
 use tam_types::{CanonicalTermId, InventoryId, OrgId, ProductId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
@@ -267,6 +268,135 @@ fn create_body(uploaded: &UploadedView, title: &str, inventories: &[&str]) -> se
             "answers": [{"segments": ["CC-BY"], "native_id": "CC-BY"}]
         }]
     })
+}
+
+/// The TPT-base block that TPT's own form collects and `product` has no
+/// column for. Only what the sidecar stores: the title, price, payload and
+/// grades travel on the create body itself.
+fn tpt_base() -> serde_json::Value {
+    serde_json::json!({
+        "subject_areas": ["math"],
+        "tags": ["centers"],
+        "formats": ["easel"],
+        "custom_categories": ["Autumn unit"],
+        "tax_code_id": 2,
+        "additional_licence_minor_units": 405,
+        "teaching_duration_id": 6,
+        "pages_or_slides": 12,
+        // Wire id 4 is "Included with Rubric", which sits at menu position 3.
+        // Reading it back as 4 is what proves nothing derived it from a
+        // position on the way through the wire and the column.
+        "answer_key_id": 4,
+        "copyright_declaration_id": 1,
+        "status_user": 0
+    })
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_create_persists_every_group_the_form_collects(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("tpt-base");
+    let state = configured(pool.clone(), &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("base"), "").await;
+
+    let mut body = create_body(&uploaded, "Fractions on a number line", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    body["tpt_base"] = tpt_base();
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let created: CreatedProductView =
+        serde_json::from_slice(&created).expect("the create answers its own view");
+
+    let held = TptBaseRepo::new(pool)
+        .get(ORG_A, created.product)
+        .await
+        .expect("the sidecar reads")
+        .expect("the create wrote a sidecar row");
+    assert_eq!(
+        held.details.answer_key.map(AnswerKey::wire_id),
+        Some(4),
+        "the answer key arrives as its wire id rather than its menu position"
+    );
+    assert_eq!(
+        held.tax_code.map(TaxCode::wire_id),
+        Some(2),
+        "the tax code the seller designated, which is never chosen for them"
+    );
+    assert_eq!(
+        (
+            held.categories.subject_areas.len(),
+            held.categories.tags.len(),
+            held.categories.formats.len(),
+            held.categories.custom_categories.as_slice()
+        ),
+        (1, 1, 1, ["Autumn unit".to_owned()].as_slice()),
+        "each picker's chosen slugs survive verbatim, and the seller's own shelf beside them"
+    );
+    assert_eq!(held.additional_licence_minor_units, Some(405));
+    assert_eq!(held.details.pages_or_slides, Some(12));
+}
+
+/// The attestation gate, at the route rather than only in the form: a client
+/// that skipped the radio group is refused with the reason rather than
+/// writing a product nobody attested to.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_create_without_an_attestation_is_refused_by_name(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("no-attestation");
+    let state = configured(pool.clone(), &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("bare"), "").await;
+
+    let mut body = create_body(&uploaded, "Unattested", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    let mut base = tpt_base();
+    base["copyright_declaration_id"] = serde_json::Value::Null;
+    body["tpt_base"] = base;
+
+    let (status, refused) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let refused = String::from_utf8_lossy(&refused);
+    assert!(
+        refused.contains("copyright"),
+        "the refusal names the group whose control is unanswered: {refused}"
+    );
+}
+
+/// A create from a path that does not author on this form writes no sidecar
+/// row, which is why every read of that table is an outer join.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_create_without_the_block_writes_no_sidecar_row(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("no-base");
+    let state = configured(pool.clone(), &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("plain"), "").await;
+
+    let (status, created) = json_call(
+        state,
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &create_body(&uploaded, "Imported elsewhere", &["TesGb"]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let created: CreatedProductView =
+        serde_json::from_slice(&created).expect("the create answers its own view");
+    assert_eq!(
+        TptBaseRepo::new(pool)
+            .get(ORG_A, created.product)
+            .await
+            .expect("the sidecar reads"),
+        None,
+        "no block is a create that did not author on this form, and absence is a fact"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

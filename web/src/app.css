@@ -1804,3 +1804,210 @@ dialog::backdrop {
 	margin-top: 16px;
 	justify-content: flex-end;
 }
+
+/* ---------------------------------------------------------------- the create
+   form. One section per heading TPT's own form carries, so the segregation a
+   seller already knows survives: they look for the tax code under Price
+   because that is where TPT puts it. The controls below are the same control
+   type per field, plus the three things that cost nothing and TPT does not
+   do — a counter against each measured cap, a search over the long pickers,
+   and an inline message that names the control rather than the request. */
+
+.form-group {
+	scroll-margin-top: 24px;
+}
+
+/* The "Required" marker TPT renders beside a label, in its own right rather
+   than as an asterisk a screen reader reads as punctuation. */
+.req {
+	margin-left: 8px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	color: var(--accent);
+}
+
+.field > span > .counter {
+	margin-left: 8px;
+}
+
+/* The grade grid, read down its columns: primary grades, middle grades,
+   high-school grades, then the three non-grade bands. The column arrangement
+   is the segregation, so it survives the narrowest breakpoint by halving
+   rather than collapsing to one list. */
+.grade-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 4px 14px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card);
+	padding: 10px 12px;
+}
+
+.grade-col {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+@media (max-width: 720px) {
+	.grade-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+/* One checkbox and its words, tighter than `.choice`: these run to seventeen
+   in a grid and to 133 in a scroll box, where a bordered row per option is
+   noise rather than structure. */
+.tick {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 5px 0;
+	font-weight: 400;
+	font-size: 13px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.tick input {
+	margin: 3px 0 0;
+	flex: none;
+}
+
+.tick.off {
+	color: var(--faint);
+}
+
+.picker input[type='search'] {
+	margin-top: 6px;
+}
+
+.picker .pick-list {
+	margin-top: 6px;
+}
+
+/* The chosen members of a capped picker, shown as removable chips so the
+   selection is legible without opening the list. */
+.chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 6px 0 2px;
+}
+
+.chip-pick {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 6px 3px 9px;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	background: var(--accent-soft);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.chip-pick button {
+	border: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1;
+	padding: 0 2px;
+}
+
+.chip-pick button:hover {
+	color: var(--bad);
+}
+
+/* The destination rail, and the framework rail inside Education Standards. */
+.tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	border-bottom: 1px solid var(--line);
+	margin-bottom: 14px;
+}
+
+.tab {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	border: 0;
+	background: none;
+	padding: 9px 13px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--muted);
+	border-bottom: 2px solid transparent;
+	margin-bottom: -1px;
+}
+
+.tab[aria-selected='true'] {
+	color: var(--ink);
+	border-bottom-color: var(--accent);
+}
+
+.tab:hover {
+	color: var(--ink);
+}
+
+/* The four fixed thumbnail slots, revealed under "upload thumbnails now"
+   exactly as TPT's own conditional does. */
+.thumb-slots {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 10px;
+	margin-top: 10px;
+}
+
+.thumb-slot {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	border: 1px dashed var(--line);
+	border-radius: 8px;
+	background: var(--card);
+	padding: 14px 12px;
+	text-align: center;
+	color: var(--muted);
+}
+
+.thumb-slot b {
+	color: var(--ink);
+	font-size: 13px;
+}
+
+/* The seller's own shelves, visually apart from the three platform pickers
+   because the values are theirs rather than the marketplace's. */
+.custom-shelf {
+	margin-top: 14px;
+	padding-top: 14px;
+	border-top: 1px dashed var(--line);
+}
+
+.preamble {
+	margin: 0 0 10px;
+	font-size: 13px;
+	color: var(--muted);
+	line-height: 1.55;
+}
+
+/* A field on a marketplace tab whose value has been taken away from the
+   canonical one. */
+.override + .override {
+	margin-top: 14px;
+}
+
+.override .inline-choices {
+	margin-top: 8px;
+}
+
+.refusals li a {
+	color: inherit;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}

@@ -26,6 +26,7 @@ mod product;
 pub mod pruning;
 pub mod sessions;
 pub mod taxonomy;
+pub mod tpt_base;
 
 pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
@@ -60,6 +61,7 @@ pub use org::{OrgRecord, OrgRepo};
 pub use product::{ProductEdit, ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
+pub use tpt_base::{TptBaseRecord, TptBaseRepo};
 pub mod elections;
 pub mod sync_requests;
 pub use elections::{AnswerReport, AnsweredElection, ElectionRepo, NewAnswer, OpenElection};

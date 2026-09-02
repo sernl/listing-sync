@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO product_tpt_base (org_id, product_id, thumbnail_mode, thumbnail_hashes, video_preview_hash, additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, teaching_duration_id, pages_or_slides, answer_key_id, copyright_declaration_id, status_user, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) ON CONFLICT (org_id, product_id) DO UPDATE SET thumbnail_mode                 = EXCLUDED.thumbnail_mode, thumbnail_hashes               = EXCLUDED.thumbnail_hashes, video_preview_hash             = EXCLUDED.video_preview_hash, additional_licence_minor_units = EXCLUDED.additional_licence_minor_units, bundle_discount_minor_units    = EXCLUDED.bundle_discount_minor_units, tax_code_id                    = EXCLUDED.tax_code_id, subject_area_slugs             = EXCLUDED.subject_area_slugs, tag_slugs                      = EXCLUDED.tag_slugs, format_slugs                   = EXCLUDED.format_slugs, custom_categories              = EXCLUDED.custom_categories, standards                      = EXCLUDED.standards, teaching_duration_id           = EXCLUDED.teaching_duration_id, pages_or_slides                = EXCLUDED.pages_or_slides, answer_key_id                  = EXCLUDED.answer_key_id, copyright_declaration_id       = EXCLUDED.copyright_declaration_id, status_user                    = EXCLUDED.status_user, updated_at                     = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int2",
+        "ByteaArray",
+        "Bytea",
+        "Int8",
+        "Int8",
+        "Int2",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Jsonb",
+        "Int2",
+        "Int4",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "46f79c2f3dbc407f7116f15992c30622fa030105b3110eb55ff48bd890de682e"
+}

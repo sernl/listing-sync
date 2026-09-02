@@ -25,6 +25,7 @@ pub mod jobs;
 pub mod openapi;
 pub mod org;
 pub mod paddle;
+pub mod product;
 pub mod quota;
 pub mod resources;
 pub mod session;
@@ -184,6 +185,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/vocabulary/{inventory}",
             get(vocabulary::vocabulary_view),
+        )
+        .route(
+            "/{version}/authoring/vocabulary",
+            get(product::form_vocabulary_view),
+        )
+        .route("/{version}/authoring/check", post(product::check_draft))
+        .route(
+            "/{version}/standards/search",
+            get(product::standards_search),
         )
         .route("/{version}/taxonomy/terms", get(taxonomy::list_terms))
         .route("/{version}/connections", get(resources::list_connections))

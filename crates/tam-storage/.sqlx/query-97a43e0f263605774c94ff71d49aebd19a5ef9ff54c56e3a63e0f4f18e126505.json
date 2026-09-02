@@ -1,0 +1,113 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT thumbnail_mode, thumbnail_hashes, video_preview_hash, additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, teaching_duration_id, pages_or_slides, answer_key_id, copyright_declaration_id, status_user FROM product_tpt_base WHERE org_id = $1 AND product_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "thumbnail_mode",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "thumbnail_hashes",
+        "type_info": "ByteaArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "video_preview_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "additional_licence_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "bundle_discount_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "tax_code_id",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
+        "name": "subject_area_slugs",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 7,
+        "name": "tag_slugs",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 8,
+        "name": "format_slugs",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 9,
+        "name": "custom_categories",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 10,
+        "name": "standards",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 11,
+        "name": "teaching_duration_id",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 12,
+        "name": "pages_or_slides",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "answer_key_id",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 14,
+        "name": "copyright_declaration_id",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 15,
+        "name": "status_user",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "97a43e0f263605774c94ff71d49aebd19a5ef9ff54c56e3a63e0f4f18e126505"
+}

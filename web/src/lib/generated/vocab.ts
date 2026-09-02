@@ -162,6 +162,33 @@ export type BodyWire =
   | "carries_declared_format"
   | "renders_to_html";
 
+export type StandardsState =
+  | "ingested"
+  | "not_ingested";
+
+export type FormGroup =
+  | "name"
+  | "files"
+  | "description"
+  | "price"
+  | "categories"
+  | "education_standards"
+  | "details"
+  | "copyright"
+  | "product_status";
+
+export const FORM_GROUPS: readonly FormGroup[] = [
+  "name",
+  "files",
+  "description",
+  "price",
+  "categories",
+  "education_standards",
+  "details",
+  "copyright",
+  "product_status",
+];
+
 export type ElectionTriggerKind =
   | "supply"
   | "elect_one"
