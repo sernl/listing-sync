@@ -1,10 +1,25 @@
 {
   "_source": "Polled live on 2026-08-29 against the founder's own TPT seller session: the `TaxCodesQuery`, `EducationStandardsJurisdictionsQuery` and `MyProductListingsCustomCategories` operations on https://www.teacherspayteachers.com/graph/graphql, the `JSON.parse` blobs embedded in the `tpt-frontend` webpack chunks, and the `var cfg = {...}` bootstrap on GET /My-Products/New/Digital-Next. GraphQL introspection is disabled on both /graph/graphql and /gateway/graphql, so operation text was recovered from the `loc.source.body` literals the client bundles carry.",
   "_status": "complete for every fixed option set the create and edit forms offer; the education-standards leaf ids below each jurisdiction are deliberately not captured, and the seller custom store categories are seller-scoped rather than a platform vocabulary",
+  "_revisions": [
+    {
+      "date": "2026-09-03",
+      "source": "docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03",
+      "changed": [
+        "constraints.selectionCaps added: the four picker caps the create form states, from tpt-product-model.md executive summary item 5 and the create-form screenshot",
+        "taxonomyTags: sellerWritable false on elementary, middle-school and high-school, the three Grade-Level roll-ups the form offers no checkbox for",
+        "teachingDuration: sixteen labels corrected to the title case the DOM renders; the ids are unaffected",
+        "answerKey: domIndex added to every option, because the menu order is not the id order",
+        "taxCodes: domIndex added to every option, confirming id equals index plus one",
+        "constraints.uploadSlots.thumbnails: slots confirmed at four against the DOM's four thumb boxes"
+      ]
+    }
+  ],
   "taxonomyTags": {
     "field": "data[TaxonomyTags][] (read back as `taxonomyTags`)",
     "note": "One flat slug namespace where a grade, a subject, a resource type, a file format and a language are all the same kind of thing; only `category` tells them apart, and it is metadata about the slug rather than a separate field on the product. Referentially closed: every `parentId` resolves inside the set. Max depth 2.",
     "hiddenNote": "An `isHidden` facet is a retired value that still reads back on existing products. Accept it on read, never offer it on write.",
+    "writableNote": "A `sellerWritable: false` facet is one the create form offers no control for, so the projection must never post it. The 2026-09-03 DOM read renders seventeen Grade-Level checkboxes against the twenty Grade-Level facets here: `elementary`, `middle-school` and `high-school` are the buyer-side roll-ups that drive browse filters and are parents of the seventeen. Distinct from `isHidden`, which is a retired value: a roll-up is current and unwritable rather than retired.",
     "countsByCategory": {
       "PreK-12-Subject-Area": 140,
       "Type-of-Resource": 71,
@@ -22,15 +37,21 @@
     "options": {
       "elementary": {
         "name": "Elementary",
-        "category": "Grade-Level"
+        "category": "Grade-Level",
+        "sellerWritable": false,
+        "_source": "docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03"
       },
       "middle-school": {
         "name": "Middle School",
-        "category": "Grade-Level"
+        "category": "Grade-Level",
+        "sellerWritable": false,
+        "_source": "docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03"
       },
       "high-school": {
         "name": "High School",
-        "category": "Grade-Level"
+        "category": "Grade-Level",
+        "sellerWritable": false,
+        "_source": "docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03"
       },
       "art": {
         "name": "Art",
@@ -2138,155 +2159,189 @@
   },
   "taxCodes": {
     "field": "data[ItemTaxCode][tax_code_id]",
-    "note": "The field carries the row `id`, not the `taxCode` string: the captured edit posted 2 for a product reading back as DB031013.",
+    "note": "The field carries the row `id`, not the `taxCode` string: the captured edit posted 2 for a product reading back as DB031013. The 2026-09-03 DOM read confirms the same five rows in the same order with all five labels matching, so the wire id is the DOM index plus one. As with answerKey the `li` elements carry no value attribute, and the id is read from this file rather than from a position. Source: docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03.",
     "options": {
       "1": {
         "taxCode": "DA051011",
-        "name": "Digital audio works sold to an end user with rights for permanent use"
+        "name": "Digital audio works sold to an end user with rights for permanent use",
+        "domIndex": 0
       },
       "2": {
         "taxCode": "DB031013",
-        "name": "Digital books sold to an end user with rights for permanent use"
+        "name": "Digital books sold to an end user with rights for permanent use",
+        "domIndex": 1
       },
       "3": {
         "taxCode": "DI010200",
-        "name": "Digital Images - Streaming / Electronic Download"
+        "name": "Digital Images - Streaming / Electronic Download",
+        "domIndex": 2
       },
       "4": {
         "taxCode": "DV010200",
-        "name": "Videos - Streaming / Electronic Download"
+        "name": "Videos - Streaming / Electronic Download",
+        "domIndex": 3
       },
       "5": {
         "taxCode": "DO010000",
-        "name": "Other Digital Goods - No Physical Media"
+        "name": "Other Digital Goods - No Physical Media",
+        "domIndex": 4
       }
     }
   },
   "teachingDuration": {
     "field": "data[ItemsProperty][duration] (read back as `teachingDuration`)",
-    "note": "The write side posts the id and the GraphQL read side returns the symbolic name. `UNKNOWN` appears in the read-side label map with no numeric counterpart, so it is a read sentinel rather than a member.",
+    "note": "The write side posts the id and the GraphQL read side returns the symbolic name. `UNKNOWN` appears in the read-side label map with no numeric counterpart, so it is a read sentinel rather than a member. The DOM index equals the id for all twenty-three, and the DOM is the display authority for the labels: sixteen were corrected to its title case on 2026-09-03 (ids 0, 13, 14, 15, 19, 20 and 22 already matched). Source: docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03.",
     "options": {
       "0": {
         "enum": "NA",
-        "label": "N/A"
+        "label": "N/A",
+        "domIndex": 0
       },
       "1": {
         "enum": "MINUTES_30",
-        "label": "30 minutes"
+        "label": "30 Minutes",
+        "domIndex": 1
       },
       "2": {
         "enum": "MINUTES_40",
-        "label": "40 minutes"
+        "label": "40 Minutes",
+        "domIndex": 2
       },
       "3": {
         "enum": "MINUTES_45",
-        "label": "45 minutes"
+        "label": "45 Minutes",
+        "domIndex": 3
       },
       "4": {
         "enum": "MINUTES_50",
-        "label": "50 minutes"
+        "label": "50 Minutes",
+        "domIndex": 4
       },
       "5": {
         "enum": "MINUTES_55",
-        "label": "55 minutes"
+        "label": "55 Minutes",
+        "domIndex": 5
       },
       "6": {
         "enum": "HOURS_1",
-        "label": "1 hour"
+        "label": "1 Hour",
+        "domIndex": 6
       },
       "7": {
         "enum": "MINUTES_90",
-        "label": "90 minutes"
+        "label": "90 Minutes",
+        "domIndex": 7
       },
       "8": {
         "enum": "HOURS_2",
-        "label": "2 hours"
+        "label": "2 Hours",
+        "domIndex": 8
       },
       "9": {
         "enum": "HOURS_3",
-        "label": "3 hours"
+        "label": "3 Hours",
+        "domIndex": 9
       },
       "10": {
         "enum": "DAYS_2",
-        "label": "2 days"
+        "label": "2 Days",
+        "domIndex": 10
       },
       "11": {
         "enum": "DAYS_3",
-        "label": "3 days"
+        "label": "3 Days",
+        "domIndex": 11
       },
       "12": {
         "enum": "DAYS_4",
-        "label": "4 days"
+        "label": "4 Days",
+        "domIndex": 12
       },
       "13": {
         "enum": "WEEKS_1",
-        "label": "1 Week"
+        "label": "1 Week",
+        "domIndex": 13
       },
       "14": {
         "enum": "WEEKS_2",
-        "label": "2 Weeks"
+        "label": "2 Weeks",
+        "domIndex": 14
       },
       "15": {
         "enum": "WEEKS_3",
-        "label": "3 Weeks"
+        "label": "3 Weeks",
+        "domIndex": 15
       },
       "16": {
         "enum": "MONTHS_1",
-        "label": "1 month"
+        "label": "1 Month",
+        "domIndex": 16
       },
       "17": {
         "enum": "MONTHS_2",
-        "label": "2 months"
+        "label": "2 Months",
+        "domIndex": 17
       },
       "18": {
         "enum": "MONTHS_3",
-        "label": "3 months"
+        "label": "3 Months",
+        "domIndex": 18
       },
       "19": {
         "enum": "SEMESTERS_1",
-        "label": "1 Semester"
+        "label": "1 Semester",
+        "domIndex": 19
       },
       "20": {
         "enum": "YEARS_1",
-        "label": "1 Year"
+        "label": "1 Year",
+        "domIndex": 20
       },
       "21": {
         "enum": "LIFELONG_TOOL",
-        "label": "Lifelong tool"
+        "label": "Lifelong Tool",
+        "domIndex": 21
       },
       "22": {
         "enum": "OTHER",
-        "label": "Other"
+        "label": "Other",
+        "domIndex": 22
       }
     }
   },
   "answerKey": {
     "field": "data[ItemsProperty][answer_key] (read back as `answerKey`)",
-    "note": "`UNKNOWN` is again read-side only.",
+    "note": "`UNKNOWN` is again read-side only. The 2026-09-03 DOM read confirms all six labels and settles that the menu order is not the id order: the six `li` elements run N/A, Included, Not Included, Included with Rubric, Rubric Only, Does Not Apply, which is ids 0, 1, 2, 4, 5, 3. The `li` elements carry no value attribute, so an id inferred from a menu position writes Included with Rubric as Does Not Apply. Read the id from this file, never from a position. Source: docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03.",
     "options": {
       "0": {
         "enum": "NA",
-        "label": "N/A"
+        "label": "N/A",
+        "domIndex": 0
       },
       "1": {
         "enum": "INCLUDED",
-        "label": "Included"
+        "label": "Included",
+        "domIndex": 1
       },
       "2": {
         "enum": "NOT_INCLUDED",
-        "label": "Not Included"
+        "label": "Not Included",
+        "domIndex": 2
       },
       "3": {
         "enum": "DOES_NOT_APPLY",
-        "label": "Does Not Apply"
+        "label": "Does Not Apply",
+        "domIndex": 5
       },
       "4": {
         "enum": "INCLUDED_WITH_RUBRIC",
-        "label": "Included with Rubric"
+        "label": "Included with Rubric",
+        "domIndex": 3
       },
       "5": {
         "enum": "RUBRIC_ONLY",
-        "label": "Rubric Only"
+        "label": "Rubric Only",
+        "domIndex": 4
       }
     }
   },
@@ -3205,7 +3260,8 @@
           "png",
           "tiff",
           "tif"
-        ]
+        ],
+        "_source": "Confirmed 2026-09-03 against the four `data[ItemDigital][thumb1..thumb4]` boxes the create form renders under `generate_thumbnail` mode 2, and against TPT help article 360042865851 (\"up to four thumbnail images per product\"). Source: docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03."
       },
       "videoPreview": {
         "maxSizeBytes": 1073741824,
@@ -3233,6 +3289,17 @@
           "video/x-msvideo"
         ]
       }
+    },
+    "selectionCaps": {
+      "_source": "docs/research/rethink/tpt-product-model.md, from the 2026-08-30 HAR capture and the create-form screenshot; confirmed present as placeholder text and absent as a validation attribute by docs/research/rethink/tpt-create-form-dom.md, read from a full-page DOM snapshot of GET /My-Products/New/Digital-Next taken 2026-09-03",
+      "_note": "How many members each create-form picker states it accepts. The form states these as placeholder and helper text rather than as a `max` attribute, and the 2026-09-03 DOM read confirms no `max`, `maxlength` or data attribute anywhere on the four controls. A picker named in `contradictedByCapture` has been observed to accept more than it states: the 2026-08-30 create posted four PreK-12-Subject-Area slugs against a stated cap of three, so that number is the form's claim rather than a refusal, and enforcing it would raise a question about a set the platform already accepted. A cap absent here is unmeasured, never unlimited.",
+      "grades": 4,
+      "subjectAreas": 3,
+      "tags": 6,
+      "formats": 3,
+      "contradictedByCapture": [
+        "subjectAreas"
+      ]
     },
     "note": "Every value but the title length comes from the `var cfg` bootstrap the create page hands its own client, so these are the client's bounds and not server refusals anyone measured. 80 is both the title-length constant in chunk `tpt-frontend.1.1564` and the longest of 352 observed titles; the counting unit is unverified, so `crates/tam-domain/src/registry.rs` declares no title cap."
   },

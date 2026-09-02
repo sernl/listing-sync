@@ -687,6 +687,89 @@ mod tests {
         );
     }
 
+    /// The registry's one measured cardinality cap, spent where a listing
+    /// actually crosses. TPT's create form takes four grades, so a fifth is a
+    /// question about which four rather than a set quietly cut to length, and
+    /// `project_listing` is where a seller meets that question.
+    #[test]
+    fn a_grade_set_over_tpts_declared_cap_blocks_on_one_election_and_publishes_nothing() {
+        const SLUGS: [&str; 5] = [
+            "1st-grade",
+            "2nd-grade",
+            "3rd-grade",
+            "4th-grade",
+            "5th-grade",
+        ];
+        let phase = VocabularyId(InventoryId::Tpt, TermKind::Phase);
+        let term = |index: u8| CanonicalTermId(Uuid([0xC0 + index; 16]));
+        let path = |index: usize| VocabularyPath {
+            vocabulary: phase,
+            segments: vec![SLUGS[index].to_owned()],
+            native_id: Some(SLUGS[index].to_owned()),
+        };
+        let catalogue: Vec<CanonicalTerm> = (0..SLUGS.len())
+            .map(|index| CanonicalTerm {
+                id: term(u8::try_from(index).expect("five fits")),
+                kind: TermKind::Phase,
+                parent: None,
+                label: SLUGS[index].to_owned(),
+            })
+            .collect();
+        let edges: Vec<ProjectionEdge> = (0..SLUGS.len())
+            .map(|index| ProjectionEdge {
+                from: term(u8::try_from(index).expect("five fits")),
+                to: path(index),
+                kind: EdgeKind::Exact,
+                decided_by: Decider::Imported {
+                    source: "test".to_owned(),
+                },
+                decided_at: NOW,
+            })
+            .collect();
+
+        let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        source.subjects = vec![];
+        source.grades.source = tam_domain::DeclarationSource::Imported { vocabulary: phase };
+        source.grades.raw = (0..SLUGS.len()).map(path).collect();
+
+        let blocked = project_listing(
+            &source,
+            &ListingContext {
+                inventory: InventoryId::Tpt,
+                ..ctx(&catalogue, &edges, &[])
+            },
+        )
+        .expect_err("five grades against a cap of four is a question, not a projection");
+        let ProjectionBlocked::Blocked {
+            gaps, elections, ..
+        } = blocked
+        else {
+            panic!("the cap is an election, not another gate: {blocked:?}");
+        };
+        assert!(
+            gaps.is_empty(),
+            "every grade maps; only the count is at issue"
+        );
+        assert_eq!(elections.len(), 1, "one axis over its cap, one question");
+        assert_eq!(elections[0].axis, TermKind::Phase);
+        let ElectionTrigger::OverCap { cap, from } = &elections[0].trigger else {
+            panic!(
+                "a set over the cap is an OverCap trigger: {:?}",
+                elections[0]
+            );
+        };
+        assert_eq!(
+            *cap, 4,
+            "the registry's declared cap reaches the seller as the number the form states"
+        );
+        assert_eq!(
+            from.len(),
+            5,
+            "the whole resolved set goes into the question, so no four-grade subset exists \
+             anywhere for a caller to publish by accident"
+        );
+    }
+
     #[test]
     fn an_unmapped_term_blocks_as_a_vocabulary_gap() {
         let catalogue = terms();

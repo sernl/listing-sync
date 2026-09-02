@@ -2,8 +2,8 @@
 //! which binds no licence axis at all.
 
 use super::{
-    AxisAbsent, AxisBinding, CanonicalFields, Cardinality, Delegation, FieldDirection, FieldSpec,
-    InventoryRegistry, LengthCap, NativeField, NativeVocabulary, NonDelegable,
+    AxisAbsent, AxisBinding, CanonicalFields, Cardinality, CountCap, Delegation, FieldDirection,
+    FieldSpec, InventoryRegistry, LengthCap, NativeField, NativeVocabulary, NonDelegable,
 };
 use crate::TermKind;
 use tam_types::{InventoryId, LengthUnit};
@@ -75,6 +75,21 @@ pub(super) const TPT: InventoryRegistry = InventoryRegistry {
 /// grade, a subject, a resource type and an audience are all the same kind of
 /// thing, so the axis is a fact of the facet's own `category` rather than of
 /// where it lands on the wire.
+///
+/// One of the four declares a cap, and the asymmetry is the evidence rather
+/// than an oversight. The create form states a limit on each of its pickers,
+/// but a stated limit is a claim until a write is refused: the 2026-08-30
+/// create posted four `PreK-12-Subject-Area` slugs against a form that says
+/// three, and TPT accepted them, so declaring the subject cap here would raise
+/// an election about a set the platform already took. Grade is the one where
+/// the form's number and every capture agree, so it is the one declared. Topic
+/// and resource type have no picker of their own on the form and therefore no
+/// measurement at all. The numbers live in
+/// docs/design/data/tpt-vocabulary.json under `constraints.selectionCaps`,
+/// which `tam_taxonomy::TptForm` reads; four is restated here because a
+/// registry const cannot read a file, and
+/// `the_declared_grade_cap_is_the_one_the_capture_states` holds the two
+/// against each other.
 const TPT_AXES: &[AxisBinding] = &[
     AxisBinding {
         axis: TermKind::Subject,
@@ -97,7 +112,9 @@ const TPT_AXES: &[AxisBinding] = &[
     AxisBinding {
         axis: TermKind::Phase,
         native: "taxonomyTags",
-        cardinality: Cardinality::Many { cap: None },
+        cardinality: Cardinality::Many {
+            cap: Some(CountCap { limit: 4 }),
+        },
         delegation: Delegation::ByOptIn,
     },
 ];
@@ -336,7 +353,8 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
 mod tests {
     use super::TPT;
     use crate::registry::{
-        AxisAbsent, Delegation, FieldDirection, LengthCap, NativeVocabulary, NonDelegable,
+        AxisAbsent, Cardinality, CountCap, Delegation, FieldDirection, LengthCap, NativeVocabulary,
+        NonDelegable,
     };
     use crate::TermKind;
     use tam_types::{FieldKey, LengthUnit};
@@ -538,6 +556,29 @@ mod tests {
             None,
             "a measured absence is not also a binding"
         );
+    }
+
+    /// One of the four axes carries a cap, and the other three carry none for
+    /// three different reasons. Asserting all four together is what keeps a
+    /// later editor from tidying the asymmetry away.
+    #[test]
+    fn only_the_grade_axis_declares_a_cardinality_cap() {
+        let cap = |axis| TPT.axis(axis).map(|binding| binding.cardinality);
+        assert_eq!(
+            cap(TermKind::Phase),
+            Some(Cardinality::Many {
+                cap: Some(CountCap { limit: 4 })
+            }),
+            "the create form says four grades and no capture contradicts it"
+        );
+        for axis in [TermKind::Subject, TermKind::Topic, TermKind::ResourceType] {
+            assert_eq!(
+                cap(axis),
+                Some(Cardinality::Many { cap: None }),
+                "{axis:?} is either contradicted by a capture or never measured, and an \
+                 absent cap is unmeasured rather than unlimited"
+            );
+        }
     }
 
     #[test]

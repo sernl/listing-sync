@@ -1,7 +1,8 @@
 //! The taxonomy hub: the pure projection function over the edge relation,
 //! the crosswalk derivation over the captured Tes trees, and the Tes
-//! age-range table, and the captured labels a form renders those
-//! vocabularies with. No I/O; the durable side lives in tam-storage.
+//! age-range table, the create-form limits TPT's own capture states, and the
+//! captured labels a form renders those vocabularies with. No I/O; the
+//! durable side lives in tam-storage.
 
 #![forbid(unsafe_code)]
 
@@ -12,6 +13,7 @@ pub mod native_labels;
 pub mod project;
 pub mod provenance;
 pub mod tes;
+pub mod tpt_form;
 
 pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
 pub use licences::{derive_licence_crosswalk, LicenceCrosswalk, LicenceError};
@@ -27,3 +29,4 @@ pub use tes::{
     MismatchReason, Residue, ResidueNode, TesAgeRange, TesSubject, TesTopic, TesTree,
     TES_MAIN_AGE_RANGES,
 };
+pub use tpt_form::{FormError, Picker, TptForm};

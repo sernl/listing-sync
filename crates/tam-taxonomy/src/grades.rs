@@ -1,21 +1,35 @@
 //! The grade axis, derived from the two polled vocabularies rather than
 //! transcribed.
 //!
-//! The canonical grade vocabulary is minted from Tes `yearGroups`, the richest
-//! set on file: thirty rows spanning both countries, every row carrying the
-//! ages it covers. TPT's nineteen grade options pair against it through one
-//! authored fifteen-row table, and everything else — labels, ages, band
+//! The canonical grade vocabulary is minted from TPT's own grade options,
+//! because TPT is the base product model: a canonical phase carries TPT's
+//! identity and TPT's label, and Tes is a projection target like any other.
+//! Fifteen of TPT's nineteen options pair against a Tes `yearGroups` row
+//! through one authored table, and everything else — labels, ages, band
 //! coverage — is read out of the JSONs, so a re-poll cannot leave a
 //! transcription behind.
+//!
+//! TPT is a superset of the axis rather than the whole of it, and the
+//! extension pass is where that is admitted. Fifteen `yearGroups` rows name a
+//! phase TPT has no option for — GB Nursery, Reception and Years 1 to 13 —
+//! and all thirty rows are selectable on the Tes US and NZ wires, so those
+//! fifteen are minted under Tes's identity. The split is the whole content of
+//! the base decision: which side a term's identifier and label come from, and
+//! nothing about the projection functions, which decide on the edge set alone.
+//!
+//! Ages are the one thing the base cannot supply. TPT's `gradeLevels` carries
+//! form labels and no age semantics at all, so a TPT-minted term reaches a Tes
+//! GB age band only through the year group the pairing table names for it, and
+//! the four TPT options no Tes row pairs reach no band at all.
 //!
 //! The GB fork is the interesting half. The Tes editor takes `ageRanges` when
 //! the country is GB and `yearGroups` otherwise, so `VocabularyId(TesGb,
 //! Phase)` denotes the seven age bands while `VocabularyId(TesUs, Phase)`
-//! denotes the thirty year groups. A year group reaches a band by *covering*:
-//! the narrowest band that admits the lowest declared age and does not end
-//! before the highest. Where no band covers, the derivation emits no edge and
-//! a no-counterpart record, because a nearest-band rule would silently file
-//! ages 1-4 under the 3-5 band and pass every count-based check.
+//! denotes the thirty year groups. A phase reaches a band by *covering*: the
+//! narrowest band that admits the lowest declared age and does not end before
+//! the highest. Where no band covers, the derivation emits no edge and a
+//! no-counterpart record, because a nearest-band rule would silently file ages
+//! 1-4 under the 3-5 band and pass every count-based check.
 //!
 //! Neither half of a TPT grade path is in `gradeLevels`, which holds a bare
 //! id-to-form-label map; the seller-facing label and the slug TPT addresses
@@ -53,6 +67,11 @@ use crate::tes::AgeBounds;
 /// against all three Tes inventories; Homeschool and Staff are `audience`
 /// facets TPT's grade selector happens to offer, which is a routing hint for a
 /// later axis and not a reason to force a grade edge.
+///
+/// The table survives the re-base onto TPT unchanged, and reading it in the
+/// other direction is the whole of what the re-base does to it: the pairs are
+/// the same fifteen, and which side mints the term is decided by which pass
+/// visits it first.
 const GRADE_PAIRS: [(u64, u64); 15] = [
     (1, 16),
     (2, 17),
@@ -154,7 +173,7 @@ pub struct Uncovered {
 /// residue for the reconciliation queue; a year group no age band covers is a
 /// measured absence in a vocabulary we hold whole, which is a no-counterpart
 /// record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GradeCrosswalk {
     pub terms: Vec<CanonicalTerm>,
     pub edges: Vec<ProjectionEdge>,
@@ -216,7 +235,6 @@ impl core::fmt::Display for GradeError {
 }
 
 impl core::error::Error for GradeError {}
-
 /// Derives the whole grade axis from the two committed vocabulary captures.
 ///
 /// Pure: both captures arrive as text and the caller does the I/O, so
@@ -226,260 +244,332 @@ pub fn derive_grade_crosswalk(
     tes_json: &str,
     decided_at: Timestamp,
 ) -> Result<GradeCrosswalk, GradeError> {
-    let tpt: TptVocabulary = serde_json::from_str(tpt_json).map_err(|error| GradeError::Parse {
-        file: "tpt-vocabulary.json",
-        detail: error.to_string(),
-    })?;
-    let tes: TesVocabulary = serde_json::from_str(tes_json).map_err(|error| GradeError::Parse {
-        file: "tes-vocabulary.json",
-        detail: error.to_string(),
-    })?;
+    let mint = Mint::read(tpt_json, tes_json)?;
+    let mut building = Building::default();
+    mint.mint_from_tpt(&mut building, decided_at)?;
+    mint.mint_tes_extensions(&mut building, decided_at);
+    mint.seed_bands(&mut building, decided_at);
+    Ok(building.out)
+}
 
-    let year_groups = numbered(&tes.year_groups.options, "yearGroups")?;
-    let bands = numbered(&tes.age_ranges.options, "ageRanges")?;
-    let grade_levels = numbered(&tpt.grade_levels.options, "gradeLevels")?;
-    let facets = grade_facets(&tpt.taxonomy_tags.options);
+/// Both captures as the derivation reads them, plus the two deciders every
+/// row it emits is attributed to.
+struct Mint {
+    year_groups: BTreeMap<u64, YearGroup>,
+    bands: BTreeMap<u64, AgeRange>,
+    grade_levels: BTreeMap<u64, GradeLevel>,
+    facets: BTreeMap<String, Vec<GradeFacet>>,
+    /// TPT grade to Tes year group, and its inverse, from `GRADE_PAIRS`.
+    /// Both directions are held because the first pass asks "what does this
+    /// TPT grade pair to" and the second asks "is this Tes row already
+    /// spoken for".
+    paired: BTreeMap<u64, u64>,
+    spoken_for: BTreeMap<u64, u64>,
+    tes_source: Decider,
+    tpt_source: Decider,
+}
 
-    let tes_source = Decider::Imported {
-        source: tes.source.clone(),
-    };
-    let tpt_source = Decider::Imported {
-        source: tpt.source.clone(),
-    };
+/// The derivation in progress: the crosswalk being built, and the band
+/// bookkeeping the two minting passes accumulate and `seed_bands` spends.
+#[derive(Default)]
+struct Building {
+    out: GradeCrosswalk,
+    /// Band to the year groups it covers, filled by whichever pass routed
+    /// that year group's ages.
+    covered: BTreeMap<u64, Vec<u64>>,
+    /// The TPT grade path each paired year group resolves to, keyed by year
+    /// group, so the band relation reads the same join the first pass did
+    /// rather than re-deriving it.
+    tpt_grades: BTreeMap<u64, VocabularyPath>,
+}
 
-    for &(tpt_id, year_group) in &GRADE_PAIRS {
-        if !year_groups.contains_key(&year_group) {
-            return Err(GradeError::UnknownYearGroup { id: year_group });
+impl Mint {
+    fn read(tpt_json: &str, tes_json: &str) -> Result<Self, GradeError> {
+        let tpt: TptVocabulary =
+            serde_json::from_str(tpt_json).map_err(|error| GradeError::Parse {
+                file: "tpt-vocabulary.json",
+                detail: error.to_string(),
+            })?;
+        let tes: TesVocabulary =
+            serde_json::from_str(tes_json).map_err(|error| GradeError::Parse {
+                file: "tes-vocabulary.json",
+                detail: error.to_string(),
+            })?;
+        let mint = Self {
+            year_groups: numbered(&tes.year_groups.options, "yearGroups")?,
+            bands: numbered(&tes.age_ranges.options, "ageRanges")?,
+            grade_levels: numbered(&tpt.grade_levels.options, "gradeLevels")?,
+            facets: grade_facets(&tpt.taxonomy_tags.options),
+            paired: GRADE_PAIRS.iter().copied().collect(),
+            spoken_for: GRADE_PAIRS
+                .iter()
+                .map(|&(tpt_id, year_group)| (year_group, tpt_id))
+                .collect(),
+            tes_source: Decider::Imported {
+                source: tes.source.clone(),
+            },
+            tpt_source: Decider::Imported {
+                source: tpt.source.clone(),
+            },
+        };
+        for &(tpt_id, year_group) in &GRADE_PAIRS {
+            if !mint.year_groups.contains_key(&year_group) {
+                return Err(GradeError::UnknownYearGroup { id: year_group });
+            }
+            if !mint.grade_levels.contains_key(&tpt_id) {
+                return Err(GradeError::UnknownTptGrade { id: tpt_id });
+            }
         }
-        if !grade_levels.contains_key(&tpt_id) {
-            return Err(GradeError::UnknownTptGrade { id: tpt_id });
+        Ok(mint)
+    }
+
+    /// The base pass. Every TPT grade option becomes a canonical term under
+    /// TPT's own identity and TPT's own label, whether or not Tes pairs it,
+    /// and the pairing table decides only what that term reaches on the Tes
+    /// side.
+    fn mint_from_tpt(
+        &self,
+        building: &mut Building,
+        decided_at: Timestamp,
+    ) -> Result<(), GradeError> {
+        for &tpt_id in self.grade_levels.keys() {
+            let term = tpt_grade_term_id(tpt_id);
+            let path = tpt_grade_path(tpt_id, &self.facets, &self.grade_levels)?;
+            building.out.terms.push(CanonicalTerm {
+                id: term,
+                kind: TermKind::Phase,
+                parent: None,
+                label: path.segments.first().cloned().unwrap_or_default(),
+            });
+            building.out.edges.push(ProjectionEdge {
+                from: term,
+                to: path.clone(),
+                kind: EdgeKind::Exact,
+                decided_by: self.tpt_source.clone(),
+                decided_at,
+            });
+            match self.paired.get(&tpt_id) {
+                Some(&year_group) => {
+                    building.tpt_grades.insert(year_group, path);
+                    self.route_tes(building, term, year_group, decided_at);
+                }
+                None => {
+                    for inventory in TES_INVENTORIES {
+                        building.out.no_counterparts.push(NoCounterpart {
+                            term,
+                            target: VocabularyId(inventory, TermKind::Phase),
+                            decided_by: self.tpt_source.clone(),
+                            decided_at,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The extension pass, and the reason the canonical model is a TPT
+    /// superset rather than TPT alone.
+    ///
+    /// Fifteen `yearGroups` rows — GB Nursery, Reception and Years 1 to 13 —
+    /// name a phase TPT's own vocabulary has no option for, and the whole
+    /// thirty-row set is selectable on the Tes US and NZ wires. Left unminted
+    /// they would ingest to nothing, so every Tes-sourced listing declaring
+    /// one would carry an unrecognised grade. They are minted under Tes's
+    /// identity and Tes's label, which is what marks them as the target's
+    /// contribution rather than the base's.
+    fn mint_tes_extensions(&self, building: &mut Building, decided_at: Timestamp) {
+        for (&year_group, group) in &self.year_groups {
+            if self.spoken_for.contains_key(&year_group) {
+                continue;
+            }
+            let term = year_group_id(year_group);
+            building.out.terms.push(CanonicalTerm {
+                id: term,
+                kind: TermKind::Phase,
+                parent: None,
+                label: group.group.clone(),
+            });
+            self.route_tes(building, term, year_group, decided_at);
+            building.out.no_counterparts.push(NoCounterpart {
+                term,
+                target: VocabularyId(InventoryId::Tpt, TermKind::Phase),
+                decided_by: self.tpt_source.clone(),
+                decided_at,
+            });
         }
     }
 
-    let mut out = GradeCrosswalk {
-        terms: Vec::new(),
-        edges: Vec::new(),
-        no_counterparts: Vec::new(),
-        uncovered: Vec::new(),
-    };
-    let paired: BTreeMap<u64, u64> = GRADE_PAIRS
-        .iter()
-        .map(|&(tpt_id, year_group)| (year_group, tpt_id))
-        .collect();
-    let mut covered: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-    let mut tpt_grades: BTreeMap<u64, VocabularyPath> = BTreeMap::new();
-
-    for (&id, group) in &year_groups {
-        let term = year_group_id(id);
-        out.terms.push(CanonicalTerm {
-            id: term,
-            kind: TermKind::Phase,
-            parent: None,
-            label: group.group.clone(),
-        });
-        match gb_route(group, &bands) {
+    /// One canonical term's whole Tes side: the GB band it covers into, and
+    /// its identity in the two `yearGroups` inventories.
+    ///
+    /// Reached from both passes and from the same year group either way,
+    /// because the ages a band is matched on are Tes's. TPT's `gradeLevels`
+    /// carries labels and nothing else, so a TPT-minted term has no ages of
+    /// its own and reaches a GB band only through the row the pairing table
+    /// names for it.
+    fn route_tes(
+        &self,
+        building: &mut Building,
+        term: CanonicalTermId,
+        year_group: u64,
+        decided_at: Timestamp,
+    ) {
+        // Unreachable: `Mint::read` refuses a pairing table naming a year
+        // group the capture does not hold, and the extension pass iterates
+        // the capture itself. Returning rather than panicking keeps the
+        // derivation total, and a lookup that did fire would drop one term's
+        // Tes side rather than corrupt another's.
+        let Some(group) = self.year_groups.get(&year_group) else {
+            return;
+        };
+        match gb_route(group, &self.bands) {
             GbRoute::Onto { band, kind } => {
-                if let Some(row) = bands.get(&band) {
-                    out.edges.push(ProjectionEdge {
+                if let Some(row) = self.bands.get(&band) {
+                    building.out.edges.push(ProjectionEdge {
                         from: term,
                         to: band_path(band, row),
                         kind,
-                        decided_by: tes_source.clone(),
+                        decided_by: self.tes_source.clone(),
                         decided_at,
                     });
                     if kind == EdgeKind::Broader {
-                        covered.entry(band).or_default().push(id);
+                        building.covered.entry(band).or_default().push(year_group);
                     }
                 }
             }
             GbRoute::NoBand => {
-                out.uncovered.push(uncovered(id, group));
-                out.no_counterparts.push(NoCounterpart {
+                building.out.uncovered.push(uncovered(year_group, group));
+                building.out.no_counterparts.push(NoCounterpart {
                     term,
                     target: VocabularyId(InventoryId::TesGb, TermKind::Phase),
-                    decided_by: tes_source.clone(),
+                    decided_by: self.tes_source.clone(),
                     decided_at,
                 });
             }
         }
         for inventory in [InventoryId::TesUs, InventoryId::TesNz] {
-            out.edges.push(ProjectionEdge {
+            building.out.edges.push(ProjectionEdge {
                 from: term,
-                to: year_group_path(inventory, id, group),
+                to: year_group_path(inventory, year_group, group),
                 kind: EdgeKind::Exact,
-                decided_by: tes_source.clone(),
+                decided_by: self.tes_source.clone(),
                 decided_at,
             });
         }
-        match paired.get(&id) {
-            Some(&tpt_id) => {
-                let path = tpt_grade_path(tpt_id, &facets, &grade_levels)?;
-                tpt_grades.insert(id, path.clone());
-                out.edges.push(ProjectionEdge {
-                    from: term,
-                    to: path,
-                    kind: EdgeKind::Exact,
-                    decided_by: tpt_source.clone(),
-                    decided_at,
-                });
+    }
+
+    /// The Tes GB age bands as vocabulary members in their own right, and the
+    /// relation from each band to the phases it covers.
+    ///
+    /// Without these terms a GB source path ingests to nothing: the projection
+    /// reverses `Exact` edges only, and every edge a covered phase holds into
+    /// `(TesGb, Phase)` is `Broader`, so a GB `ageRanges` id would enter the
+    /// relation as an unrecognised value on every GB-sourced listing.
+    ///
+    /// The relation from a band to what it covers is genuinely `Narrower` —
+    /// one band covers several year groups — which the projection will never
+    /// derive across, because inverting it would invent the distinction the
+    /// band dropped. So a GB grade going to a US target is a question for the
+    /// seller, and these edges are what the question offers as its candidates.
+    ///
+    /// Six band terms, not seven. The not-applicable band and the
+    /// not-applicable phase denote the same thing, and the sentinel `Exact`
+    /// edge seeded beside the covering pass already is that band's identity
+    /// edge; minting a second term for it would have two terms claim one path
+    /// as `Exact`, which the reverse-uniqueness index refuses.
+    ///
+    /// TPT is related the same way and from the same measurement. A band
+    /// holds no age semantics of TPT's own, so a band reaches a TPT grade only
+    /// through the year group the pairing table names for it: the band covers
+    /// the year group, the year group is that TPT grade, so the band covers
+    /// that grade. Every band the captures produce covers either several TPT
+    /// grades or none, so the relation is the same `Narrower` fan-out and asks
+    /// the seller the same question. Seeding it `Exact` instead is not
+    /// available even where a band covered one grade: the TPT-minted term
+    /// already claims that TPT path as `Exact`, and the reverse-uniqueness
+    /// index admits one such claim per path.
+    ///
+    /// A band that covers no TPT grade at all is a measured absence and takes
+    /// a no-counterpart record, on the same rule the uncovered year groups
+    /// take one: the 3-5 band covers only Reception, which TPT does not pair,
+    /// because TPT's Preschool spans an age range wider at the bottom than the
+    /// band and its Kindergarten one wider at the top. Left as neither an edge
+    /// nor a record it would be an unanswerable gap, blocking every GB listing
+    /// that declares it.
+    fn seed_bands(&self, building: &mut Building, decided_at: Timestamp) {
+        for (&band, row) in &self.bands {
+            if bounds_of(row) == AgeBounds::NotApplicable {
+                continue;
             }
-            None => out.no_counterparts.push(NoCounterpart {
-                term,
-                target: VocabularyId(InventoryId::Tpt, TermKind::Phase),
-                decided_by: tpt_source.clone(),
-                decided_at,
-            }),
-        }
-    }
-
-    for &tpt_id in grade_levels.keys() {
-        if GRADE_PAIRS
-            .iter()
-            .any(|&(paired_id, _)| paired_id == tpt_id)
-        {
-            continue;
-        }
-        let term = tpt_grade_term_id(tpt_id);
-        let path = tpt_grade_path(tpt_id, &facets, &grade_levels)?;
-        out.terms.push(CanonicalTerm {
-            id: term,
-            kind: TermKind::Phase,
-            parent: None,
-            label: path.segments.first().cloned().unwrap_or_default(),
-        });
-        out.edges.push(ProjectionEdge {
-            from: term,
-            to: path,
-            kind: EdgeKind::Exact,
-            decided_by: tpt_source.clone(),
-            decided_at,
-        });
-        for inventory in TES_INVENTORIES {
-            out.no_counterparts.push(NoCounterpart {
-                term,
-                target: VocabularyId(inventory, TermKind::Phase),
-                decided_by: tpt_source.clone(),
+            let term = age_range_id(band);
+            building.out.terms.push(CanonicalTerm {
+                id: term,
+                kind: TermKind::Phase,
+                parent: None,
+                label: row.label.clone(),
+            });
+            building.out.edges.push(ProjectionEdge {
+                from: term,
+                to: band_path(band, row),
+                kind: EdgeKind::Exact,
+                decided_by: self.tes_source.clone(),
                 decided_at,
             });
+            let mut covering: Vec<u64> = building.covered.get(&band).cloned().unwrap_or_default();
+            // Ascending by year group rather than by visit order. The covering
+            // set is filled by whichever minting pass routed each row, so
+            // under the TPT base the paired rows arrive before the extension
+            // rows and the raw order is US grades before GB years. That order
+            // is seller-facing — it is the candidate list a `Narrow` election
+            // offers — so it is decided here rather than inherited from which
+            // side minted the term.
+            covering.sort_unstable();
+            self.seed_band_candidates(building, term, &covering, decided_at);
         }
     }
 
-    seed_bands(
-        &mut out,
-        &BandSeed {
-            bands: &bands,
-            covered: &covered,
-            year_groups: &year_groups,
-            tpt_grades: &tpt_grades,
-            tes_source: &tes_source,
-            tpt_source: &tpt_source,
-        },
-        decided_at,
-    );
-    Ok(out)
-}
-
-/// The Tes GB age bands as vocabulary members in their own right, and the
-/// relation from each band to the year groups it covers.
-///
-/// Without these terms a GB source path ingests to nothing: the projection
-/// reverses `Exact` edges only, and every edge a year group holds into
-/// `(TesGb, Phase)` is `Broader`, so a GB `ageRanges` id would enter the
-/// relation as an unrecognised value on every GB-sourced listing.
-///
-/// The relation from a band to its year groups is genuinely `Narrower` — one
-/// band covers several year groups — which the projection will never derive
-/// across, because inverting it would invent the distinction the band dropped.
-/// So a GB grade going to a US target is a question for the seller, and these
-/// edges are what the question offers as its candidates.
-///
-/// Six band terms, not seven. The not-applicable band and the not-applicable
-/// year group denote the same thing, and the sentinel `Exact` edge seeded
-/// beside the covering pass already is that band's identity edge; minting a
-/// second term for it would have two terms claim one path as `Exact`, which
-/// the reverse-uniqueness index refuses.
-///
-/// TPT is related the same way and from the same measurement. A band holds no
-/// age semantics of TPT's own — `gradeLevels` carries labels and nothing else
-/// — so a band reaches a TPT grade only through the year group the pairing
-/// table names for it: the band covers the year group, the year group is that
-/// TPT grade, so the band covers that grade. Every band the captures produce
-/// covers either several TPT grades or none, so the relation is the same
-/// `Narrower` fan-out and asks the seller the same question. Seeding it
-/// `Exact` instead is not available even where a band covered one grade: the
-/// paired year group already claims that TPT path as `Exact`, and the
-/// reverse-uniqueness index admits one such claim per path.
-///
-/// A band that covers no TPT grade at all is a measured absence and takes a
-/// no-counterpart record, on the same rule the uncovered year groups take one:
-/// the 3-5 band covers only Reception, which TPT does not pair, because TPT's
-/// Preschool spans an age range wider at the bottom than the band and its
-/// Kindergarten one wider at the top. Left as neither an edge nor a record it
-/// would be an unanswerable gap, blocking every GB listing that declares it.
-struct BandSeed<'a> {
-    bands: &'a BTreeMap<u64, AgeRange>,
-    covered: &'a BTreeMap<u64, Vec<u64>>,
-    year_groups: &'a BTreeMap<u64, YearGroup>,
-    /// The TPT grade path each paired year group resolves to, keyed by year
-    /// group, so the band relation reads the same join the year groups did
-    /// rather than re-deriving it.
-    tpt_grades: &'a BTreeMap<u64, VocabularyPath>,
-    tes_source: &'a Decider,
-    tpt_source: &'a Decider,
-}
-
-fn seed_bands(out: &mut GradeCrosswalk, seed: &BandSeed<'_>, decided_at: Timestamp) {
-    for (&band, row) in seed.bands {
-        if bounds_of(row) == AgeBounds::NotApplicable {
-            continue;
-        }
-        let term = age_range_id(band);
-        out.terms.push(CanonicalTerm {
-            id: term,
-            kind: TermKind::Phase,
-            parent: None,
-            label: row.label.clone(),
-        });
-        out.edges.push(ProjectionEdge {
-            from: term,
-            to: band_path(band, row),
-            kind: EdgeKind::Exact,
-            decided_by: seed.tes_source.clone(),
-            decided_at,
-        });
-        let covering: &[u64] = seed.covered.get(&band).map_or(&[], Vec::as_slice);
+    /// One band's `Narrower` fan-out into the three target vocabularies, and
+    /// the measured absence a band covering no TPT grade takes instead.
+    fn seed_band_candidates(
+        &self,
+        building: &mut Building,
+        term: CanonicalTermId,
+        covering: &[u64],
+        decided_at: Timestamp,
+    ) {
         for &year_group in covering {
-            let Some(group) = seed.year_groups.get(&year_group) else {
+            let Some(group) = self.year_groups.get(&year_group) else {
                 continue;
             };
             for inventory in [InventoryId::TesUs, InventoryId::TesNz] {
-                out.edges.push(ProjectionEdge {
+                building.out.edges.push(ProjectionEdge {
                     from: term,
                     to: year_group_path(inventory, year_group, group),
                     kind: EdgeKind::Narrower,
-                    decided_by: seed.tes_source.clone(),
+                    decided_by: self.tes_source.clone(),
                     decided_at,
                 });
             }
         }
-        let grades: Vec<&VocabularyPath> = covering
+        let grades: Vec<VocabularyPath> = covering
             .iter()
-            .filter_map(|year_group| seed.tpt_grades.get(year_group))
+            .filter_map(|year_group| building.tpt_grades.get(year_group).cloned())
             .collect();
         if grades.is_empty() {
-            out.no_counterparts.push(NoCounterpart {
+            building.out.no_counterparts.push(NoCounterpart {
                 term,
                 target: VocabularyId(InventoryId::Tpt, TermKind::Phase),
-                decided_by: seed.tpt_source.clone(),
+                decided_by: self.tpt_source.clone(),
                 decided_at,
             });
         }
         for path in grades {
-            out.edges.push(ProjectionEdge {
+            building.out.edges.push(ProjectionEdge {
                 from: term,
-                to: path.clone(),
+                to: path,
                 kind: EdgeKind::Narrower,
-                decided_by: seed.tpt_source.clone(),
+                decided_by: self.tpt_source.clone(),
                 decided_at,
             });
         }
@@ -683,773 +773,4 @@ pub(crate) fn derived(name: &str) -> CanonicalTermId {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{derive_grade_crosswalk, year_group_id, GradeCrosswalk};
-    use crate::project::{ingest_by_native_id, ingest_grades, project, project_axis, AxisRequest};
-    use tam_domain::equivalence::{ElectionTrigger, Loss, PricingBranch};
-    use tam_domain::registry::{registry, AxisBinding};
-    use tam_domain::{
-        DeclarationSource, EdgeKind, GradeDeclaration, TermKind, TermProjection, VocabularyId,
-        VocabularyPath,
-    };
-    use tam_types::natives::is_tpt_tag_slug;
-    use tam_types::{InventoryId, ProductId, Timestamp, Uuid};
-
-    const TPT: &str = include_str!("../../../docs/design/data/tpt-vocabulary.json");
-    const TES: &str = include_str!("../../../docs/design/data/tes-vocabulary.json");
-    const AT: Timestamp = Timestamp(1_700_000_000_000);
-    const PRODUCT: ProductId = ProductId(Uuid([0x0f; 16]));
-
-    fn crosswalk() -> GradeCrosswalk {
-        derive_grade_crosswalk(TPT, TES, AT).expect("the committed captures derive")
-    }
-
-    fn edges_into(
-        crosswalk: &GradeCrosswalk,
-        inventory: InventoryId,
-    ) -> Vec<&tam_domain::ProjectionEdge> {
-        crosswalk
-            .edges
-            .iter()
-            .filter(|edge| edge.to.vocabulary == VocabularyId(inventory, TermKind::Phase))
-            .collect()
-    }
-
-    #[test]
-    fn no_band_is_invented_where_none_covers() {
-        let crosswalk = crosswalk();
-        for (year_group, why) in [(1_u64, "GB Nursery, ages 1-4"), (16, "US Pre-K, ages 1-5")] {
-            let term = year_group_id(year_group);
-            assert!(
-                !crosswalk.edges.iter().any(|edge| edge.from == term
-                    && edge.to.vocabulary == VocabularyId(InventoryId::TesGb, TermKind::Phase)),
-                "{why} covers no band and a nearest-band rule would file it under 3-5"
-            );
-            assert!(
-                crosswalk
-                    .uncovered
-                    .iter()
-                    .any(|row| row.year_group == year_group),
-                "{why} is reported rather than silently omitted"
-            );
-            assert!(
-                crosswalk
-                    .no_counterparts
-                    .iter()
-                    .any(|record| record.term == term
-                        && record.target == VocabularyId(InventoryId::TesGb, TermKind::Phase)),
-                "{why} is a measured absence, so it omits rather than blocking every listing"
-            );
-        }
-    }
-
-    #[test]
-    fn the_not_applicable_sentinel_takes_one_exact_band_and_not_every_bounded_one() {
-        let crosswalk = crosswalk();
-        let term = year_group_id(30);
-        let gb: Vec<_> = crosswalk
-            .edges
-            .iter()
-            .filter(|edge| {
-                edge.from == term
-                    && edge.to.vocabulary == VocabularyId(InventoryId::TesGb, TermKind::Phase)
-            })
-            .collect();
-        assert_eq!(
-            gb.len(),
-            1,
-            "an empty humanAges set is vacuously inside every bounded band, which is the \
-             branch a covering rule gets wrong"
-        );
-        assert_eq!(gb[0].kind, EdgeKind::Exact);
-        assert_eq!(gb[0].to.native_id.as_deref(), Some("7"));
-    }
-
-    #[test]
-    fn the_gb_band_relation_is_twenty_seven_broader_edges_over_seven_band_members() {
-        let crosswalk = crosswalk();
-        let gb = edges_into(&crosswalk, InventoryId::TesGb);
-        let broader = gb
-            .iter()
-            .filter(|edge| edge.kind == EdgeKind::Broader)
-            .count();
-        let exact = gb
-            .iter()
-            .filter(|edge| edge.kind == EdgeKind::Exact)
-            .count();
-        assert_eq!(
-            (broader, exact),
-            (27, 7),
-            "fourteen coverings from the GB half and thirteen from the US half, over six band \
-             members and the sentinel the two vocabularies share"
-        );
-    }
-
-    #[test]
-    fn a_gb_age_band_enters_the_relation_as_a_term_of_its_own() {
-        let crosswalk = crosswalk();
-        for band in 1_u64..=6 {
-            assert_eq!(
-                ingest_by_native_id(
-                    &band.to_string(),
-                    VocabularyId(InventoryId::TesGb, TermKind::Phase),
-                    &crosswalk.edges,
-                ),
-                Some(super::age_range_id(band)),
-                "a GB source path ingests, or every GB-sourced listing carries an \
-                 unrecognised grade"
-            );
-        }
-        assert_eq!(
-            ingest_by_native_id(
-                "7",
-                VocabularyId(InventoryId::TesGb, TermKind::Phase),
-                &crosswalk.edges,
-            ),
-            Some(year_group_id(30)),
-            "the two not-applicable sentinels denote one thing and share one term"
-        );
-    }
-
-    #[test]
-    fn a_band_names_every_year_group_it_covers_and_derives_none_of_them() {
-        let crosswalk = crosswalk();
-        let band = super::age_range_id(3);
-        let candidates: Vec<&str> = crosswalk
-            .edges
-            .iter()
-            .filter(|edge| {
-                edge.from == band
-                    && edge.kind == EdgeKind::Narrower
-                    && edge.to.vocabulary == VocabularyId(InventoryId::TesUs, TermKind::Phase)
-            })
-            .filter_map(|edge| edge.to.native_id.as_deref())
-            .collect();
-        assert_eq!(
-            candidates,
-            vec!["5", "6", "7", "8", "19", "20", "21", "22"],
-            "ages 7-11 covers four GB years and four US grades, and which of them a listing \
-             carries is the seller's to say"
-        );
-        assert_eq!(
-            project(
-                band,
-                VocabularyId(InventoryId::TesUs, TermKind::Phase),
-                &crosswalk.edges,
-            ),
-            TermProjection::Absent,
-            "the projection never derives across a narrower edge, so the candidates are a \
-             question rather than an answer"
-        );
-    }
-
-    #[test]
-    fn every_tpt_grade_is_paired_or_recorded_absent_and_never_both() {
-        let crosswalk = crosswalk();
-        let projecting: Vec<_> = edges_into(&crosswalk, InventoryId::Tpt)
-            .into_iter()
-            .filter(|edge| edge.kind != EdgeKind::Narrower)
-            .collect();
-        assert_eq!(
-            projecting.len(),
-            19,
-            "nineteen TPT grade options, each claimed once"
-        );
-        let mut ids: Vec<&str> = projecting
-            .iter()
-            .filter_map(|edge| edge.to.native_id.as_deref())
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), 19, "no TPT id is the target of two edges");
-
-        let absent: Vec<_> = crosswalk
-            .no_counterparts
-            .iter()
-            .filter(|record| record.target == VocabularyId(InventoryId::Tpt, TermKind::Phase))
-            .collect();
-        assert_eq!(
-            absent.len(),
-            16,
-            "the fifteen GB year groups have no TPT counterpart, and neither does the one \
-             band that covers none"
-        );
-        for record in &absent {
-            assert!(
-                !crosswalk.edges.iter().any(|edge| edge.from == record.term
-                    && edge.to.vocabulary == VocabularyId(InventoryId::Tpt, TermKind::Phase)),
-                "a term is paired or recorded absent, never both"
-            );
-        }
-    }
-
-    /// The band-to-TPT table, as counts and exact memberships. The ages in
-    /// each message are the capture's own: a band names a TPT grade when it
-    /// covers the year group the pairing table names for that grade, and
-    /// `a_named_tpt_grade_sits_inside_the_band_that_names_it` reads those ages
-    /// back out of the JSON so a wrong row here cannot agree with itself.
-    #[test]
-    fn a_band_names_the_tpt_grades_its_covered_year_groups_pair_to() {
-        let crosswalk = crosswalk();
-        let table = [
-            (
-                1_u64,
-                vec![],
-                "3-5 covers Reception alone, which TPT does not pair",
-            ),
-            (
-                2,
-                vec!["kindergarten", "1st-grade"],
-                "5-7 covers Kindergarten 5-6 and 1st 6-7",
-            ),
-            (
-                3,
-                vec!["2nd-grade", "3rd-grade", "4th-grade", "5th-grade"],
-                "7-11 covers 2nd through 5th, ages 7-11",
-            ),
-            (
-                4,
-                vec!["6th-grade", "7th-grade", "8th-grade"],
-                "11-14 covers 6th through 8th, ages 11-14",
-            ),
-            (
-                5,
-                vec!["9th-grade", "10th-grade"],
-                "14-16 covers 9th 14-15 and 10th 15-16",
-            ),
-            (
-                6,
-                vec!["11th-grade", "12th-grade"],
-                "16+ covers 11th 16-17 and 12th 17-18",
-            ),
-        ];
-        let mut named_total = 0_usize;
-        for (band, expected, why) in table {
-            let named = tpt_grades_named_by(&crosswalk, band);
-            assert_eq!(named, expected, "{why}");
-            named_total += named.len();
-            assert_eq!(
-                crosswalk
-                    .no_counterparts
-                    .iter()
-                    .filter(|record| record.term == super::age_range_id(band)
-                        && record.target == VocabularyId(InventoryId::Tpt, TermKind::Phase))
-                    .count(),
-                usize::from(expected.is_empty()),
-                "a band is related or recorded absent, never neither and never both: {why}"
-            );
-        }
-        assert_eq!(
-            named_total, 13,
-            "thirteen of the fifteen paired year groups fall inside a band; Pre-K and the \
-             not-applicable sentinel are the two that do not"
-        );
-    }
-
-    /// The membership half of the table, read back out of the capture: every
-    /// TPT grade a band names is a grade whose paired year group declares only
-    /// ages the band admits. Independent of the narrowest-covering choice,
-    /// which the literal table above pins instead.
-    #[test]
-    fn a_named_tpt_grade_sits_inside_the_band_that_names_it() {
-        let crosswalk = crosswalk();
-        let tes: super::TesVocabulary = serde_json::from_str(TES).expect("the capture parses");
-        let captured = captured_grade_facets();
-        let paired: std::collections::BTreeMap<String, u64> = super::GRADE_PAIRS
-            .iter()
-            .map(|&(tpt_id, year_group)| {
-                let (slug, _) = captured
-                    .get(&tpt_id.to_string())
-                    .unwrap_or_else(|| panic!("the pairing names TPT grade {tpt_id}"));
-                (slug.clone(), year_group)
-            })
-            .collect();
-        let mut checked = 0_usize;
-        for band in 1_u64..=6 {
-            let row = tes
-                .age_ranges
-                .options
-                .get(&band.to_string())
-                .expect("the band is a captured row");
-            let (low, high) = (
-                row.age_low.expect("a bounded band declares its low age"),
-                row.age_high.unwrap_or(u8::MAX),
-            );
-            for slug in tpt_grades_named_by(&crosswalk, band) {
-                let year_group = paired[slug];
-                let ages = &tes
-                    .year_groups
-                    .options
-                    .get(&year_group.to_string())
-                    .expect("the pairing names a captured year group")
-                    .human_ages;
-                assert!(
-                    ages.iter().all(|&age| age >= low && age <= high),
-                    "TPT grade {slug} is year group {year_group}, ages {ages:?}, which the \
-                     {} band does not admit",
-                    row.label
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(
-            checked, 13,
-            "every named grade is checked against the capture"
-        );
-    }
-
-    fn tpt_grades_named_by(crosswalk: &GradeCrosswalk, band: u64) -> Vec<&str> {
-        let term = super::age_range_id(band);
-        crosswalk
-            .edges
-            .iter()
-            .filter(|edge| {
-                edge.from == term
-                    && edge.kind == EdgeKind::Narrower
-                    && edge.to.vocabulary == VocabularyId(InventoryId::Tpt, TermKind::Phase)
-            })
-            .filter_map(|edge| edge.to.native_id.as_deref())
-            .collect()
-    }
-
-    #[test]
-    fn the_tpt_only_grades_are_absent_from_all_three_tes_inventories() {
-        let crosswalk = crosswalk();
-        for tpt_id in [15_u64, 16, 17, 19] {
-            let term = super::tpt_grade_term_id(tpt_id);
-            let targets: Vec<_> = crosswalk
-                .no_counterparts
-                .iter()
-                .filter(|record| record.term == term)
-                .map(|record| record.target.0)
-                .collect();
-            assert_eq!(
-                targets,
-                vec![InventoryId::TesGb, InventoryId::TesUs, InventoryId::TesNz],
-                "TPT grade {tpt_id} has no Tes counterpart anywhere"
-            );
-        }
-    }
-
-    #[test]
-    fn the_tpt_label_is_the_taxonomy_tag_and_not_the_form_label() {
-        let crosswalk = crosswalk();
-        let preschool = edges_into(&crosswalk, InventoryId::Tpt)
-            .into_iter()
-            .find(|edge| edge.to.native_id.as_deref() == Some("preschool"))
-            .expect("TPT grade 1 is paired, and its path is keyed by its facet's slug");
-        assert_eq!(
-            preschool.to.segments,
-            vec!["Preschool".to_owned()],
-            "TPT's own label for grade 1 is Preschool; PreK is the create form's abbreviation"
-        );
-    }
-
-    /// The `legacyId` to facet join read straight out of the capture, so the
-    /// pairing table's numeric ids and the slugs the edges carry can be held
-    /// against each other without going back through the derivation.
-    fn captured_grade_facets() -> std::collections::BTreeMap<String, (String, String)> {
-        let capture: serde_json::Value = serde_json::from_str(TPT).expect("the capture parses");
-        let options = capture["taxonomyTags"]["options"]
-            .as_object()
-            .expect("the capture holds a taxonomy tag map");
-        let mut out = std::collections::BTreeMap::new();
-        for (slug, tag) in options {
-            let (Some(legacy), Some(category), Some(name)) = (
-                tag["legacyId"].as_str(),
-                tag["category"].as_str(),
-                tag["name"].as_str(),
-            ) else {
-                continue;
-            };
-            if !super::GRADE_TAG_CATEGORIES.contains(&category) {
-                continue;
-            }
-            assert!(
-                out.insert(legacy.to_owned(), (slug.clone(), name.to_owned()))
-                    .is_none(),
-                "legacyId {legacy} names two grade facets, so any slug join would be a guess"
-            );
-        }
-        out
-    }
-
-    /// TPT addresses a grade twice over and by different identifiers: the
-    /// create form's selector takes the `legacyId`, and the product's own wire
-    /// takes the `taxonomyTags` slug. The path is the wire's, so every edge
-    /// into `(Tpt, Phase)` carries the slug, and the slug and the label are
-    /// read off one facet rather than joined from two.
-    #[test]
-    fn a_tpt_grade_path_is_addressed_by_its_taxonomy_tag_slug_and_never_its_legacy_id() {
-        let crosswalk = crosswalk();
-        let captured = captured_grade_facets();
-        let edges = edges_into(&crosswalk, InventoryId::Tpt);
-        assert_eq!(
-            edges.len(),
-            32,
-            "nineteen grade options claimed once each, and the thirteen band coverings"
-        );
-        for edge in &edges {
-            let native = edge
-                .to
-                .native_id
-                .as_deref()
-                .expect("a TPT grade path is addressed or it cannot be posted");
-            let (legacy, (_, name)) = captured
-                .iter()
-                .find(|(_, (slug, _))| slug == native)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{native:?} is no slug the capture keys a grade facet by, so TPT's tag                          namespace does not answer to it"
-                    )
-                });
-            assert_eq!(
-                &edge.to.segments,
-                &vec![name.clone()],
-                "legacyId {legacy}'s slug and label are one facet's, not two joins'"
-            );
-            assert!(
-                is_tpt_tag_slug(native),
-                "{native:?} fails the adapter's slug-shape guard and would be refused rather                  than posted"
-            );
-        }
-    }
-
-    /// The arithmetic half: the nineteen `gradeLevels` options are exactly the
-    /// nineteen facets the projecting edges address, so no option is left
-    /// carrying a form-facing identifier.
-    #[test]
-    fn every_gradelevels_option_projects_under_the_slug_its_legacy_id_joins_to() {
-        let crosswalk = crosswalk();
-        let captured = captured_grade_facets();
-        let tpt: super::TptVocabulary = serde_json::from_str(TPT).expect("the capture parses");
-        let mut expected: Vec<&str> = tpt
-            .grade_levels
-            .options
-            .keys()
-            .map(|legacy| {
-                let Some((slug, _)) = captured.get(legacy) else {
-                    panic!("gradeLevels {legacy} joins no grade facet");
-                };
-                slug.as_str()
-            })
-            .collect();
-        let mut addressed: Vec<&str> = edges_into(&crosswalk, InventoryId::Tpt)
-            .into_iter()
-            .filter(|edge| edge.kind != EdgeKind::Narrower)
-            .filter_map(|edge| edge.to.native_id.as_deref())
-            .collect();
-        expected.sort_unstable();
-        addressed.sort_unstable();
-        assert_eq!(
-            expected.len(),
-            19,
-            "the capture holds nineteen grade options"
-        );
-        assert_eq!(
-            addressed, expected,
-            "each option is claimed once, under the slug and not the number"
-        );
-    }
-
-    #[test]
-    fn the_seeded_grade_relation_holds_no_ambiguity() {
-        let crosswalk = crosswalk();
-        for term in &crosswalk.terms {
-            for inventory in InventoryId::ALL {
-                let projection = project(
-                    term.id,
-                    VocabularyId(inventory, TermKind::Phase),
-                    &crosswalk.edges,
-                );
-                assert!(
-                    !matches!(projection, TermProjection::Ambiguous { .. }),
-                    "{} projects ambiguously into {inventory:?}",
-                    term.label
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn one_term_holds_at_most_one_projecting_edge_into_each_vocabulary() {
-        let crosswalk = crosswalk();
-        let mut keys: Vec<_> = crosswalk
-            .edges
-            .iter()
-            .filter(|edge| edge.kind != EdgeKind::Narrower)
-            .map(|edge| (edge.from.0 .0, edge.to.vocabulary.0, edge.kind))
-            .collect();
-        let total = keys.len();
-        keys.sort_unstable_by_key(|&(from, inventory, kind)| {
-            (from, format!("{inventory:?}"), format!("{kind:?}"))
-        });
-        keys.dedup();
-        assert_eq!(
-            keys.len(),
-            total,
-            "the seeder's output satisfies projection_edge_single_valued"
-        );
-        assert!(
-            crosswalk
-                .edges
-                .iter()
-                .any(|edge| edge.kind == EdgeKind::Narrower),
-            "narrower edges are excluded from that index precisely because the band relation \
-             needs several of them from one term"
-        );
-    }
-
-    fn declaration(inventory: InventoryId, native: &str) -> GradeDeclaration {
-        GradeDeclaration {
-            source: DeclarationSource::Imported {
-                vocabulary: VocabularyId(inventory, TermKind::Phase),
-            },
-            raw: vec![VocabularyPath {
-                vocabulary: VocabularyId(inventory, TermKind::Phase),
-                segments: vec!["whatever the seller saw".to_owned()],
-                native_id: Some(native.to_owned()),
-            }],
-            derived: None,
-        }
-    }
-
-    fn phase_axis(inventory: InventoryId) -> AxisBinding {
-        registry(inventory)
-            .axis(TermKind::Phase)
-            .expect("every inventory under test binds a phase axis")
-    }
-
-    #[test]
-    fn a_us_year_group_broadens_onto_a_gb_band_and_names_what_it_dropped() {
-        let crosswalk = crosswalk();
-        let declared = declaration(InventoryId::TesUs, "21");
-        let ingested = ingest_grades(&declared, &crosswalk.edges);
-        assert_eq!(
-            ingested.terms,
-            vec![year_group_id(21)],
-            "a US grade is a member of the yearGroups vocabulary and ingests by its own id"
-        );
-
-        let outcome = project_axis(
-            AxisRequest {
-                product: PRODUCT,
-                inventory: InventoryId::TesGb,
-                binding: phase_axis(InventoryId::TesGb),
-                terms: &ingested.terms,
-                sources: &ingested.sources,
-                pricing: PricingBranch::Free,
-                rules: &[],
-                settled: &[],
-            },
-            &crosswalk.edges,
-            &[],
-        );
-        assert_eq!(
-            outcome
-                .resolved
-                .iter()
-                .filter_map(|path| path.native_id.as_deref())
-                .collect::<Vec<_>>(),
-            vec!["3"],
-            "US 4th grade, ages 9-10, publishes into the GB 7-11 band and not under its own id"
-        );
-        assert!(
-            outcome.elections.is_empty(),
-            "the lossy direction is derived"
-        );
-        assert!(
-            matches!(outcome.loss.as_slice(), [Loss::Broadened { .. }]),
-            "the widening is disclosed rather than hidden"
-        );
-    }
-
-    #[test]
-    fn a_gb_band_asks_which_year_groups_it_means_rather_than_picking_one() {
-        let crosswalk = crosswalk();
-        let declared = declaration(InventoryId::TesGb, "3");
-        let ingested = ingest_grades(&declared, &crosswalk.edges);
-        assert_eq!(ingested.terms, vec![super::age_range_id(3)]);
-
-        let outcome = project_axis(
-            AxisRequest {
-                product: PRODUCT,
-                inventory: InventoryId::TesUs,
-                binding: phase_axis(InventoryId::TesUs),
-                terms: &ingested.terms,
-                sources: &ingested.sources,
-                pricing: PricingBranch::Free,
-                rules: &[],
-                settled: &[],
-            },
-            &crosswalk.edges,
-            &[],
-        );
-        assert!(
-            outcome.gaps.is_empty(),
-            "a band is not a missing equivalence; the relation holds every candidate already"
-        );
-        let [election] = outcome.elections.as_slice() else {
-            panic!("one election, naming the choice the band leaves open");
-        };
-        let ElectionTrigger::Narrow { from, candidates } = &election.trigger else {
-            panic!("a band covering several year groups is a Narrow trigger");
-        };
-        assert_eq!(from.native_id.as_deref(), Some("3"));
-        assert_eq!(
-            candidates
-                .iter()
-                .filter_map(|path| path.native_id.as_deref())
-                .collect::<Vec<_>>(),
-            vec!["5", "6", "7", "8", "19", "20", "21", "22"]
-        );
-        assert!(
-            outcome.resolved.is_empty(),
-            "nothing publishes until the seller answers, so no year group is picked for them"
-        );
-        assert_eq!(
-            election.trigger.key().as_deref(),
-            Some("3"),
-            "the answer keys on the band, so five hundred GB listings ask once"
-        );
-    }
-
-    fn recorded_absences(
-        crosswalk: &GradeCrosswalk,
-    ) -> Vec<(tam_types::CanonicalTermId, VocabularyId)> {
-        crosswalk
-            .no_counterparts
-            .iter()
-            .map(|record| (record.term, record.target))
-            .collect()
-    }
-
-    fn into_tpt(
-        crosswalk: &GradeCrosswalk,
-        inventory: InventoryId,
-        native: &str,
-    ) -> tam_domain::equivalence::AxisOutcome {
-        let declared = declaration(inventory, native);
-        let ingested = ingest_grades(&declared, &crosswalk.edges);
-        project_axis(
-            AxisRequest {
-                product: PRODUCT,
-                inventory: InventoryId::Tpt,
-                binding: phase_axis(InventoryId::Tpt),
-                terms: &ingested.terms,
-                sources: &ingested.sources,
-                pricing: PricingBranch::Free,
-                rules: &[],
-                settled: &[],
-            },
-            &crosswalk.edges,
-            &recorded_absences(crosswalk),
-        )
-    }
-
-    #[test]
-    fn a_gb_band_cross_lists_to_tpt_as_the_same_question_it_asks_the_tes_us_side() {
-        let crosswalk = crosswalk();
-        let outcome = into_tpt(&crosswalk, InventoryId::TesGb, "3");
-        assert!(
-            outcome.gaps.is_empty(),
-            "a GB band reaching TPT is a choice the seller makes, not an equivalence \
-             nobody authored"
-        );
-        let [election] = outcome.elections.as_slice() else {
-            panic!("one election, naming the TPT grades the 7-11 band leaves open");
-        };
-        let ElectionTrigger::Narrow { from, candidates } = &election.trigger else {
-            panic!("a band covering several TPT grades is a Narrow trigger");
-        };
-        assert_eq!(from.native_id.as_deref(), Some("3"));
-        assert_eq!(
-            candidates
-                .iter()
-                .filter_map(|path| path.native_id.as_deref())
-                .collect::<Vec<_>>(),
-            vec!["2nd-grade", "3rd-grade", "4th-grade", "5th-grade"],
-            "2nd through 5th grade, which is what ages 7-11 means to TPT"
-        );
-        assert!(
-            outcome.resolved.is_empty(),
-            "nothing publishes until the seller answers"
-        );
-    }
-
-    #[test]
-    fn the_band_no_tpt_grade_sits_inside_omits_rather_than_blocking_the_cross_list() {
-        let crosswalk = crosswalk();
-        let outcome = into_tpt(&crosswalk, InventoryId::TesGb, "1");
-        assert!(
-            outcome.gaps.is_empty() && outcome.elections.is_empty(),
-            "the 3-5 band's absence from TPT is measured, so it proceeds rather than parking \
-             every GB early-years listing on a question with no candidates"
-        );
-        assert_eq!(outcome.omitted, vec![super::age_range_id(1)]);
-        assert!(outcome.is_publishable());
-    }
-
-    /// The seam a live cross-list crosses. `tam-marketplace-tpt` refuses a
-    /// grade whose native is not slug-shaped, because a foreign marketplace's
-    /// own identifier posted into `taxonomyTags` writes that number into the
-    /// seller's listing verbatim. The identifier is chosen here, so the shape
-    /// is asserted here, on both the direction that resolves and the one that
-    /// asks.
-    #[test]
-    fn a_tes_grade_reaching_tpt_arrives_under_a_slug_the_adapter_will_post() {
-        let crosswalk = crosswalk();
-        let resolving = into_tpt(&crosswalk, InventoryId::TesUs, "23");
-        let resolved: Vec<&str> = resolving
-            .resolved
-            .iter()
-            .filter_map(|path| path.native_id.as_deref())
-            .collect();
-        assert_eq!(
-            resolved,
-            vec!["6th-grade"],
-            "US 6th grade is year group 23, which the pairing table names TPT grade 8, whose \
-             facet the capture keys `6th-grade`"
-        );
-
-        let electing = into_tpt(&crosswalk, InventoryId::TesGb, "4");
-        let [election] = electing.elections.as_slice() else {
-            panic!("the 11-14 band covers three TPT grades and asks which");
-        };
-        let ElectionTrigger::Narrow { candidates, .. } = &election.trigger else {
-            panic!("a band covering several TPT grades is a Narrow trigger");
-        };
-        let offered: Vec<&str> = candidates
-            .iter()
-            .filter_map(|path| path.native_id.as_deref())
-            .collect();
-        assert_eq!(offered, vec!["6th-grade", "7th-grade", "8th-grade"]);
-
-        for native in resolved.into_iter().chain(offered) {
-            assert!(
-                is_tpt_tag_slug(native),
-                "{native:?} fails the adapter's slug-shape guard, so answering the election \
-                 with it would refuse the upload rather than publish it"
-            );
-        }
-    }
-
-    #[test]
-    fn a_path_the_relation_does_not_recognise_is_carried_out_rather_than_dropped() {
-        let crosswalk = crosswalk();
-        let declared = declaration(InventoryId::TesGb, "4242");
-        let ingested = ingest_grades(&declared, &crosswalk.edges);
-        assert!(ingested.terms.is_empty());
-        assert_eq!(
-            ingested.unrecognised.len(),
-            1,
-            "reconciliation_item.term references canonical_term, so an unrecognised path \
-             cannot become a queue item and must travel as itself"
-        );
-    }
-
-    #[test]
-    fn the_derivation_is_deterministic() {
-        assert_eq!(crosswalk(), crosswalk());
-    }
-}
+mod tests;

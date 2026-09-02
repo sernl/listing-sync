@@ -147,8 +147,9 @@ mod tests {
     fn the_tpt_scales_carry_their_captured_labels() {
         assert_eq!(
             native_label(InventoryId::Tpt, "ItemsProperty.duration", "6"),
-            Some("1 hour"),
-            "the captured 6 is an hour rather than a rank"
+            Some("1 Hour"),
+            "the captured 6 is an hour rather than a rank, in the title case the 2026-09-03 \
+             DOM read shows the seller"
         );
         assert_eq!(
             native_label(InventoryId::Tpt, "ItemsProperty.answer_key", "1"),
