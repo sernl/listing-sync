@@ -72,6 +72,12 @@ The interpreter itself, `run_item` and its effect loop.
 Both adapters and the transport, which the plan already books as portable.
 `FileSource`, under D27, once the `blake3` `pure` feature question is answered.
 
+Implemented 2026-09-03 as the interim, and it is interim on purpose.
+D27's target is client-side ingest, where the seller's own machine holds the bytes and the server never has them.
+Until that exists the bytes are ours: the work order carries a `PayloadManifest` per file — id, name, content type, blake3 hash, byte length — and the device fetches the bytes from `GET /v1/devices/{device}/payload/{file}`, then checks what arrived against the manifest before it uploads anything.
+The route is guarded three ways: the device must hold a live lease, the item that lease names must reference the file in its projection, and the file must be the organisation's.
+The response carries the bytes and nothing else, because the manifest is the commitment and a second copy travelling beside the bytes would be a second thing to disagree with.
+
 The intent hash is computed over the rendered field set (`crates/tam-engine/src/seed.rs:507`) and the idempotency key is derived from it, so the server cannot know either until the device has composed.
 `RecordIntent` therefore records what the device rendered, and the port operation carries the composed field set back.
 If instead the server computes the intent hash it must render the field set, which is composition, and puts the architecture at S3.

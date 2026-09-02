@@ -554,3 +554,119 @@ async fn one_tenants_session_cannot_claim_through_another_tenants_device_id(pool
          predicate is read within the tenant the session speaks for: {view}"
     );
 }
+
+/// A ledger call naming a lease this device does not hold is refused before
+/// anything is dispatched.
+///
+/// The fence is the whole point of the endpoint: the organisation comes from
+/// the session, the holder from the lease, and a device that satisfies neither
+/// reaches no ledger method at all.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_ledger_call_naming_a_lease_this_device_does_not_hold_is_refused(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+
+    let refused = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/ledger"),
+            token: &TOKEN_A,
+            body: Some(serde_json::json!({
+                "call": "preflight_succeeded",
+                "lease": { "org": ORG_A, "item": Uuid([0x11; 16]), "lease_epoch": 1 },
+            })),
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::CONFLICT,
+        "no such live lease exists, so the call is refused rather than dispatched: {}",
+        String::from_utf8_lossy(&refused.body)
+    );
+}
+
+/// The payload route refuses a device holding no live lease, and refuses a
+/// file id that is not a uuid before it reaches the store.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_payload_route_refuses_a_device_with_no_live_lease(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+
+    let forbidden = call(
+        pool.clone(),
+        Call {
+            method: Method::GET,
+            path: &format!("/v1/devices/{LAPTOP}/payload/11111111-1111-1111-1111-111111111111"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert!(
+        matches!(
+            forbidden.status,
+            StatusCode::FORBIDDEN | StatusCode::SERVICE_UNAVAILABLE
+        ),
+        "a device with no live lease has no business fetching a seller's files; this \
+         deployment answers 503 where it holds no object store at all: {}",
+        forbidden.status
+    );
+
+    let malformed = call(
+        pool.clone(),
+        Call {
+            method: Method::GET,
+            path: &format!("/v1/devices/{LAPTOP}/payload/not-a-uuid"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert!(
+        matches!(
+            malformed.status,
+            StatusCode::UNPROCESSABLE_ENTITY | StatusCode::SERVICE_UNAVAILABLE
+        ),
+        "a malformed file id is a validation answer rather than a lookup: {}",
+        malformed.status
+    );
+}
+
+/// One tenant's session cannot reach another tenant's device through either
+/// new route, because neither carries an organisation identifier.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn neither_new_route_carries_an_organisation_a_caller_could_substitute(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+
+    for path in [
+        format!("/v1/devices/{LAPTOP}/ledger"),
+        format!("/v1/devices/{LAPTOP}/settle"),
+    ] {
+        let across = call(
+            pool.clone(),
+            Call {
+                method: Method::POST,
+                path: &path,
+                token: &TOKEN_B,
+                body: Some(serde_json::json!({
+                    "call": "preflight_succeeded",
+                    "lease": { "org": ORG_A, "item": Uuid([0x11; 16]), "lease_epoch": 1 },
+                })),
+                wall: t0,
+            },
+        )
+        .await;
+        assert_ne!(
+            across.status,
+            StatusCode::OK,
+            "{path}: org B's session naming org A's lease must not succeed, whatever the \
+             body says the org is"
+        );
+    }
+}

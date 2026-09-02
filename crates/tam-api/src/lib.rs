@@ -214,6 +214,11 @@ pub fn router(state: AppState) -> Router {
         // reports what it did. The server never says now.
         .route("/{version}/devices/{device}/work", post(work::claim))
         .route("/{version}/devices/{device}/settle", post(work::settle))
+        .route("/{version}/devices/{device}/ledger", post(work::ledger))
+        .route(
+            "/{version}/devices/{device}/payload/{file}",
+            get(work::payload),
+        )
         .route("/{version}/connections", get(resources::list_connections))
         .route(
             "/{version}/connections/{connection}/revoke",

@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ji.org_id, ji.id, ji.job_id, ji.mapping_id, ji.idempotency_key,\n                 ji.lease_epoch, ji.attempt_count, ji.operation, ji.subject_kind,\n                 ji.subject_url, ji.subject_numeric_id, ji.state_from, ji.state_to,\n                 ji.requires_bound_on, j.inventory AS \"inventory!\"\n               FROM job_item ji\n               JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id\n               WHERE ji.org_id = $1 AND ji.id = $2\n                 AND ji.state IN ('leased', 'running', 'verifying')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "idempotency_key",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "lease_epoch",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "attempt_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "operation",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "subject_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "subject_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "subject_numeric_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "state_from",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "state_to",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "requires_bound_on",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "inventory!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "ff268ece047fdae43220812659bacc7ed513d4ea5f20ac314f6497756c93eb0c"
+}

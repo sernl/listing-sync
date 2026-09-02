@@ -1123,6 +1123,62 @@ impl LeaseRepo {
         })))
     }
 
+    /// One leased item by id, for a caller that already knows which item it
+    /// holds and needs the rest of the row.
+    ///
+    /// Org-pinned like the device claim, so the tenant is the pin's rather
+    /// than an argument's, and it answers `None` for an item that is not
+    /// currently live rather than one that merely exists: the callers are
+    /// asking what this lease covers, not what the ledger remembers.
+    pub async fn leased_item(
+        &self,
+        org: OrgId,
+        item: JobItemId,
+    ) -> Result<Option<LeasedItem>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let row = sqlx::query!(
+            r#"SELECT ji.org_id, ji.id, ji.job_id, ji.mapping_id, ji.idempotency_key,
+                 ji.lease_epoch, ji.attempt_count, ji.operation, ji.subject_kind,
+                 ji.subject_url, ji.subject_numeric_id, ji.state_from, ji.state_to,
+                 ji.requires_bound_on, j.inventory AS "inventory!"
+               FROM job_item ji
+               JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
+               WHERE ji.org_id = $1 AND ji.id = $2
+                 AND ji.state IN ('leased', 'running', 'verifying')"#,
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        let Some(row) = row else { return Ok(None) };
+        Ok(Some(LeasedItem {
+            org: OrgId(uuid_from_db(row.org_id)),
+            item: JobItemId(uuid_from_db(row.id)),
+            job: JobId(uuid_from_db(row.job_id)),
+            mapping: MappingId(uuid_from_db(row.mapping_id)),
+            inventory: inventory_from_db(&row.inventory)?,
+            idempotency_key: IdempotencyKey(uuid_from_db(row.idempotency_key)),
+            operation: StoredOperation {
+                operation: row.operation,
+                subject_kind: row.subject_kind,
+                subject_url: row.subject_url,
+                subject_numeric_id: row.subject_numeric_id,
+                state_from: row.state_from,
+                state_to: row.state_to,
+            }
+            .decode()?,
+            lease_epoch: row.lease_epoch,
+            attempt_count: row.attempt_count,
+            requires_bound_on: row
+                .requires_bound_on
+                .as_deref()
+                .map(inventory_from_db)
+                .transpose()?,
+        }))
+    }
+
     /// Every fenced write shares this shape: the epoch must still match, and
     /// a zero-row update is the stale worker finding out, not racing.
     ///
