@@ -1,12 +1,14 @@
 //! What the running application holds: the device it is, where sessions go,
 //! and whether the server currently says it may work.
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
 use crate::device::DeviceIdentity;
 use crate::entitlement::EntitlementGate;
+use crate::heartbeat::{ControlPlane, Offline};
 use crate::session::SessionStore;
 
 pub struct DesktopState {
@@ -15,16 +17,41 @@ pub struct DesktopState {
     /// Replaced wholesale at each check-in rather than mutated, so a
     /// half-applied entitlement never exists.
     gate: Mutex<EntitlementGate>,
+    /// The seller signed this device out from the console, and the last
+    /// check-in said so. Kept apart from the gate because the two answer
+    /// different questions: the gate says whether work may run, and this says
+    /// why it may not, which is what the interface shows.
+    revoked: AtomicBool,
+    /// How this device reaches the server's registry. `Offline` by default,
+    /// because this slice ships no transport and a client that believed it had
+    /// checked in would never learn it had been revoked.
+    plane: Arc<dyn ControlPlane>,
 }
 
 impl DesktopState {
     #[must_use]
     pub fn new(device: DeviceIdentity, store: Arc<dyn SessionStore>) -> Self {
+        Self::with_control_plane(device, store, Arc::new(Offline))
+    }
+
+    #[must_use]
+    pub fn with_control_plane(
+        device: DeviceIdentity,
+        store: Arc<dyn SessionStore>,
+        plane: Arc<dyn ControlPlane>,
+    ) -> Self {
         Self {
             device,
             store,
             gate: Mutex::new(EntitlementGate::closed()),
+            revoked: AtomicBool::new(false),
+            plane,
         }
+    }
+
+    #[must_use]
+    pub fn control_plane(&self) -> &dyn ControlPlane {
+        self.plane.as_ref()
     }
 
     #[must_use]
@@ -46,6 +73,19 @@ impl DesktopState {
     /// Installs the entitlement a check-in returned.
     pub async fn set_gate(&self, gate: EntitlementGate) {
         *self.gate.lock().await = gate;
+    }
+
+    /// Whether the last check-in said this device had been signed out.
+    #[must_use]
+    pub fn revoked(&self) -> bool {
+        self.revoked.load(Ordering::SeqCst)
+    }
+
+    /// Records what a check-in answered. Set from the answer rather than only
+    /// ever raised, so signing the device back in on the console clears it at
+    /// the next check-in instead of needing a restart.
+    pub fn set_revoked(&self, revoked: bool) {
+        self.revoked.store(revoked, Ordering::SeqCst);
     }
 }
 
@@ -77,5 +117,10 @@ mod tests {
             );
         }
         assert_eq!(state.gate().await, EntitlementGate::closed());
+        assert!(
+            !state.revoked(),
+            "a device nobody has signed out is not revoked; the closed gate is the \
+             absence of an entitlement, which is a different fact"
+        );
     }
 }

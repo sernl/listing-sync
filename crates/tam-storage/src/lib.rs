@@ -16,6 +16,7 @@ pub mod billing;
 pub mod blobs;
 mod codec;
 pub mod connections;
+pub mod device;
 pub mod job_reads;
 pub mod jobs;
 pub mod lowering;
@@ -39,6 +40,10 @@ pub use blobs::{BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
 pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,
     ConnectionRepo, ConnectionRow,
+};
+pub use device::{
+    DeviceHeartbeat, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
+    DeviceSessionReport, DeviceSessionStatus,
 };
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,

@@ -17,7 +17,7 @@ use tam_api::vocabulary::{
 use tam_api::{APIErrorCode, APIErrorKind};
 use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_domain::product::FormGroup;
-use tam_storage::ItemStateKind;
+use tam_storage::{DeviceSessionStatus, ItemStateKind};
 use tam_types::{
     ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,
     JobEventPayload, LengthUnit, Marketplace, TermKind, TransportClass,
@@ -54,6 +54,12 @@ fn main() {
     ));
     out.push('\n');
     out.push_str(&union("ConnectionEvent", &ConnectionEvent::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union(
+        "DeviceSessionStatus",
+        &DeviceSessionStatus::ALL,
+        |status| format!("\"{}\"", status.as_str()),
+    ));
     out.push('\n');
     out.push_str(&union("ItemState", &ItemStateKind::ALL, |state| {
         format!("\"{}\"", state.as_str())

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 48] = [
+pub const ROUTES: [Route; 52] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -181,6 +181,26 @@ pub const ROUTES: [Route; 48] = [
     },
     Route {
         method: "get",
+        path: "/{version}/devices",
+        summary: "The seller's own machines and the marketplaces each one holds",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices",
+        summary: "Register this device, or refresh what a known one says about itself",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/heartbeat",
+        summary: "A device's check-in; the answer tells it whether it has been signed out",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/revoke",
+        summary: "Sign one device out; it wipes its marketplace sessions on next contact",
+    },
+    Route {
+        method: "get",
         path: "/{version}/connections",
         summary: "The marketplace connections and their link states",
     },
@@ -324,12 +344,13 @@ mod tests {
             .get("paths")
             .and_then(|paths| paths.as_object())
             .map(serde_json::Map::len);
-        // /v1/jobs, /v1/session and /v1/org each carry two operations,
-        // /v1/products carries two and /v1/products/{product} three, so
-        // distinct paths are six fewer than the operations in the table.
+        // /v1/jobs, /v1/session, /v1/org and /v1/devices each carry two
+        // operations, /v1/products carries two and /v1/products/{product}
+        // three, so distinct paths are seven fewer than the operations in the
+        // table.
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 6),
+            Some(ROUTES.len() - 7),
             "each operation lands in the document exactly once"
         );
     }

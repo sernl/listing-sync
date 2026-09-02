@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE device SET revoked_at = COALESCE(revoked_at, $3) WHERE org_id = $1 AND id = $2 RETURNING revoked_at AS \"revoked_at!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revoked_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "057a013803cde7b73feadfc4dc806ee00f0f1d339a6c00b0f2357cd009e7eafe"
+}

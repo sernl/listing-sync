@@ -19,6 +19,7 @@ pub mod commands;
 pub mod connect;
 pub mod device;
 pub mod entitlement;
+pub mod heartbeat;
 pub mod scheduler;
 pub mod session;
 pub mod state;
@@ -65,6 +66,7 @@ pub fn run() {
             commands::connect_marketplace,
             commands::session_status,
             commands::forget_session,
+            commands::device_check_in,
         ])
         .run(tauri::generate_context!())
         .expect("the Teachouse desktop client starts");

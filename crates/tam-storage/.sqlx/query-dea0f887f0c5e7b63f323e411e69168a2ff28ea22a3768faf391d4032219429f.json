@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT device_id, marketplace, account_label, linked_at, last_used_at, status FROM device_marketplace_session WHERE org_id = $1 AND ($2::text IS NULL OR device_id = $2) ORDER BY device_id, marketplace",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "device_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "marketplace",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "account_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "linked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_used_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "dea0f887f0c5e7b63f323e411e69168a2ff28ea22a3768faf391d4032219429f"
+}

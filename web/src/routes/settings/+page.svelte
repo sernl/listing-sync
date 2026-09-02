@@ -226,7 +226,7 @@
 	<PageHead
 		icon="⚙"
 		title="Settings"
-		description="Organisation, profile, passkeys and billing."
+		description="Organisation, profile, passkeys, devices and billing."
 	/>
 
 	<Panel
@@ -364,6 +364,23 @@
 				</div>
 			</form>
 		{/if}
+	</Panel>
+
+	<Panel
+		title="Your devices"
+		description="The machines signed in to this account, the marketplace logins each one holds, and a sign-out for each. Your marketplace logins live on the machine that captured them, never on our servers."
+	>
+		<div class="row">
+			<span class="what">
+				<span class="t">Machines and browser sign-ins</span>
+				<span class="s">
+					Sign out a machine you no longer use, or end a browser sign-in you do not
+					recognise.
+				</span>
+			</span>
+			<span class="grow"></span>
+			<a class="btn small" href="/settings/devices">Open</a>
+		</div>
 	</Panel>
 
 	<Panel

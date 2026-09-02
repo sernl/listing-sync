@@ -89,6 +89,16 @@ export const auth = betterAuth({
   telemetry: { enabled: false },
   advanced: { database: { generateId: 'uuid' } },
   rateLimit: { enabled: true, storage: 'database' },
+  // The session cookie cache is off, explicitly rather than by default.
+  // Verified 2026-09-02 against better-auth 1.7.2: with it on, getSession
+  // answers out of a signed cookie for `maxAge` seconds (default 300) without
+  // reading the session table (`packages/better-auth/src/cookies/index.ts`),
+  // so a session revoked through `revokeSession` stays usable until that cache
+  // expires. Decision D14 puts a per-device sign-out on the "Your devices"
+  // page, and a sign-out that silently takes up to five minutes is the one
+  // thing that page must not do. Turning this on is therefore a founder
+  // decision that has to answer for the revocation latency it reintroduces.
+  session: { cookieCache: { enabled: false } },
   emailAndPassword: {
     enabled: true,
     sendResetPassword: async ({ user, url }) => {

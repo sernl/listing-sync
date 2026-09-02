@@ -10,13 +10,15 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 32] = [
+const TENANT_TABLES: [&str; 34] = [
     "billing_subscription",
     "binding_candidate",
     "blob",
     "connection",
     "connection_audit",
     "connection_secret",
+    "device",
+    "device_marketplace_session",
     "election_item",
     "election_rule",
     "field_audit",

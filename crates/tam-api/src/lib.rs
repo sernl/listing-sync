@@ -20,6 +20,7 @@ pub mod analytics;
 pub mod auth;
 pub mod billing;
 pub mod catalogue;
+pub mod devices;
 pub mod error;
 pub mod jobs;
 pub mod openapi;
@@ -196,6 +197,18 @@ pub fn router(state: AppState) -> Router {
             get(product::standards_search),
         )
         .route("/{version}/taxonomy/terms", get(taxonomy::list_terms))
+        .route(
+            "/{version}/devices",
+            get(devices::list_devices).post(devices::register),
+        )
+        .route(
+            "/{version}/devices/{device}/heartbeat",
+            post(devices::heartbeat),
+        )
+        .route(
+            "/{version}/devices/{device}/revoke",
+            post(devices::revoke_device),
+        )
         .route("/{version}/connections", get(resources::list_connections))
         .route(
             "/{version}/connections/{connection}/revoke",

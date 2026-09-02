@@ -76,6 +76,11 @@ export type ConnectionEvent =
   | "revoked"
   | "unlinked";
 
+export type DeviceSessionStatus =
+  | "connected"
+  | "signed_out"
+  | "wiped";
+
 export type ItemState =
   | "queued"
   | "leased"

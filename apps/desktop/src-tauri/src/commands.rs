@@ -14,6 +14,7 @@ use tam_types::{Marketplace, Timestamp};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::connect::login_target;
+use crate::heartbeat::{check_in, first_run, CheckInError};
 use crate::session::{Cookie, CookieJar, SessionRecord, SessionStatus};
 use crate::state::DesktopState;
 
@@ -47,6 +48,24 @@ impl From<tauri::Error> for CommandError {
     fn from(why: tauri::Error) -> Self {
         Self(why.to_string())
     }
+}
+
+impl From<CheckInError> for CommandError {
+    fn from(why: CheckInError) -> Self {
+        Self(why.to_string())
+    }
+}
+
+/// What this device's standing with the server is, as the interface reads it.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DeviceState {
+    /// The seller signed this device out from the console. Sessions have been
+    /// forgotten and no work will run.
+    pub revoked: bool,
+    /// The last check-in reached the server. False means we do not know our
+    /// standing rather than that we are in good standing, which is why the
+    /// interface must not read `revoked: false` alone as permission.
+    pub reached_server: bool,
 }
 
 /// Opens the marketplace's own login page in a window on this device, waits
@@ -116,7 +135,42 @@ pub async fn connect_marketplace(
         jar,
     };
     state.store().put(&record).await?;
+
+    // D14: a device the seller has already signed out must not keep a session
+    // it just captured, so the check-in that would learn of it happens before
+    // the capture is reported as a success. A check-in that could not reach the
+    // server is not evidence of revocation and leaves the capture standing.
+    if let Ok(answer) = check_in(&state, state.control_plane()).await {
+        if answer.revoked {
+            return Err(CommandError(
+                "this device has been signed out from the console, so the marketplace \
+                 session was not kept"
+                    .to_owned(),
+            ));
+        }
+    }
     Ok(SessionStatus::of(&record))
+}
+
+/// Registers this device with the server's registry and checks in.
+///
+/// The console calls it when it loads, which is what first run means for a
+/// client whose interface is the console. Registration is idempotent on the
+/// server, so calling it again is a refresh rather than a second machine.
+#[tauri::command]
+pub async fn device_check_in(app: AppHandle) -> Result<DeviceState, CommandError> {
+    let state = app.state::<DesktopState>();
+    match first_run(&state, state.control_plane()).await {
+        Ok(answer) => Ok(DeviceState {
+            revoked: answer.revoked,
+            reached_server: true,
+        }),
+        Err(CheckInError::Plane(_)) => Ok(DeviceState {
+            revoked: state.revoked(),
+            reached_server: false,
+        }),
+        Err(why) => Err(CommandError::from(why)),
+    }
 }
 
 /// Whether this device holds a session for a marketplace, and nothing about

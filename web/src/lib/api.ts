@@ -11,6 +11,7 @@ import type {
 	ConnectionStatus,
 	CopyFormat,
 	Delegation,
+	DeviceSessionStatus,
 	ElectionTriggerKind,
 	FailureCode,
 	FileKind,
@@ -108,6 +109,37 @@ export interface Whoami {
 export interface OrgView {
 	id: string;
 	name: string;
+}
+
+/** One marketplace session a device holds, as the device last reported it.
+ *  Metadata only: migration 0042 has no column a cookie could travel in, which
+ *  is decision D1 made structural rather than remembered. */
+export interface DeviceSessionView {
+	marketplace: Marketplace;
+	account_label: string | null;
+	linked_at: number;
+	last_used_at: number;
+	status: DeviceSessionStatus;
+}
+
+/** One of the seller's own machines. `wipe_outstanding` is the honest half of
+ *  D14: the device was signed out and has not checked in since, so it may
+ *  still hold the marketplace cookies listed beside it. */
+export interface DeviceView {
+	id: string;
+	name: string;
+	os: string;
+	arch: string;
+	app_version: string;
+	first_seen_at: number;
+	last_seen_at: number;
+	revoked_at: number | null;
+	wipe_outstanding: boolean;
+	sessions: DeviceSessionView[];
+}
+
+export interface DevicesView {
+	devices: DeviceView[];
 }
 
 export interface ProductHead {
@@ -985,6 +1017,15 @@ export const api = {
 			`/v1/jobs/${job}/items${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
 		),
 	item: (job: string, item: string) => request<ItemDetail>(`/v1/jobs/${job}/items/${item}`),
+
+	/** The seller's own machines. Registration and heartbeat are the desktop
+	 *  client's calls, not the console's, so they are deliberately absent
+	 *  here. */
+	devices: () => request<DevicesView>('/v1/devices'),
+	/** Sign one machine out. The device wipes its marketplace sessions on its
+	 *  next check-in; one that never reconnects keeps them until the
+	 *  marketplace expires them, which the page states. */
+	revokeDevice: (device: string) => post<DeviceView>(`/v1/devices/${device}/revoke`, {}),
 
 	connections: () => request<{ connections: ConnectionView[] }>('/v1/connections'),
 	revoke: (connection: string) =>
