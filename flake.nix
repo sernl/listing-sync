@@ -154,10 +154,11 @@
                 buildPhaseCargoCommand = ''
                   crates="-p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
                   for target in wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-apple-ios aarch64-linux-android; do
-                    # tam-limits asserts usize::BITS >= 64, which wasm32 is not
+                    # tam-limits asserts usize::BITS >= 64, which wasm32 is
+                    # not, and tam-pipeline depends on tam-limits
                     case "$target" in
                       wasm32-*) extra="" ;;
-                      *) extra="-p tam-limits" ;;
+                      *) extra="-p tam-limits -p tam-pipeline" ;;
                     esac
                     cargo check --target "$target" --no-default-features $crates $extra
                   done

@@ -5,7 +5,10 @@ edition = "2021"
 publish = false
 
 [dependencies]
-blake3 = "1"
+# `pure` by founder decision, 2026-09-03: it drops blake3's C and asm
+# paths, so every client target compiles without a C toolchain. Measured
+# cost 2.47 to 1.71 GiB/s single-core, accepted.
+blake3 = { version = "1", features = ["pure"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 tam-limits = { path = "../tam-limits" }
 tam-types = { path = "../tam-types" }
