@@ -7,8 +7,8 @@
 
 use serde_json::json;
 use tam_domain::{
-    seller_clears, verification_settles, BlockCause, Effect, HaltScope, Input, ItemOperation,
-    ItemOutcome, MachineError, SellerEvent, StepBudget, SyncMachine, SyncState, Transition,
+    seller_clears, verification_settles, BlockCause, Effect, Input, ItemOperation, ItemOutcome,
+    MachineError, SellerEvent, StepBudget, SyncMachine, SyncState, Transition,
 };
 use tam_marketplace::{
     AdapterError, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator,
@@ -840,31 +840,17 @@ pub async fn run_item<
                     .await?;
                 }
                 Effect::Halt { scope } => {
-                    // The port admits one scope, so the two wider arms have
-                    // nothing to call. `halt_scope()` produces only
-                    // `OrgInventory` today, which is why they are unreachable
-                    // rather than unimplemented; narrowing the enum itself is
-                    // a separate change to `tam-domain`. Until then a wider
-                    // scope abandons, because the stall bias is the right
-                    // answer to an effect this process may not execute.
-                    match scope {
-                        HaltScope::OrgInventory { inventory, .. } => {
-                            ctx.ledger
-                                .halt_this_tenant(
-                                    &lease_ref,
-                                    inventory,
-                                    "the transition table demanded a halt",
-                                    now,
-                                )
-                                .await?;
-                        }
-                        HaltScope::Org { .. } | HaltScope::FleetInventory { .. } => {
-                            return Ok(RunVerdict::Abandoned {
-                                reason: "the machine asked for a halt wider than this lease"
-                                    .to_owned(),
-                            })
-                        }
-                    }
+                    // One scope exists, so there is no wider one to refuse.
+                    // `HaltScope` is a struct rather than a sum precisely so
+                    // this match cannot name the fleet kill switch.
+                    ctx.ledger
+                        .halt_this_tenant(
+                            &lease_ref,
+                            scope.inventory,
+                            "the transition table demanded a halt",
+                            now,
+                        )
+                        .await?;
                 }
                 Effect::Notify { org: _, event } => {
                     notify(ctx, lease, event, now).await?;

@@ -451,14 +451,23 @@ pub struct StepBudget {
     pub actions_remaining: u32,
 }
 
+/// What a halt the machine raises reaches: one tenant, one inventory.
+///
+/// A struct rather than a sum, and that is the point. The two wider scopes it
+/// used to carry — one tenant across every inventory, and every tenant on one
+/// marketplace — were never produced by `halt_scope`, and they became a hazard
+/// the moment the interpreter moved to a process the seller controls: an
+/// effect vocabulary that can name the fleet kill switch is a device that can
+/// reach it. With one shape there is no wider scope to name, so the property
+/// is structural rather than a convention the next editor might not notice.
+///
+/// The fleet halts still exist and still have writers: `tam-engine`'s breaker
+/// and canary raise them directly against `HaltRepo`, which runs on our own
+/// infrastructure and is never reachable from the effect loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HaltScope {
-    /// One tenant, one inventory. What an ambiguous create raises.
-    OrgInventory { org: OrgId, inventory: InventoryId },
-    /// One tenant, every inventory.
-    Org { org: OrgId },
-    /// Every tenant, one inventory. The fleet kill switch.
-    FleetInventory { inventory: InventoryId },
+pub struct HaltScope {
+    pub org: OrgId,
+    pub inventory: InventoryId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1409,8 +1418,8 @@ impl SyncMachine {
         )
     }
 
-    fn halt_scope(&self) -> HaltScope {
-        HaltScope::OrgInventory {
+    const fn halt_scope(&self) -> HaltScope {
+        HaltScope {
             org: self.org,
             inventory: self.inventory,
         }
@@ -1751,7 +1760,7 @@ mod machine_tests {
 
     fn halt() -> Effect {
         Effect::Halt {
-            scope: HaltScope::OrgInventory {
+            scope: HaltScope {
                 org: org(),
                 inventory: InventoryId::TesGb,
             },
