@@ -268,6 +268,14 @@ Both are extension-based.
 Server-side credential-holding automation appears nowhere in the comparable set.
 They sit on the Perplexity side of the access line, which means they do not validate our architecture; they are evidence for the official-API and client-side mitigations.
 
+Correction (2026-09-02): server-side credential-holding automation does appear in the comparable set, contrary to the sentence above.
+PrimeLister's own documentation for its cloud Poshmark automation instructs the seller to "simply enter your Poshmark account credentials (username/email and password) into the tool", states that "your credentials are encrypted and securely stored in the cloud", and records that connecting without saving those credentials "is not" currently possible, its stated rationale being operational rather than legal (`docs/research/rethink/vendoo-architecture-and-market.md` section 6, citing https://docs.primelister.com/features/poshmark-automation-tool, retrieved 2026-09-02).
+So a server-side credential-holding operator does run against a no-API marketplace, publicly documented and apparently unenforced against.
+The verdict in this memo is unchanged, for two reasons.
+The exposure analysis never rested on the practice being unique: it rests on Power Ventures placing a server-side operator inside the authorization question the day a cease-and-desist arrives, and one more operator running that risk does not change what happens when a notice is served.
+And the comparison is not like for like, since Poshmark has not pursued PrimeLister while TPT contracts through Teacher Synergy LLC as part of IXL Learning, a materially more litigious counterparty, so absence of enforcement against one is weak evidence about the other.
+What the finding does change is one sentence of argument: "nobody does this" is no longer available as support, and the case for moving execution client-side now stands on the access-versus-authorization distinction alone, which it does.
+
 One theory can be discounted.
 Trespass to chattels, the theory behind eBay, Inc. v. Bidder's Edge, Inc., 100 F. Supp. 2d 1058 (N.D. Cal. 2000), which enjoined an automated aggregator, was narrowed by Intel Corp. v. Hamidi, 30 Cal. 4th 1342 (2003) to require actual system impairment, which a rate-limited tool posting a seller's own listings cannot meet.
 The reasoning attributed to Hamidi here is **unverified**.
