@@ -48,7 +48,10 @@
               || (builtins.match ".*/\\.sqlx/query-.*\\.json" path != null)
               || (builtins.match ".*/migrations/.*\\.sql" path != null)
               || (builtins.match ".*/tests/cassettes/.*\\.json" path != null)
-              || (builtins.match ".*/docs/design/data/.*\\.json" path != null);
+              || (builtins.match ".*/docs/design/data/.*\\.jsonl?" path != null)
+              # The verdict-fixtures bin and equivalence test in tam-core-wasm
+              # include drafts.json and verdicts.json from outside src/.
+              || (builtins.match ".*/crates/[^/]+/fixtures/.*\\.json" path != null);
           };
           # filterCargoSources keeps every .toml, so deny.toml and clippy.toml
           # are already in src; narrowing to the latter keeps the file-count
