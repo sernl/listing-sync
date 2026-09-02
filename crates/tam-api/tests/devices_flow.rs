@@ -670,3 +670,47 @@ async fn neither_new_route_carries_an_organisation_a_caller_could_substitute(poo
         );
     }
 }
+
+/// The work route accepts a marketplace filter and serves without one.
+///
+/// What the filter *does* is asserted where the fixtures can seed two
+/// marketplaces of real work — `a_filtered_claim_returns_only_the_marketplace_it_asked_for`
+/// in tam-storage. What this pins is the surface: the body parses, an absent
+/// body keeps the old behaviour, and a client that sends the filter the desktop
+/// stream sends is served rather than refused.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_work_route_accepts_a_marketplace_filter_and_serves_without_one(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+
+    for body in [
+        None,
+        Some(serde_json::json!({ "marketplace": "Tes" })),
+        Some(serde_json::json!({})),
+    ] {
+        let answer = call(
+            pool.clone(),
+            Call {
+                method: Method::POST,
+                path: &format!("/v1/devices/{LAPTOP}/work"),
+                token: &TOKEN_A,
+                body: body.clone(),
+                wall: t0,
+            },
+        )
+        .await;
+        assert_eq!(
+            answer.status,
+            StatusCode::OK,
+            "the route serves with body {body:?}: {}",
+            String::from_utf8_lossy(&answer.body)
+        );
+        let view: serde_json::Value =
+            serde_json::from_slice(&answer.body).expect("the claim view parses");
+        assert_eq!(
+            view["state"], "idle",
+            "nothing is queued in this fixture, so every shape answers idle rather than \
+             faulting: {view}"
+        );
+    }
+}

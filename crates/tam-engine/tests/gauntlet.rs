@@ -35,8 +35,8 @@ use tam_marketplace::{
 };
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
-    BudgetGrant, DeviceRef, ElectionRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem,
-    ProductRepo, RateBudgetRepo, TaxonomyRepo,
+    BudgetGrant, ClaimPolicy, DeviceRef, ElectionRepo, JobRepo, LeaseRepo, MappingRepo, NewJob,
+    NewJobItem, ProductRepo, RateBudgetRepo, TaxonomyRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
@@ -1467,7 +1467,15 @@ async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::Leas
     .expect("the fixture device registers");
     tx.commit().await.expect("the fixture device commits");
     match tam_storage::LeaseRepo::new(app.clone())
-        .claim_for_device(&DeviceRef { org: ORG, device }, ttl, 24, NOW)
+        .claim_for_device(
+            &DeviceRef { org: ORG, device },
+            &ClaimPolicy {
+                ttl_seconds: ttl,
+                grace_hours: 24,
+                marketplace: None,
+            },
+            NOW,
+        )
         .await
         .expect("the claim runs")
     {

@@ -24,7 +24,9 @@ use tam_marketplace::{
     ListingState, MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle,
     RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
 };
-use tam_storage::{DeviceRef, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
+use tam_storage::{
+    ClaimPolicy, DeviceRef, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo,
+};
 use tam_types::{
     Actor, ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId, Stamp,
     SystemComponent, Timestamp, Uuid,
@@ -999,7 +1001,15 @@ async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::Leas
     .expect("the fixture device registers");
     tx.commit().await.expect("the fixture device commits");
     match tam_storage::LeaseRepo::new(app.clone())
-        .claim_for_device(&DeviceRef { org: ORG, device }, ttl, 24, T0)
+        .claim_for_device(
+            &DeviceRef { org: ORG, device },
+            &ClaimPolicy {
+                ttl_seconds: ttl,
+                grace_hours: 24,
+                marketplace: None,
+            },
+            T0,
+        )
         .await
         .expect("the claim runs")
     {

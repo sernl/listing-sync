@@ -16,10 +16,10 @@ use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_storage::{
-    revive_by_gap, revive_on, settle_if_complete, AttemptIntent, BudgetGrant, ConnectionAudit,
-    DeviceClaim, DeviceRef, HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LeaseRepo,
-    LeasedItem, MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
-    ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, REAUTH_REQUIRED,
+    revive_by_gap, revive_on, settle_if_complete, AttemptIntent, BudgetGrant, ClaimPolicy,
+    ConnectionAudit, DeviceClaim, DeviceRef, HaltCause, HaltRepo, ItemVerdict, JobReadRepo,
+    JobRepo, LeaseRepo, LeasedItem, MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
+    OutboxRepo, ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, REAUTH_REQUIRED,
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -206,7 +206,15 @@ async fn claim(app: &PgPool, org: OrgId, device: &str, ttl: i64) -> Option<Lease
     // they are about; the tests that are about it revoke explicitly.
     register_device(app, org, device).await;
     match LeaseRepo::new(app.clone())
-        .claim_for_device(&DeviceRef { org, device }, ttl, 24, T0)
+        .claim_for_device(
+            &DeviceRef { org, device },
+            &ClaimPolicy {
+                ttl_seconds: ttl,
+                grace_hours: 24,
+                marketplace: None,
+            },
+            T0,
+        )
         .await
         .expect("the claim runs")
     {
@@ -2178,8 +2186,11 @@ async fn a_second_device_is_told_the_slot_is_held_rather_than_that_nothing_is_qu
                     org: tenant.org,
                     device: "device-a"
                 },
-                60,
-                24,
+                &ClaimPolicy {
+                    ttl_seconds: 60,
+                    grace_hours: 24,
+                    marketplace: None,
+                },
                 T0
             )
             .await
@@ -2193,8 +2204,11 @@ async fn a_second_device_is_told_the_slot_is_held_rather_than_that_nothing_is_qu
                 org: tenant.org,
                 device: "device-b",
             },
-            60,
-            24,
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+            },
             T0,
         )
         .await
@@ -2266,4 +2280,101 @@ async fn subscribe(app: &PgPool, org: OrgId, status: &str, period_end: &str) {
     .await
     .expect("the subscription row writes");
     tx.commit().await.expect("the subscription commits");
+}
+
+/// A filtered claim never returns another marketplace's item.
+///
+/// The device gates its own readiness per marketplace before it pulls, so it
+/// asks for the one it is ready for. Serving it a different marketplace's item
+/// would hand it work it can only refuse, and the refusal costs a lease expiry
+/// before anyone else can take that item.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_filtered_claim_returns_only_the_marketplace_it_asked_for(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC2, true).await;
+    let tpt_mapping = seed_mapping_on(&app, &tenant, 0xC6, InventoryId::Tpt).await;
+    link_connection(&app, tenant.org, "tpt", 0xC7).await;
+    // Tes first in FIFO order, so an unfiltered claim would take it and a
+    // filtered one asking for Tpt must not.
+    enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: tenant.mapping,
+            job_seed: 0xCA,
+            item_seed: 0xCB,
+            inventory: InventoryId::TesGb,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+    enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: tpt_mapping,
+            job_seed: 0xCC,
+            item_seed: 0xCD,
+            inventory: InventoryId::Tpt,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+    register_device(&app, tenant.org, "filtering-device").await;
+    let leases = LeaseRepo::new(app.clone());
+
+    let tpt = leases
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "filtering-device",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: Some(Marketplace::Tpt),
+            },
+            T0,
+        )
+        .await
+        .expect("the filtered claim runs");
+    let DeviceClaim::Leased(item) = tpt else {
+        panic!("the Tpt item is claimable and the filter asked for it: {tpt:?}");
+    };
+    assert_eq!(
+        item.inventory,
+        InventoryId::Tpt,
+        "the filter asked for Tpt, and the Tes item is first in FIFO order, so serving \
+         Tes here would be the filter having done nothing"
+    );
+
+    // And a device asking for the other marketplace still claims: the slot
+    // taken above is Tpt's, and Tes was never contended.
+    register_device(&app, tenant.org, "tes-device").await;
+    let anything = leases
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "tes-device",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: Some(Marketplace::Tes),
+            },
+            T0,
+        )
+        .await
+        .expect("the second filtered claim runs");
+    let DeviceClaim::Leased(other) = anything else {
+        panic!(
+            "Tes was never contended, so a device asking for it must claim rather than be \
+             told the queue is held: {anything:?}"
+        );
+    };
+    assert_eq!(
+        other.inventory,
+        InventoryId::TesGb,
+        "and what it claims is the marketplace it asked for"
+    );
 }

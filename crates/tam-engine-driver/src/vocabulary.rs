@@ -22,7 +22,7 @@ use tam_marketplace::{
 };
 use tam_types::{
     ConnectionId, ContentHash, FailureCode, FailureDetail, FileId, InventoryId, JobEventPayload,
-    JobId, MappingId, OrgId, Uuid,
+    JobId, MappingId, Marketplace, OrgId, Uuid,
 };
 
 /// Which organisation, item and epoch a fenced write speaks for. Every ledger
@@ -254,6 +254,19 @@ pub struct WorkOrder {
     pub server_now_ms: i64,
     pub server_deadline_ms: i64,
     pub next_poll_ms: u64,
+}
+
+/// What the device is asking for when it pulls.
+///
+/// The device gates readiness per marketplace before it pulls — a session
+/// present, entitlement standing, no halt — so it asks for work it has already
+/// decided it can do. Absent means whatever is due, which is what the
+/// in-process worker wants; present means a mismatched order never reaches a
+/// device that would only refuse it and spend a lease expiry doing so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WorkFilter {
+    #[serde(default)]
+    pub marketplace: Option<Marketplace>,
 }
 
 /// What the device is told when it asks for work.

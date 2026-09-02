@@ -25,7 +25,9 @@ use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
 use tam_marketplace_tes::TesAdapter;
-use tam_storage::{DeviceRef, ElectionRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo};
+use tam_storage::{
+    ClaimPolicy, DeviceRef, ElectionRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo,
+};
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole,
     InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule,
@@ -1523,7 +1525,15 @@ async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::Leas
     .expect("the fixture device registers");
     tx.commit().await.expect("the fixture device commits");
     match tam_storage::LeaseRepo::new(app.clone())
-        .claim_for_device(&DeviceRef { org: ORG, device }, ttl, 24, NOW)
+        .claim_for_device(
+            &DeviceRef { org: ORG, device },
+            &ClaimPolicy {
+                ttl_seconds: ttl,
+                grace_hours: 24,
+                marketplace: None,
+            },
+            NOW,
+        )
         .await
         .expect("the claim runs")
     {

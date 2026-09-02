@@ -14,9 +14,9 @@ use tam_domain::{
 };
 use tam_marketplace::{IdempotencyKey, ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
-    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, DeviceClaim, DeviceRef,
-    ItemVerdict, JobRepo, LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewAttempt, NewJob,
-    NewJobItem, ProductRepo, StorageError, WriteAttemptRepo,
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, ClaimPolicy, DeviceClaim,
+    DeviceRef, ItemVerdict, JobRepo, LandingEffect, LeaseRef, LeaseRepo, MappingRepo, NewAttempt,
+    NewJob, NewJobItem, ProductRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
@@ -223,8 +223,11 @@ async fn claim_lease(app: &PgPool) -> Result<Option<LeaseRef>, StorageError> {
                     org: ORG,
                     device: DEVICE,
                 },
-                600,
-                24,
+                &ClaimPolicy {
+                    ttl_seconds: 600,
+                    grace_hours: 24,
+                    marketplace: None,
+                },
                 T0,
             )
             .await?

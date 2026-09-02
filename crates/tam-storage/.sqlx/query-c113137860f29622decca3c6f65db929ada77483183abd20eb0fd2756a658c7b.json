@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lease_owner FROM job_item WHERE org_id = $1 AND state IN ('leased', 'running', 'verifying') AND lease_owner IS DISTINCT FROM $2 AND ($3::text IS NULL OR marketplace = $3) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lease_owner",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c113137860f29622decca3c6f65db929ada77483183abd20eb0fd2756a658c7b"
+}

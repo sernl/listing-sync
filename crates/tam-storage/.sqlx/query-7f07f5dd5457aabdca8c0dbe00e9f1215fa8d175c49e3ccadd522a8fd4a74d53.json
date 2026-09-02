@@ -1,0 +1,109 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH candidate AS (\n                 SELECT ji.org_id, ji.id\n                 FROM job_item ji\n                 JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id\n                 JOIN marketplace_inventory mi\n                   ON mi.code = j.inventory AND mi.marketplace = j.marketplace\n                 WHERE ji.state = 'queued'\n                   -- Defence in depth beside the row-level security this\n                   -- statement is meant to run under. Forced RLS pins the\n                   -- tenant for free under `tam_app`, but the pin is the only\n                   -- tenancy this statement has, and a pool wired to a\n                   -- BYPASSRLS role would silently claim another tenant's\n                   -- work. Reading the pinned setting rather than an argument\n                   -- keeps the tenant the server's, never the caller's.\n                   -- The two-argument form answers NULL rather than raising\n                   -- when the setting is absent, and a NULL comparison selects\n                   -- nothing: an unpinned caller claims no work at all, which\n                   -- is the fail-closed direction.\n                   AND ji.org_id = nullif(current_setting('app.current_org', true), '')::uuid\n                   AND mi.transport_class = 'seller_device'\n                   -- Absent means \"whatever is due\"; present restricts the\n                   -- claim to work this device has already decided it is\n                   -- ready for, so a mismatched order never costs a lease.\n                   AND ($4::text IS NULL OR ji.marketplace = $4)\n                   AND EXISTS (SELECT 1 FROM device d\n                         WHERE d.org_id = ji.org_id AND d.id = $1\n                           AND d.revoked_at IS NULL)\n                   AND NOT EXISTS (SELECT 1 FROM billing_subscription bs\n                         WHERE bs.org_id = ji.org_id\n                           AND bs.status NOT IN ('active', 'trialing')\n                           AND bs.current_period_end IS NOT NULL\n                           AND bs.current_period_end < now() - make_interval(hours => $3))\n                   AND NOT EXISTS (SELECT 1 FROM inventory_halt ih\n                         WHERE ih.inventory = j.inventory\n                           AND ih.marketplace = j.marketplace)\n                   AND NOT EXISTS (SELECT 1 FROM org_halt oh\n                         WHERE oh.org_id = ji.org_id)\n                   AND NOT EXISTS (SELECT 1 FROM org_inventory_halt oih\n                         WHERE oih.org_id = ji.org_id\n                           AND oih.inventory = j.inventory\n                           AND oih.marketplace = j.marketplace)\n                   AND EXISTS (SELECT 1 FROM connection c\n                         WHERE c.org_id = ji.org_id\n                           AND c.marketplace = j.marketplace\n                           AND c.state = 'linked')\n                   AND NOT EXISTS (SELECT 1 FROM job_item live\n                         WHERE live.org_id = ji.org_id\n                           AND live.marketplace = ji.marketplace\n                           AND live.state IN ('leased', 'running', 'verifying'))\n                 ORDER BY ji.created_at, ji.id\n                 LIMIT 1\n                 FOR UPDATE OF ji SKIP LOCKED\n               )\n               UPDATE job_item AS item\n               SET state = 'leased', lease_owner = $1,\n                   lease_expires_at = now() + make_interval(secs => $2)\n               FROM candidate, job j2\n               WHERE item.org_id = candidate.org_id AND item.id = candidate.id\n                 AND j2.org_id = item.org_id AND j2.id = item.job_id\n               RETURNING item.org_id, item.id, item.job_id, item.mapping_id,\n                 item.idempotency_key, item.lease_epoch, item.attempt_count,\n                 item.operation, item.subject_kind, item.subject_url,\n                 item.subject_numeric_id, item.state_from, item.state_to,\n                 item.requires_bound_on,\n                 j2.inventory AS \"inventory!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "idempotency_key",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "lease_epoch",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "attempt_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "operation",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "subject_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "subject_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "subject_numeric_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "state_from",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "state_to",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "requires_bound_on",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "inventory!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "7f07f5dd5457aabdca8c0dbe00e9f1215fa8d175c49e3ccadd522a8fd4a74d53"
+}

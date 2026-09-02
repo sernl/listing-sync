@@ -15,8 +15,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
-    Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, OrgId,
-    Stamp, SystemComponent, Timestamp, Uuid,
+    Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, Marketplace,
+    OrgId, Stamp, SystemComponent, Timestamp, Uuid,
 };
 
 use crate::codec::{
@@ -814,6 +814,20 @@ pub struct DeviceRef<'a> {
     pub device: &'a str,
 }
 
+/// How a device wants its claim served.
+///
+/// A struct rather than three parameters, and the marketplace is the reason it
+/// exists: a device gates readiness per marketplace before it pulls — session
+/// present, entitlement standing, no halt — so it must be able to ask for work
+/// it is actually ready to do. Without one it takes whatever is due, which is
+/// the behaviour the in-process worker wants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaimPolicy {
+    pub ttl_seconds: i64,
+    pub grace_hours: i64,
+    pub marketplace: Option<Marketplace>,
+}
+
 /// What a device's claim came to.
 ///
 /// `Empty` and `HeldByAnotherDevice` are deliberately different answers. Under
@@ -972,11 +986,15 @@ impl LeaseRepo {
     pub async fn claim_for_device(
         &self,
         claimant: &DeviceRef<'_>,
-        ttl_seconds: i64,
-        grace_hours: i64,
+        policy: &ClaimPolicy,
         at: Timestamp,
     ) -> Result<DeviceClaim, StorageError> {
         let DeviceRef { org, device } = *claimant;
+        let ClaimPolicy {
+            ttl_seconds,
+            grace_hours,
+            marketplace,
+        } = *policy;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let leased = sqlx::query!(
@@ -1000,6 +1018,10 @@ impl LeaseRepo {
                    -- is the fail-closed direction.
                    AND ji.org_id = nullif(current_setting('app.current_org', true), '')::uuid
                    AND mi.transport_class = 'seller_device'
+                   -- Absent means "whatever is due"; present restricts the
+                   -- claim to work this device has already decided it is
+                   -- ready for, so a mismatched order never costs a lease.
+                   AND ($4::text IS NULL OR ji.marketplace = $4)
                    AND EXISTS (SELECT 1 FROM device d
                          WHERE d.org_id = ji.org_id AND d.id = $1
                            AND d.revoked_at IS NULL)
@@ -1044,6 +1066,7 @@ impl LeaseRepo {
             device,
             f64::from(i32::try_from(ttl_seconds).unwrap_or(i32::MAX)),
             i32::try_from(grace_hours).unwrap_or(i32::MAX),
+            marketplace.map(marketplace_to_db),
         )
         .fetch_optional(&mut *tx)
         .await;
@@ -1061,12 +1084,18 @@ impl LeaseRepo {
             // Nothing claimable. Whether that is an empty queue or a sibling
             // device holding the slot is the difference between polling again
             // soon and backing off, so it is read rather than assumed.
+            // Scoped to the marketplace the caller asked for, where it asked
+            // for one. A device asking for Tes must not be told the queue is
+            // held because a sibling holds Tpt: it would back off from a slot
+            // that was never contended.
             let held: Option<String> = sqlx::query_scalar!(
                 "SELECT lease_owner FROM job_item \
                  WHERE org_id = $1 AND state IN ('leased', 'running', 'verifying') \
-                   AND lease_owner IS DISTINCT FROM $2 LIMIT 1",
+                   AND lease_owner IS DISTINCT FROM $2 \
+                   AND ($3::text IS NULL OR marketplace = $3) LIMIT 1",
                 uuid_to_db(org.0),
                 device,
+                marketplace.map(marketplace_to_db),
             )
             .fetch_optional(&mut *tx)
             .await?

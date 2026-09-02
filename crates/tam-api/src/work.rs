@@ -19,10 +19,10 @@ use tam_engine::ledger::{to_wire_item, PgLedger};
 use tam_engine::seed::{preparation as preparation_for, prepare_item, ItemPreparation};
 use tam_engine_driver::vocabulary::{
     ClaimView, LeaseRef, LedgerAnswer, LedgerCall, LedgerError, PayloadManifest, SettleEnvelope,
-    WorkOrder,
+    WorkFilter, WorkOrder,
 };
 use tam_pipeline::store::LocalObjectStore;
-use tam_storage::{describe_files, BlobRepo, DeviceClaim, DeviceRef, LeaseRepo};
+use tam_storage::{describe_files, BlobRepo, ClaimPolicy, DeviceClaim, DeviceRef, LeaseRepo};
 use tam_types::Timestamp;
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
@@ -49,16 +49,25 @@ pub(crate) async fn claim(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, device)): Path<(String, String)>,
+    // Optional: a device that has gated its own readiness asks for the one
+    // marketplace it is ready for, and a device that has not asks for
+    // whatever is due. An absent or unparseable body means the latter, so a
+    // client that sends nothing keeps the behaviour it had.
+    filter: Option<Json<WorkFilter>>,
 ) -> Result<Json<ClaimView>, APIError> {
     let now = (state.wall)();
+    let filter = filter.map(|Json(filter)| filter).unwrap_or_default();
     let claimed = LeaseRepo::new(state.pool.clone())
         .claim_for_device(
             &DeviceRef {
                 org: context.org,
                 device: &device,
             },
-            CLAIM_TTL_SECS,
-            ENTITLEMENT_GRACE_HOURS,
+            &ClaimPolicy {
+                ttl_seconds: CLAIM_TTL_SECS,
+                grace_hours: ENTITLEMENT_GRACE_HOURS,
+                marketplace: filter.marketplace,
+            },
             now,
         )
         .await
