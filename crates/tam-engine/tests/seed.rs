@@ -16,9 +16,9 @@ use tam_domain::equivalence::{
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
-use tam_engine::driver::{seed_refused, DriverContext, NowSource, RunVerdict};
-use tam_engine::ledger::{PgJournal, PgOutbox};
+use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
 use tam_engine::seed::{prepare_item, seed_from_projection, ItemPreparation};
+use tam_engine_driver::driver::{seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
@@ -335,7 +335,7 @@ fn removing(url: &str) -> tam_domain::ItemOperation {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-fn entry(seed: &tam_engine::driver::MachineSeed, key: FieldKey) -> String {
+fn entry(seed: &tam_engine_driver::driver::MachineSeed, key: FieldKey) -> String {
     seed.fields
         .entries
         .iter()
@@ -1212,9 +1212,13 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
         .expect("the create leases next");
     assert_eq!(create.item, ids[0]);
     let attempts = tam_storage::WriteAttemptRepo::new(engine.clone());
-    let attempt = attempts
+    // The id is the caller's now, so the fixture mints the one it will assert
+    // the settle against rather than reading one back.
+    let attempt = tam_types::Uuid([0x5A; 16]);
+    attempts
         .open(
             &create.lease_ref(),
+            attempt,
             &tam_storage::NewAttempt {
                 mapping: MAPPING,
                 intent: &tam_storage::AttemptIntent {
@@ -1408,19 +1412,17 @@ async fn refuse_one(app: &PgPool, engine: &PgPool, leases: &LeaseRepo) -> (Lease
     let error = seed_from_projection(&adapter, &held, &projected)
         .expect_err("a path Tes cannot address is refused rather than rendered");
     let cancel = tokio_util::sync::CancellationToken::new();
+    let ledger = PgLedger::new(engine.clone(), held.job);
+    let cancel = TokenCancellation(&cancel);
     let ctx = DriverContext {
         adapter: &adapter,
-        leases,
-        halts: &tam_storage::HaltRepo::new(engine.clone()),
-        attempts: &tam_storage::WriteAttemptRepo::new(engine.clone()),
-        budgets: &tam_storage::RateBudgetRepo::new(engine.clone()),
-        journal: &PgJournal::new(engine.clone()),
-        outbox: &PgOutbox::new(engine.clone()),
+        ledger: &ledger,
         clock: &FixedClock,
+        ids: &RandomIds,
         cancel: &cancel,
         pause: &tam_marketplace::InstantPause,
     };
-    let verdict = seed_refused(&ctx, &held, &error, NOW)
+    let verdict = seed_refused(&ctx, &to_wire_item(&held), &error, NOW)
         .await
         .expect("the settle runs");
     (held, verdict)

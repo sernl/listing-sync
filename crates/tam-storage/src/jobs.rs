@@ -1478,11 +1478,17 @@ impl WriteAttemptRepo {
     /// Opens the in-flight row and mints its identifier. The partial unique
     /// index refuses a second in-flight attempt for the mapping, which is
     /// the duplicate-upload storm failing at the database.
+    /// The attempt id is the caller's rather than minted here, so a response
+    /// lost in flight is recoverable by re-offering the same id instead of
+    /// spending another of the item's attempts. Making the write itself
+    /// idempotent on `(org, attempt)` is the other half and is not done yet;
+    /// until it is, a re-offer of a known id still violates the fence.
     pub async fn open(
         &self,
         lease: &LeaseRef,
+        attempt: tam_types::Uuid,
         new: &NewAttempt<'_>,
-    ) -> Result<tam_types::Uuid, StorageError> {
+    ) -> Result<(), StorageError> {
         let NewAttempt {
             mapping,
             intent,
@@ -1490,7 +1496,6 @@ impl WriteAttemptRepo {
         } = *new;
         let Stamp { at, actor } = stamp;
         let AttemptIntent { body, hash } = intent;
-        let attempt = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
         let inserted = sqlx::query!(
             "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10)",
             uuid_to_db(lease.org.0),
@@ -1509,7 +1514,7 @@ impl WriteAttemptRepo {
         map_unique(inserted, "write_attempt_one_in_flight", || {
             StorageError::AttemptInFlight
         })?;
-        Ok(attempt)
+        Ok(())
     }
 
     /// Epoch-fenced settlement of the attempt row, and — when the verdict

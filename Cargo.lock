@@ -5027,6 +5027,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tam-domain",
+ "tam-engine-driver",
  "tam-limits",
  "tam-marketplace",
  "tam-marketplace-tes",
@@ -5037,6 +5038,18 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "tam-engine-driver"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tam-domain",
+ "tam-limits",
+ "tam-marketplace",
+ "tam-types",
 ]
 
 [[package]]
@@ -5279,6 +5292,7 @@ dependencies = [
  "sqlx",
  "tam-domain",
  "tam-engine",
+ "tam-engine-driver",
  "tam-limits",
  "tam-marketplace",
  "tam-marketplace-tes",

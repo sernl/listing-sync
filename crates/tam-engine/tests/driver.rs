@@ -12,11 +12,11 @@ use std::sync::Arc;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{ItemOutcome, StepBudget};
-use tam_engine::driver::{
+use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
+use tam_engine::seed::verify_policy;
+use tam_engine_driver::driver::{
     run_item, DriverContext, MachineSeed, NowSource, RunVerdict, PREFLIGHT_FAILURES_MAX,
 };
-use tam_engine::ledger::{PgJournal, PgOutbox};
-use tam_engine::seed::verify_policy;
 use tam_marketplace::FetchReason;
 use tam_marketplace::{
     AdapterError, AmbiguityCause, ChallengeKind, CreateStrategy, FieldSet, FormId,
@@ -24,10 +24,7 @@ use tam_marketplace::{
     ListingState, MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle,
     RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence,
 };
-use tam_storage::{
-    HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo, RateBudgetRepo,
-    WriteAttemptRepo,
-};
+use tam_storage::{JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
 use tam_types::{
     Actor, ContentHash, CopyFormat, FieldKey, InventoryId, JobId, MappingId, OrgId, Stamp,
     SystemComponent, Timestamp, Uuid,
@@ -398,21 +395,19 @@ async fn drive(
         .expect("the scan runs")
         .expect("the item leases");
     let clock = SteppingClock(AtomicI64::new(at.0 + 1_000));
+    let ledger = PgLedger::new(engine.clone(), lease.job);
+    // The fixture's own token, so an adapter call can cancel the run it is
+    // being driven under; never cancelled unless a hook was asked for.
+    let cancel = TokenCancellation(&adapter.cancel);
     let ctx = DriverContext {
         adapter,
-        leases,
-        halts: &HaltRepo::new(engine.clone()),
-        attempts: &WriteAttemptRepo::new(engine.clone()),
-        budgets: &RateBudgetRepo::new(engine.clone()),
-        journal: &PgJournal::new(engine.clone()),
-        outbox: &PgOutbox::new(engine.clone()),
+        ledger: &ledger,
         clock: &clock,
-        // The fixture's own, so an adapter call can cancel the run it is
-        // being driven under; never cancelled unless a hook was asked for.
-        cancel: &adapter.cancel,
+        ids: &RandomIds,
+        cancel: &cancel,
         pause: &InstantPause,
     };
-    run_item(&ctx, &lease, seed_machine(strategy))
+    run_item(&ctx, &to_wire_item(&lease), seed_machine(strategy))
         .await
         .expect("the driver runs")
 }

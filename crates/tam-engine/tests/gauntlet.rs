@@ -21,9 +21,9 @@ use tam_domain::{
     Binding, CanonicalTerm, Decider, EdgeKind, ItemOutcome, ProjectionEdge, TermKind, Verification,
     VocabularyId, VocabularyPath,
 };
-use tam_engine::driver::{run_item, DriverContext, EngineError, NowSource, RunVerdict};
-use tam_engine::ledger::{PgJournal, PgOutbox};
+use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
+use tam_engine_driver::driver::{run_item, DriverContext, EngineError, NowSource, RunVerdict};
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestBody, Transport, TransportError,
@@ -34,8 +34,8 @@ use tam_marketplace::{
 };
 use tam_marketplace_tes::TesAdapter;
 use tam_storage::{
-    BudgetGrant, ElectionRepo, HaltRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem,
-    ProductRepo, RateBudgetRepo, TaxonomyRepo, WriteAttemptRepo,
+    BudgetGrant, ElectionRepo, JobRepo, LeaseRepo, MappingRepo, NewJob, NewJobItem, ProductRepo,
+    RateBudgetRepo, TaxonomyRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
@@ -777,24 +777,19 @@ async fn pump(
         || seed_for_removal(&item, &operation),
         |projected| seed_from_projection(&adapter, &item, projected).expect("the adapter renders"),
     );
-    let halts = HaltRepo::new(pool.clone());
-    let attempts = WriteAttemptRepo::new(pool.clone());
-    let budgets = RateBudgetRepo::new(pool.clone());
     let cancel = CancellationToken::new();
     let pause = CountingPause::default();
+    let ledger = PgLedger::new(pool.clone(), item.job);
+    let cancel = TokenCancellation(&cancel);
     let ctx = DriverContext {
         adapter: &adapter,
-        leases: &leases,
-        halts: &halts,
-        attempts: &attempts,
-        budgets: &budgets,
-        journal: &PgJournal::new(pool.clone()),
-        outbox: &PgOutbox::new(pool.clone()),
+        ledger: &ledger,
         clock: &Clock,
+        ids: &RandomIds,
         cancel: &cancel,
         pause: &pause,
     };
-    let verdict = run_item(&ctx, &item, seed).await;
+    let verdict = run_item(&ctx, &to_wire_item(&item), seed).await;
     (verdict, pause.pauses.load(Ordering::Relaxed))
 }
 

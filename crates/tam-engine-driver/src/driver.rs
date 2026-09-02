@@ -10,22 +10,20 @@ use tam_domain::{
     seller_clears, verification_settles, BlockCause, Effect, HaltScope, Input, ItemOperation,
     ItemOutcome, MachineError, SellerEvent, StepBudget, SyncMachine, SyncState, Transition,
 };
-use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::{
     AdapterError, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator,
     ListingState, MarketplaceAdapter, ObservedListing, Outcome, Pause, RemoteLifecycle,
     RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
 };
-use tam_storage::{
-    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, EventScope, HaltCause,
-    HaltRepo, ItemVerdict, LandingEffect, LeaseRef, LeaseRepo, LeasedItem, NewAttempt,
-    NewOutboxMessage, RateBudgetRepo, StorageError, WriteAttemptRepo,
-};
 use tam_types::{
-    BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId,
-    Stamp, SystemComponent, Timestamp, Uuid,
+    BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, Timestamp,
 };
-use tokio_util::sync::CancellationToken;
+
+use crate::ports::{Cancellation, IdSource, ItemLedger};
+use crate::vocabulary::{
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind,
+    ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerError, NewAttempt,
+};
 
 /// The clock seam: the binaries read the wall clock at this boundary
 /// (expect-attributed there); tests hand instants in.
@@ -78,43 +76,15 @@ pub struct MachineSeed {
     pub verify: VerifyPolicy,
 }
 
-/// The item's event journal as a capability. The interpreter records what it
-/// did; allocating the per-organisation sequence and writing the row belongs
-/// to the implementation, which is what takes the raw pool — and with it
-/// `sqlx` — out of this module's own signature.
-///
-/// Written with an explicit `impl Future` return rather than `async fn`,
-/// because `async_fn_in_trait` is a hard error under a deny-warnings build
-/// and the desugaring is what a multi-threaded runtime requires anyway.
-pub trait JournalPort: Send + Sync {
-    fn record(
-        &self,
-        scope: &EventScope,
-        payload: &JobEventPayload,
-        stamp: Stamp,
-    ) -> impl std::future::Future<Output = Result<(), StorageError>> + Send;
-}
-
-/// The seller-notification outbox as a capability. At-least-once delivery
-/// deduped on `(org, topic, dedupe_key)` is the storage side's contract; this
-/// states only that the interpreter can queue one.
-pub trait NotifyPort: Send + Sync {
-    fn append(
-        &self,
-        message: &NewOutboxMessage,
-    ) -> impl std::future::Future<Output = Result<(), StorageError>> + Send;
-}
-
-pub struct DriverContext<'a, A, N, P, J, O> {
+pub struct DriverContext<'a, A, N, P, L, C, I> {
     pub adapter: &'a A,
-    pub leases: &'a LeaseRepo,
-    pub halts: &'a HaltRepo,
-    pub attempts: &'a WriteAttemptRepo,
-    pub budgets: &'a RateBudgetRepo,
-    pub journal: &'a J,
-    pub outbox: &'a O,
+    /// The one ledger seam. Four repositories and two raw-pool writers stood
+    /// here; collapsing them is what lets the whole surface be keyed on the
+    /// lease the server issued.
+    pub ledger: &'a L,
     pub clock: &'a N,
-    pub cancel: &'a CancellationToken,
+    pub ids: &'a I,
+    pub cancel: &'a C,
     /// The wait between verification reads. A capability rather than a
     /// runtime call, because this crate takes no timer by design: the worker
     /// binds a real sleep and a test binds an instant return, so the poll is
@@ -136,7 +106,7 @@ pub enum RunVerdict {
 
 #[derive(Debug)]
 pub enum EngineError {
-    Storage(StorageError),
+    Ledger(LedgerError),
     Machine(MachineError),
     /// The adapter refused to render the projection into its own wire
     /// shape: the item is unrepresentable on this marketplace, so its lease
@@ -144,9 +114,9 @@ pub enum EngineError {
     Projection(AdapterError),
 }
 
-impl From<StorageError> for EngineError {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
+impl From<LedgerError> for EngineError {
+    fn from(error: LedgerError) -> Self {
+        Self::Ledger(error)
     }
 }
 
@@ -165,7 +135,7 @@ impl From<AdapterError> for EngineError {
 impl core::fmt::Display for EngineError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Storage(error) => write!(f, "storage: {error}"),
+            Self::Ledger(error) => write!(f, "ledger: {error}"),
             Self::Machine(error) => write!(f, "machine: {error:?}"),
             Self::Projection(error) => write!(f, "projection: {error:?}"),
         }
@@ -193,7 +163,7 @@ fn subject_as_json(subject: &RemoteListingId) -> serde_json::Value {
 /// it will post, as it always has, now tagged with the operation; a revise
 /// adds the listing it addresses and both ends of the transition; a removal
 /// carries no field set at all, because a removal describes nothing.
-pub(crate) fn intent_as_json(operation: &ItemOperation, fields: &FieldSet) -> serde_json::Value {
+pub fn intent_as_json(operation: &ItemOperation, fields: &FieldSet) -> serde_json::Value {
     let entries = serde_json::to_value(&fields.entries).unwrap_or(serde_json::Value::Null);
     let files = serde_json::to_value(&fields.files).unwrap_or(serde_json::Value::Null);
     match operation {
@@ -403,27 +373,28 @@ async fn verify_with_backoff<
     A: MarketplaceAdapter,
     N: NowSource,
     P: Pause,
-    J: JournalPort,
-    O: NotifyPort,
+    L: ItemLedger,
+    C: Cancellation,
+    I: IdSource,
 >(
-    ctx: &DriverContext<'_, A, N, P, J, O>,
+    ctx: &DriverContext<'_, A, N, P, L, C, I>,
     lease: &LeasedItem,
     request: Verification<'_>,
 ) -> Result<VerifyOutcome, EngineError> {
-    let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
     let mut last: Option<ObservedListing> = None;
     for attempted in 0..request.policy.tries {
         let now = ctx.clock.now();
         if ctx.cancel.is_cancelled() || now.0 >= request.deadline {
             return Ok(VerifyOutcome::Stopped(VerifyStop::Cut));
         }
-        // Recomputed on every read: `consume` is keyed on the window start,
-        // so one window carried across a poll that straddles a minute
-        // boundary keeps incrementing a bucket it has already left.
-        let window = Timestamp(now.0 - now.0.rem_euclid(60_000));
         let grant = ctx
-            .budgets
-            .consume(lease.org, request.connection, window, ceiling)
+            .ledger
+            .request_grant(
+                &lease.lease_ref(),
+                request.connection,
+                GrantKind::VerifyRead,
+                now,
+            )
             .await?;
         if grant == BudgetGrant::Exhausted {
             return Ok(VerifyOutcome::Stopped(VerifyStop::RateWindowClosed));
@@ -471,16 +442,6 @@ const fn outcome_to_attempt_state(outcome: &Outcome) -> &'static str {
     }
 }
 
-/// The seven design topics are fixed; the parked-job mail is also the reauth
-/// prompt, and a halt notice rides the settled-job topic until the design
-/// grows a dedicated one.
-const fn seller_event_topic(event: SellerEvent) -> &'static str {
-    match event {
-        SellerEvent::ReauthRequired | SellerEvent::ItemParked => "email.parked_job",
-        SellerEvent::JobSettled | SellerEvent::InventoryHalted => "email.job_settled",
-    }
-}
-
 /// How many indeterminate preflights in a row stop being read as a transient.
 ///
 /// A preflight failure other than schema drift abandons the run, which is the
@@ -521,16 +482,21 @@ pub async fn run_item<
     A: MarketplaceAdapter,
     N: NowSource,
     P: Pause,
-    J: JournalPort,
-    O: NotifyPort,
+    L: ItemLedger,
+    C: Cancellation,
+    I: IdSource,
 >(
-    ctx: &DriverContext<'_, A, N, P, J, O>,
+    ctx: &DriverContext<'_, A, N, P, L, C, I>,
     lease: &LeasedItem,
     seed: MachineSeed,
 ) -> Result<RunVerdict, EngineError> {
     let org = lease.org;
     let lease_ref = lease.lease_ref();
-    let Some(connection) = ctx.leases.connection_for(org, lease.inventory).await? else {
+    let Some(connection) = ctx
+        .ledger
+        .connection_for(&lease_ref, lease.inventory)
+        .await?
+    else {
         return Ok(RunVerdict::Abandoned {
             reason: "no linked connection at run time".to_owned(),
         });
@@ -595,7 +561,7 @@ pub async fn run_item<
                     let asserted = ctx.adapter.assert_form_schema(form).await;
                     pending = Some(match asserted {
                         Ok(fingerprint) => {
-                            ctx.leases.preflight_succeeded(&lease_ref).await?;
+                            ctx.ledger.preflight_succeeded(&lease_ref).await?;
                             Input::PreflightResult(Ok(fingerprint))
                         }
                         Err(AdapterError::SchemaDrift(drift)) => {
@@ -605,29 +571,32 @@ pub async fn run_item<
                     });
                 }
                 Effect::RecordIntent { intent_hash } => {
+                    // Minted here rather than by the ledger, so a response
+                    // lost in flight is recoverable by re-offering the same id
+                    // instead of burning the item's whole attempt budget.
+                    let minted = ctx.ids.new_id();
                     let attempt = ctx
-                        .attempts
-                        .open(
+                        .ledger
+                        .open_attempt(
                             &lease_ref,
                             &NewAttempt {
+                                attempt: minted,
                                 mapping: lease.mapping,
-                                intent: &AttemptIntent {
+                                intent: AttemptIntent {
                                     body: intent_as_json(&operation, &next.fields),
                                     hash: intent_hash.0.to_vec(),
                                 },
-                                // The driver opens its own attempt rows; the
-                                // seller's part ended when the job was queued.
-                                stamp: Stamp::system(SystemComponent::Engine, now),
                             },
+                            now,
                         )
                         .await;
                     match attempt {
-                        Ok(attempt) => {
-                            let attempt = WriteAttemptId(attempt);
+                        Ok(()) => {
+                            let attempt = WriteAttemptId(minted);
                             current_attempt = Some(attempt);
                             pending = Some(Input::IntentRecorded(attempt));
                         }
-                        Err(StorageError::AttemptInFlight) => {
+                        Err(LedgerError::AttemptInFlight) => {
                             return Ok(RunVerdict::Abandoned {
                                 reason: "another attempt is in flight for this mapping".to_owned(),
                             })
@@ -640,7 +609,7 @@ pub async fn run_item<
                     key,
                     fields,
                 } => {
-                    let grant = consume_write_grant(ctx, org, connection, now).await?;
+                    let grant = consume_write_grant(ctx, &lease_ref, connection, now).await?;
                     if grant == BudgetGrant::Exhausted {
                         return rate_refused_before_the_write(
                             ctx,
@@ -664,7 +633,7 @@ pub async fn run_item<
                     fields,
                     transition: lifecycle,
                 } => {
-                    let grant = consume_write_grant(ctx, org, connection, now).await?;
+                    let grant = consume_write_grant(ctx, &lease_ref, connection, now).await?;
                     if grant == BudgetGrant::Exhausted {
                         return rate_refused_before_the_write(
                             ctx,
@@ -697,7 +666,7 @@ pub async fn run_item<
                     subject,
                     state,
                 } => {
-                    let grant = consume_write_grant(ctx, org, connection, now).await?;
+                    let grant = consume_write_grant(ctx, &lease_ref, connection, now).await?;
                     if grant == BudgetGrant::Exhausted {
                         return rate_refused_before_the_write(
                             ctx,
@@ -812,7 +781,7 @@ pub async fn run_item<
                     challenge,
                     expires,
                 } => {
-                    ctx.leases
+                    ctx.ledger
                         .park(&lease_ref, &format!("{challenge:?}"), Timestamp(expires.0))
                         .await?;
                     record_event(
@@ -839,8 +808,8 @@ pub async fn run_item<
                     // rather than on the effect's presence is what keeps that
                     // true if it ever does again.
                     if matches!(cause, BlockCause::Reauth) {
-                        ctx.leases
-                            .gate_connection(org, lease.inventory, now)
+                        ctx.ledger
+                            .gate_connection(&lease_ref, lease.inventory, now)
                             .await?;
                     }
                     record_event(
@@ -864,25 +833,34 @@ pub async fn run_item<
                     .await?;
                 }
                 Effect::Halt { scope } => {
-                    let cause = HaltCause {
-                        raised_by: "machine".to_owned(),
-                        reason: "the transition table demanded a halt".to_owned(),
-                        at: now,
-                    };
+                    // The port admits one scope, so the two wider arms have
+                    // nothing to call. `halt_scope()` produces only
+                    // `OrgInventory` today, which is why they are unreachable
+                    // rather than unimplemented; narrowing the enum itself is
+                    // a separate change to `tam-domain`. Until then a wider
+                    // scope abandons, because the stall bias is the right
+                    // answer to an effect this process may not execute.
                     match scope {
-                        HaltScope::OrgInventory { org, inventory } => {
-                            ctx.halts
-                                .raise_org_inventory(org, inventory, &cause)
+                        HaltScope::OrgInventory { inventory, .. } => {
+                            ctx.ledger
+                                .halt_this_tenant(
+                                    &lease_ref,
+                                    inventory,
+                                    "the transition table demanded a halt",
+                                    now,
+                                )
                                 .await?;
                         }
-                        HaltScope::Org { org } => ctx.halts.raise_org(org, &cause).await?,
-                        HaltScope::FleetInventory { inventory } => {
-                            ctx.halts.raise_fleet_inventory(inventory, &cause).await?;
+                        HaltScope::Org { .. } | HaltScope::FleetInventory { .. } => {
+                            return Ok(RunVerdict::Abandoned {
+                                reason: "the machine asked for a halt wider than this lease"
+                                    .to_owned(),
+                            })
                         }
                     }
                 }
-                Effect::Notify { org, event } => {
-                    notify(ctx, org, lease, event, now).await?;
+                Effect::Notify { org: _, event } => {
+                    notify(ctx, lease, event, now).await?;
                 }
             }
         }
@@ -925,8 +903,8 @@ pub async fn run_item<
                         ),
                     };
                     let settled = ctx
-                        .attempts
-                        .settle(
+                        .ledger
+                        .settle_attempt(
                             &lease_ref,
                             AttemptRef {
                                 attempt: attempt.0,
@@ -962,8 +940,8 @@ pub async fn run_item<
                 // fenced item settle is where that becomes knowable. Record
                 // it rather than fence it: real fencing changes the create
                 // path too and is founder-gated.
-                let item_settled = ctx.leases.settle(&lease_ref, &verdict, now).await;
-                if severed && matches!(item_settled, Err(StorageError::StaleLease)) {
+                let item_settled = ctx.ledger.settle_item(&lease_ref, &verdict, now).await;
+                if severed && matches!(item_settled, Err(LedgerError::StaleLease)) {
                     record_event(
                         ctx,
                         lease,
@@ -1002,8 +980,7 @@ pub async fn run_item<
     }
 }
 
-/// One grant against the connection's declared per-minute ceiling, with the
-/// window recomputed from the clock at the moment of the call.
+/// One grant for one lifecycle write.
 ///
 /// What the ceiling bounds is *effects* rather than requests, and always
 /// has: one submit issues a create, a metadata write, a three-step upload per
@@ -1011,24 +988,27 @@ pub async fn run_item<
 /// lower bound on outbound traffic rather than a count of it. Making it exact
 /// means consuming inside the transport seam, which is recorded as founder-
 /// gated rather than assumed here.
+///
+/// Neither the window nor the ceiling appears: both are the server's, derived
+/// from its own copy of the limits. A governed party that supplied either
+/// would be setting its own rate limit.
 async fn consume_write_grant(
     ctx: &DriverContext<
         '_,
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
-    org: OrgId,
+    lease: &LeaseRef,
     connection: ConnectionId,
     now: Timestamp,
 ) -> Result<BudgetGrant, EngineError> {
-    let window = Timestamp(now.0 - now.0.rem_euclid(60_000));
-    let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
     Ok(ctx
-        .budgets
-        .consume(org, connection, window, ceiling)
+        .ledger
+        .request_grant(lease, connection, GrantKind::Write, now)
         .await?)
 }
 
@@ -1041,8 +1021,9 @@ async fn rate_refused_before_the_write(
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
     lease_ref: &LeaseRef,
     settling: AttemptRef,
@@ -1106,8 +1087,9 @@ async fn preflight_failed(
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
     lease: &LeasedItem,
     error: &AdapterError,
@@ -1116,7 +1098,7 @@ async fn preflight_failed(
     let lease_ref = lease.lease_ref();
     let seen = preflight_challenge(error);
     let streak = ctx
-        .leases
+        .ledger
         .preflight_failed(&lease_ref, !seller_clears(seen))
         .await?;
     // The reaper's own predicate, read against the value `acquire` returned:
@@ -1145,8 +1127,8 @@ async fn preflight_failed(
         BlockCause::Challenge
     };
     if matches!(cause, BlockCause::Reauth) {
-        ctx.leases
-            .gate_connection(lease.org, lease.inventory, at)
+        ctx.ledger
+            .gate_connection(&lease_ref, lease.inventory, at)
             .await?;
     }
     record_event(
@@ -1168,7 +1150,7 @@ async fn preflight_failed(
         // bookkeeping. `job_item.preflight_failures` holds the count.
         failure_detail: Some(detail),
     };
-    ctx.leases.settle(&lease_ref, &verdict, at).await?;
+    ctx.ledger.settle_item(&lease_ref, &verdict, at).await?;
     record_event(
         ctx,
         lease,
@@ -1179,7 +1161,7 @@ async fn preflight_failed(
     )
     .await?;
     if matches!(cause, BlockCause::Reauth) {
-        notify(ctx, lease.org, lease, SellerEvent::ReauthRequired, at).await?;
+        notify(ctx, lease, SellerEvent::ReauthRequired, at).await?;
     }
     Ok(RunVerdict::Settled(ItemOutcome::Blocked))
 }
@@ -1270,18 +1252,23 @@ async fn settle_open_attempt(
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
     lease: &LeaseRef,
     settling: AttemptRef,
     verdict: &AttemptVerdict,
     at: Timestamp,
 ) -> Result<(), EngineError> {
-    match ctx.attempts.settle(lease, settling, verdict, at).await {
+    match ctx
+        .ledger
+        .settle_attempt(lease, settling, verdict, at)
+        .await
+    {
         // A fenced settle means the lease was stolen, and the steal owns the
         // story from here — the same reading the terminal path already takes.
-        Ok(_) | Err(StorageError::StaleLease) => Ok(()),
+        Ok(_) | Err(LedgerError::StaleLease) => Ok(()),
         Err(error) => Err(error.into()),
     }
 }
@@ -1333,23 +1320,16 @@ async fn record_event(
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
     lease: &LeasedItem,
     payload: &JobEventPayload,
     at: Timestamp,
-) -> Result<(), StorageError> {
-    ctx.journal
-        .record(
-            &EventScope {
-                org: lease.org,
-                job: lease.job,
-                item: Some(lease.item),
-            },
-            payload,
-            Stamp::system(SystemComponent::Engine, at),
-        )
+) -> Result<(), LedgerError> {
+    ctx.ledger
+        .record_event(&lease.lease_ref(), payload, at)
         .await
 }
 
@@ -1359,14 +1339,15 @@ async fn record_action(
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
     lease: &LeasedItem,
     sequence: u32,
     label: &str,
     at: Timestamp,
-) -> Result<(), StorageError> {
+) -> Result<(), LedgerError> {
     record_event(
         ctx,
         lease,
@@ -1410,8 +1391,9 @@ pub async fn seed_refused(
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
     lease: &LeasedItem,
     error: &EngineError,
@@ -1427,7 +1409,9 @@ pub async fn seed_refused(
         failure_code: Some(*code),
         failure_detail: Some(detail.clone()),
     };
-    ctx.leases.settle(&lease.lease_ref(), &verdict, at).await?;
+    ctx.ledger
+        .settle_item(&lease.lease_ref(), &verdict, at)
+        .await?;
     record_event(
         ctx,
         lease,
@@ -1446,34 +1430,24 @@ async fn notify(
         impl MarketplaceAdapter,
         impl NowSource,
         impl Pause,
-        impl JournalPort,
-        impl NotifyPort,
+        impl ItemLedger,
+        impl Cancellation,
+        impl IdSource,
     >,
-    org: OrgId,
     lease: &LeasedItem,
     event: SellerEvent,
     at: Timestamp,
-) -> Result<(), StorageError> {
-    ctx.outbox
-        .append(&NewOutboxMessage {
-            org,
-            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-            topic: seller_event_topic(event).to_owned(),
-            dedupe_key: format!("{event:?}:{:02x?}", lease.item.0 .0),
-            payload: json!({ "event": format!("{event:?}") }),
-            at,
-        })
-        .await
+) -> Result<(), LedgerError> {
+    ctx.ledger.notify(&lease.lease_ref(), event, at).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::{bind_anomaly, outcome_to_item};
-    use crate::seed::verify_policy;
+    use crate::vocabulary::BindDisposition;
     use tam_domain::ItemOutcome;
     use tam_marketplace::{Outcome, RemoteListingId};
-    use tam_storage::BindDisposition;
-    use tam_types::{BindAnomaly, FailureCode, FailureDetail, InventoryId, MappingId, Uuid};
+    use tam_types::{BindAnomaly, FailureCode, FailureDetail, MappingId, Uuid};
 
     #[test]
     fn a_rejection_carries_its_detail_into_the_verdict() {
@@ -1602,71 +1576,5 @@ mod tests {
              does, which a refusal against the binding state could not say without \
              contradicting itself"
         );
-    }
-
-    /// The lease TTL the worker leases with. Mirrored rather than imported:
-    /// `tam-worker` is a binary crate with no library target, so there is
-    /// nothing for `tam-engine` to depend on, and the inequality is asserted
-    /// where `VerifyPolicy` lives. The mirror is checked against the
-    /// worker's own source below rather than trusted, because a guard that
-    /// cannot see one of the two values it names is not a guard.
-    const LEASE_TTL_SECS: i64 = 300;
-
-    /// The worker's source, which is the only thing this crate can reach of
-    /// it.
-    const WORKER_SOURCE: &str = include_str!("../../tam-worker/src/main.rs");
-
-    /// The lease TTL the worker actually declares, read out of that source.
-    /// `None` where the declaration moved or changed shape, which fails the
-    /// assertion below as loudly as a changed value does — the mirror has to
-    /// break when it stops mirroring, whatever the reason.
-    fn declared_lease_ttl_secs() -> Option<i64> {
-        WORKER_SOURCE.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("const LEASE_TTL_SECS: i64 = ")?
-                .strip_suffix(';')?
-                .parse()
-                .ok()
-        })
-    }
-
-    #[test]
-    fn the_mirrored_lease_ttl_is_the_one_the_worker_leases_with() {
-        assert_eq!(
-            declared_lease_ttl_secs(),
-            Some(LEASE_TTL_SECS),
-            "the inequality below is only worth asserting against the lease the worker \
-             really takes: lowering LEASE_TTL_SECS there and leaving this copy behind \
-             leaves the test green while the poll has stopped fitting"
-        );
-    }
-
-    /// The slowest Tpt create actually measured, recorded as "nearly three
-    /// minutes" at `crates/tam-marketplace-tpt/src/flows.rs`. The theoretical
-    /// worst case is larger — two queue-job polls at `QUEUE_POLL_MAX` can
-    /// spend 360s inside `submit` alone — and exceeds the lease before any
-    /// poll is added. That is a pre-existing hazard recorded for the founder,
-    /// not one this poll creates and not one Phase 3 hides by raising a
-    /// limit.
-    const MEASURED_SUBMIT_WORST_CASE_MS: u64 = 180_000;
-
-    #[test]
-    fn the_verification_poll_fits_inside_the_lease() {
-        let lease_ms = u64::try_from(LEASE_TTL_SECS * 1_000).unwrap_or(u64::MAX);
-        for inventory in [
-            InventoryId::TesGb,
-            InventoryId::TesUs,
-            InventoryId::TesNz,
-            InventoryId::Etsy,
-            InventoryId::Tpt,
-        ] {
-            let spent = MEASURED_SUBMIT_WORST_CASE_MS + verify_policy(inventory).window_ms();
-            assert!(
-                spent < lease_ms,
-                "{inventory:?}: submit_worst_case + tries * interval is {spent}ms against a \
-                 {lease_ms}ms lease; when the lease expires mid-run the epoch-fenced attempt \
-                 settle fails after a listing has landed, and the mapping never binds"
-            );
-        }
     }
 }

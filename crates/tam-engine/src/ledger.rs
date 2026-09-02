@@ -1,30 +1,162 @@
-//! The Postgres side of the driver's two write capabilities.
+//! The server's side of the driver's ledger port.
 //!
-//! Each opens a transaction around a single write, which is what the
-//! interpreter's move off the raw pool had to leave unchanged: the journal's
-//! per-organisation sequence is allocated inside its transaction, and the
-//! outbox row is deduped by the storage layer within its own.
+//! Two things live here and nowhere else. The Postgres implementation of
+//! [`ItemLedger`], which is the only code entitled to turn a lease reference
+//! into a row; and the conversions between the driver's wire vocabulary and
+//! `tam-storage`'s row vocabulary.
+//!
+//! Every conversion is a total match with no wildcard arm. That is the point
+//! of having two vocabularies: a variant added on either side fails to
+//! compile here rather than being silently mapped onto a neighbour, so the
+//! client contract cannot drift with the schema.
 
 use sqlx::PgPool;
-use tam_storage::{append_event, EventScope, NewOutboxMessage, OutboxRepo, StorageError};
-use tam_types::{JobEventPayload, Stamp};
+use tam_engine_driver::ports::ItemLedger;
+use tam_engine_driver::vocabulary as wire;
+use tam_storage::{
+    append_event, EventScope, HaltCause, HaltRepo, LeaseRepo, NewOutboxMessage, OutboxRepo,
+    RateBudgetRepo, StorageError, WriteAttemptRepo,
+};
+use tam_types::{
+    ConnectionId, InventoryId, JobEventPayload, Stamp, SystemComponent, Timestamp, Uuid,
+};
 
-use crate::driver::{JournalPort, NotifyPort};
-
-/// The event journal against the engine's own pool.
-pub struct PgJournal {
-    pool: PgPool,
-}
-
-impl PgJournal {
-    #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+/// The seven design topics are fixed; the parked-job mail is also the reauth
+/// prompt, and a halt notice rides the settled-job topic until the design
+/// grows a dedicated one.
+///
+/// It lives on the server because the port carries the closed `SellerEvent`
+/// and never a topic: a topic string crossing the boundary would name any
+/// relay the drainer knows.
+const fn seller_event_topic(event: tam_domain::SellerEvent) -> &'static str {
+    use tam_domain::SellerEvent;
+    match event {
+        SellerEvent::ReauthRequired | SellerEvent::ItemParked => "email.parked_job",
+        SellerEvent::JobSettled | SellerEvent::InventoryHalted => "email.job_settled",
     }
 }
 
-impl JournalPort for PgJournal {
-    async fn record(
+fn to_storage_lease(lease: &wire::LeaseRef) -> tam_storage::LeaseRef {
+    tam_storage::LeaseRef {
+        org: lease.org,
+        item: lease.item,
+        lease_epoch: lease.lease_epoch,
+    }
+}
+
+/// One claimed item as the driver sees it. The scan is the server's, so this
+/// runs once per lease on the way out.
+#[must_use]
+pub fn to_wire_item(item: &tam_storage::LeasedItem) -> wire::LeasedItem {
+    wire::LeasedItem {
+        org: item.org,
+        item: item.item,
+        job: item.job,
+        mapping: item.mapping,
+        inventory: item.inventory,
+        idempotency_key: item.idempotency_key,
+        operation: item.operation.clone(),
+        lease_epoch: item.lease_epoch,
+        attempt_count: item.attempt_count,
+        requires_bound_on: item.requires_bound_on,
+    }
+}
+
+fn to_storage_landing(landing: &wire::LandingEffect) -> tam_storage::LandingEffect {
+    match landing {
+        wire::LandingEffect::None => tam_storage::LandingEffect::None,
+        wire::LandingEffect::Addressed { id } => {
+            tam_storage::LandingEffect::Addressed { id: id.clone() }
+        }
+        wire::LandingEffect::Landed { id, lifecycle } => tam_storage::LandingEffect::Landed {
+            id: id.clone(),
+            lifecycle: lifecycle.clone(),
+        },
+        wire::LandingEffect::Severed { id } => {
+            tam_storage::LandingEffect::Severed { id: id.clone() }
+        }
+    }
+}
+
+fn to_wire_disposition(disposition: tam_storage::BindDisposition) -> wire::BindDisposition {
+    match disposition {
+        tam_storage::BindDisposition::NotLanded => wire::BindDisposition::NotLanded,
+        tam_storage::BindDisposition::Addressed => wire::BindDisposition::Addressed,
+        tam_storage::BindDisposition::Bound => wire::BindDisposition::Bound,
+        tam_storage::BindDisposition::AlreadyBound => wire::BindDisposition::AlreadyBound,
+        tam_storage::BindDisposition::DivergentLanding { existing } => {
+            wire::BindDisposition::DivergentLanding { existing }
+        }
+        tam_storage::BindDisposition::ClaimedElsewhere { existing_mapping } => {
+            wire::BindDisposition::ClaimedElsewhere { existing_mapping }
+        }
+        tam_storage::BindDisposition::Refused { state } => wire::BindDisposition::Refused { state },
+        tam_storage::BindDisposition::Severed => wire::BindDisposition::Severed,
+        tam_storage::BindDisposition::SeverRefused { state } => {
+            wire::BindDisposition::SeverRefused { state }
+        }
+        tam_storage::BindDisposition::SeverDiverged { existing } => {
+            wire::BindDisposition::SeverDiverged { existing }
+        }
+    }
+}
+
+fn to_wire_grant(grant: tam_storage::BudgetGrant) -> wire::BudgetGrant {
+    match grant {
+        tam_storage::BudgetGrant::Granted { used } => wire::BudgetGrant::Granted { used },
+        tam_storage::BudgetGrant::Exhausted => wire::BudgetGrant::Exhausted,
+    }
+}
+
+/// The two conditions the interpreter branches on survive as themselves;
+/// every other row becomes opaque text, because the interpreter's only answer
+/// to one is the stall bias and `sqlx::Error` must not cross the boundary.
+///
+/// Public because `seed.rs` reaches storage directly and answers in the same
+/// `EngineError`, so it needs the one conversion rather than a second one.
+#[must_use]
+pub fn to_wire_error(error: &StorageError) -> wire::LedgerError {
+    match *error {
+        StorageError::AttemptInFlight => wire::LedgerError::AttemptInFlight,
+        StorageError::StaleLease => wire::LedgerError::StaleLease,
+        StorageError::Db(_)
+        | StorageError::TimestampOutOfRange { .. }
+        | StorageError::CorruptRow { .. }
+        | StorageError::OrgMismatch
+        | StorageError::Inconsistent { .. }
+        | StorageError::DuplicateIdempotencyKey { .. }
+        | StorageError::ListingAlreadyBound => wire::LedgerError::Refused {
+            detail: error.to_string(),
+        },
+    }
+}
+
+/// Every repository the interpreter is allowed to reach, behind one seam.
+pub struct PgLedger {
+    pool: PgPool,
+    leases: LeaseRepo,
+    halts: HaltRepo,
+    attempts: WriteAttemptRepo,
+    budgets: RateBudgetRepo,
+    /// The job the lease belongs to, so `record_event` can scope an event the
+    /// driver keys only by lease.
+    job: tam_types::JobId,
+}
+
+impl PgLedger {
+    #[must_use]
+    pub fn new(pool: PgPool, job: tam_types::JobId) -> Self {
+        Self {
+            leases: LeaseRepo::new(pool.clone()),
+            halts: HaltRepo::new(pool.clone()),
+            attempts: WriteAttemptRepo::new(pool.clone()),
+            budgets: RateBudgetRepo::new(pool.clone()),
+            pool,
+            job,
+        }
+    }
+
+    async fn append_event(
         &self,
         scope: &EventScope,
         payload: &JobEventPayload,
@@ -35,25 +167,247 @@ impl JournalPort for PgJournal {
         tx.commit().await?;
         Ok(())
     }
-}
 
-/// The seller-notification outbox against the engine's own pool.
-pub struct PgOutbox {
-    pool: PgPool,
-}
-
-impl PgOutbox {
-    #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-impl NotifyPort for PgOutbox {
-    async fn append(&self, message: &NewOutboxMessage) -> Result<(), StorageError> {
+    async fn append_outbox(&self, message: &NewOutboxMessage) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
         OutboxRepo::append(&mut tx, message).await?;
         tx.commit().await?;
         Ok(())
+    }
+}
+
+impl ItemLedger for PgLedger {
+    async fn connection_for(
+        &self,
+        lease: &wire::LeaseRef,
+        inventory: InventoryId,
+    ) -> Result<Option<ConnectionId>, wire::LedgerError> {
+        self.leases
+            .connection_for(lease.org, inventory)
+            .await
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn preflight_succeeded(&self, lease: &wire::LeaseRef) -> Result<(), wire::LedgerError> {
+        self.leases
+            .preflight_succeeded(&to_storage_lease(lease))
+            .await
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn preflight_failed(
+        &self,
+        lease: &wire::LeaseRef,
+        edge_class: bool,
+    ) -> Result<wire::PreflightStreak, wire::LedgerError> {
+        self.leases
+            .preflight_failed(&to_storage_lease(lease), edge_class)
+            .await
+            .map(|streak| wire::PreflightStreak {
+                failures: streak.failures,
+                edge_only: streak.edge_only,
+            })
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn park(
+        &self,
+        lease: &wire::LeaseRef,
+        blocked_on: &str,
+        park_expires: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        self.leases
+            .park(&to_storage_lease(lease), blocked_on, park_expires)
+            .await
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn settle_item(
+        &self,
+        lease: &wire::LeaseRef,
+        verdict: &wire::ItemVerdict,
+        at: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        let verdict = tam_storage::ItemVerdict {
+            outcome: verdict.outcome,
+            failure_code: verdict.failure_code,
+            failure_detail: verdict.failure_detail.clone(),
+        };
+        self.leases
+            .settle(&to_storage_lease(lease), &verdict, at)
+            .await
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn open_attempt(
+        &self,
+        lease: &wire::LeaseRef,
+        new: &wire::NewAttempt,
+        at: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        let intent = tam_storage::AttemptIntent {
+            body: new.intent.body.clone(),
+            hash: new.intent.hash.clone(),
+        };
+        self.attempts
+            .open(
+                &to_storage_lease(lease),
+                new.attempt,
+                &tam_storage::NewAttempt {
+                    mapping: new.mapping,
+                    intent: &intent,
+                    // The engine opens the row; the seller's part ended when
+                    // the job was queued. A device-originated attempt is
+                    // stamped by the actor component step 7 adds.
+                    stamp: Stamp::system(SystemComponent::Engine, at),
+                },
+            )
+            .await
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn settle_attempt(
+        &self,
+        lease: &wire::LeaseRef,
+        attempt: wire::AttemptRef,
+        verdict: &wire::AttemptVerdict,
+        at: Timestamp,
+    ) -> Result<wire::BindDisposition, wire::LedgerError> {
+        let verdict = tam_storage::AttemptVerdict {
+            state: verdict.state.clone(),
+            failure_code: verdict.failure_code,
+            landing: to_storage_landing(&verdict.landing),
+        };
+        self.attempts
+            .settle(
+                &to_storage_lease(lease),
+                tam_storage::AttemptRef {
+                    attempt: attempt.attempt,
+                    mapping: attempt.mapping,
+                },
+                &verdict,
+                at,
+            )
+            .await
+            .map(to_wire_disposition)
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn gate_connection(
+        &self,
+        lease: &wire::LeaseRef,
+        inventory: InventoryId,
+        at: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        self.leases
+            .gate_connection(lease.org, inventory, at)
+            .await
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn halt_this_tenant(
+        &self,
+        lease: &wire::LeaseRef,
+        inventory: InventoryId,
+        reason: &str,
+        at: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        self.halts
+            .raise_org_inventory(
+                lease.org,
+                inventory,
+                &HaltCause {
+                    raised_by: "machine".to_owned(),
+                    reason: reason.to_owned(),
+                    at,
+                },
+            )
+            .await
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn request_grant(
+        &self,
+        lease: &wire::LeaseRef,
+        connection: ConnectionId,
+        kind: wire::GrantKind,
+        at: Timestamp,
+    ) -> Result<wire::BudgetGrant, wire::LedgerError> {
+        // Both kinds draw on the same per-connection window today. The
+        // distinction is carried so the ceiling can differ without the
+        // interpreter learning what either ceiling is.
+        let ceiling = match kind {
+            wire::GrantKind::Write | wire::GrantKind::VerifyRead => {
+                i32::try_from(tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX.get())
+                    .unwrap_or(i32::MAX)
+            }
+        };
+        // Recomputed per call: `consume` is keyed on the window start, so one
+        // window carried across a poll that straddles a minute boundary keeps
+        // incrementing a bucket it has already left.
+        let window = Timestamp(at.0 - at.0.rem_euclid(60_000));
+        self.budgets
+            .consume(lease.org, connection, window, ceiling)
+            .await
+            .map(to_wire_grant)
+            .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn record_event(
+        &self,
+        lease: &wire::LeaseRef,
+        payload: &JobEventPayload,
+        at: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        self.append_event(
+            &EventScope {
+                org: lease.org,
+                job: self.job,
+                item: Some(lease.item),
+            },
+            payload,
+            Stamp::system(SystemComponent::Engine, at),
+        )
+        .await
+        .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn notify(
+        &self,
+        lease: &wire::LeaseRef,
+        event: tam_domain::SellerEvent,
+        at: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        self.append_outbox(&NewOutboxMessage {
+            org: lease.org,
+            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            topic: seller_event_topic(event).to_owned(),
+            dedupe_key: format!("{event:?}:{:02x?}", lease.item.0 .0),
+            payload: serde_json::json!({ "event": format!("{event:?}") }),
+            at,
+        })
+        .await
+        .map_err(|error| to_wire_error(&error))
+    }
+}
+
+/// The wall clock as the driver's id source. `uuid::Uuid::new_v4` is the same
+/// mint the outbox uses; it is a capability here only because the interpreter
+/// crate takes no ambient randomness.
+pub struct RandomIds;
+
+impl tam_engine_driver::ports::IdSource for RandomIds {
+    fn new_id(&self) -> Uuid {
+        Uuid(*uuid::Uuid::new_v4().as_bytes())
+    }
+}
+
+/// The host's cancellation, behind the interpreter's own capability so that
+/// crate never names `tokio-util`.
+pub struct TokenCancellation<'a>(pub &'a tokio_util::sync::CancellationToken);
+
+impl tam_engine_driver::ports::Cancellation for TokenCancellation<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
     }
 }

@@ -8,6 +8,7 @@ publish = false
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-domain = { path = "../tam-domain" }
 tam-engine = { path = "../tam-engine" }
+tam-engine-driver = { path = "../tam-engine-driver" }
 tam-limits = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-marketplace-tes = { path = "../tam-marketplace-tes" }

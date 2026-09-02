@@ -29,7 +29,7 @@ use tam_storage::{
 use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
 use tam_types::{AttemptId, InventoryId, OrgId, Timestamp, Uuid};
 
-use crate::driver::{intent_as_json, EngineError, MachineSeed, VerifyPolicy};
+use tam_engine_driver::driver::{intent_as_json, EngineError, MachineSeed, VerifyPolicy};
 
 /// Per-item action ceiling; generous against the longest measured flow
 /// (create, metadata, three-step file upload per file, read-back).
@@ -134,7 +134,8 @@ async fn counterpart_binding(
 ) -> Result<CounterpartState, EngineError> {
     let found = MappingRepo::new(pool.clone())
         .list_for_product(org, product)
-        .await?
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?
         .into_iter()
         .find(|record| record.mapping.inventory == inventory);
     Ok(match found.as_ref().map(|record| &record.mapping.binding) {
@@ -248,9 +249,12 @@ pub async fn prepare_item(
 ) -> Result<ItemPreparation, EngineError> {
     let mapping = MappingRepo::new(pool.clone())
         .get(lease.org, lease.mapping)
-        .await?
-        .ok_or(StorageError::Inconsistent {
-            reason: "a leased item's mapping must exist".to_owned(),
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?
+        .ok_or_else(|| {
+            crate::ledger::to_wire_error(&StorageError::Inconsistent {
+                reason: "a leased item's mapping must exist".to_owned(),
+            })
         })?;
     let operation = lease.operation.clone();
     // The counterpart gate, here rather than in `admission`, which is a
@@ -313,24 +317,37 @@ pub async fn prepare_item(
     }
     let product = ProductRepo::new(pool.clone())
         .get(lease.org, mapping.mapping.product)
-        .await?
-        .ok_or(StorageError::Inconsistent {
-            reason: "a mapped product must exist".to_owned(),
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?
+        .ok_or_else(|| {
+            crate::ledger::to_wire_error(&StorageError::Inconsistent {
+                reason: "a mapped product must exist".to_owned(),
+            })
         })?
         .product;
 
     let taxonomy = TaxonomyRepo::new(pool.clone());
-    let terms = taxonomy.terms().await?;
+    let terms = taxonomy
+        .terms()
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
     // Which vocabularies to load is the registry's answer, not a second
     // hardcoded kind list: a target that binds a phase axis needs its phase
     // edges, and the product's own grade declaration names the source
     // vocabulary the grade ingests from before it projects.
     let edges = taxonomy
         .edges_into_all(&projection_vocabularies(lease.inventory, &product))
-        .await?;
-    let no_counterparts = taxonomy.no_counterparts_into(lease.inventory).await?;
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
+    let no_counterparts = taxonomy
+        .no_counterparts_into(lease.inventory)
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
     let elections = ElectionRepo::new(pool.clone());
-    let rules = elections.rules(lease.org).await?;
+    let rules = elections
+        .rules(lease.org)
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
     // The seller's own settled questions, beside the standing policies. The
     // answer that revived this item lives here and nowhere else, so a
     // projection reading rules alone re-raises the identical question and
@@ -338,7 +355,8 @@ pub async fn prepare_item(
     // nothing.
     let settled = elections
         .answered_for(lease.org, mapping.mapping.product)
-        .await?;
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
 
     let projection = match project_listing(
         &product,
@@ -392,14 +410,16 @@ pub async fn prepare_item(
                     },
                     &causes,
                 )
-                .await?;
+                .await
+                .map_err(|error| crate::ledger::to_wire_error(&error))?;
             // The seller's questions are enqueued under the engine pool for
             // the same reason the reconciliation items above are: this is
             // where the projection discovers them, and a question discovered
             // and not recorded is a park with nothing behind it.
             let elected = elections
                 .raise(lease.org, lease.mapping, &raised_elections, now)
-                .await?;
+                .await
+                .map_err(|error| crate::ledger::to_wire_error(&error))?;
             // The report is the gate's own, not the other gate's. The worker
             // re-checks an election park against it -- a raise that minted
             // nothing is a question already answered, and requeueing on that
@@ -479,7 +499,8 @@ async fn record_losses(
             },
             losses,
         )
-        .await?;
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
     Ok(())
 }
 
@@ -562,5 +583,78 @@ pub fn seed_for_removal(lease: &LeasedItem, operation: &ItemOperation) -> Machin
             actions_remaining: ACTIONS_PER_ITEM,
         },
         verify: verify_policy(lease.inventory),
+    }
+}
+
+#[cfg(test)]
+mod lease_budget_tests {
+    use super::verify_policy;
+    use tam_types::InventoryId;
+
+    /// The lease TTL the worker leases with. Mirrored rather than imported:
+    /// `tam-worker` is a binary crate with no library target, so there is
+    /// nothing to depend on, and the inequality is asserted here because
+    /// `verify_policy` is what supplies the poll window. The mirror is
+    /// checked against the worker's own source below rather than trusted,
+    /// because a guard that cannot see one of the two values it names is not
+    /// a guard.
+    const LEASE_TTL_SECS: i64 = 300;
+
+    /// The worker's source, which is the only thing this crate can reach of
+    /// it.
+    const WORKER_SOURCE: &str = include_str!("../../tam-worker/src/main.rs");
+
+    /// The lease TTL the worker actually declares, read out of that source.
+    /// `None` where the declaration moved or changed shape, which fails the
+    /// assertion below as loudly as a changed value does — the mirror has to
+    /// break when it stops mirroring, whatever the reason.
+    fn declared_lease_ttl_secs() -> Option<i64> {
+        WORKER_SOURCE.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("const LEASE_TTL_SECS: i64 = ")?
+                .strip_suffix(';')?
+                .parse()
+                .ok()
+        })
+    }
+
+    #[test]
+    fn the_mirrored_lease_ttl_is_the_one_the_worker_leases_with() {
+        assert_eq!(
+            declared_lease_ttl_secs(),
+            Some(LEASE_TTL_SECS),
+            "the inequality below is only worth asserting against the lease the worker \
+             really takes: lowering LEASE_TTL_SECS there and leaving this copy behind \
+             leaves the test green while the poll has stopped fitting"
+        );
+    }
+
+    /// The slowest Tpt create actually measured, recorded as "nearly three
+    /// minutes" at `crates/tam-marketplace-tpt/src/flows.rs`. The theoretical
+    /// worst case is larger — two queue-job polls at `QUEUE_POLL_MAX` can
+    /// spend 360s inside `submit` alone — and exceeds the lease before any
+    /// poll is added. That is a pre-existing hazard recorded for the founder,
+    /// not one this poll creates and not one Phase 3 hides by raising a
+    /// limit.
+    const MEASURED_SUBMIT_WORST_CASE_MS: u64 = 180_000;
+
+    #[test]
+    fn the_verification_poll_fits_inside_the_lease() {
+        let lease_ms = u64::try_from(LEASE_TTL_SECS * 1_000).unwrap_or(u64::MAX);
+        for inventory in [
+            InventoryId::TesGb,
+            InventoryId::TesUs,
+            InventoryId::TesNz,
+            InventoryId::Etsy,
+            InventoryId::Tpt,
+        ] {
+            let spent = MEASURED_SUBMIT_WORST_CASE_MS + verify_policy(inventory).window_ms();
+            assert!(
+                spent < lease_ms,
+                "{inventory:?}: submit_worst_case + tries * interval is {spent}ms against a \
+                 {lease_ms}ms lease; when the lease expires mid-run the epoch-fenced attempt \
+                 settle fails after a listing has landed, and the mapping never binds"
+            );
+        }
     }
 }

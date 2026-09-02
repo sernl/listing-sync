@@ -55,9 +55,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tam_domain::{ItemOperation, ItemOutcome};
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::{claim_account, request_lease, ClaimError, LeasePurpose};
-use tam_engine::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
-use tam_engine::ledger::{PgJournal, PgOutbox};
+use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
+use tam_engine_driver::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_marketplace::transport::{Transport, TransportError};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
 use tam_marketplace_tes::{
@@ -71,7 +71,7 @@ use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
     BlobRepo, ConnectionFactsRepo, ElectionRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo,
-    LeasedItem, PipelineFileSource, RateBudgetRepo, WriteAttemptRepo,
+    LeasedItem, PipelineFileSource,
 };
 use tam_types::{
     ConnectionId, FailureCode, FailureDetail, InventoryId, Marketplace, OrgId, Timestamp, Uuid,
@@ -145,11 +145,6 @@ impl OncePerPass {
 struct Pump {
     pool: sqlx::PgPool,
     leases: LeaseRepo,
-    halts: HaltRepo,
-    attempts: WriteAttemptRepo,
-    budgets: RateBudgetRepo,
-    journal: PgJournal,
-    outbox: PgOutbox,
     broker_socket: std::path::PathBuf,
     kek: Kek,
     store_root: std::path::PathBuf,
@@ -502,18 +497,21 @@ impl Pump {
             operation,
             projected,
         } = work;
+        // One ledger per run, because the port is keyed on the lease and the
+        // job that lease belongs to is what scopes its events.
+        let ledger = PgLedger::new(self.pool.clone(), item.job);
+        let cancel = TokenCancellation(&self.cancel);
         let ctx = DriverContext {
             adapter,
-            leases: &self.leases,
-            halts: &self.halts,
-            attempts: &self.attempts,
-            budgets: &self.budgets,
-            journal: &self.journal,
-            outbox: &self.outbox,
+            ledger: &ledger,
             clock: &WallClock,
-            cancel: &self.cancel,
+            ids: &RandomIds,
+            cancel: &cancel,
             pause: &SleepingPause,
         };
+        // The lease scan is the server's, so the crossing into the
+        // interpreter's own vocabulary happens once, here.
+        let driven = to_wire_item(item);
         // A removal renders nothing, so it never reaches the adapter's
         // projection: the listing is being taken down rather than described.
         let seeded = projected.map_or_else(
@@ -524,8 +522,8 @@ impl Pump {
         // before the write settles the item through the path a refusal
         // raised during one already takes.
         let outcome = match seeded {
-            Ok(seed) => run_item(&ctx, item, seed).await,
-            Err(error) => seed_refused(&ctx, item, &error, ctx.clock.now()).await,
+            Ok(seed) => run_item(&ctx, &driven, seed).await,
+            Err(error) => seed_refused(&ctx, &driven, &error, ctx.clock.now()).await,
         };
         match outcome {
             Ok(RunVerdict::Settled(outcome)) => {
@@ -861,11 +859,6 @@ async fn run_pump(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
     let pump = Pump {
         pool: pool.clone(),
         leases: LeaseRepo::new(pool.clone()),
-        halts: HaltRepo::new(pool.clone()),
-        attempts: WriteAttemptRepo::new(pool.clone()),
-        budgets: RateBudgetRepo::new(pool.clone()),
-        journal: PgJournal::new(pool.clone()),
-        outbox: PgOutbox::new(pool.clone()),
         broker_socket,
         kek,
         store_root,

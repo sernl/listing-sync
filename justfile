@@ -40,6 +40,15 @@ purity:
         echo 'purity violation: a banned dependency reached the pure core' >&2
         exit 1
     fi
+    # The interpreter is held to the same bar plus `tam-storage`: it runs on
+    # the seller's device, so a database handle, a runtime or a storage row in
+    # its dependency graph is the boundary having failed rather than a
+    # portability inconvenience.
+    driver="$(cargo tree -e normal -p tam-engine-driver --prefix none)"
+    if printf '%s\n' "$driver" | grep -E '^(tokio|tokio-util|reqwest|sqlx|tam-storage) v'; then
+        echo 'purity violation: a banned dependency reached tam-engine-driver' >&2
+        exit 1
+    fi
     echo 'purity: the pure-core subgraph is clean'
 
 # The client surfaces the pure core and the adapters must reach, one triple
@@ -56,10 +65,13 @@ portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-taxonom
 # tam-limits asserts usize::BITS >= 64 at compile time, which is true of every
 # target here except wasm32. Widening that claim is a change to a founder-gated
 # limits file, so the wasm leg omits the crate rather than relaxing it.
-# tam-pipeline is here for that reason alone, through its tam-limits edge. The
+# tam-pipeline is here for that reason alone, through its tam-limits edge, and
+# so is tam-engine-driver: it still reads the attempt budget and the wall-clock
+# deadline. Step 8 of the engine-driver split moves both into the claim
+# envelope beside the rate ceiling, after which the crate joins the list above. The
 # blocker of its own is gone: blake3's `pure` feature, enabled by founder
 # decision on 2026-09-03, drops the cc and ml64.exe paths it could not cross.
-portable_crates_64 := "-p tam-limits -p tam-pipeline"
+portable_crates_64 := "-p tam-limits -p tam-pipeline -p tam-engine-driver"
 
 # Prove every client target still compiles. The standard libraries come from
 # rust-toolchain.toml's `targets`, so this needs the devshell rather than a
