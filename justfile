@@ -35,7 +35,7 @@ check:
 purity:
     #!/usr/bin/env sh
     set -eu
-    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-standards --prefix none)"
+    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-standards --prefix none)"
     if printf '%s\n' "$tree" | grep -E '^(tokio|tokio-util|reqwest|sqlx) v'; then
         echo 'purity violation: a banned dependency reached the pure core' >&2
         exit 1
@@ -60,7 +60,7 @@ portable_targets := "wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple
 # feature, which is reqwest and nothing else; reqwest, tokio and rustls are
 # native-only and stay behind it. The server-bound crates are absent by
 # design: they hold sqlx, axum and a runtime, and no client compiles them.
-portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
+portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
 
 # tam-limits asserts usize::BITS >= 64 at compile time, which is true of every
 # target here except wasm32. Widening that claim is a change to a founder-gated
@@ -215,8 +215,26 @@ pre-push: check web-check db-verify db-test-all check-portable
 web-typegen:
     cargo run -p tam-api --bin typegen > web/src/lib/generated/vocab.ts
 
+# The browser's copy of the core: the same rules the API answers with, compiled
+# to wasm32 and bound for the browser. Generated output is gitignored and built
+# here, so nothing generated is committed and no stale copy can ship.
+#
+# --lib is load-bearing: the fixture generator is a bin in the same crate and
+# does not cross-compile.
+web-wasm:
+    cargo build --target wasm32-unknown-unknown --release --lib -p tam-core-wasm
+    wasm-bindgen --target web --out-name core \
+        --out-dir web/src/lib/core/generated \
+        target/wasm32-unknown-unknown/release/tam_core_wasm.wasm
+
+# Re-record what the native path decides for each fixture draft. The vitest
+# suite and a Rust test both compare against the recorded file, so run this
+# only when a rule changed on purpose; the diff is the record of that change.
+web-wasm-fixtures:
+    cargo run -q -p tam-core-wasm --bin verdict-fixtures > crates/tam-core-wasm/fixtures/verdicts.json
+
 # The web lane: lockfile install, vocabulary freshness, types, tests, build
-web-check:
+web-check: web-wasm
     cargo run -p tam-api --bin typegen | diff -u web/src/lib/generated/vocab.ts - \
         || (echo "vocab.ts is stale; run just web-typegen" && exit 1)
     cd web && npm ci --no-audit --no-fund
@@ -225,7 +243,7 @@ web-check:
     cd web && npm run build
 
 # The client dev server, proxying /v1 to a locally running tam-server
-web-dev:
+web-dev: web-wasm
     cd web && npm run dev
 
 # The desktop client (Tauri v2, D2), which hosts this same console and owns the

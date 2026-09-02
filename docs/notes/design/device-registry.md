@@ -3,7 +3,7 @@
 Decision D14's server-side half: which of the seller's own machines exist, what each one holds, and how the seller signs one out.
 
 - date: 2026-09-03
-- status: built and green under `just db-test`, `just web-check` and the desktop crate's own tests; the desktop client's wire transport is the one part that is a seam rather than an implementation
+- status: built and green under `just db-test`, `just web-check` and the desktop crate's own tests; the desktop client now carries the wire transport too, and what remains unwired is where its base URL and session come from
 - decisions it implements: D14 (per-surface marketplace login, the device registry, the "Your devices" page with per-device sign-out), D1 (the two-branch automation rule the registry's contents obey), D10 and D11 (the entitlement the check-in closes on revocation), D30 (the wording the page uses about where a login lives)
 
 ## Why a registry of our own
@@ -118,10 +118,24 @@ The check-in comes first because it is what learns of a revocation, and a cycle 
 `DesktopState` gained a `revoked` flag beside the gate, kept apart from it because the two answer different questions: the gate says whether work may run, and this says why it may not, which is what the interface shows.
 `device_check_in` answers `reached_server` alongside `revoked`, so the interface never reads a `false` from a check-in that never happened as permission.
 
-The one part that is a seam rather than an implementation is the transport.
-`ControlPlane` is the trait, exactly as `WorkSource` is for work, and its only implementation is `Offline`, which returns `NotConfigured` for every call.
-The desktop crate has no HTTP client, and adding one is a founder-gated dependency decision; until it is taken, a shipped build reaches no registry and therefore never learns it has been revoked, which is the same posture the entitlement gate already takes with its placeholder key.
-An `Offline` that answered success instead of an error would be the one failure the registry exists to prevent, so it answers an error.
+`ControlPlane` is the trait, exactly as `WorkSource` is for work, and it has two implementations.
+`Offline` returns `NotConfigured` for every call and is what a build with no configured base URL gets; an `Offline` that answered success instead of an error would be the one failure the registry exists to prevent, so it answers an error.
+`HttpControlPlane` in `control_plane.rs` is the wire implementation, added on 2026-09-03 with the founder-disclosed `reqwest` edge.
+
+That module is split in two so the protocol is testable without a socket.
+`Transport` is one POST reduced to a path, a body and a reply; `HttpControlPlane` is the protocol above it, deciding which path, what JSON, and what each status means.
+The unit tests substitute a fake at that seam, so the two paths, the body keys and the status mapping are pinned without binding a port, and `crates/tam-api/tests/devices_flow.rs` pins the same paths and keys on the server side against a real database.
+`404` on either path means only that this device is not registered, so the client re-registers rather than retrying; every other non-success is a refusal carrying the status and an excerpt of what the server said.
+A `200` whose body does not parse is a refusal too, and deliberately not a default: the only default available would be `revoked: false`, which is the answer that keeps working, so guessing it would turn a broken proxy into a device that never learns it was signed out.
+
+Two custody properties are enforced there rather than remembered.
+The session token this client speaks under never reaches a formatter, because `HttpTransport` writes its own `Debug`, the same reason `CookieJar` does.
+And a test drives a real captured session with a real cookie through `check_in` and asserts that neither the cookie name nor its value appears in the bytes that would go out, which is the property the whole architecture rests on asserted at the one place bytes leave the machine for us.
+
+What is still not wired is where the client's two configuration values come from.
+`HttpControlPlane::against(base_url, session)` takes the control-plane base URL and the console session cookie, and nothing constructs it yet: `DesktopState::new` still defaults to `Offline`.
+The session in particular cannot be read by the console's own JavaScript, because the cookie is HttpOnly; the route that would work is the one `connect_marketplace` already uses for marketplaces, reading it from the main window's cookie store from Rust.
+That is a deliberate stopping point rather than an oversight, and it is the next step for this surface.
 
 ## What is verified
 
@@ -129,7 +143,7 @@ An `Offline` that answered success instead of an error would be the one failure 
 `crates/tam-storage/tests/rls_matrix.rs` carries both tables, so neither could have been added without a tenancy decision.
 `crates/tam-api/tests/devices_flow.rs` drives the four endpoints over the wire, including the two-tenant case at the surface, the refusals, and the unauthenticated case.
 `web/src/routes/settings/devices/merge.test.ts` covers the join, including the two agent strings that would fool a naive platform reader and every case where the join declines to guess.
-The desktop crate's own tests cover the report, the wipe, the cycle ordering, and the no-transport case.
+The desktop crate's own tests cover the report, the wipe, the cycle ordering, the no-transport case, and the wire client: the paths and body keys it sends, the status mapping, the revoked answer reaching the session store, an unparseable answer refusing rather than guessing, and that no captured cookie reaches the bytes it would send.
 
 ## Sources
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { loadCoreForTest } from '$lib/core/testing';
 import {
 	applyToAll,
 	atCap,
@@ -26,6 +27,10 @@ import {
 	type TptDraft
 } from './tpt-form';
 import type { FacetView, FormVocabularyView } from '$lib/api';
+
+// The refusals below are the compiled core's, not this file's, so the module
+// has to be in memory before any of them is asked for.
+loadCoreForTest();
 
 /** The vocabulary as `GET /v1/authoring/vocabulary` serves it, trimmed to the
  *  fields these tests read. Transcribed from `crates/tam-api/src/product/mod.rs`

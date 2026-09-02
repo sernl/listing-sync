@@ -1,15 +1,17 @@
 // The create form's own model, on the canonical TPT base: what the seller has
-// typed, what each control refuses, and the two request bodies it composes.
-// Pure, so it tests without a component, and driven by
-// `GET /v1/authoring/vocabulary` rather than by a second copy of the capture
-// here.
+// typed, what its controls hold, and the two request bodies it composes.
 //
-// The refusals below mirror `crates/tam-domain/src/product.rs` so a seller
-// reads a message as they type. They are not the authority:
-// `POST /v1/authoring/check` decides, and the page shows what it returns
-// alongside these. Where the two could disagree the server wins, which is why
-// nothing here invents a rule the model does not hold — the caps arrive in the
-// vocabulary payload and an absent cap is unmeasured rather than unlimited.
+// The refusals are no longer stated here. They are decided by the compiled
+// core in `$lib/core`, which is the same function `POST /v1/authoring/check`
+// calls, so the message a seller reads as they type and the answer the server
+// gives are one answer rather than two implementations that agreed when they
+// were last compared (D28). Exactly one rule is added here — that a listing
+// names at least one marketplace — because it is a decision about this listing
+// and not a property of the product the domain describes.
+//
+// What remains is presentation and wire assembly: the counters, the picker
+// toggles, the facet search, the grade grid, the price parsing and the two
+// request bodies. None of those is a rule, and the core answers none of them.
 
 import type {
 	CreateProductBody,
@@ -23,6 +25,13 @@ import type {
 	TptBaseInput
 } from '$lib/api';
 import type { FormGroup, InventoryId } from '$lib/generated/vocab';
+import { core, loadCore } from '$lib/core';
+
+// Started at module scope so the rules are ready before the seller has typed
+// anything; guarded because there is no asset to fetch while prerendering.
+if (typeof window !== 'undefined') {
+	void loadCore();
+}
 
 /** TPT's create form is nine sections and every one of them is a heading the
  *  seller reads. Education Standards is lifted out of Categories, where TPT
@@ -133,13 +142,9 @@ export function emptyTptDraft(): TptDraft {
 /** Which draft field a picker holds, so one control serves all four. */
 export type PickerKey = 'grades' | 'subjectAreas' | 'tags' | 'formats';
 
-/** The label TPT's own form puts on each picker, and the cap it states. */
-export const PICKER_LABEL: Record<PickerKey, string> = {
-	grades: 'Grade Level',
-	subjectAreas: 'Subject Area',
-	tags: 'Tag',
-	formats: 'Format'
-};
+// The labels each picker carries and which of them TPT marks required are the
+// core's, not this file's: `Picker::label` and the three required pickers live
+// in `tam-domain`, and a refusal arrives here already naming its control.
 
 const CAP_FIELD: Record<PickerKey, keyof FormCaps> = {
 	grades: 'grades',
@@ -147,10 +152,6 @@ const CAP_FIELD: Record<PickerKey, keyof FormCaps> = {
 	tags: 'tags',
 	formats: 'formats'
 };
-
-/** TPT marks Grade Level, Subject Area and Tag required; Format carries no
- *  marker. Reported as the form has it and never invented. */
-export const REQUIRED_PICKERS: readonly PickerKey[] = ['grades', 'subjectAreas', 'tags'];
 
 /** The measured limit for one picker, or `null` where none is measured.
  *
@@ -279,90 +280,40 @@ export interface Refusal {
 
 /** Everything this form refuses, in the order the groups read.
  *
- *  A mirror of the server's own rules so the seller sees a message as they
- *  type. `POST /v1/authoring/check` is the authority and the page shows its
- *  answer too; nothing here states a rule the model does not hold. */
+ *  Decided by the compiled core, which is the same function
+ *  `POST /v1/authoring/check` calls, so the message a seller reads as they type
+ *  is the server's answer rather than a second implementation of it. What used
+ *  to be reproduced here is gone; only the one rule below is added, and it is
+ *  added because the domain does not hold it.
+ *
+ *  `vocabulary` is still taken because it is what the page has and what the
+ *  caller passes; the caps it carries are no longer read here, since the module
+ *  holds the same numbers from the same capture. */
 export function refusalsOf(draft: TptDraft, vocabulary: FormVocabularyView | null): Refusal[] {
+	void vocabulary;
 	const found: Refusal[] = [];
-	const name = draft.name.trim();
-	if (name.length === 0) {
-		found.push({ group: 'name', control: 'Title', message: 'A product needs a title.' });
-	} else if (vocabulary !== null && name.length > vocabulary.limits.title_max_utf16_units) {
+	const rules = core();
+	if (rules === null) {
+		// Fail closed. An unloaded module has not decided that there is nothing
+		// to refuse, and treating it as though it had would let a blank form
+		// submit in the moment before the rules arrive.
 		found.push({
 			group: 'name',
-			control: 'Title',
-			message: `The title is ${name.length} characters and the form takes ${vocabulary.limits.title_max_utf16_units}.`
-		});
-	}
-	if (draft.payload.length === 0) {
-		found.push({
-			group: 'files',
-			control: 'Downloadable File',
-			message: 'Upload the file buyers download; a product with none cannot be listed anywhere.'
-		});
-	}
-	if (draft.thumbnails.length > 0 && draft.thumbnailMode !== '2') {
-		found.push({
-			group: 'files',
-			control: 'Thumbnails',
-			message: 'Thumbnails are attached under an option that shows no slots for them.'
-		});
-	}
-	if (!draft.free) {
-		if (minorUnitsOf(draft.price) === null) {
-			found.push({
-				group: 'price',
-				control: 'Price',
-				message: 'A paid listing needs a price, written in dollars and cents.'
-			});
-		} else if (
-			vocabulary !== null &&
-			(minorUnitsOf(draft.price) ?? 0) < vocabulary.limits.min_price_minor_units
-		) {
-			found.push({
-				group: 'price',
-				control: 'Price',
-				message: `TPT refuses a price below $${majorUnitsOf(vocabulary.limits.min_price_minor_units)}.`
-			});
-		}
-		if (draft.taxCode === null) {
-			found.push({
-				group: 'price',
-				control: 'Tax Code',
-				message:
-					'Choose a tax code. It is never chosen for you: designating it is yours under TPT’s terms.'
-			});
-		}
-	}
-	if (vocabulary !== null) {
-		for (const picker of REQUIRED_PICKERS) {
-			if (draft[picker].length === 0) {
-				found.push({
-					group: 'categories',
-					control: PICKER_LABEL[picker],
-					message: `${PICKER_LABEL[picker]} is required; choose at least one.`
-				});
-			}
-		}
-		for (const picker of ['grades', 'subjectAreas', 'tags', 'formats'] as PickerKey[]) {
-			const cap = capOf(vocabulary.caps, picker);
-			if (cap !== null && draft[picker].length > cap) {
-				found.push({
-					group: 'categories',
-					control: PICKER_LABEL[picker],
-					message: `${PICKER_LABEL[picker]} takes up to ${cap}, and ${draft[picker].length} are chosen.`
-				});
-			}
-		}
-	}
-	if (draft.copyright === null) {
-		found.push({
-			group: 'copyright',
 			control: null,
-			message:
-				'Choose one of the two attestations. Nothing is pre-selected, because the statement is yours to make.'
+			message: 'The form’s rules are still loading; nothing can be submitted yet.'
 		});
+	} else {
+		for (const refusal of rules.checkDraft(draftInputOf(draft)).refusals) {
+			found.push({
+				group: refusal.group,
+				control: refusal.control ?? null,
+				message: refusal.message
+			});
+		}
 	}
+	// The one rule the core does not hold, and the reason it does not: the
+	// domain describes a product, and which marketplaces to publish it to is a
+	// decision about this listing rather than a property of the product.
 	if (draft.inventories.length === 0) {
 		found.push({
 			group: 'product_status',
@@ -379,17 +330,18 @@ export interface Advisory {
 	message: string;
 }
 
+/** The advisories the core raises. Nothing is added here: every one of them is
+ *  guidance the model already states. */
 export function advisoriesOf(draft: TptDraft, vocabulary: FormVocabularyView | null): Advisory[] {
-	const found: Advisory[] = [];
-	const pages = Number(draft.pagesOrSlides.trim());
-	const guidance = vocabulary?.limits.free_resource_page_guidance ?? null;
-	if (draft.free && guidance !== null && Number.isFinite(pages) && pages > guidance) {
-		found.push({
-			group: 'price',
-			message: `TPT advises that free resources be ${guidance} pages or fewer, and this one states ${pages}. It is guidance rather than a rule, so nothing is blocked.`
-		});
+	void vocabulary;
+	const rules = core();
+	if (rules === null) {
+		return [];
 	}
-	return found;
+	return rules.checkDraft(draftInputOf(draft)).advisories.map((advisory) => ({
+		group: advisory.group,
+		message: advisory.message
+	}));
 }
 
 export function submittable(refusals: readonly Refusal[]): boolean {
@@ -495,15 +447,32 @@ export interface MarketplaceProjection {
 	rows: ProjectedRow[];
 }
 
-/** One marketplace's tab, built from what this client holds.
+/** One marketplace's tab, built from what this client holds and what the core
+ *  decides.
  *
- *  Field rows only, because no endpoint renders a product's projection field
- *  by field: `GET /v1/vocabulary/{inventory}` serves the registry's field
- *  table and `GET /v1/mappings` serves mapping heads with recorded losses, and
- *  neither answers "what will this listing's title be on Tes". Axis rows are
- *  the missing half and arrive from the server whole, which is why the row
- *  type already distinguishes them. */
+ *  Field rows only. The values are this listing's — its own overrides where the
+ *  seller set one — and the losses are the core's, read from the compiled-in
+ *  field registry: a cap one platform declares and this listing's value exceeds
+ *  is a real disclosed loss rather than the `null` this function used to state
+ *  for every row.
+ *
+ *  Axis rows are still the missing half and still arrive from the server whole.
+ *  The equivalence relation lives in Postgres, so a client that resolved an
+ *  axis would be inventing a mapping nobody recorded; `GET /v1/vocabulary/
+ *  {inventory}` serves the registry's field table and `GET /v1/mappings` serves
+ *  mapping heads, and neither answers "what will this listing's subject be on
+ *  Tes". The endpoint that would is owed, and is the same gap the per-
+ *  organisation override slice fills. */
 export function projectionOf(draft: TptDraft, inventory: InventoryId): MarketplaceProjection {
+	const rules = core();
+	const declared =
+		rules === null
+			? new Map<string, string | null>()
+			: new Map(
+					rules
+						.projectPreview(draftInputOf(draft), inventory)
+						.rows.map((row) => [row.key, row.loss] as const)
+				);
 	return {
 		inventory,
 		rows: OVERRIDABLE.map((entry) => ({
@@ -514,9 +483,18 @@ export function projectionOf(draft: TptDraft, inventory: InventoryId): Marketpla
 			decided_by: diverges(draft, inventory, entry.field)
 				? ({ by: 'listing_override' } as const)
 				: ({ by: 'listing' } as const),
-			loss: null
+			// Null is "nothing recorded", never "nothing lost": a registry that
+			// declares no cap for this field has not measured one.
+			loss: declared.get(canonicalKey(entry.field)) ?? null
 		}))
 	};
+}
+
+/** The registry's own name for one of this form's overridable fields. The two
+ *  vocabularies agree except on the title, which the domain calls `title` and
+ *  the create form calls `name`. */
+function canonicalKey(field: string): string {
+	return field === 'name' ? 'title' : field;
 }
 
 /** One marketplace's own value, set or cleared. Clearing is Reset: the field

@@ -184,6 +184,11 @@
               pkgs.postgresql_17
               pkgs.nodejs_22
               pkgs.shellcheck
+              # The browser's copy of the core. Pinned by nixpkgs rather than
+              # by us: wasm-bindgen refuses a CLI whose version differs from
+              # the crate's, so crates/tam-core-wasm pins the crate to exactly
+              # what this carries.
+              pkgs.wasm-bindgen-cli
               pkgs.sqlx-cli
               # The desktop client. `cargo-tauri` drives the bundle,
               # `cargo-xwin` and `nsis` are D29's local Windows cross-compile,

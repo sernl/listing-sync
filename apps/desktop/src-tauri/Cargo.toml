@@ -37,6 +37,41 @@ uuid       = { version = "1", features = ["v4"] }
 # with; a second signature stack would be a second thing to get wrong.
 jsonwebtoken = { version = "9.3", default-features = false }
 
+# This device's own HTTP to our control plane, which is the registry check-in
+# and nothing else: no marketplace request is ever composed here, and D1 keeps
+# it that way. The edge is inherent rather than optional, because a device that
+# cannot reach the control plane cannot learn it has been revoked.
+#
+# Version 0.13 rather than the 0.12 the server crates pin, deliberately:
+# tauri-plugin-updater already puts 0.13.4 in this binary, so this adds an edge
+# to a package that is present rather than a second HTTP and TLS stack in a
+# client whose bundle size we measure.
+#
+# `rustls-no-provider` rather than `rustls`, and the difference is not
+# cosmetic. In 0.13, `rustls = ["__rustls-aws-lc-rs", ...]` forces the
+# aws-lc-rs provider, which drags aws-lc-sys and a cmake C build into a binary
+# we cross-compile to Windows -- the exact class of dependency that already
+# needed an unwrapped-clang workaround for `ring`. `rustls-no-provider` is the
+# same TLS stack without a forced provider, and is what tauri-plugin-updater
+# already enables here, so this edge adds no package at all.
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls-no-provider",
+] }
+
+# The crypto provider that TLS stack runs on, named rather than inherited.
+# `rustls-no-provider` makes `Client::build()` panic outright unless a default
+# provider is already installed, and the only thing that installs one today is
+# tauri-plugin-updater, lazily, inside its own update check
+# (tauri-plugin-updater 2.11.0, src/updater.rs:492). A check-in that happened
+# to run before the first update check would therefore panic, so this client
+# installs the same ring provider itself, under the same guard.
+#
+# `ring` rather than aws-lc-rs: the updater already compiles rustls with the
+# ring feature into this binary, so this edge adds no package and no second
+# provider, where reqwest's `rustls` feature would add aws-lc-sys and a cmake
+# C build to a binary we cross-compile to Windows.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
 tam-types = { path = "../../../crates/tam-types" }
 
 # One keychain backend per platform rather than the crate's umbrella feature,

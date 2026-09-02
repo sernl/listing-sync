@@ -1,0 +1,252 @@
+{
+  "blank_slug": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "   "
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "complete_free": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions on a number line",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "copyright_unstated": {
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "empty_draft": {},
+  "free_over_page_guidance": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "pages_or_slides": 24,
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "grades_over_cap": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "1st-grade",
+      "2nd-grade",
+      "3rd-grade",
+      "4th-grade",
+      "5th-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "malformed_upload_ref": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "not-a-digest",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "name_missing": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "no_payload": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "paid_at_floor": {
+    "copyright_declaration_id": 1,
+    "free": false,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "price_minor_units": 95,
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ],
+    "tax_code_id": 1
+  },
+  "paid_no_price": {
+    "copyright_declaration_id": 1,
+    "free": false,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ],
+    "tax_code_id": 1
+  },
+  "paid_no_tax_code": {
+    "copyright_declaration_id": 1,
+    "free": false,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "price_minor_units": 450,
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ]
+  },
+  "paid_under_floor": {
+    "copyright_declaration_id": 1,
+    "free": false,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "price_minor_units": 94,
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ],
+    "tax_code_id": 1
+  },
+  "paid_with_tax_code": {
+    "copyright_declaration_id": 1,
+    "free": false,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "price_minor_units": 450,
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ],
+    "tax_code_id": 1
+  },
+  "required_pickers_empty": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "thumbnails_without_upload_now": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ],
+    "thumbnail_hashes": [
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ],
+    "thumbnail_mode": 1
+  },
+  "unmeasured_cap_passes": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "subject_areas": [
+      "math",
+      "science",
+      "ela",
+      "art"
+    ],
+    "tags": [
+      "centers"
+    ]
+  }
+}

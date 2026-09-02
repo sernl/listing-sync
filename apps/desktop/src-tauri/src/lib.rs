@@ -17,6 +17,7 @@
 
 pub mod commands;
 pub mod connect;
+pub mod control_plane;
 pub mod device;
 pub mod entitlement;
 pub mod heartbeat;

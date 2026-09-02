@@ -1,0 +1,188 @@
+{
+  "blank_slug": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "categories",
+        "message": "A category value cannot be blank."
+      },
+      {
+        "group": "categories",
+        "control": "Subject Area",
+        "message": "Subject Area is required; choose at least one."
+      }
+    ],
+    "advisories": []
+  },
+  "complete_free": {
+    "submittable": true,
+    "refusals": [],
+    "advisories": []
+  },
+  "copyright_unstated": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "copyright",
+        "message": "Choose one of the two copyright attestations. Nothing is pre-selected, because              the statement is yours to make."
+      }
+    ],
+    "advisories": []
+  },
+  "empty_draft": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "name",
+        "message": "A product needs a title."
+      },
+      {
+        "group": "files",
+        "control": "Downloadable File",
+        "message": "Upload the file buyers download; a product with none cannot be listed anywhere."
+      },
+      {
+        "group": "price",
+        "control": "Price",
+        "message": "A paid listing needs a price, written in dollars and cents."
+      },
+      {
+        "group": "price",
+        "control": "Tax Code",
+        "message": "Choose a tax code. It is never chosen for you: designating it is yours under TPT's terms."
+      }
+    ],
+    "advisories": []
+  },
+  "free_over_page_guidance": {
+    "submittable": true,
+    "refusals": [],
+    "advisories": [
+      {
+        "group": "price",
+        "message": "TPT advises that free resources be 10 pages or fewer, and this one                  states 24. It is guidance rather than a rule, so nothing is blocked."
+      }
+    ]
+  },
+  "grades_over_cap": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "categories",
+        "control": "Grade Level",
+        "message": "Grade Level takes up to 4, and 5 are chosen."
+      }
+    ],
+    "advisories": []
+  },
+  "malformed_upload_ref": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "files",
+        "message": "A file handle is not one this server issued; upload the file again."
+      }
+    ],
+    "advisories": []
+  },
+  "name_missing": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "name",
+        "message": "A product needs a title."
+      }
+    ],
+    "advisories": []
+  },
+  "no_payload": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "files",
+        "control": "Downloadable File",
+        "message": "Upload the file buyers download; a product with none cannot be listed anywhere."
+      }
+    ],
+    "advisories": []
+  },
+  "paid_at_floor": {
+    "submittable": true,
+    "refusals": [],
+    "advisories": []
+  },
+  "paid_no_price": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "price",
+        "control": "Price",
+        "message": "A paid listing needs a price, written in dollars and cents."
+      }
+    ],
+    "advisories": []
+  },
+  "paid_no_tax_code": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "price",
+        "control": "Tax Code",
+        "message": "Choose a tax code. It is never chosen for you: designating it is yours under TPT's terms."
+      }
+    ],
+    "advisories": []
+  },
+  "paid_under_floor": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "price",
+        "control": "Price",
+        "message": "TPT refuses a price below $0.95."
+      }
+    ],
+    "advisories": []
+  },
+  "paid_with_tax_code": {
+    "submittable": true,
+    "refusals": [],
+    "advisories": []
+  },
+  "required_pickers_empty": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "categories",
+        "control": "Grade Level",
+        "message": "Grade Level is required; choose at least one."
+      },
+      {
+        "group": "categories",
+        "control": "Subject Area",
+        "message": "Subject Area is required; choose at least one."
+      },
+      {
+        "group": "categories",
+        "control": "Tag",
+        "message": "Tag is required; choose at least one."
+      }
+    ],
+    "advisories": []
+  },
+  "thumbnails_without_upload_now": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "files",
+        "message": "Thumbnails were attached under the option \"Auto generate thumbnails from the product file\", which shows no slots for them."
+      }
+    ],
+    "advisories": []
+  },
+  "unmeasured_cap_passes": {
+    "submittable": true,
+    "refusals": [],
+    "advisories": []
+  }
+}
