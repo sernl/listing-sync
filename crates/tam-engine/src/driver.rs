@@ -527,7 +527,20 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
 
     loop {
         let now = ctx.clock.now();
-        if ctx.cancel.is_cancelled() || now.0 >= wall_deadline {
+        // Stepped only where the machine can still take the input, which is
+        // the same rule `verify_with_backoff` states for itself. A terminal
+        // machine answers `InputNotApplicable`, returning `Err` with a
+        // listing the submit already committed left unsettled; a parked one
+        // exchanges its own park, gate and notification for an abandoned
+        // attempt, releasing the only fence against a second create while the
+        // mapping is still unbound. Both arms return from the match below
+        // instead, which is what the cancellation wanted in the first place.
+        if (ctx.cancel.is_cancelled() || now.0 >= wall_deadline)
+            && !matches!(
+                transition.next.state,
+                SyncState::Terminal(_) | SyncState::Parked { .. }
+            )
+        {
             transition = transition
                 .next
                 .step(Input::BudgetExhausted, LogicalInstant(now.0))?;

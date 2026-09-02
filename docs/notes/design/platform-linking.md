@@ -50,7 +50,7 @@ A headless browser on our own box is the credible unattended vehicle, and the sh
 Browserless is rejected and the reason is not preference: it is SSPL-or-commercial with the vendor's own published position putting closed-source commercial use on the paid side, and the free image's capability delta over driving Chrome directly is zero because stealth and captcha handling are Enterprise-only (`research-browserless-custody.md`).
 The vehicle, if this is built, is a small chromiumoxide driver the broker launches and kills per attempt, with no persisted profile, no session recording and no screenshot artifact, because a persisted profile is an unencrypted credential store outside the vault.
 
-An attended flow — the seller completing the sign-in themselves, challenge included — is already named in the decision record as one of the two better custody models (`docs/design/decisions.md:42`), and the type for it already exists as `CustodyModel::SellerDrivenSession` (`crates/tam-marketplace/src/lib.rs:719-720`).
+An attended flow — the seller completing the sign-in themselves, challenge included — is already named in the decision record as one of the two better custody models (`docs/design/decisions.md:42`), and under D1 it is no longer one model among three but the only one: the session is established and held on the seller's own device, so the custody enum that once carried it has been deleted rather than selected from (`docs/notes/design/engine-driver-split.md` section 3).
 Its cost is a real build: a browser we run whose viewport and input are relayed to the seller.
 Its property is that no marketplace password ever enters our custody and every challenge is answered by the human the challenge is asking about.
 

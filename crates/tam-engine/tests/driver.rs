@@ -7,6 +7,7 @@
 #![cfg(feature = "pg-tests")]
 
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -60,6 +61,12 @@ struct ScriptedAdapter {
     /// keeps the refusal below, so a test that grew a revise by accident says
     /// so rather than replaying a create's scripted answer.
     revise_answer: Option<Result<SubmitEvidence, AdapterError>>,
+    /// The token the run is driven under, cancelled once the named call has
+    /// answered. That is how a fixture places a suspended device precisely
+    /// between a committed transition and the loop top that reads the token.
+    cancel: Arc<CancellationToken>,
+    cancel_after_submit: bool,
+    cancel_after_read_back: bool,
 }
 
 impl ScriptedAdapter {
@@ -71,7 +78,20 @@ impl ScriptedAdapter {
             preflight_answers: vec![Ok(FormSchemaFingerprint(ContentHash([0x0F; 32])))],
             preflight_cursor: AtomicUsize::new(0),
             revise_answer: None,
+            cancel: Arc::new(CancellationToken::new()),
+            cancel_after_submit: false,
+            cancel_after_read_back: false,
         }
+    }
+
+    fn cancelling_after_submit(mut self) -> Self {
+        self.cancel_after_submit = true;
+        self
+    }
+
+    fn cancelling_after_read_back(mut self) -> Self {
+        self.cancel_after_read_back = true;
+        self
     }
 
     fn revising(mut self, answer: Result<SubmitEvidence, AdapterError>) -> Self {
@@ -127,12 +147,17 @@ impl MarketplaceAdapter for ScriptedAdapter {
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
         let position = self.submit_cursor.fetch_add(1, Ordering::SeqCst);
-        self.submit_answers
-            .get(position)
-            .cloned()
-            .unwrap_or(Err(AdapterError::Ambiguous(
-                AmbiguityCause::ResponseEventLost,
-            )))
+        let answer =
+            self.submit_answers
+                .get(position)
+                .cloned()
+                .unwrap_or(Err(AdapterError::Ambiguous(
+                    AmbiguityCause::ResponseEventLost,
+                )));
+        if self.cancel_after_submit {
+            self.cancel.cancel();
+        }
+        answer
     }
 
     /// A lifecycle write answers only where a fixture scripted one. The
@@ -175,6 +200,9 @@ impl MarketplaceAdapter for ScriptedAdapter {
                 url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
             },
         };
+        if self.cancel_after_read_back {
+            self.cancel.cancel();
+        }
         Ok(ObservedListing {
             id,
             fields: vec![(FieldKey::Title, "Fixture".to_owned())],
@@ -369,7 +397,6 @@ async fn drive(
         .expect("the scan runs")
         .expect("the item leases");
     let clock = SteppingClock(AtomicI64::new(at.0 + 1_000));
-    let cancel = CancellationToken::new();
     let ctx = DriverContext {
         adapter,
         leases,
@@ -378,7 +405,9 @@ async fn drive(
         budgets: &RateBudgetRepo::new(engine.clone()),
         pool: engine,
         clock: &clock,
-        cancel: &cancel,
+        // The fixture's own, so an adapter call can cancel the run it is
+        // being driven under; never cancelled unless a hook was asked for.
+        cancel: &adapter.cancel,
         pause: &InstantPause,
     };
     run_item(&ctx, &lease, seed_machine(strategy))
@@ -1060,6 +1089,122 @@ async fn an_expired_session_still_parks_and_gates_the_connection(app: PgPool) {
     assert_eq!(
         connection, "needs_reauth",
         "and the gate goes up: every sibling would spend a lease learning the same thing"
+    );
+}
+
+/// A suspended device lands between the transition into a terminal state and
+/// the loop top that reads the token. `exhaust_budget` answers a terminal
+/// machine `InputNotApplicable`, so stepping it there returned `Err` from the
+/// run and left the listing the submit had already committed unsettled, with
+/// its fencing attempt standing open.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_cancellation_after_the_read_back_still_settles_what_the_write_committed(app: PgPool) {
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence())).cancelling_after_read_back();
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let verdict = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        T0,
+    )
+    .await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "the read-back had already satisfied the predicate, so the cancellation settles \
+         the run rather than failing it with the listing still open"
+    );
+    let item: (String, Option<String>) =
+        sqlx::query_as("SELECT state, outcome FROM job_item LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the item row reads");
+    assert_eq!(
+        (item.0.as_str(), item.1.as_deref()),
+        ("settled", Some("succeeded")),
+        "the ledger records the outcome; an unsettled item is what a closed lid used to cost"
+    );
+    let attempt_state: String = sqlx::query_scalar("SELECT state FROM write_attempt LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the attempt row reads");
+    assert_eq!(
+        attempt_state, "committed",
+        "and the fence settles with it rather than standing in flight against every later lease"
+    );
+    assert_bound_to(&engine, "https://www.tes.com/api/v2/resources/9001")
+        .await
+        .expect("the mapping row reads");
+}
+
+/// The same defect from the parked side. The transition into `Parked` carries
+/// [ParkItem, RequeueBehindGate, Notify] as an effect list the loop has not
+/// executed yet, and the loop-top step used to replace the whole transition —
+/// discarding all three and settling the attempt abandoned instead, which
+/// releases the only fence against a second create while the mapping is still
+/// unbound. This is `an_expired_session_still_parks_and_gates_the_connection`
+/// with the device suspended one instruction later.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_cancellation_after_a_lapsed_session_still_parks_gates_and_notifies(app: PgPool) {
+    let adapter =
+        ScriptedAdapter::answering(Err(AdapterError::SessionExpired)).cancelling_after_submit();
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let verdict = drive(
+        &engine,
+        &leases,
+        &adapter,
+        CreateStrategy::HaltOnAmbiguity,
+        T0,
+    )
+    .await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Parked,
+        "the park was already decided when the token was cancelled, so the run reports it"
+    );
+    let parked: (String, Option<String>) =
+        sqlx::query_as("SELECT state, blocked_on FROM job_item LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the item row reads");
+    assert_eq!(
+        (parked.0.as_str(), parked.1.as_deref()),
+        ("parked_live", Some(tam_storage::REAUTH_REQUIRED)),
+        "the park landed rather than being exchanged for an abandoned attempt"
+    );
+    let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the connection row reads");
+    assert_eq!(
+        connection, "needs_reauth",
+        "and the gate went up, which is what holds every sibling item back"
+    );
+    let notified: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM outbox_message WHERE topic = 'email.parked_job'")
+            .fetch_one(&engine)
+            .await
+            .expect("the outbox reads");
+    assert_eq!(
+        notified, 1,
+        "and the seller was told, which is the only way a park ever clears"
+    );
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM write_attempt WHERE state = 'in_flight'")
+            .fetch_one(&engine)
+            .await
+            .expect("the attempt rows read");
+    assert_eq!(
+        attempts, 1,
+        "the create fence stays shut: settling it here is what would let the park resume \
+         into a second listing"
     );
 }
 
