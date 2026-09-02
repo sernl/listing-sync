@@ -781,8 +781,15 @@ pub async fn run_item<
                     challenge,
                     expires,
                 } => {
+                    // The machine states the instant it wants; what crosses
+                    // the boundary is how long from now, because the server is
+                    // the only clock the reaper reads back against. Rounded up,
+                    // so a sub-second park is still a park rather than an
+                    // expiry already in the past.
+                    let park_for = (expires.0 - now.0).max(0).div_euclid(1_000)
+                        + i64::from((expires.0 - now.0).max(0).rem_euclid(1_000) > 0);
                     ctx.ledger
-                        .park(&lease_ref, &format!("{challenge:?}"), Timestamp(expires.0))
+                        .park(&lease_ref, &format!("{challenge:?}"), park_for)
                         .await?;
                     record_event(
                         ctx,

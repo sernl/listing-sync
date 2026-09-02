@@ -1183,7 +1183,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
 
     let leases = tam_storage::LeaseRepo::new(engine.clone());
     let publish = leases
-        .acquire("w1", NOW, 600)
+        .acquire("w1", 600)
         .await
         .expect("the scan runs")
         .expect("an item leases");
@@ -1201,12 +1201,12 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
     };
     assert_eq!(gate, tam_storage::AWAITING_COUNTERPART);
     leases
-        .park(&publish.lease_ref(), gate, Timestamp(NOW.0 + 86_400_000))
+        .park(&publish.lease_ref(), gate, 86_400)
         .await
         .expect("the publish parks");
 
     let create = leases
-        .acquire("w1", NOW, 600)
+        .acquire("w1", 600)
         .await
         .expect("the scan runs")
         .expect("the create leases next");
@@ -1275,7 +1275,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
         .expect("the create's item settles");
 
     let woken = leases
-        .acquire("w1", NOW, 600)
+        .acquire("w1", 600)
         .await
         .expect("the scan runs")
         .expect("the revived publish leases");
@@ -1390,7 +1390,7 @@ async fn provision_refusing_queue(app: &PgPool, engine: &PgPool) {
 )]
 async fn refuse_one(app: &PgPool, engine: &PgPool, leases: &LeaseRepo) -> (LeasedItem, RunVerdict) {
     let held = leases
-        .acquire("seed-refusal-test", NOW, 600)
+        .acquire("seed-refusal-test", 600)
         .await
         .expect("the scan runs")
         .expect("an item leases");

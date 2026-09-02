@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO job_item (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, operation, subject_kind, subject_url, subject_numeric_id, state_from, state_to, requires_bound_on, marketplace) SELECT $1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11, $12, $13, m.marketplace FROM mapping m WHERE m.org_id = $1 AND m.id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9dcb8dd2919ca72730c691b9471d334b668c592556bfdd72eb54c5240c96a97a"
+}

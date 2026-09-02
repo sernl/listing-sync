@@ -533,7 +533,10 @@ Two rules attach and are as load-bearing as the contents: every constant names t
 | Constant | Value | Enforced by | Basis and status |
 |---|---|---|---|
 | `BROWSER_LANES` | 2 | `tam-worker` lane semaphore | Measured bound near 30 sessions, chosen operating point |
-| `JOBS_PER_TENANT` | 1 | durable per-tenant mutex in `tam-storage` | Design rule from the form-token race, not a tunable |
+| `JOBS_PER_TENANT` | 1 | durable per-connection mutex in `tam-storage` | Design rule from the form-token race, not a tunable |
+
+Amended 2026-09-03 by founder ruling: the mutex is scoped to the connection rather than to the organisation, because the form-token race it protects against is per marketplace session and D14 grants a seller several devices.
+It was never a Rust constant; the rule lives in `crates/tam-storage/migrations/0044_lease_mutex_per_connection.sql` and its two behaviour tests in `crates/tam-storage/tests/leases.rs`.
 | `WEBDRIVER_COMMAND_TIMEOUT` | 30s | the `reqwest` client at construction | Guess against `thirtyfour`'s 120s default, awaiting M0 soak |
 | `JOB_WALL_CLOCK_BUDGET` | 600s | `CancellationToken` in `tam-worker` | Guess anchored on the three-minute per-listing observation |
 | `MAX_ACTIONS_PER_JOB` | 120 | the action interpreter, at pack load and at run | Guess; the CrowdStrike lesson, awaiting the real form action count |

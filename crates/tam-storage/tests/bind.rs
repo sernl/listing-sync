@@ -197,7 +197,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
 async fn seeded_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, StorageError> {
     seed(app, engine).await?;
     Ok(LeaseRepo::new(engine.clone())
-        .acquire("bind-test", T0, 600)
+        .acquire("bind-test", 600)
         .await?
         .map(|leased| leased.lease_ref()))
 }
@@ -242,7 +242,7 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
         )
         .await?;
     Ok(LeaseRepo::new(engine.clone())
-        .acquire("bind-test", T0, 600)
+        .acquire("bind-test", 600)
         .await?
         .map(|leased| leased.lease_ref()))
 }
@@ -257,9 +257,14 @@ async fn settle_attempt(
     at: Timestamp,
 ) -> Result<BindDisposition, StorageError> {
     let attempts = WriteAttemptRepo::new(engine.clone());
-    let attempt = attempts
+    // The id is the caller's now, and `open` is idempotent on it, so a fixture
+    // reusing one would silently re-open the row it already settled. Drawn
+    // fresh per call for that reason.
+    let attempt = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
+    attempts
         .open(
             lease,
+            attempt,
             &NewAttempt {
                 mapping,
                 intent: &AttemptIntent {

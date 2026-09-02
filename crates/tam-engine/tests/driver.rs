@@ -363,7 +363,7 @@ async fn drive(
     at: Timestamp,
 ) -> RunVerdict {
     let lease = leases
-        .acquire("driver-test", at, LEASE_SECONDS)
+        .acquire("driver-test", LEASE_SECONDS)
         .await
         .expect("the scan runs")
         .expect("the item leases");
@@ -392,16 +392,22 @@ async fn drive(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn requeue(leases: &LeaseRepo, at: Timestamp) -> Timestamp {
-    let after = Timestamp(at.0 + (LEASE_SECONDS + 1) * 1_000);
+async fn requeue(engine: &PgPool, leases: &LeaseRepo, at: Timestamp) -> Timestamp {
+    // The lease expiry is the database's own fact now, so a fixture cannot
+    // reach it by advancing its clock: it ages the row instead, which is the
+    // same condition a worker that went away leaves behind.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(engine)
+        .await
+        .expect("the lease ages");
     leases
         .expire_and_steal(
-            after,
+            Timestamp(at.0 + (LEASE_SECONDS + 1) * 1_000),
             i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX),
         )
         .await
         .expect("the maintenance pass runs");
-    after
+    Timestamp(at.0 + (LEASE_SECONDS + 1) * 1_000)
 }
 
 /// The submit landed and named its listing; the verification read then
@@ -438,7 +444,7 @@ async fn a_preflight_that_stays_indeterminate_stops_wedging_the_queue(app: PgPoo
     let mut verdicts = Vec::new();
     for lease in 0..PREFLIGHT_FAILURES_MAX {
         if lease > 0 {
-            at = requeue(&leases, at).await;
+            at = requeue(&engine, &leases, at).await;
         }
         verdicts.push(
             drive(
@@ -516,7 +522,7 @@ async fn a_preflight_that_stays_indeterminate_stops_wedging_the_queue(app: PgPoo
 
     assert!(
         leases
-            .acquire("driver-test", Timestamp(at.0 + 1_000_000), LEASE_SECONDS)
+            .acquire("driver-test", LEASE_SECONDS)
             .await
             .expect("the scan runs")
             .is_none(),
@@ -528,7 +534,7 @@ async fn a_preflight_that_stays_indeterminate_stops_wedging_the_queue(app: PgPoo
         .expect("the seller re-links");
     assert!(
         leases
-            .acquire("driver-test", Timestamp(at.0 + 2_000_000), LEASE_SECONDS)
+            .acquire("driver-test", LEASE_SECONDS)
             .await
             .expect("the scan runs")
             .is_none(),
@@ -563,7 +569,7 @@ async fn a_healthy_preflight_wipes_the_streak(app: PgPool) {
         T0,
     )
     .await;
-    let at = requeue(&leases, T0).await;
+    let at = requeue(&engine, &leases, T0).await;
     let second = drive(
         &engine,
         &leases,
@@ -583,7 +589,7 @@ async fn a_healthy_preflight_wipes_the_streak(app: PgPool) {
         .expect("the item row reads");
     assert_eq!(streak, 2, "both failures counted");
 
-    let at = requeue(&leases, at).await;
+    let at = requeue(&engine, &leases, at).await;
     let third = drive(
         &engine,
         &leases,
@@ -651,7 +657,7 @@ async fn an_item_out_of_attempt_budget_still_settles_on_the_connection(app: PgPo
         matches!(first, RunVerdict::Abandoned { .. }),
         "a fourth attempt is still affordable, so the stall bias holds: {first:?}"
     );
-    let at = requeue(&leases, T0).await;
+    let at = requeue(&engine, &leases, T0).await;
     let second = drive(
         &engine,
         &leases,
@@ -752,7 +758,7 @@ async fn a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further(app: 
     // draft over a listing that already exists.
     assert!(
         leases
-            .acquire("driver-test", Timestamp(T0.0 + 1_000), LEASE_SECONDS)
+            .acquire("driver-test", LEASE_SECONDS)
             .await
             .expect("the scan runs")
             .is_none(),
@@ -880,7 +886,7 @@ async fn a_preflight_challenge_settles_blocked_without_gating(app: PgPool) {
     let mut verdicts = Vec::new();
     for lease in 0..PREFLIGHT_FAILURES_MAX {
         if lease > 0 {
-            at = requeue(&leases, at).await;
+            at = requeue(&engine, &leases, at).await;
         }
         verdicts.push(
             drive(
@@ -1008,7 +1014,7 @@ async fn a_mixed_preflight_streak_takes_the_seller_actionable_floor(app: PgPool)
     let mut verdicts = Vec::new();
     for lease in 0..PREFLIGHT_FAILURES_MAX {
         if lease > 0 {
-            at = requeue(&leases, at).await;
+            at = requeue(&engine, &leases, at).await;
         }
         verdicts.push(
             drive(

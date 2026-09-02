@@ -208,11 +208,14 @@ async fn provision(pool: &PgPool) {
             org,
             &[format!(
                 "INSERT INTO job_item (org_id, id, job_id, mapping_id, idempotency_key, state, \
-                     operation, outcome, failure_code, failure_detail, settled_at, created_at) \
-                 VALUES ($1, '{}', '{}', '{}', gen_random_uuid(), 'settled', 'create', \
-                     'failed', 'Other', 'the fixture failure', now(), now())",
+                     operation, outcome, failure_code, failure_detail, settled_at, created_at, \
+                     marketplace) \
+                 SELECT $1, '{}', '{}', '{}', gen_random_uuid(), 'settled', 'create', \
+                     'failed', 'Other', 'the fixture failure', now(), now(), m.marketplace \
+                 FROM mapping m WHERE m.org_id = $1 AND m.id = '{}'",
                 id(item),
                 id(job),
+                id(mapping),
                 id(mapping)
             )],
         )

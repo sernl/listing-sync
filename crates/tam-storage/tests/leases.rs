@@ -23,9 +23,9 @@ use tam_storage::{
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
-    FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet,
-    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp,
-    Title, Uuid,
+    FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, Marketplace, OrgId,
+    PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Stamp,
+    SystemComponent, Timestamp, Title, TransportClass, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -238,12 +238,12 @@ async fn the_tenant_mutex_holds_and_parallelism_is_inter_tenant(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     let first = leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("something is leasable");
     let second = leases
-        .acquire("w2", T0, 60)
+        .acquire("w2", 60)
         .await
         .expect("the scan runs")
         .expect("the other tenant is leasable");
@@ -251,7 +251,7 @@ async fn the_tenant_mutex_holds_and_parallelism_is_inter_tenant(app: PgPool) {
         first.org, second.org,
         "one live lease per tenant: the second lease must come from the other org"
     );
-    let third = leases.acquire("w3", T0, 60).await.expect("the scan runs");
+    let third = leases.acquire("w3", 60).await.expect("the scan runs");
     assert!(
         third.is_none(),
         "both tenants hold a live lease, so nothing is leasable"
@@ -270,14 +270,14 @@ async fn the_tenant_mutex_holds_and_parallelism_is_inter_tenant(app: PgPool) {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn park_leased(leases: &LeaseRepo, worker: &str, gate: &str, expires: Timestamp) {
+async fn park_leased(leases: &LeaseRepo, worker: &str, gate: &str, park_for: i64) {
     let lease = leases
-        .acquire(worker, T0, 60)
+        .acquire(worker, 60)
         .await
         .expect("the scan runs")
         .expect("the item leases");
     leases
-        .park(&lease.lease_ref(), gate, expires)
+        .park(&lease.lease_ref(), gate, park_for)
         .await
         .expect("the park is fenced on a live lease");
 }
@@ -314,8 +314,7 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
     let tenant = seed_tenant(&app, 0xC1, true).await;
     enqueue_one(&engine, &tenant, 0x51, 0x52).await;
     let leases = LeaseRepo::new(engine.clone());
-    let expires = Timestamp(T0.0 + 1_000);
-    park_leased(&leases, "w1", "reconciliation", expires).await;
+    park_leased(&leases, "w1", "reconciliation", 1).await;
 
     assert_eq!(
         leases
@@ -325,6 +324,12 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
         0,
         "a park that has not expired is not the unparker's business"
     );
+    // The park expiry is the database's own fact now, so a fixture that means
+    // to expire one ages the row rather than naming a later instant.
+    sqlx::query("UPDATE job_item SET park_expires_at = now() - interval '1 second'")
+        .execute(&engine)
+        .await
+        .expect("the park ages");
     assert_eq!(
         leases
             .revive_expired(Timestamp(T0.0 + 2_000), ATTEMPTS_MAX)
@@ -362,8 +367,14 @@ async fn a_gate_that_never_clears_settles_into_a_row_the_item_page_can_still_rea
     let job = JobId(Uuid([0x59; 16]));
     let item = enqueue_operation(&engine, &tenant, 0x59, 0x5A, ItemOperation::Create).await;
     let leases = LeaseRepo::new(engine.clone());
-    park_leased(&leases, "w1", "reconciliation", Timestamp(T0.0 + 1_000)).await;
+    park_leased(&leases, "w1", "reconciliation", 1).await;
 
+    // The park expiry is the database's own fact now, so a fixture that means
+    // to expire one ages the row rather than naming a later instant.
+    sqlx::query("UPDATE job_item SET park_expires_at = now() - interval '1 second'")
+        .execute(&engine)
+        .await
+        .expect("the park ages");
     assert_eq!(
         leases
             .revive_expired(Timestamp(T0.0 + 2_000), 1)
@@ -402,7 +413,7 @@ async fn an_expired_challenge_park_is_left_where_the_driver_put_it(app: PgPool) 
     enqueue_one(&engine, &tenant, 0x53, 0x54).await;
     let leases = LeaseRepo::new(engine.clone());
     // The driver writes the challenge's own debug form here, never a gate.
-    park_leased(&leases, "w1", "Captcha", Timestamp(T0.0 + 1_000)).await;
+    park_leased(&leases, "w1", "Captcha", 1).await;
 
     assert_eq!(
         leases
@@ -431,13 +442,7 @@ async fn resolving_one_gap_revives_every_item_parked_behind_it(app: PgPool) {
     }
     let leases = LeaseRepo::new(engine.clone());
     for worker in ["w1", "w2", "w3"] {
-        park_leased(
-            &leases,
-            worker,
-            "reconciliation",
-            Timestamp(T0.0 + 86_400_000),
-        )
-        .await;
+        park_leased(&leases, worker, "reconciliation", 86_400).await;
     }
 
     let mut tx = app.begin().await.expect("the answering transaction opens");
@@ -467,8 +472,8 @@ async fn an_election_revive_touches_only_its_own_mapping(app: PgPool) {
     enqueue_one(&engine, &first, 0x71, 0x72).await;
     enqueue_one(&engine, &second, 0x73, 0x74).await;
     let leases = LeaseRepo::new(engine.clone());
-    park_leased(&leases, "w1", "election", Timestamp(T0.0 + 86_400_000)).await;
-    park_leased(&leases, "w2", "election", Timestamp(T0.0 + 86_400_000)).await;
+    park_leased(&leases, "w1", "election", 86400).await;
+    park_leased(&leases, "w2", "election", 86400).await;
 
     let mut tx = app.begin().await.expect("the answering transaction opens");
     let revived = revive_on(&mut tx, first.org, first.mapping, "election", T0)
@@ -513,7 +518,7 @@ async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     let one = leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the first item leases");
@@ -529,7 +534,7 @@ async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
     );
 
     let two = leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the second item leases");
@@ -565,13 +570,19 @@ async fn a_job_whose_last_item_exhausts_its_attempts_still_says_it_finished(app:
     enqueue_one(&engine, &tenant, 0x91, 0x92).await;
     let leases = LeaseRepo::new(engine.clone());
     leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the item leases");
 
     // The commonest bulk failure: the item dies in the maintenance loop's own
     // cross-tenant statement, with no job context and no worker involved.
+    // The lease expiry is the database's own fact now, so a fixture that means
+    // to expire one ages the row rather than naming a later instant.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the lease ages");
     let touched = leases
         .expire_and_steal(Timestamp(T0.0 + 61_000), 1)
         .await
@@ -596,10 +607,16 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     let lease = leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the item leases");
+    // The lease expiry is the database's own fact now, so a fixture that means
+    // to expire one ages the row rather than naming a later instant.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the lease ages");
     let after_expiry = Timestamp(T0.0 + 61_000);
     let touched = leases
         .expire_and_steal(after_expiry, 5)
@@ -620,7 +637,7 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
     );
 
     let release = leases
-        .acquire("w2", after_expiry, 60)
+        .acquire("w2", 60)
         .await
         .expect("the scan runs")
         .expect("the stolen item re-leases");
@@ -661,7 +678,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
         .expect("the halt raises");
 
     let leases = LeaseRepo::new(engine.clone());
-    let nothing = leases.acquire("w1", T0, 60).await.expect("the scan runs");
+    let nothing = leases.acquire("w1", 60).await.expect("the scan runs");
     assert!(
         nothing.is_none(),
         "one tenant is halted and the other has no linked connection; both must be refused"
@@ -684,7 +701,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
     .expect("linking the connection");
     tx.commit().await.expect("the link commits");
     let leased = leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the linked tenant now leases");
@@ -722,7 +739,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
         .await
         .expect("the item settles");
     enqueue_one(&engine, &unlinked, 0x13, 0x23).await;
-    let gated = leases.acquire("w1", T0, 60).await.expect("the scan runs");
+    let gated = leases.acquire("w1", 60).await.expect("the scan runs");
     assert!(
         gated.is_none(),
         "needs_reauth is the gate: nothing leases behind it"
@@ -737,10 +754,16 @@ async fn the_attempt_budget_settles_failed_rather_than_looping(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the item leases");
+    // The lease expiry is the database's own fact now, so a fixture that means
+    // to expire one ages the row rather than naming a later instant.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the lease ages");
     let touched = leases
         .expire_and_steal(Timestamp(T0.0 + 61_000), 1)
         .await
@@ -793,7 +816,7 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     let first = leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the first item leases");
@@ -812,7 +835,7 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
         .expect("the rejected item settles");
 
     let second = leases
-        .acquire("w2", T0, 60)
+        .acquire("w2", 60)
         .await
         .expect("the scan runs")
         .expect("the second item leases");
@@ -1046,12 +1069,12 @@ async fn an_enqueued_removal_leases_as_a_removal(app: PgPool) {
 
     let leases = LeaseRepo::new(engine.clone());
     let first = leases
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("something is leasable");
     let second = leases
-        .acquire("w2", T0, 60)
+        .acquire("w2", 60)
         .await
         .expect("the scan runs")
         .expect("the other tenant is leasable");
@@ -1106,7 +1129,7 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
     );
 
     let leased = LeaseRepo::new(engine.clone())
-        .acquire("w1", T0, 60)
+        .acquire("w1", 60)
         .await
         .expect("the scan runs")
         .expect("the enqueued removal is leasable");
@@ -1371,7 +1394,7 @@ async fn enqueue_on(engine: &PgPool, tenant: &Tenant, onto: &EnqueueOnto) -> Job
 async fn park_mid_submit(engine: &PgPool, worker: &str, mapping: MappingId) -> JobItemId {
     let leases = LeaseRepo::new(engine.clone());
     let lease = leases
-        .acquire(worker, T0, 60)
+        .acquire(worker, 60)
         .await
         .expect("the scan runs")
         .expect("the item leases");
@@ -1382,6 +1405,9 @@ async fn park_mid_submit(engine: &PgPool, worker: &str, mapping: MappingId) -> J
     WriteAttemptRepo::new(engine.clone())
         .open(
             &lease.lease_ref(),
+            // Fresh per call: `open` is idempotent on the id now, so a fixture
+            // reusing one would silently skip the second mapping's attempt.
+            tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes()),
             &NewAttempt {
                 mapping,
                 intent: &intent(),
@@ -1394,7 +1420,7 @@ async fn park_mid_submit(engine: &PgPool, worker: &str, mapping: MappingId) -> J
         .await
         .expect("the attempt opens");
     leases
-        .park(&lease.lease_ref(), REAUTH_REQUIRED, Timestamp(T0.0 + 1_000))
+        .park(&lease.lease_ref(), REAUTH_REQUIRED, 1)
         .await
         .expect("the park is fenced on a live lease");
     lease.item
@@ -1554,7 +1580,7 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
     );
 
     let resumed = leases
-        .acquire("w3", Timestamp(T0.0 + 3_000), 60)
+        .acquire("w3", 60)
         .await
         .expect("the scan runs")
         .expect("the revived item leases again");
@@ -1565,6 +1591,7 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
     WriteAttemptRepo::new(engine.clone())
         .open(
             &resumed.lease_ref(),
+            tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes()),
             &NewAttempt {
                 mapping: tenant.mapping,
                 intent: &intent(),
@@ -1720,4 +1747,239 @@ async fn a_released_publish_names_no_listing(app: PgPool) {
         vec![("abandoned".to_owned(), None, None, None)],
         "a publish addressed no listing, so its released attempt names none either"
     );
+}
+
+/// D1's build-failing rule, bound to a database fact.
+///
+/// `Marketplace::transport_class()` is the source of truth for which branch of
+/// the automation rule a marketplace falls in, and the claim statement filters
+/// on `marketplace_inventory.transport_class`. Nothing keeps a Rust match and a
+/// SQL column agreeing except this test, so a no-API marketplace given a server
+/// transport in either place fails the build here rather than shipping.
+#[sqlx::test(migrations = "./migrations")]
+async fn every_marketplace_transport_class_matches_the_rust_source_of_truth(app: PgPool) {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT DISTINCT marketplace, transport_class FROM marketplace_inventory")
+            .fetch_all(&app)
+            .await
+            .expect("the inventory table reads");
+    assert!(
+        !rows.is_empty(),
+        "an empty table would make every assertion below vacuous"
+    );
+    for (marketplace, stored) in rows {
+        let declared = match marketplace.as_str() {
+            "tes" => Marketplace::Tes,
+            "tpt" => Marketplace::Tpt,
+            "etsy" => Marketplace::Etsy,
+            other => panic!("the table names a marketplace Rust does not: {other}"),
+        };
+        let expected = match declared.transport_class() {
+            TransportClass::SellerDevice => "seller_device",
+            TransportClass::OfficialApi => "official_api",
+        };
+        assert_eq!(
+            stored, expected,
+            "{marketplace}: the column and Marketplace::transport_class() disagree, which is \
+             the two-branch rule having become decoration"
+        );
+    }
+}
+
+/// Every marketplace the type system knows is represented in the table, so the
+/// test above cannot pass by simply not covering one.
+#[sqlx::test(migrations = "./migrations")]
+async fn every_declared_marketplace_has_a_transport_class_row(app: PgPool) {
+    let present: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT marketplace FROM marketplace_inventory")
+            .fetch_all(&app)
+            .await
+            .expect("the inventory table reads");
+    for marketplace in [Marketplace::Tes, Marketplace::Tpt, Marketplace::Etsy] {
+        let wire = match marketplace {
+            Marketplace::Tes => "tes",
+            Marketplace::Tpt => "tpt",
+            Marketplace::Etsy => "etsy",
+        };
+        assert!(
+            present.iter().any(|row| row == wire),
+            "{wire} carries a transport class in Rust and no row in the table, so the \
+             equality test would never see it"
+        );
+    }
+}
+
+/// The mutex re-scope, contending half.
+///
+/// Two inventories of one marketplace share one seller login, so they share one
+/// live-lease slot. This is the invariant the index protects, stated as the
+/// behaviour a second claimant sees.
+#[sqlx::test(migrations = "./migrations")]
+async fn two_inventories_of_one_marketplace_cannot_both_hold_a_live_lease(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xE1, true).await;
+    let us_mapping = seed_mapping_on(&app, &tenant, 0xE4, InventoryId::TesUs).await;
+    enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: tenant.mapping,
+            job_seed: 0xE5,
+            item_seed: 0xE6,
+            inventory: InventoryId::TesGb,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+    enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: us_mapping,
+            job_seed: 0xE7,
+            item_seed: 0xE8,
+            inventory: InventoryId::TesUs,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+
+    let leases = LeaseRepo::new(engine.clone());
+    let first = leases
+        .acquire("w1", 60)
+        .await
+        .expect("the scan runs")
+        .expect("the first item leases");
+    assert_eq!(
+        first.inventory,
+        InventoryId::TesGb,
+        "the fixture depends on FIFO order"
+    );
+    let second = leases.acquire("w2", 60).await.expect("the scan runs");
+    assert!(
+        second.is_none(),
+        "tes_gb and tes_us are one Tes login, so the second claimant must find the slot \
+         taken rather than open a second live session on one marketplace account: {second:?}"
+    );
+}
+
+/// The mutex re-scope, non-contending half.
+///
+/// Two marketplaces are two logins, so they are two slots. Under the
+/// per-organisation index this was one, which is what capped a seller at one
+/// working device and serialised the two branches against each other.
+///
+/// Deliberately Tpt rather than Etsy: both are the seller-device branch, so
+/// what separates these two leases is the mutex and nothing else. Pairing
+/// against Etsy would let the transport-class split do the separating and the
+/// assertion would still pass with the mutex broken.
+#[sqlx::test(migrations = "./migrations")]
+async fn two_marketplaces_can_each_hold_a_live_lease(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xF1, true).await;
+    let tpt_mapping = seed_mapping_on(&app, &tenant, 0xF4, InventoryId::Tpt).await;
+    link_connection(&app, tenant.org, "tpt", 0xFB).await;
+    enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: tenant.mapping,
+            job_seed: 0xF6,
+            item_seed: 0xF7,
+            inventory: InventoryId::TesGb,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+    enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: tpt_mapping,
+            job_seed: 0xF8,
+            item_seed: 0xF9,
+            inventory: InventoryId::Tpt,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+
+    let leases = LeaseRepo::new(engine.clone());
+    let first = leases
+        .acquire("w1", 60)
+        .await
+        .expect("the scan runs")
+        .expect("the first item leases");
+    let second = leases
+        .acquire("w2", 60)
+        .await
+        .expect("the scan runs")
+        .expect("a second marketplace is a second session, so it leases too");
+    assert_ne!(
+        first.inventory, second.inventory,
+        "the two live leases must be on different marketplaces, or the mutex is not what \
+         let them both through"
+    );
+}
+
+/// Two devices racing one mapping: the fence admits exactly one.
+///
+/// `open` is idempotent on the caller's id, so a lost response is recovered by
+/// re-offering the same id. A *different* id arriving while one is in flight is
+/// a second create rather than a retry, and it is refused — which is the only
+/// thing standing between a requeued item and a duplicate listing.
+#[sqlx::test(migrations = "./migrations")]
+async fn exactly_one_open_per_mapping_survives_two_devices(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xB1, true).await;
+    enqueue_one(&engine, &tenant, 0xB2, 0xB3).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let lease = leases
+        .acquire("device-a", 60)
+        .await
+        .expect("the scan runs")
+        .expect("the item leases");
+    let attempts = WriteAttemptRepo::new(engine.clone());
+    let first = Uuid([0xB4; 16]);
+    let second = Uuid([0xB5; 16]);
+    attempts
+        .open(&lease.lease_ref(), first, &new_attempt(tenant.mapping))
+        .await
+        .expect("the first device opens the fence");
+    let racing = attempts
+        .open(&lease.lease_ref(), second, &new_attempt(tenant.mapping))
+        .await;
+    assert!(
+        matches!(racing, Err(StorageError::AttemptInFlight)),
+        "a second device minting its own id is a second create, and the fence refuses it: \
+         {racing:?}"
+    );
+    let replayed = attempts
+        .open(&lease.lease_ref(), first, &new_attempt(tenant.mapping))
+        .await;
+    assert!(
+        replayed.is_ok(),
+        "re-offering the id already standing is the lost-response recovery, not a second \
+         create, so it answers Ok against the row already there: {replayed:?}"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["in_flight".to_owned()],
+        "and exactly one attempt row exists however many times it was offered"
+    );
+}
+
+fn new_attempt(mapping: MappingId) -> NewAttempt<'static> {
+    static INTENT: std::sync::OnceLock<AttemptIntent> = std::sync::OnceLock::new();
+    NewAttempt {
+        mapping,
+        intent: INTENT.get_or_init(|| AttemptIntent {
+            body: serde_json::json!({}),
+            hash: vec![0x01],
+        }),
+        stamp: Stamp {
+            at: T0,
+            actor: Actor::System(SystemComponent::Engine),
+        },
+    }
 }

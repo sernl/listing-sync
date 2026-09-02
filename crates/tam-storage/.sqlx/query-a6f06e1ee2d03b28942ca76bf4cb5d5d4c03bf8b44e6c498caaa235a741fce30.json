@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item SET state = 'parked_live', blocked_on = $4, park_expires_at = now() + make_interval(secs => $5), lease_owner = NULL, lease_expires_at = NULL WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 AND state IN ('leased', 'running', 'verifying')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a6f06e1ee2d03b28942ca76bf4cb5d5d4c03bf8b44e6c498caaa235a741fce30"
+}

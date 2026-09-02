@@ -231,7 +231,7 @@ impl ItemLedger for InMemoryLedger {
         &self,
         lease: &LeaseRef,
         blocked_on: &str,
-        _park_expires: Timestamp,
+        _park_for_seconds: i64,
     ) -> Result<(), LedgerError> {
         self.with(|state| {
             Self::fenced(state, lease)?;

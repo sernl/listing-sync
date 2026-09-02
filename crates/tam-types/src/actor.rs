@@ -25,11 +25,26 @@ pub enum SystemComponent {
     Worker,
     /// The import command, which runs unattended against a seller's export.
     Import,
+    /// The interpreter running on a seller's own registered device.
+    ///
+    /// Distinct from `Engine` because after the two-branch split the same
+    /// interpreter runs in two places, and an incident turns on which: an
+    /// `Engine` row was written by infrastructure we operate, and a `Device`
+    /// row was written by a process on hardware we do not. Collapsing them
+    /// would attribute a seller's machine to our own engine, which is the
+    /// audit trail having a hole in it rather than a shorter enum.
+    Device,
 }
 
 impl SystemComponent {
     /// The closed set, in a stable order.
-    pub const ALL: [Self; 4] = [Self::Engine, Self::Broker, Self::Worker, Self::Import];
+    pub const ALL: [Self; 5] = [
+        Self::Engine,
+        Self::Broker,
+        Self::Worker,
+        Self::Import,
+        Self::Device,
+    ];
 
     /// The stored spelling, identical to the serde rename.
     #[must_use]
@@ -39,6 +54,7 @@ impl SystemComponent {
             Self::Broker => "broker",
             Self::Worker => "worker",
             Self::Import => "import",
+            Self::Device => "device",
         }
     }
 }

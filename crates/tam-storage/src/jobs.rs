@@ -302,12 +302,18 @@ async fn insert_job_item(
     at: DateTime<Utc>,
 ) -> Result<(), StorageError> {
     let operation = OperationColumns::encode(&item.operation)?;
+    // `marketplace` is read from the mapping inside the statement rather than
+    // supplied: the live-lease mutex is an index over it, so a caller-supplied
+    // value that disagreed with the mapping would put the mutex on the wrong
+    // marketplace account. Deriving it here makes that unrepresentable.
     let inserted = sqlx::query!(
         "INSERT INTO job_item \
          (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, \
           operation, subject_kind, subject_url, subject_numeric_id, \
-          state_from, state_to, requires_bound_on) \
-         VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11, $12, $13)",
+          state_from, state_to, requires_bound_on, marketplace) \
+         SELECT $1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11, $12, $13, \
+                m.marketplace \
+         FROM mapping m WHERE m.org_id = $1 AND m.id = $4",
         org,
         uuid_to_db(item.item.0),
         job,
@@ -786,17 +792,31 @@ impl LeaseRepo {
         Self { pool }
     }
 
-    /// The cross-tenant scan. Halts and the connection gate fail closed in
-    /// the candidate filter; the per-tenant mutex is the partial unique index
-    /// from migration 0008, so a concurrent second lease for one tenant fails
-    /// structurally and reports as `None` rather than racing.
+    /// The cross-tenant scan for the branch this process is allowed to run.
+    ///
+    /// Halts and the connection gate fail closed in the candidate filter.
+    ///
+    /// The transport-class predicate that will confine this scan to
+    /// `official_api` items is deliberately not here yet: it strands the
+    /// seller-device branch until `claim_for_device` exists to drain it, so
+    /// the two land together. `marketplace_inventory.transport_class` and the
+    /// test binding it to `Marketplace::transport_class()` are already in
+    /// place, which is the half that makes the rule enforceable.
+    ///
+    /// The live-lease mutex is the partial unique index from migration 0044,
+    /// scoped to the connection, so a seller's second device contends only
+    /// with a sibling working the same marketplace account.
+    ///
+    /// The lease expiry is computed by the database rather than by the
+    /// claimant, because it is read back by the reaper against the database's
+    /// own clock: a claimant running fast would otherwise wedge its tenant's
+    /// queue past a TTL the server thinks it granted, and one running slow
+    /// would have its claim stolen mid-submit.
     pub async fn acquire(
         &self,
         worker: &str,
-        now: Timestamp,
         ttl_seconds: i64,
     ) -> Result<Option<LeasedItem>, StorageError> {
-        let expires = timestamp_to_db(Timestamp(now.0 + ttl_seconds * 1000))?;
         let mut tx = self.pool.begin().await?;
         let leased = sqlx::query!(
             r#"WITH candidate AS (
@@ -819,13 +839,15 @@ impl LeaseRepo {
                            AND c.state = 'linked')
                    AND NOT EXISTS (SELECT 1 FROM job_item live
                          WHERE live.org_id = ji.org_id
+                           AND live.marketplace = ji.marketplace
                            AND live.state IN ('leased', 'running', 'verifying'))
                  ORDER BY ji.created_at, ji.id
                  LIMIT 1
                  FOR UPDATE OF ji SKIP LOCKED
                )
                UPDATE job_item AS item
-               SET state = 'leased', lease_owner = $1, lease_expires_at = $2
+               SET state = 'leased', lease_owner = $1,
+                   lease_expires_at = now() + make_interval(secs => $2)
                FROM candidate, job j2
                WHERE item.org_id = candidate.org_id AND item.id = candidate.id
                  AND j2.org_id = item.org_id AND j2.id = item.job_id
@@ -836,11 +858,11 @@ impl LeaseRepo {
                  item.requires_bound_on,
                  j2.inventory AS "inventory!""#,
             worker,
-            expires,
+            f64::from(i32::try_from(ttl_seconds).unwrap_or(i32::MAX)),
         )
         .fetch_optional(&mut *tx)
         .await;
-        let leased = match map_unique(leased, "job_item_one_live_lease_per_org", || {
+        let leased = match map_unique(leased, "job_item_one_live_lease_per_connection", || {
             StorageError::StaleLease
         }) {
             Ok(row) => row,
@@ -929,11 +951,15 @@ impl LeaseRepo {
         Ok(())
     }
 
+    /// Parks the item for a duration the caller states, resolved against the
+    /// database's clock for the same reason the lease expiry is: the reaper
+    /// reads `park_expires_at` against `now()`, so an instant minted anywhere
+    /// else is two clocks being compared.
     pub async fn park(
         &self,
         lease: &LeaseRef,
         blocked_on: &str,
-        park_expires: Timestamp,
+        park_for_seconds: i64,
     ) -> Result<(), StorageError> {
         let LeaseRef {
             org,
@@ -942,7 +968,8 @@ impl LeaseRepo {
         } = *lease;
         let updated = sqlx::query!(
             "UPDATE job_item \
-             SET state = 'parked_live', blocked_on = $4, park_expires_at = $5, \
+             SET state = 'parked_live', blocked_on = $4, \
+                 park_expires_at = now() + make_interval(secs => $5), \
                  lease_owner = NULL, lease_expires_at = NULL \
              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
                AND state IN ('leased', 'running', 'verifying')",
@@ -950,7 +977,7 @@ impl LeaseRepo {
             uuid_to_db(item.0),
             lease_epoch,
             blocked_on,
-            timestamp_to_db(park_expires)?,
+            f64::from(i32::try_from(park_for_seconds).unwrap_or(i32::MAX)),
         )
         .execute(&self.pool)
         .await?;
@@ -1050,7 +1077,7 @@ impl LeaseRepo {
                  settled_at = $1, lease_owner = NULL, lease_expires_at = NULL, \
                  lease_epoch = lease_epoch + 1 \
              WHERE state IN ('leased', 'running', 'verifying') \
-               AND lease_expires_at <= $1 AND attempt_count + 1 >= $2 \
+               AND lease_expires_at <= now() AND attempt_count + 1 >= $2 \
              RETURNING org_id, job_id",
             now_db,
             attempts_max,
@@ -1062,8 +1089,7 @@ impl LeaseRepo {
              SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, \
                  lease_epoch = lease_epoch + 1, attempt_count = attempt_count + 1 \
              WHERE state IN ('leased', 'running', 'verifying') \
-               AND lease_expires_at <= $1",
-            now_db,
+               AND lease_expires_at <= now()",
         )
         .execute(&mut *tx)
         .await?;
@@ -1122,7 +1148,7 @@ impl LeaseRepo {
                  failure_detail = 'the gate ' || COALESCE(blocked_on, 'unknown') \
                      || ' did not clear within the attempt budget', \
                  blocked_on = NULL, park_expires_at = NULL, settled_at = $1 \
-             WHERE state = 'parked_live' AND park_expires_at <= $1 \
+             WHERE state = 'parked_live' AND park_expires_at <= now() \
                AND blocked_on = ANY($2) \
                AND attempt_count + 1 >= $3 \
              RETURNING org_id, job_id, id",
@@ -1149,10 +1175,9 @@ impl LeaseRepo {
             "UPDATE job_item \
              SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, \
                  attempt_count = attempt_count + 1 \
-             WHERE state = 'parked_live' AND park_expires_at <= $1 \
-               AND blocked_on = ANY($2) \
+             WHERE state = 'parked_live' AND park_expires_at <= now() \
+               AND blocked_on = ANY($1) \
              RETURNING org_id, job_id, id",
-            timestamp_to_db(now)?,
             &REVIVABLE_GATES.map(str::to_owned)[..],
         )
         .fetch_all(&mut *tx)
@@ -1478,11 +1503,17 @@ impl WriteAttemptRepo {
     /// Opens the in-flight row and mints its identifier. The partial unique
     /// index refuses a second in-flight attempt for the mapping, which is
     /// the duplicate-upload storm failing at the database.
-    /// The attempt id is the caller's rather than minted here, so a response
-    /// lost in flight is recoverable by re-offering the same id instead of
-    /// spending another of the item's attempts. Making the write itself
-    /// idempotent on `(org, attempt)` is the other half and is not done yet;
-    /// until it is, a re-offer of a known id still violates the fence.
+    /// The attempt id is the caller's rather than minted here, and the write
+    /// is idempotent on it: a response lost in flight is recovered by
+    /// re-offering the same id, which answers `Ok` against the row already
+    /// standing instead of spending another of the item's attempts.
+    ///
+    /// `ON CONFLICT (org_id, id) DO NOTHING` is what makes the replay safe,
+    /// and the `RETURNING`-less row count is what tells the two cases apart
+    /// from the fence firing: a different id arriving while one is in flight
+    /// still violates `write_attempt_one_in_flight` and still answers
+    /// `AttemptInFlight`, because that is a second create rather than a
+    /// retry of the first.
     pub async fn open(
         &self,
         lease: &LeaseRef,
@@ -1497,7 +1528,7 @@ impl WriteAttemptRepo {
         let Stamp { at, actor } = stamp;
         let AttemptIntent { body, hash } = intent;
         let inserted = sqlx::query!(
-            "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10)",
+            "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10)              ON CONFLICT (org_id, id) DO NOTHING",
             uuid_to_db(lease.org.0),
             uuid_to_db(attempt),
             uuid_to_db(lease.item.0),

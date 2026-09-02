@@ -739,7 +739,7 @@ async fn pump(
     let pool = &engine_pool(app).await;
     let leases = LeaseRepo::new(pool.clone());
     let item = leases
-        .acquire("gauntlet", NOW, 300)
+        .acquire("gauntlet", 300)
         .await
         .expect("the acquire runs")
         .expect("the enqueued item leases");
@@ -1033,6 +1033,12 @@ async fn exhaust_all_but_one_grant(engine: &PgPool) {
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
 async fn requeue(engine: &PgPool) {
+    // The lease expiry is the database's own fact now, so the fixture ages the
+    // row rather than advancing a clock the statement no longer reads.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(engine)
+        .await
+        .expect("the lease ages");
     let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
     LeaseRepo::new(engine.clone())
         .expire_and_steal(Timestamp(NOW.0 + 400_000), attempts_max)

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE job_item SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, attempt_count = attempt_count + 1 WHERE state = 'parked_live' AND park_expires_at <= $1 AND blocked_on = ANY($2) RETURNING org_id, job_id, id",
+  "query": "UPDATE job_item SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, attempt_count = attempt_count + 1 WHERE state = 'parked_live' AND park_expires_at <= now() AND blocked_on = ANY($1) RETURNING org_id, job_id, id",
   "describe": {
     "columns": [
       {
@@ -21,7 +21,6 @@
     ],
     "parameters": {
       "Left": [
-        "Timestamptz",
         "TextArray"
       ]
     },
@@ -31,5 +30,5 @@
       false
     ]
   },
-  "hash": "b306f225cc98d4d256df05b070c79fd06317b71e76dce7f3a787516a2e1bd754"
+  "hash": "70730e4ebf7303735f33e3ab0b46329abf27688aa289c47b11a3dcc7e3bf214f"
 }

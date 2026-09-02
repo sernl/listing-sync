@@ -62,11 +62,15 @@ pub trait ItemLedger: Send + Sync {
         edge_class: bool,
     ) -> impl core::future::Future<Output = Result<PreflightStreak, LedgerError>> + Send;
 
+    /// A duration rather than an instant: the reaper reads `park_expires_at`
+    /// against the server's clock, so a park stated as an absolute instant is
+    /// two clocks being compared. The device says how long, the server says
+    /// when.
     fn park(
         &self,
         lease: &LeaseRef,
         blocked_on: &str,
-        park_expires: Timestamp,
+        park_for_seconds: i64,
     ) -> impl core::future::Future<Output = Result<(), LedgerError>> + Send;
 
     fn settle_item(

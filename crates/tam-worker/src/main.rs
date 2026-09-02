@@ -84,7 +84,10 @@ const LEASE_TTL_SECS: i64 = 300;
 /// immediately through the revive the answering transaction runs; this is the
 /// backstop for an answer that never comes, and the maintenance pass requeues
 /// it into a clean retry once it expires.
-const BLOCKED_PARK_MS: i64 = 24 * 60 * 60 * 1000;
+/// How long a blocked item waits before the unparker looks at it again.
+/// Stated in seconds because that is what the park takes: the database
+/// resolves it against its own clock.
+const BLOCKED_PARK_SECS: i64 = 24 * 60 * 60;
 
 /// The real wait the driver's verification poll takes between reads. The
 /// engine holds no timer by design, so the sleep enters here, at the process
@@ -209,8 +212,13 @@ impl Pump {
                 projected,
             }) => (operation, projected),
             Ok(ItemPreparation::Blocked { gate, raised }) => {
-                let until = Timestamp(now.0.saturating_add(BLOCKED_PARK_MS));
-                match self.leases.park(&item.lease_ref(), gate, until).await {
+                // How long, not until when: the reaper reads the expiry
+                // against the database's clock, so the database mints it.
+                match self
+                    .leases
+                    .park(&item.lease_ref(), gate, BLOCKED_PARK_SECS)
+                    .await
+                {
                     Ok(()) => {
                         eprintln!(
                             "tam-worker {worker}: item {:?} parked on {gate} \
@@ -906,10 +914,7 @@ async fn run_pump(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
             if cancel.is_cancelled() {
                 break;
             }
-            match leases
-                .acquire(worker_name, WallClock.now(), LEASE_TTL_SECS)
-                .await
-            {
+            match leases.acquire(worker_name, LEASE_TTL_SECS).await {
                 Ok(Some(item)) => pump.pump_item(worker_name, &item).await,
                 Ok(None) => break,
                 Err(error) => {

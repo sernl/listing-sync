@@ -214,10 +214,10 @@ impl ItemLedger for PgLedger {
         &self,
         lease: &wire::LeaseRef,
         blocked_on: &str,
-        park_expires: Timestamp,
+        park_for_seconds: i64,
     ) -> Result<(), wire::LedgerError> {
         self.leases
-            .park(&to_storage_lease(lease), blocked_on, park_expires)
+            .park(&to_storage_lease(lease), blocked_on, park_for_seconds)
             .await
             .map_err(|error| to_wire_error(&error))
     }

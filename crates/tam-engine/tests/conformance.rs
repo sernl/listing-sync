@@ -25,7 +25,7 @@ async fn leased(app: &PgPool) -> (PgLedger, tam_engine_driver::vocabulary::Lease
     fixture::seed(app, &engine).await;
     let leases = LeaseRepo::new(engine.clone());
     let item = leases
-        .acquire("conformance", conformance::T0, 600)
+        .acquire("conformance", 600)
         .await
         .expect("the scan runs")
         .expect("the item leases");

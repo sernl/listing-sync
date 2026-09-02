@@ -15,6 +15,7 @@
 - The governing axiom: a stalled queue is recoverable, a duplicate-upload storm is not; every ambiguous resolution biases toward stalling.
 - `lease_epoch` is the fencing token: a steal increments it, every ledger write carries the epoch it leased at, and a stale epoch's write is rejected, not raced.
 - The per-tenant mutex (`JOBS_PER_TENANT = 1`) is a design rule from the form-token race, not a tunable; it is enforced in the lease-acquisition SQL and `UNIQUE (org_id, idempotency_key)` is its database backstop.
+  Amended 2026-09-03 by founder ruling: the mutex became per-connection, so two inventories of one marketplace still contend and two marketplaces no longer do (`crates/tam-storage/migrations/0044_lease_mutex_per_connection.sql`).
 - Halts fail closed: a worker that cannot read the three halt tables refuses to automate.
 - The idempotency key is UUIDv5 over the fixed-width canonical encoding in `sync-machine.md`, keyed on the INVENTORY (GB and US must not collide), namespace constant `NAMESPACE_TAM_INTENT` in `tam-types`, never rotated.
 - Sessions for the Tes adapter come from an operator-supplied jar path until M1e's broker exists; the seam is the constructor, so M1e changes wiring, not flows.
