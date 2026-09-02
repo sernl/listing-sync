@@ -35,7 +35,7 @@ check:
 purity:
     #!/usr/bin/env sh
     set -eu
-    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy --prefix none)"
+    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-standards --prefix none)"
     if printf '%s\n' "$tree" | grep -E '^(tokio|tokio-util|reqwest|sqlx) v'; then
         echo 'purity violation: a banned dependency reached the pure core' >&2
         exit 1
@@ -193,6 +193,32 @@ web-check:
 # The client dev server, proxying /v1 to a locally running tam-server
 web-dev:
     cd web && npm run dev
+
+# The desktop client (Tauri v2, D2), which hosts this same console and owns the
+# seller's marketplace sessions on the seller's own device. The console comes
+# from the SvelteKit dev server, so `just web-dev` must already be running.
+#
+# The desktop client against a running `just web-dev`
+desktop-dev:
+    cd apps/desktop && cargo tauri dev
+
+# Windows is the shipping surface; this is the bundle that needs no
+# cross-compile, and it is how the client is exercised on this machine. The web
+# build runs first because the bundle embeds its output.
+#
+# The Linux desktop bundle
+desktop-build:
+    cd web && npm run build
+    cd apps/desktop && cargo tauri build --bundles deb
+
+# D29's local Windows route. Tauri's own documentation calls the cross-compile
+# a last resort and an MSI needs Windows, so the release path stays the GitHub
+# Windows runner and this recipe is the local one.
+#
+# The Windows NSIS installer, cross-compiled through cargo-xwin
+desktop-build-windows:
+    cd web && npm run build
+    cd apps/desktop && env -u CC -u CXX -u NIX_CFLAGS_COMPILE -u NIX_LDFLAGS PATH="$TAURI_WINDOWS_TOOLCHAIN_BIN:$PATH" cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis
 
 # Give tam-auth an environment file, creating one from the template on a
 # machine that has none. An existing auth/.env is never touched.

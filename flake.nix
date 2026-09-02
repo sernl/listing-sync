@@ -60,6 +60,14 @@
           commonArgs = {
             inherit src;
             strictDeps = true;
+            # The desktop client is excluded from the sandboxed lanes rather
+            # than built in them. Two reasons, both structural: `tauri.conf.json`
+            # and the bundle icons are not Cargo sources, so `filterCargoSources`
+            # drops them and `generate_context!` has nothing to read; and its
+            # `frontendDist` is `web/build`, a gitignored npm artefact that no
+            # Cargo-source filter can produce. It is covered by `just check`
+            # and by `just desktop-build` instead.
+            cargoExtraArgs = "--locked --workspace --exclude tam-desktop";
           };
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
           bin = craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; });
@@ -174,6 +182,42 @@
               pkgs.nodejs_22
               pkgs.shellcheck
               pkgs.sqlx-cli
+              # The desktop client. `cargo-tauri` drives the bundle,
+              # `cargo-xwin` and `nsis` are D29's local Windows cross-compile,
+              # and `pkg-config` finds the Linux webview below.
+              pkgs.cargo-tauri
+              pkgs.cargo-xwin
+              pkgs.nsis
+              pkgs.pkg-config
+            ];
+            # buildInputs rather than packages: the pkg-config setup hook
+            # populates PKG_CONFIG_PATH from a package's `dev` output only for
+            # inputs at the host offset, and wry's webkit2gtk-sys build fails
+            # without those .pc files (tools/login-probe/README.md).
+            buildInputs = [
+              pkgs.gtk3
+              pkgs.webkitgtk_4_1
+              pkgs.libsoup_3
+              pkgs.glib-networking
+            ];
+            # WebKitGTK takes TLS from a GIO module that no setup hook adds,
+            # and without it every https navigation lands on "TLS support is
+            # not available" instead of the login page. Same finding, same file.
+            shellHook = ''
+              export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules''${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}"
+            '';
+            # The Windows cross-compile needs an *unwrapped* clang. Measured:
+            # nixpkgs' cc-wrapper is not multi-target aware, so it reads
+            # cargo-xwin's MSVC-style `/imsvc` include flags as filenames and
+            # adds `-fPIC`, which clang-cl rejects for a windows-msvc target;
+            # ring's C sources are where that first bites. It is deliberately
+            # not on PATH, because an unwrapped clang ahead of the wrapper
+            # breaks every native C build in the tree. `just
+            # desktop-build-windows` prepends it for exactly one command.
+            TAURI_WINDOWS_TOOLCHAIN_BIN = pkgs.lib.makeBinPath [
+              pkgs.llvmPackages.clang-unwrapped
+              pkgs.lld
+              pkgs.llvmPackages.llvm
             ];
           };
 

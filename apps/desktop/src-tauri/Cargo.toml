@@ -1,0 +1,61 @@
+[package]
+name        = "tam-desktop"
+version     = "0.1.0"
+edition     = "2021"
+publish     = false
+description = "The Teachouse desktop client: the seller's device, where every no-API marketplace request originates"
+
+[lib]
+name = "tam_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "teachouse"
+path = "src/main.rs"
+
+[features]
+# Set by `cargo tauri build`. With it on, `generate_context!` embeds the
+# frontend rather than pointing the webview at the dev server; removing it
+# makes a release bundle that loads nothing.
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+tauri               = { version = "2.11", features = [] }
+tauri-plugin-os     = "2.3"
+tauri-plugin-updater = "2.11"
+
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio      = { version = "1", features = ["time", "rt", "sync"] }
+uuid       = { version = "1", features = ["v4"] }
+
+# The entitlement token is a compact JWS with `alg: EdDSA`, which is the
+# format and the crate `tam-api` already verifies better-auth's assertions
+# with; a second signature stack would be a second thing to get wrong.
+jsonwebtoken = { version = "9.3", default-features = false }
+
+tam-types = { path = "../../../crates/tam-types" }
+
+# One keychain backend per platform rather than the crate's umbrella feature,
+# so a Windows build never compiles D-Bus and a Linux build never compiles
+# Security Framework. `linux-native` is deliberately not used: linux-keyutils
+# is the kernel session keyring and does not survive a reboot, which a stored
+# marketplace session must.
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+
+[dev-dependencies]
+ring  = { version = "0.17", features = ["std"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "test-util"] }
+
+[lints]
+workspace = true

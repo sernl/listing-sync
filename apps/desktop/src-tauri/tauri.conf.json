@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Teachouse",
+  "version": "0.1.0",
+  "identifier": "io.teachouse.desktop",
+  "build": {
+    "frontendDist": "../../../web/build",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Teachouse",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://api.teachouse.io"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "deb"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
+    "createUpdaterArtifacts": false,
+    "publisher": "Teachouse",
+    "category": "Business",
+    "shortDescription": "Cross-listing for teaching-resource marketplaces",
+    "longDescription": "Teachouse cross-lists teaching resources. Your marketplace login never leaves your device."
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://cdn.crabnebula.app/update/ORG/APP/{{target}}-{{arch}}/{{current_version}}"
+      ],
+      "pubkey": "PLACEHOLDER_FOUNDER_SUPPLIES_THIS"
+    }
+  }
+}
