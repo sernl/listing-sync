@@ -1,5 +1,8 @@
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+# `Apache-2.0 WITH LLVM-exception` is a distinct SPDX expression rather than a
+# variant of the entry beside it, so it needs its own place in the list; the
+# exception only removes an attribution requirement.
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.93
 
 # Measured, not anticipated: reqwest with rustls-tls reaches webpki-roots,
@@ -9,6 +12,43 @@ confidence-threshold = 0.93
 [[licenses.exceptions]]
 crate = "webpki-roots"
 allow = ["CDLA-Permissive-2.0"]
+
+# The same licence for the same reason, one dependency further out: reqwest
+# under tauri-plugin-updater reaches it through rustls-platform-verifier.
+[[licenses.exceptions]]
+crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
+# MPL-2.0, and build-time only. These four reach the graph through dom_query
+# under tauri-utils under tauri-build, which is a build dependency, so they
+# compile during the build and ship in no artefact. Measured 2026-09-03 with
+# `cargo tree -e normal,no-proc-macro` against every workspace binary, which
+# reaches none of them. Founder-delegated decision.
+[[licenses.exceptions]]
+crate = "cssparser"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "cssparser-macros"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "dtoa-short"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "selectors"
+allow = ["MPL-2.0"]
+
+# MPL-2.0, and the one that ships: option-ext reaches the desktop binary
+# through dirs under tauri, at run time and unmodified. MPL-2.0 is file-level
+# copyleft, discharged by the unmodified upstream source already published on
+# crates.io; modifying the crate would oblige us to publish the modified files.
+# It is the only copyleft-licensed code in any shipped artefact.
+# Founder-delegated decision, 2026-09-03.
+[[licenses.exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
 
 [licenses.private]
 ignore = true          # the workspace's own unpublished crates
@@ -27,14 +67,38 @@ deny = [
   # provider is chosen. No crate name is written here before then.
 ]
 
-# The JSON depth bound is a feature rather than a call site: with this feature
-# off, the method that disables the 128-deep limit does not exist at all.
-[[bans.features]]
-crate = "serde_json"
-deny  = ["unbounded_depth"]
+# The serde_json `unbounded_depth` ban left this file on 2026-09-03 for the
+# `deny` recipe in the justfile, which can ask the question this file cannot.
 
 [advisories]
 yanked = "deny"
+
+# Unmaintained notices rather than vulnerabilities, and all sixteen are Tauri
+# v2's Linux stack. Ten are the gtk-rs 0.18 bindings, RUSTSEC-2024-0411 to
+# 0420, which bind GTK3, the only GTK Tauri v2 supports; proc-macro-error,
+# RUSTSEC-2024-0370, and the five unic crates are transitive under that same
+# chain. This list names sixteen advisories and softens nothing in general:
+# an unmaintained crate outside it still fails, and so does a new advisory
+# against any of these crates, which would carry an id that is not here.
+# Revisit when Tauri adopts GTK4. Founder-delegated decision, 2026-09-03.
+ignore = [
+  "RUSTSEC-2024-0370",
+  "RUSTSEC-2024-0411",
+  "RUSTSEC-2024-0412",
+  "RUSTSEC-2024-0413",
+  "RUSTSEC-2024-0414",
+  "RUSTSEC-2024-0415",
+  "RUSTSEC-2024-0416",
+  "RUSTSEC-2024-0417",
+  "RUSTSEC-2024-0418",
+  "RUSTSEC-2024-0419",
+  "RUSTSEC-2024-0420",
+  "RUSTSEC-2025-0075",
+  "RUSTSEC-2025-0080",
+  "RUSTSEC-2025-0081",
+  "RUSTSEC-2025-0098",
+  "RUSTSEC-2025-0100",
+]
 
 [sources]
 unknown-registry = "deny"

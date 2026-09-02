@@ -174,9 +174,10 @@ Signing runs on the Windows runner, not here.
 The Ed25519 entitlement keypair.
 Its public half, thirty-two raw bytes, replaces `EMBEDDED_PUBLIC_KEY`; its private half signs tokens on the server.
 
-## Three findings that need a founder decision
+## Four findings on the dependency policy, and the decisions taken
 
-The dependency policy is founder-gated, and adding Tauri moves it in three ways that no build here may resolve on its own.
+The dependency policy is founder-gated, and adding Tauri moved it in four ways that no build here could resolve on its own.
+All four were decided on 2026-09-03 by founder-delegated decision, and what follows records each finding as measured and then the decision taken on it.
 
 The workspace dependency graph doubles, from 342 packages to 684.
 Much of the addition is target-gated and never compiles on Linux — the `windows_*`, `objc2-*`, `ndk` and `jni` families — but every one of them is in `Cargo.lock` and therefore inside `cargo deny` and `cargo audit`'s scope.
@@ -185,14 +186,33 @@ Much of the addition is target-gated and never compiles on Linux — the `window
 Five are MPL-2.0: `cssparser`, `cssparser-macros`, `dtoa-short` and `selectors` arrive through `dom_query` under `tauri-utils`, and `option-ext` through `dirs`.
 `target-lexicon` is Apache-2.0 WITH LLVM-exception, through `cfg-expr` and `system-deps` under the GTK bindings.
 `webpki-root-certs` is CDLA-Permissive-2.0, through `rustls-platform-verifier` under `reqwest`, and is the same licence and the same reason as the `webpki-roots` exception `deny.toml` already carries.
-Each would need its own scoped `[[licenses.exceptions]]` entry, in the greppable per-crate form that file already uses.
+That is now decided, on 2026-09-03, by founder-delegated decision.
+`deny.toml` carries six of the seven as scoped per-crate `[[licenses.exceptions]]` entries, in the greppable form that file already uses.
+`target-lexicon`'s expression joins the allow list instead, because `Apache-2.0 WITH LLVM-exception` only relaxes an entry already there.
+What the exceptions record is the distinction between build-time and shipped.
+`cssparser`, `cssparser-macros`, `dtoa-short` and `selectors` reach the graph only under `tauri-build`, a build dependency, so they compile during the build and ship in no artefact.
+Measured with `cargo tree -e normal,no-proc-macro`, no workspace binary reaches any of them.
+`option-ext` does ship, unmodified, in the desktop binary through `dirs` under `tauri`, which makes it the only copyleft-licensed code in anything we distribute.
+MPL-2.0 is file-level copyleft, and the unmodified upstream source already published on crates.io discharges it; modifying the crate would oblige us to publish the modified files.
 
 `cargo deny check bans` now fails on one entry, and this one is worth reading closely rather than waiving.
 `serde_json`'s `unbounded_depth` feature is denied because, with it off, the method that disables the 128-deep parse limit does not exist at all.
 It is now enabled, through exactly one path: `cargo_metadata`, an optional dependency of `tauri-utils` turned on by its `build` feature.
 That path reaches `serde_json` only through `tauri-macros`, a proc-macro crate, and under `resolver = "2"` proc-macro features are not unified into the target build, so the `serde_json` linked into a shipped binary should not carry it.
-`cargo deny` does not model that separation, so the check fails regardless.
-The options are a scoped exclusion in `deny.toml`, accepting a red lane, or rejecting the dependency; the first two are founder decisions and the third would end this surface.
+`cargo deny` reads one unified feature set out of `cargo metadata` and does not model that separation, so the check fails regardless.
+That is now decided, on 2026-09-03, by founder-delegated decision.
+The `[[bans.features]]` entry left `deny.toml` for the `deny` recipe in the justfile, which can ask the question `deny.toml` cannot.
+For every workspace member carrying a binary target, taken from `cargo metadata` so that a new binary needs no edit, the recipe runs `cargo tree -e normal,no-proc-macro` and fails, naming the crate, if `serde_json` appears in that graph with `unbounded_depth`.
+Measured on the day of the decision, all fourteen carry `default,raw_value,std`, and the desktop binary `alloc` besides, so the separation above holds and nothing we ship can disable the depth limit.
+The bound is now enforced against the runtime graph rather than against the unified feature set.
+
+`cargo deny check advisories` fails on sixteen crates, a fourth finding this note did not anticipate and the doubling above explains.
+All sixteen are unmaintained notices rather than vulnerabilities, and all sixteen are Tauri v2's Linux stack.
+Ten are the gtk-rs 0.18 bindings, RUSTSEC-2024-0411 to 0420, which bind GTK3, the only GTK Tauri v2 supports; `proc-macro-error` and the five `unic` crates are transitive under that same chain.
+That is now decided, on 2026-09-03, by founder-delegated decision, and `deny.toml` ignores those sixteen advisory ids under a single comment carrying this reason.
+Nothing is softened in general: an unmaintained crate outside the list still fails the lane, and a new advisory against any of these crates would carry an id that is not on it.
+The vulnerability policy is untouched and could not be softened even deliberately, because cargo-deny 0.20 removed the key that once allowed it.
+Revisit when Tauri adopts GTK4.
 
 ## Sources
 

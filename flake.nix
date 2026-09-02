@@ -177,6 +177,8 @@
               pkgs.cargo-deny
               pkgs.cargo-machete
               pkgs.just
+              # `just deny`'s runtime-graph check reads cargo metadata through it
+              pkgs.jq
               pkgs.podman
               pkgs.podman-compose
               pkgs.postgresql_17

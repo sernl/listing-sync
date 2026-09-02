@@ -51,17 +51,15 @@ portable_targets := "wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple
 # feature, which is reqwest and nothing else; reqwest, tokio and rustls are
 # native-only and stay behind it. The server-bound crates are absent by
 # design: they hold sqlx, axum and a runtime, and no client compiles them.
-#
-# tam-pipeline is absent for a reason that is not design: blake3 builds
-# blake3_neon.c through cc on every aarch64 target and assembles through
-# ml64.exe on windows-msvc, so it needs the crate's `pure` feature to cross
-# at all. That is a dependency change and therefore a founder decision.
 portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
 
 # tam-limits asserts usize::BITS >= 64 at compile time, which is true of every
 # target here except wasm32. Widening that claim is a change to a founder-gated
 # limits file, so the wasm leg omits the crate rather than relaxing it.
-portable_crates_64 := "-p tam-limits"
+# tam-pipeline is here for that reason alone, through its tam-limits edge. The
+# blocker of its own is gone: blake3's `pure` feature, enabled by founder
+# decision on 2026-09-03, drops the cc and ml64.exe paths it could not cross.
+portable_crates_64 := "-p tam-limits -p tam-pipeline"
 
 # Prove every client target still compiles. The standard libraries come from
 # rust-toolchain.toml's `targets`, so this needs the devshell rather than a
@@ -83,9 +81,33 @@ check-portable:
 ready: check
     nix flake check
 
-# Dependency licence and advisory policy (proprietary licence gate)
+# Dependency licence and advisory policy (proprietary licence gate), plus the
+# serde_json depth bound, which moved here from deny.toml on 2026-09-03. The
+# bound is a feature rather than a call site: with `unbounded_depth` off, the
+# method that disables the 128-deep parse limit does not exist at all. But
+# cargo-deny reads one unified feature set out of cargo metadata and cannot
+# separate a build dependency's features from a shipped binary's, so its
+# [[bans.features]] entry fired on tauri-build's chain and said nothing about
+# what we ship. The per-binary cargo tree below asks only about what ships,
+# and taking the binaries from cargo metadata covers a new one without an
+# edit here. bash rather than sh because pipefail is what stops a failed
+# cargo metadata from passing the check vacuously.
+
+# Dependency licence and advisory policy, and the serde_json depth bound
 deny:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo deny check
+    crates=$(cargo metadata --format-version 1 --no-deps \
+        | jq -r '.packages[] | select(any(.targets[]?; any(.kind[]?; . == "bin"))) | .name')
+    for crate in $crates; do
+        tree=$(cargo tree -e normal,no-proc-macro -p "$crate" -f '{p} {f}')
+        found=$(printf '%s\n' "$tree" | grep 'serde_json v' | grep 'unbounded_depth' || true)
+        if [ -n "$found" ]; then
+            echo "serde_json feature 'unbounded_depth' reaches the shipped binary crate $crate" >&2
+            exit 1
+        fi
+    done
 
 # One-time host preparation for rootless podman: a user-level signature
 # policy (accept-anything; image integrity comes from the digest pin in
