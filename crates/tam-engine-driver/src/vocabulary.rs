@@ -16,12 +16,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::driver::VerifyPolicy;
-use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent, StepBudget};
 use tam_marketplace::{
     CreateStrategy, FormId, IdempotencyKey, ProjectedListing, RemoteLifecycle, RemoteListingId,
 };
 use tam_types::{
-    ContentHash, FailureCode, FailureDetail, FileId, InventoryId, JobId, MappingId, OrgId, Uuid,
+    ConnectionId, ContentHash, FailureCode, FailureDetail, FileId, InventoryId, JobEventPayload,
+    JobId, MappingId, OrgId, Uuid,
 };
 
 /// Which organisation, item and epoch a fenced write speaks for. Every ledger
@@ -276,4 +277,153 @@ pub enum ClaimView {
 pub struct SettleEnvelope {
     pub lease: LeaseRef,
     pub verdict: ItemVerdict,
+    /// The device's asserted instant, recorded as the seller's assertion
+    /// beside the server's own receipt. `org_seq` keeps ordering
+    /// server-authoritative, so this is evidence rather than authority.
+    pub at_ms: i64,
+}
+
+/// One call the device makes against the ledger, other than the settle.
+///
+/// Every variant carries the [`LeaseRef`] it speaks for, because the server
+/// derives the organisation, the connection, the inventory and the epoch from
+/// the lease it issued rather than from anything the caller says. The device
+/// names what it wants done; it never names whose work it is.
+///
+/// `at_ms` is the device's *asserted* instant, on the variants whose ledger
+/// method takes one. It is the seller's clock and is recorded as their
+/// assertion, never mistaken for our record: the server stamps its own receipt
+/// beside it, and `org_seq` keeps ordering server-authoritative regardless.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "call", rename_all = "snake_case")]
+pub enum LedgerCall {
+    ConnectionFor {
+        lease: LeaseRef,
+        inventory: InventoryId,
+    },
+    PreflightSucceeded {
+        lease: LeaseRef,
+    },
+    PreflightFailed {
+        lease: LeaseRef,
+        edge_class: bool,
+    },
+    /// A duration rather than an instant: the reaper reads `park_expires_at`
+    /// against the server's clock, so the server mints the when.
+    Park {
+        lease: LeaseRef,
+        blocked_on: String,
+        park_for_seconds: i64,
+    },
+    OpenAttempt {
+        lease: LeaseRef,
+        new: NewAttempt,
+        at_ms: i64,
+    },
+    SettleAttempt {
+        lease: LeaseRef,
+        attempt: AttemptRef,
+        verdict: AttemptVerdict,
+        at_ms: i64,
+    },
+    GateConnection {
+        lease: LeaseRef,
+        inventory: InventoryId,
+        at_ms: i64,
+    },
+    /// The only halt reachable from a device, fixed to this tenant's
+    /// inventory: there is no wider scope to name.
+    HaltThisTenant {
+        lease: LeaseRef,
+        inventory: InventoryId,
+        reason: String,
+        at_ms: i64,
+    },
+    /// Neither the window nor the ceiling appears: both are the server's.
+    RequestGrant {
+        lease: LeaseRef,
+        connection: ConnectionId,
+        kind: GrantKind,
+        at_ms: i64,
+    },
+    RecordEvent {
+        lease: LeaseRef,
+        payload: JobEventPayload,
+        at_ms: i64,
+    },
+    /// The closed event, never a topic string, which would otherwise name any
+    /// relay the drainer knows.
+    Notify {
+        lease: LeaseRef,
+        event: SellerEvent,
+        at_ms: i64,
+    },
+}
+
+impl LedgerCall {
+    /// The lease this call speaks for, which is what the endpoint fences on
+    /// before it dispatches anything.
+    #[must_use]
+    pub const fn lease(&self) -> &LeaseRef {
+        match self {
+            Self::ConnectionFor { lease, .. }
+            | Self::PreflightSucceeded { lease }
+            | Self::PreflightFailed { lease, .. }
+            | Self::Park { lease, .. }
+            | Self::OpenAttempt { lease, .. }
+            | Self::SettleAttempt { lease, .. }
+            | Self::GateConnection { lease, .. }
+            | Self::HaltThisTenant { lease, .. }
+            | Self::RequestGrant { lease, .. }
+            | Self::RecordEvent { lease, .. }
+            | Self::Notify { lease, .. } => lease,
+        }
+    }
+
+    /// The device's asserted instant, where the call carries one.
+    #[must_use]
+    pub const fn asserted_at_ms(&self) -> Option<i64> {
+        match self {
+            Self::ConnectionFor { .. }
+            | Self::PreflightSucceeded { .. }
+            | Self::PreflightFailed { .. }
+            | Self::Park { .. } => None,
+            Self::OpenAttempt { at_ms, .. }
+            | Self::SettleAttempt { at_ms, .. }
+            | Self::GateConnection { at_ms, .. }
+            | Self::HaltThisTenant { at_ms, .. }
+            | Self::RequestGrant { at_ms, .. }
+            | Self::RecordEvent { at_ms, .. }
+            | Self::Notify { at_ms, .. } => Some(*at_ms),
+        }
+    }
+}
+
+/// What the ledger answers.
+///
+/// `Refused` carries a [`LedgerError`] as an answer rather than as a transport
+/// failure, and that distinction is the point: `AttemptInFlight` is the
+/// duplicate-create fence holding and `StaleLease` is another holder owning the
+/// item now, and the interpreter branches on both. A device that saw them as
+/// HTTP faults would retry the two conditions it must not retry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "answer", rename_all = "snake_case")]
+pub enum LedgerAnswer {
+    /// The call had nothing to return but did it.
+    Done,
+    Connection {
+        connection: Option<ConnectionId>,
+    },
+    Streak {
+        streak: PreflightStreak,
+    },
+    Bound {
+        disposition: BindDisposition,
+    },
+    Grant {
+        grant: BudgetGrant,
+    },
+    Refused {
+        error: LedgerError,
+    },
 }

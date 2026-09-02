@@ -14,8 +14,8 @@ use sqlx::PgPool;
 use tam_engine_driver::ports::ItemLedger;
 use tam_engine_driver::vocabulary as wire;
 use tam_storage::{
-    append_event, EventScope, HaltCause, HaltRepo, LeaseRepo, NewOutboxMessage, OutboxRepo,
-    RateBudgetRepo, StorageError, WriteAttemptRepo,
+    append_event_asserted, EventScope, HaltCause, HaltRepo, LeaseRepo, NewOutboxMessage,
+    OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
     ConnectionId, InventoryId, JobEventPayload, Stamp, SystemComponent, Timestamp, Uuid,
@@ -134,6 +134,12 @@ pub fn to_wire_error(error: &StorageError) -> wire::LedgerError {
 /// Every repository the interpreter is allowed to reach, behind one seam.
 pub struct PgLedger {
     pool: PgPool,
+    /// Set when this ledger serves a seller's device rather than our own
+    /// worker. It decides two things: rows are attributed to `Device` rather
+    /// than `Engine`, and the instant the caller supplies is recorded as the
+    /// device's assertion beside our own receipt instead of being taken as
+    /// our record.
+    device: Option<String>,
     leases: LeaseRepo,
     halts: HaltRepo,
     attempts: WriteAttemptRepo,
@@ -152,7 +158,44 @@ impl PgLedger {
             attempts: WriteAttemptRepo::new(pool.clone()),
             budgets: RateBudgetRepo::new(pool.clone()),
             pool,
+            device: None,
             job,
+        }
+    }
+
+    /// The same ledger serving a named device, which changes how its writes
+    /// are attributed and dated.
+    #[must_use]
+    pub fn for_device(pool: PgPool, job: tam_types::JobId, device: String) -> Self {
+        Self {
+            device: Some(device),
+            ..Self::new(pool, job)
+        }
+    }
+
+    /// The server's own clock, read at the boundary where a receipt is minted.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the receipt is by definition our clock rather than the caller's; reading it here is the whole point of recording two instants"
+    )]
+    fn receipt() -> Timestamp {
+        let since = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis());
+        Timestamp(i64::try_from(since).unwrap_or(i64::MAX))
+    }
+
+    /// Who a row is attributed to, and what its two instants are.
+    ///
+    /// A server write is stamped `Engine` at the instant it supplied, with no
+    /// assertion to record. A device write is stamped `Device` at the server's
+    /// own receipt, with the device's instant recorded beside it: the seller's
+    /// clock is preserved as their claim rather than mistaken for our record.
+    fn stamped(&self, at: Timestamp, receipt: Timestamp) -> (Stamp, Option<Timestamp>) {
+        if self.device.is_some() {
+            (Stamp::system(SystemComponent::Device, receipt), Some(at))
+        } else {
+            (Stamp::system(SystemComponent::Engine, at), None)
         }
     }
 
@@ -161,9 +204,10 @@ impl PgLedger {
         scope: &EventScope,
         payload: &JobEventPayload,
         stamp: Stamp,
+        asserted: Option<Timestamp>,
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
-        append_event(&mut tx, scope, payload, stamp).await?;
+        append_event_asserted(&mut tx, scope, payload, stamp, asserted).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -249,18 +293,17 @@ impl ItemLedger for PgLedger {
             body: new.intent.body.clone(),
             hash: new.intent.hash.clone(),
         };
+        let (stamp, asserted) = self.stamped(at, Self::receipt());
         self.attempts
-            .open(
+            .open_asserted(
                 &to_storage_lease(lease),
                 new.attempt,
                 &tam_storage::NewAttempt {
                     mapping: new.mapping,
                     intent: &intent,
-                    // The engine opens the row; the seller's part ended when
-                    // the job was queued. A device-originated attempt is
-                    // stamped by the actor component step 7 adds.
-                    stamp: Stamp::system(SystemComponent::Engine, at),
+                    stamp,
                 },
+                asserted,
             )
             .await
             .map_err(|error| to_wire_error(&error))
@@ -359,6 +402,7 @@ impl ItemLedger for PgLedger {
         payload: &JobEventPayload,
         at: Timestamp,
     ) -> Result<(), wire::LedgerError> {
+        let (stamp, asserted) = self.stamped(at, Self::receipt());
         self.append_event(
             &EventScope {
                 org: lease.org,
@@ -366,7 +410,8 @@ impl ItemLedger for PgLedger {
                 item: Some(lease.item),
             },
             payload,
-            Stamp::system(SystemComponent::Engine, at),
+            stamp,
+            asserted,
         )
         .await
         .map_err(|error| to_wire_error(&error))

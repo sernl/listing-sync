@@ -10,8 +10,8 @@ use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_engine_driver::driver::VerifyPolicy;
 use tam_engine_driver::vocabulary::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, GrantKind,
-    ItemPreparation, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerError, NewAttempt,
-    PayloadManifest, PreflightStreak, SettleEnvelope, WorkOrder,
+    ItemPreparation, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall,
+    LedgerError, NewAttempt, PayloadManifest, PreflightStreak, SettleEnvelope, WorkOrder,
 };
 use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
@@ -265,10 +265,155 @@ fn the_whole_settle_envelope_round_trips() {
             failure_code: None,
             failure_detail: None,
         },
+        at_ms: 1_756_000_042_000,
     };
     assert_eq!(
         round_trip(&envelope),
         envelope,
         "the fence the device carries back must be the fence it was issued"
+    );
+}
+
+/// Every ledger call the device can make, and the answer it gets back.
+///
+/// The device reaches the ledger only through these, so a variant that did not
+/// read back as itself would be a capability it silently loses.
+#[test]
+fn every_ledger_call_and_answer_round_trips() {
+    let calls = vec![
+        LedgerCall::ConnectionFor {
+            lease: lease(),
+            inventory: InventoryId::TesGb,
+        },
+        LedgerCall::PreflightSucceeded { lease: lease() },
+        LedgerCall::PreflightFailed {
+            lease: lease(),
+            edge_class: true,
+        },
+        LedgerCall::Park {
+            lease: lease(),
+            blocked_on: "reauth_required".to_owned(),
+            park_for_seconds: 86_400,
+        },
+        LedgerCall::OpenAttempt {
+            lease: lease(),
+            new: NewAttempt {
+                attempt: Uuid([0x7B; 16]),
+                mapping: MappingId(Uuid([0x33; 16])),
+                intent: AttemptIntent {
+                    body: serde_json::json!({ "title": "Fixture" }),
+                    hash: vec![0x0A; 32],
+                },
+            },
+            at_ms: 1_756_000_001_000,
+        },
+        LedgerCall::SettleAttempt {
+            lease: lease(),
+            attempt: AttemptRef {
+                attempt: Uuid([0x7B; 16]),
+                mapping: MappingId(Uuid([0x33; 16])),
+            },
+            verdict: AttemptVerdict {
+                state: "committed".to_owned(),
+                failure_code: None,
+                landing: LandingEffect::None,
+            },
+            at_ms: 1_756_000_002_000,
+        },
+        LedgerCall::GateConnection {
+            lease: lease(),
+            inventory: InventoryId::TesGb,
+            at_ms: 1_756_000_003_000,
+        },
+        LedgerCall::HaltThisTenant {
+            lease: lease(),
+            inventory: InventoryId::TesGb,
+            reason: "the transition table demanded a halt".to_owned(),
+            at_ms: 1_756_000_004_000,
+        },
+        LedgerCall::RequestGrant {
+            lease: lease(),
+            connection: tam_types::ConnectionId(Uuid([0x44; 16])),
+            kind: GrantKind::Write,
+            at_ms: 1_756_000_005_000,
+        },
+        LedgerCall::RecordEvent {
+            lease: lease(),
+            payload: tam_types::JobEventPayload::ItemLeased {
+                worker: "device-a".to_owned(),
+                lease_epoch: 7,
+            },
+            at_ms: 1_756_000_006_000,
+        },
+        LedgerCall::Notify {
+            lease: lease(),
+            event: tam_domain::SellerEvent::ReauthRequired,
+            at_ms: 1_756_000_007_000,
+        },
+    ];
+    for call in calls {
+        assert_eq!(round_trip(&call), call, "{call:?} round trips");
+        assert_eq!(
+            round_trip(&call).lease(),
+            &lease(),
+            "every call names the lease it speaks for, because the server derives the \
+             tenant from that rather than from anything else the caller says"
+        );
+    }
+
+    let answers = vec![
+        LedgerAnswer::Done,
+        LedgerAnswer::Connection {
+            connection: Some(tam_types::ConnectionId(Uuid([0x44; 16]))),
+        },
+        LedgerAnswer::Streak {
+            streak: PreflightStreak {
+                failures: 2,
+                edge_only: true,
+            },
+        },
+        LedgerAnswer::Bound {
+            disposition: BindDisposition::Bound,
+        },
+        LedgerAnswer::Grant {
+            grant: BudgetGrant::Granted { used: 3 },
+        },
+        // The two the interpreter branches on must survive as answers rather
+        // than as transport faults, or a device retries what it must not.
+        LedgerAnswer::Refused {
+            error: LedgerError::AttemptInFlight,
+        },
+        LedgerAnswer::Refused {
+            error: LedgerError::StaleLease,
+        },
+    ];
+    for answer in answers {
+        assert_eq!(round_trip(&answer), answer, "{answer:?} round trips");
+    }
+}
+
+/// The instant the device asserts is carried on exactly the calls whose ledger
+/// method takes one, and on the settle.
+#[test]
+fn the_asserted_instant_travels_with_every_call_that_records_one() {
+    let with = LedgerCall::RecordEvent {
+        lease: lease(),
+        payload: tam_types::JobEventPayload::ItemLeased {
+            worker: "device-a".to_owned(),
+            lease_epoch: 7,
+        },
+        at_ms: 1_756_000_006_000,
+    };
+    assert_eq!(
+        round_trip(&with).asserted_at_ms(),
+        Some(1_756_000_006_000),
+        "a call that writes a dated row carries the seller's own instant"
+    );
+    let without = LedgerCall::PreflightSucceeded { lease: lease() };
+    assert_eq!(
+        round_trip(&without).asserted_at_ms(),
+        None,
+        "and one that writes no dated row asserts nothing, rather than inventing an \
+         instant nobody will read"
     );
 }

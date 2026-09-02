@@ -9,9 +9,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tam-domain = { path = "../tam-domain" }
 tam-limits = { path = "../tam-limits" }
-# The intent hash is blake3 over the rendered field set, and the device
-# takes it, so the hash lives here with the rendering.
-tam-pipeline = { path = "../tam-pipeline" }
+# blake3 directly rather than through tam-pipeline: the intent hash is one
+# call, and the pipeline edge dragged an image decoder and a zip implementation
+# into every client binary to reach it. Same `pure` feature tam-pipeline and
+# tam-desktop already carry, so it resolves to one build.
+blake3 = { version = "1", features = ["pure"] }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-types = { path = "../tam-types" }
 

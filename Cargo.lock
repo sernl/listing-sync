@@ -5080,6 +5080,7 @@ dependencies = [
 name = "tam-engine-driver"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "futures",
  "serde",
  "serde_json",
@@ -5087,7 +5088,6 @@ dependencies = [
  "tam-engine-driver",
  "tam-limits",
  "tam-marketplace",
- "tam-pipeline",
  "tam-types",
 ]
 

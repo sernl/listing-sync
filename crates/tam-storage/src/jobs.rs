@@ -401,6 +401,27 @@ pub async fn append_event(
     payload: &JobEventPayload,
     stamp: Stamp,
 ) -> Result<(), StorageError> {
+    append_event_asserted(tx, scope, payload, stamp, None).await
+}
+
+/// The same append, recording a second instant the seller's own machine
+/// asserted.
+///
+/// After the two-branch split the interpreter runs on hardware we do not
+/// operate, so `created_at` stays our receipt and the device's clock reading is
+/// recorded beside it as an assertion. `org_seq` continues to decide order, so
+/// neither column sequences anything: this is evidence about what the seller's
+/// machine believed, not authority over when it happened.
+///
+/// `None` is the honest value for every row a server process writes, because
+/// there was no second clock to record.
+pub async fn append_event_asserted(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: &EventScope,
+    payload: &JobEventPayload,
+    stamp: Stamp,
+    asserted: Option<Timestamp>,
+) -> Result<(), StorageError> {
     let Stamp { at, actor } = stamp;
     let EventScope { org, job, item } = *scope;
     let org_db = uuid_to_db(org.0);
@@ -415,8 +436,8 @@ pub async fn append_event(
     sqlx::query!(
         "INSERT INTO job_event \
          (org_id, org_seq, job_id, job_item_id, kind, payload, created_at, \
-          actor_kind, actor_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+          actor_kind, actor_id, asserted_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         org_db,
         seq,
         uuid_to_db(job.0),
@@ -426,6 +447,7 @@ pub async fn append_event(
         timestamp_to_db(at)?,
         actor.kind(),
         actor.id(),
+        asserted.map(timestamp_to_db).transpose()?,
     )
     .execute(&mut **tx)
     .await?;
@@ -1718,6 +1740,19 @@ impl WriteAttemptRepo {
         attempt: tam_types::Uuid,
         new: &NewAttempt<'_>,
     ) -> Result<(), StorageError> {
+        self.open_asserted(lease, attempt, new, None).await
+    }
+
+    /// The same open, recording the instant the seller's own machine asserted
+    /// beside `opened_at`, which stays our receipt. See
+    /// [`append_event_asserted`] for why the two are kept apart.
+    pub async fn open_asserted(
+        &self,
+        lease: &LeaseRef,
+        attempt: tam_types::Uuid,
+        new: &NewAttempt<'_>,
+        asserted: Option<Timestamp>,
+    ) -> Result<(), StorageError> {
         let NewAttempt {
             mapping,
             intent,
@@ -1726,7 +1761,7 @@ impl WriteAttemptRepo {
         let Stamp { at, actor } = stamp;
         let AttemptIntent { body, hash } = intent;
         let inserted = sqlx::query!(
-            "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10)              ON CONFLICT (org_id, id) DO NOTHING",
+            "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id, asserted_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10, $11)              ON CONFLICT (org_id, id) DO NOTHING",
             uuid_to_db(lease.org.0),
             uuid_to_db(attempt),
             uuid_to_db(lease.item.0),
@@ -1737,6 +1772,7 @@ impl WriteAttemptRepo {
             timestamp_to_db(at)?,
             actor.kind(),
             actor.id(),
+            asserted.map(timestamp_to_db).transpose()?,
         )
         .execute(&self.pool)
         .await;

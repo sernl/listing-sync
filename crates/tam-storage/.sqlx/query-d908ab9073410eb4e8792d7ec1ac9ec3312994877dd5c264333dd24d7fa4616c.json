@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id, asserted_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10, $11)              ON CONFLICT (org_id, id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Jsonb",
+        "Bytea",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d908ab9073410eb4e8792d7ec1ac9ec3312994877dd5c264333dd24d7fa4616c"
+}

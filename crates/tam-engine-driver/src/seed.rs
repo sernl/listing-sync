@@ -15,6 +15,7 @@
 //! recomputed them would be setting its own budget.
 
 use tam_marketplace::{FieldSet, MarketplaceAdapter, ProjectedListing};
+use tam_types::ContentHash;
 
 use crate::driver::{intent_as_json, EngineError, MachineSeed};
 use crate::vocabulary::ItemPreparation;
@@ -33,7 +34,7 @@ pub fn seed_from_projection<A: MarketplaceAdapter>(
     listing: &ProjectedListing,
 ) -> Result<MachineSeed, EngineError> {
     let fields = adapter.project_fields(listing)?;
-    let intent_hash = tam_pipeline::hash::content_hash(
+    let intent_hash = content_hash(
         serde_json::json!({
             "entries": fields
                 .entries
@@ -73,7 +74,7 @@ pub fn seed_for_removal(preparation: &ItemPreparation) -> MachineSeed {
         // format to describe.
         body_format: None,
     };
-    let intent_hash = tam_pipeline::hash::content_hash(
+    let intent_hash = content_hash(
         intent_as_json(&preparation.operation, &fields)
             .to_string()
             .as_bytes(),
@@ -86,4 +87,13 @@ pub fn seed_for_removal(preparation: &ItemPreparation) -> MachineSeed {
         budget: preparation.budget,
         verify: preparation.verify,
     }
+}
+
+/// The intent hash, blake3 over the rendered bytes.
+///
+/// The same digest `tam-pipeline` takes, computed here directly: reaching it
+/// through the pipeline would drag an image decoder and a zip implementation
+/// into every client binary for one call.
+fn content_hash(bytes: &[u8]) -> ContentHash {
+    ContentHash(*blake3::hash(bytes).as_bytes())
 }

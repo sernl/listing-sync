@@ -508,6 +508,7 @@ async fn a_settle_from_a_device_other_than_the_holder_is_refused(pool: PgPool) {
                     "failure_code": null,
                     "failure_detail": null,
                 },
+                "at_ms": 1_756_000_042_000_i64,
             })),
             wall: t1,
         },

@@ -50,12 +50,13 @@ pub use job_reads::{
     JobListRow, JobReadRepo, JobSnapshot, LedgerCursor, MappingSeed,
 };
 pub use jobs::{
-    append_event, revive_by_gap, revive_counterparts, revive_on, settle_if_complete, AttemptIntent,
-    AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, CreatedJob, DeviceClaim, DeviceRef,
-    EventScope, HaltCause, HaltRepo, InventoryFailureWindow, InventoryHaltRow, ItemVerdict,
-    JobRepo, LandingEffect, LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob,
-    NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo,
-    AWAITING_COUNTERPART, ELECTION, REAUTH_REQUIRED, REVIVABLE_GATES,
+    append_event, append_event_asserted, revive_by_gap, revive_counterparts, revive_on,
+    settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
+    CreatedJob, DeviceClaim, DeviceRef, EventScope, HaltCause, HaltRepo, InventoryFailureWindow,
+    InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef, LeaseRepo, LeasedItem,
+    MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo,
+    RateBudgetRepo, WriteAttemptRepo, AWAITING_COUNTERPART, ELECTION, REAUTH_REQUIRED,
+    REVIVABLE_GATES,
 };
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
