@@ -1,0 +1,24 @@
+# Its own workspace root. The repository root manifest lists workspace members
+# explicitly, so a nested package that is neither a member nor excluded makes
+# cargo refuse to build; an empty `[workspace]` table settles that here rather
+# than by editing the founder-gated root manifest.
+[workspace]
+
+[package]
+name = "login-probe"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Read-only probe: does an embedded webview reach a marketplace login page without a bot challenge?"
+
+[dependencies]
+# The versions tauri 2.11.5 resolves to, so the answer this tool returns is an
+# answer about the stack the Tauri v2 desktop client will actually ship.
+wry = "=0.55.1"
+tao = "=0.35.3"
+
+[profile.release]
+strip = true
+lto = "thin"
