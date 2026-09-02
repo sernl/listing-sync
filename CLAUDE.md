@@ -1,6 +1,6 @@
 # Listing Sync
 
-Server-side bulk upload and cross-listing for teaching-resource marketplaces.
+Bulk upload and cross-listing for teaching-resource marketplaces.
 This file orients an agent working in this repository; the authoritative
 sources are under `docs/design/`.
 
@@ -16,8 +16,21 @@ sources are under `docs/design/`.
 
 ## Non-negotiables
 
-- Automation runs server-side, on infrastructure we operate. The client is
-  thin and performs no automation; it renders progress.
+- Automation is two-branch, and the branch is decided by whether the
+  marketplace sanctions it. Where a marketplace publishes an official API and
+  issues a token for the purpose, automation runs server-side, on
+  infrastructure we operate, using that token; Etsy and Shopify are that
+  branch. Where no official API exists, every marketplace request originates
+  on the seller's own device under the seller's own session;
+  TeachersPayTeachers and Tes are that branch. For the second branch the
+  server is a control plane: it holds the catalogue, the mapping decisions,
+  the ledger, the dashboard, the subscription and the kill switch, and it
+  sends declarative intent describing an outcome. It never composes, signs or
+  issues a request to a no-API marketplace, and never holds a session for one.
+  The registry records a transport class per marketplace, and a test fails the
+  build if a no-API marketplace gains a server transport. The schedule stays
+  deterministic and cron-shaped in both branches; only the location of the
+  timer moves, and for a no-API marketplace it runs on the seller's device.
 - Rust is required for the engine, all I/O, batch processing, the automation
   layer, and anything computationally heavy. TypeScript is for the user
   interface, and for one bounded identity service. That service is
@@ -30,13 +43,23 @@ sources are under `docs/design/`.
   reads or writes a table in `public`, never sets `app.current_org`, and
   never contacts the session broker. Authorisation — which organisation a
   request speaks for and what it may do there — is decided in Rust from
-  Postgres, and is never asserted by a token claim. Any extension of this
-  service beyond identity and session is a new founder decision, not an
-  application of this one.
+  Postgres, and is never asserted by a token claim. The sole exception is the
+  client entitlement token, which transports a decision Postgres already made
+  so that a seller's device can run scheduled no-API work between check-ins;
+  the server re-checks Postgres on every control-plane call, the client gate
+  fails closed and is advisory, and it never grants anything the server did
+  not (D10 in `docs/notes/design/vendoo-for-teachers-rethink.md`). Any
+  extension of this service beyond identity and session is a new founder
+  decision, not an application of this one.
 - Sync is deterministic and cron-scheduled, never agent-driven. Models appear
   only in listing-copy generation and selector rediscovery.
 - Markdown is one sentence per line; comments earn their place per the
   style policy in the charter.
+
+Amended 2026-09-03: the automation non-negotiable above was reversed from
+server-side-only to the two-branch rule, by founder decision D1. The full
+decision set, the evidence behind it and the re-baselined plan are in
+`docs/notes/design/vendoo-for-teachers-rethink.md`.
 
 ## Enforcement is founder-gated
 

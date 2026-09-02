@@ -17,11 +17,14 @@ The founder is an existing Tes author and is customer zero.
 Automation runs server-side on infrastructure we operate.
 This was a founder decision taken against the round-one research recommendation, which favoured local-first execution in the seller's own session on account-safety and credential-custody grounds.
 The decision was made with those risks stated and is recorded here as deliberate rather than uninformed.
+This paragraph is superseded for marketplaces with no official API by the architecture reversal of 2026-09-03 below, which moves request origin to the seller's own device for those marketplaces and leaves it server-side for the marketplaces that publish an API and issue a token for the purpose; the round-one research recommendation it was taken against is the position now adopted for the first branch.
 
 The client is thin.
 Its job around sync is detailed progress reporting: files in sync, completed, failed, per marketplace.
 Web client first, Android second.
 Mobile is a full client rather than a read-only one, because the client performs no automation.
+The last three sentences are superseded by the same 2026-09-03 entry.
+The client is no longer thin for a no-API marketplace, because it composes and issues every request to one; the surface order becomes Windows desktop first, then Android, then iOS, with the web console retained and the browser extension deferred; and a phone is a full client for API-branch marketplaces and a start-it-yourself client for the rest, because no phone can run a deterministic schedule.
 
 Rust is required for the engine, all I/O, batch processing, the automation layer, and anything computationally heavy.
 TypeScript is for the user interface, and for one bounded identity service.
@@ -41,6 +44,8 @@ Sellers supply their marketplace credentials, which we store encrypted with per-
 The founder recorded this as interim: "until we find a better way to have their creds."
 Credential acquisition therefore sits behind a seam from the first commit, with one implementation today and room for two better ones later: an interactive remote browser the seller logs into themselves, and an official partner integration if either marketplace grants one.
 The seam is cheap now and expensive to retrofit, which is the reason it exists.
+This section is superseded for marketplaces with no official API by the architecture reversal of 2026-09-03 below: as of that date no marketplace credential and no marketplace session is held centrally for that branch, the session lives on the seller's own device and is never handed to us, and the central vault applies only to the official-API tokens of the marketplaces on the API branch.
+The seam the section exists to preserve is discharged rather than replaced, because the third and best implementation it left room for turned out to be the seller's own device rather than a better server-side one.
 
 ## Hosting
 
@@ -66,7 +71,7 @@ The filtering is the point: an adversarial review of the first charter draft fou
 
 The node-graph mapping canvas, in favour of a virtualised product-by-marketplace table.
 The public versioned developer API, until a real third-party consumer exists.
-Desktop clients, which the server-side architecture removes the need for.
+The desktop-client entry that stood here is struck by the 2026-09-03 architecture reversal below: a desktop client is now the first surface rather than a need the server-side architecture removes.
 
 ## Open
 
@@ -386,3 +391,33 @@ Smart punctuation is off because its presence edits one, rewriting the seller's 
 Task lists are off because their rendering is an `<input>` element and what TPT's rich-text field does with one is unmeasured.
 The renderer is pinned in `[workspace.dependencies]` for the reason `sha2` is, so that one Markdown body renders to one HTML body on every path that renders it.
 
+## The architecture reversal: request origin moves to the seller's device, 2026-09-03
+
+The founder reversed the server-side automation decision recorded under "Architecture" above, and the reversal is two-branch rather than wholesale.
+Where a marketplace publishes an official API and issues a token for the purpose, automation stays server-side on infrastructure we operate, using that token; Etsy and Shopify are that branch.
+Where no official API exists, every marketplace request originates on the seller's own device under the seller's own session; TeachersPayTeachers and Tes are that branch.
+For the second branch the server is a control plane holding the catalogue, the mapping decisions, the ledger, the dashboard, the subscription and the kill switch, and it sends declarative intent describing an outcome; it never composes, signs or issues a request to a no-API marketplace, and never holds a session for one.
+
+The reason is request origin rather than permission.
+The Ninth Circuit's Perplexity decision turned on the architectural fact that Perplexity's servers never directly accessed Amazon's, so it is the user who accesses with the help of the tool; our servers indisputably access TPT's and Tes's, which concedes that prong and leaves only the authorization question, lost the day a cease-and-desist arrives.
+Moving the request is the only change that alters which question is litigated rather than improving the answer to the existing one, and it was already the top-ranked mitigation in `../notes/legal/marketplace-terms-assessment.md`.
+Consent does not cure it, so a seller handing us a session to operate while their device is off is refused: the seller's device is the only thing that opens a connection to a no-API marketplace.
+An opt-in cloud mode is reserved as a later decision taken with counsel and is never the default.
+
+The rule is enforced rather than remembered.
+The registry records a transport class per marketplace, and a test fails the build if a no-API marketplace gains a server transport.
+It is also visible to the seller: a badge on every marketplace row, a connect flow stating where the login happens, publish progress naming the device doing the work, and the wording "your login never leaves your device", which is never presented as a legal requirement because no statute imposes one.
+
+The surface order becomes Windows desktop first, then Android, then iOS, all Tauri v2, with desktop bundles distributed through CrabNebula Cloud.
+macOS leaves the first release because the founder has no Mac and Apple's licence forbids macOS on non-Apple hardware; Linux stays best-effort.
+The browser extension is deferred rather than sequenced: the founder would take it only as a one-day build, and the one-day version is the server-composes relay this entry rules out.
+The web console is retained, publishing directly to API-branch marketplaces and handing the no-API ones to the desktop agent.
+The schedule stays deterministic and cron-shaped in both branches; only the location of the timer moves.
+
+Two consequences are recorded here rather than edited into the sections they touch.
+The "Credentials" section's central vault, and with it the session broker and its gateway route allow-lists, dissolve for the no-API branch, because there is no longer a credential to hold centrally; the seam that section exists to preserve is satisfied by the device instead of by a better server-side implementation.
+The kill switch and the subscription gate become the entitlement token described in `../notes/design/client-side-architecture.md`, which is the only enforcement available for work running on the seller's machine, and the server remains the authority per check-in rather than per marketplace request.
+
+The full decision set, the evidence, and the re-baselined plan are in `../notes/design/vendoo-for-teachers-rethink.md`, which records thirty decisions D1 to D30 taken across four rounds on 2026-09-02 and 2026-09-03.
+This entry is D1.
+The build awaits an explicit founder go on that plan.
