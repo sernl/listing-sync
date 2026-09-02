@@ -14,9 +14,9 @@ pub mod idempotency;
 pub mod transport;
 
 use tam_types::{
-    AttemptId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail, FieldKey,
-    FieldMismatch, FileId, ImportedPrice, ImportedTerm, InventoryId, LogicalInstant, Marketplace,
-    MismatchClass, OrgId, PriceIntent, TermKind, Timestamp, Uuid,
+    AttemptId, ContentHash, CopyFormat, FailureCode, FailureDetail, FieldKey, FieldMismatch,
+    FileId, ImportedPrice, ImportedTerm, InventoryId, Marketplace, MismatchClass, PriceIntent,
+    TermKind, Timestamp, Uuid,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,9 +27,6 @@ pub struct FormId(pub Uuid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ActionId(pub Uuid);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GrantId(pub Uuid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IdempotencyKey(pub Uuid);
@@ -523,7 +520,6 @@ pub trait MarketplaceAdapter: Send + Sync {
 
     fn assert_form_schema(
         &self,
-        org: OrgId,
         form: FormId,
     ) -> impl std::future::Future<Output = Result<FormSchemaFingerprint, AdapterError>> + Send;
 
@@ -534,7 +530,6 @@ pub trait MarketplaceAdapter: Send + Sync {
     /// whose wire shape needs the current instant reads it from here.
     fn submit(
         &self,
-        org: OrgId,
         key: IdempotencyKey,
         fields: FieldSet,
         now: Timestamp,
@@ -545,7 +540,6 @@ pub trait MarketplaceAdapter: Send + Sync {
     /// is attested against.
     fn read_back(
         &self,
-        org: OrgId,
         locator: ListingLocator,
         reason: FetchReason,
         observed_at: Timestamp,
@@ -566,7 +560,6 @@ pub trait MarketplaceAdapter: Send + Sync {
     /// to poll with.
     fn revise(
         &self,
-        org: OrgId,
         plan: RevisePlan,
         now: Timestamp,
     ) -> impl std::future::Future<Output = Result<SubmitEvidence, AdapterError>> + Send;
@@ -582,7 +575,6 @@ pub trait MarketplaceAdapter: Send + Sync {
     /// and reachable only from a state a successful `RecordIntent` produced.
     fn remove(
         &self,
-        org: OrgId,
         plan: RemovalPlan,
         now: Timestamp,
     ) -> impl std::future::Future<Output = Result<SubmitEvidence, AdapterError>> + Send;
@@ -706,64 +698,6 @@ pub trait FirstPartyExport: Send + Sync {
         reason: &FetchReason,
         id: Self::Resource,
     ) -> impl std::future::Future<Output = Result<ImportedListing, AdapterError>> + Send;
-}
-
-/// How a seller's marketplace access is held. `StoredCredential` is today's
-/// model and the founder recorded it as interim, so the two better models are
-/// variants of this enum rather than a redesign.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CustodyModel {
-    /// Today. Seller supplies credentials; we hold ciphertext under a
-    /// per-tenant data-encryption key.
-    StoredCredential,
-    /// Seller authenticates themselves; we never see the password.
-    SellerDrivenSession,
-    /// A marketplace-sanctioned delegated grant, if one is ever obtained.
-    PartnerGrant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeasePurpose {
-    Write,
-    VerifyWrite,
-    PollLifecycle,
-    StructuralProbe,
-}
-
-/// A driver endpoint for a browser the broker launched and primed. It exposes
-/// no secret material, which is the type-level statement of the rule that a
-/// worker can use a connection and cannot read one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionLease {
-    pub endpoint: String,
-    pub grant: GrantId,
-    pub expires: LogicalInstant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CustodyError {
-    NotLinked,
-    NeedsReauth,
-    Revoked,
-    BrokerUnavailable,
-    GrantRefused,
-}
-
-pub trait ConnectionProvider: Send + Sync {
-    fn model(&self) -> CustodyModel;
-
-    /// There is deliberately no `get_session`, and no accessor returns secret
-    /// material. Written with an explicit `impl Future` return rather than
-    /// `async fn`, because `async_fn_in_trait` is a hard error under a
-    /// deny-warnings build and the desugaring is what a multi-threaded runtime
-    /// requires anyway.
-    fn lease(
-        &self,
-        org: OrgId,
-        connection: ConnectionId,
-        purpose: LeasePurpose,
-        grant: GrantId,
-    ) -> impl std::future::Future<Output = Result<SessionLease, CustodyError>> + Send;
 }
 
 /// File content an adapter uploads, resolved through [`FileSource`]. The

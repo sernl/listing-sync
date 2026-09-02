@@ -40,7 +40,7 @@ use tam_marketplace_tpt::upload::{cache_buster, Hop, ProcessedHandle, QueueJob, 
 use tam_marketplace_tpt::write_model::{self, AuthorshipDeclaration};
 use tam_marketplace_tpt::{InstantPause, ProductId, TptAdapter};
 use tam_types::{
-    ContentHash, CopyFormat, FailureCode, FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid,
+    ContentHash, CopyFormat, FailureCode, FieldKey, FileId, InventoryId, Timestamp, Uuid,
 };
 
 // Placeholders throughout. Same shape as the captured values, same length
@@ -59,10 +59,6 @@ const PROCESS_JOB: &str = "00000000000000000000000000000001";
 const THUMBS_JOB: &str = "00000000000000000000000000000002";
 const PRODUCT_ID: u64 = 17_511_712;
 const NOW: Timestamp = Timestamp(1_787_896_640_872);
-
-fn org() -> OrgId {
-    OrgId(Uuid([9; 16]))
-}
 
 fn key() -> IdempotencyKey {
     IdempotencyKey(Uuid([5; 16]))
@@ -465,7 +461,7 @@ fn the_create_chain_walks_every_hop_and_lands_on_the_redirect_location() {
     let cassette = create_cassette(usize::MAX, "/Product/test-17511712");
     let hops = cassette.interactions.len();
     let adapter = adapter(cassette);
-    let evidence = futures::executor::block_on(adapter.submit(org(), key(), fields(), NOW))
+    let evidence = futures::executor::block_on(adapter.submit(key(), fields(), NOW))
         .expect("the recorded create chain replays");
     assert_eq!(
         hops, 17,
@@ -538,7 +534,7 @@ fn a_payload_over_the_part_size_signs_and_puts_each_part_under_its_own_digest() 
         "the digest is per part; the captured single-part upload hid that, got {digests:?}"
     );
     let adapter = adapter(cassette).with_part_size(128);
-    futures::executor::block_on(adapter.submit(org(), key(), fields(), NOW))
+    futures::executor::block_on(adapter.submit(key(), fields(), NOW))
         .expect("the three-part chain replays");
     assert_eq!(
         adapter.transport().remaining(),
@@ -606,7 +602,7 @@ fn every_signed_s3_call_reads_the_clock_so_a_long_upload_never_signs_a_stale_dat
         "each signature is minted under the instant its own clock read returned, got {stamps:?}"
     );
     let adapter = adapter(cassette).with_part_size(128);
-    futures::executor::block_on(adapter.submit(org(), key(), fields(), NOW))
+    futures::executor::block_on(adapter.submit(key(), fields(), NOW))
         .expect("the three-part chain replays");
     assert_eq!(
         adapter.transport().remaining(),
@@ -628,7 +624,7 @@ fn a_lost_response_before_the_final_post_is_safe_to_retry_rather_than_a_halt() {
                 create_cassette(usize::MAX, "/Product/test-17511712"),
                 lose_at,
             )
-            .submit(org(), key(), fields(), NOW),
+            .submit(key(), fields(), NOW),
         );
         assert!(
             matches!(refused, Err(AdapterError::NotSent(_))),
@@ -645,8 +641,7 @@ fn a_lost_response_on_the_final_post_stays_an_ambiguity() {
         .len()
         .checked_sub(1)
         .expect("the chain ends with the form post");
-    let refused =
-        futures::executor::block_on(losing(cassette, last).submit(org(), key(), fields(), NOW));
+    let refused = futures::executor::block_on(losing(cassette, last).submit(key(), fields(), NOW));
     assert_eq!(
         refused,
         Err(AdapterError::Ambiguous(AmbiguityCause::ResponseEventLost)),
@@ -662,7 +657,6 @@ fn a_session_that_lapses_on_the_clock_read_parks_rather_than_refusing_the_item()
     // only needs re-auth.
     let refused = futures::executor::block_on(
         adapter(create_chain_answering("/uploads/time", text(401, ""))).submit(
-            org(),
             key(),
             fields(),
             NOW,
@@ -681,7 +675,6 @@ fn a_rate_limited_signing_oracle_backs_off_rather_than_refusing_the_item() {
     // multi-part upload is exactly what would draw a 429 out of it.
     let refused = futures::executor::block_on(
         adapter(create_chain_answering("/uploads/sign_auth", text(429, ""))).submit(
-            org(),
             key(),
             fields(),
             NOW,
@@ -703,7 +696,7 @@ fn a_plain_text_hop_answering_markup_two_hundred_is_read_as_the_bounce_it_is() {
             "/uploads/time",
             text(200, "<html><body><h1>Sign In</h1></body></html>"),
         ))
-        .submit(org(), key(), fields(), NOW),
+        .submit(key(), fields(), NOW),
     );
     assert_eq!(
         refused,
@@ -728,7 +721,7 @@ fn a_render_the_scrape_cannot_read_is_reported_as_drift_by_the_preflight() {
         adapter(Cassette {
             interactions: vec![render],
         })
-        .assert_form_schema(org(), FormId(Uuid([2; 16]))),
+        .assert_form_schema(FormId(Uuid([2; 16]))),
     );
     let Err(AdapterError::SchemaDrift(drift)) = refused else {
         panic!("a render the scrape cannot read is drift, not a transient, got {refused:?}");
@@ -842,15 +835,13 @@ fn the_structural_probe_reads_the_form_and_creates_nothing() {
         interactions: vec![create_render()],
     };
     let probe = adapter(cassette);
-    let fingerprint =
-        futures::executor::block_on(probe.assert_form_schema(org(), FormId(Uuid([2; 16]))))
-            .expect("the render declares every field this adapter writes");
+    let fingerprint = futures::executor::block_on(probe.assert_form_schema(FormId(Uuid([2; 16]))))
+        .expect("the render declares every field this adapter writes");
     let again = adapter(Cassette {
         interactions: vec![create_render()],
     });
-    let repeat =
-        futures::executor::block_on(again.assert_form_schema(org(), FormId(Uuid([2; 16]))))
-            .expect("the same render fingerprints the same way");
+    let repeat = futures::executor::block_on(again.assert_form_schema(FormId(Uuid([2; 16]))))
+        .expect("the same render fingerprints the same way");
     assert_eq!(
         fingerprint, repeat,
         "a fingerprint that moved without the form moving would cry drift every hour"
@@ -877,7 +868,7 @@ fn a_render_that_stops_declaring_a_field_this_adapter_writes_is_drift() {
         adapter(Cassette {
             interactions: vec![render],
         })
-        .assert_form_schema(org(), FormId(Uuid([2; 16]))),
+        .assert_form_schema(FormId(Uuid([2; 16]))),
     );
     let Err(AdapterError::SchemaDrift(drift)) = refused else {
         panic!("a field we write that the form no longer declares is drift, got {refused:?}");
@@ -902,7 +893,7 @@ fn a_submit_without_an_authorship_attestation_never_reaches_the_network() {
         OneFile(file()),
         InstantPause,
     );
-    let refused = futures::executor::block_on(unattested.submit(org(), key(), fields(), NOW));
+    let refused = futures::executor::block_on(unattested.submit(key(), fields(), NOW));
     let Err(AdapterError::Rejected { code, detail }) = refused else {
         panic!("the copyright declaration is the seller's, got {refused:?}");
     };
@@ -926,7 +917,7 @@ fn a_projection_that_is_not_exactly_one_file_is_refused_before_the_form_is_rende
         adapter(Cassette {
             interactions: vec![],
         })
-        .submit(org(), key(), many, NOW),
+        .submit(key(), many, NOW),
     );
     let Err(AdapterError::Rejected { detail, .. }) = refused else {
         panic!("only the product slot is captured, got {refused:?}");
@@ -942,7 +933,7 @@ fn a_projection_that_is_not_exactly_one_file_is_refused_before_the_form_is_rende
             adapter(Cassette {
                 interactions: vec![]
             })
-            .submit(org(), key(), none, NOW)
+            .submit(key(), none, NOW)
         )
         .is_err(),
         "a create with no file has nothing to put in the product slot"
@@ -963,8 +954,7 @@ fn a_sign_in_interstitial_on_the_form_render_is_an_expired_session() {
             ),
         }],
     };
-    let refused =
-        futures::executor::block_on(adapter(cassette).submit(org(), key(), fields(), NOW));
+    let refused = futures::executor::block_on(adapter(cassette).submit(key(), fields(), NOW));
     assert_eq!(
         refused,
         Err(AdapterError::SessionExpired),
@@ -988,8 +978,7 @@ fn a_cloudflare_managed_challenge_on_the_form_render_is_a_challenge() {
             ),
         }],
     };
-    let refused =
-        futures::executor::block_on(adapter(cassette).submit(org(), key(), fields(), NOW));
+    let refused = futures::executor::block_on(adapter(cassette).submit(key(), fields(), NOW));
     assert_eq!(
         refused,
         Err(AdapterError::Challenge(
@@ -1018,7 +1007,7 @@ fn a_queue_job_that_reports_an_error_refuses_and_says_nothing_was_created() {
         r#"{"status":2,"data":{"error":"conversion failed","key":null}}"#,
     ));
     let adapter = adapter(Cassette { interactions });
-    let refused = futures::executor::block_on(adapter.submit(org(), key(), fields(), NOW));
+    let refused = futures::executor::block_on(adapter.submit(key(), fields(), NOW));
     let Err(AdapterError::Rejected { code, detail }) = refused else {
         panic!("a failed processing job is a refusal, got {refused:?}");
     };
@@ -1048,8 +1037,7 @@ fn a_final_post_answered_two_hundred_with_the_form_again_is_ambiguous() {
              </form></body></html>",
         );
     }
-    let refused =
-        futures::executor::block_on(adapter(cassette).submit(org(), key(), fields(), NOW));
+    let refused = futures::executor::block_on(adapter(cassette).submit(key(), fields(), NOW));
     assert_eq!(
         refused,
         Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier)),
@@ -1061,8 +1049,7 @@ fn a_final_post_answered_two_hundred_with_the_form_again_is_ambiguous() {
 fn a_final_post_that_redirects_without_a_product_id_is_also_ambiguous() {
     let mut cassette = create_cassette(usize::MAX, "/My-Products");
     let _ = &mut cassette;
-    let refused =
-        futures::executor::block_on(adapter(cassette).submit(org(), key(), fields(), NOW));
+    let refused = futures::executor::block_on(adapter(cassette).submit(key(), fields(), NOW));
     assert_eq!(
         refused,
         Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier)),
@@ -1095,7 +1082,6 @@ fn a_read_back_addresses_one_product_and_reports_what_the_wire_said() {
     };
     let adapter = adapter(cassette);
     let observed = futures::executor::block_on(adapter.read_back(
-        org(),
         ListingLocator::Durable(RemoteListingId::Tpt {
             product_id: PRODUCT_ID,
         }),
@@ -1154,7 +1140,6 @@ fn a_product_absent_from_the_catalogue_reads_back_absent() {
     };
     let adapter = adapter(cassette);
     let observed = futures::executor::block_on(adapter.read_back(
-        org(),
         ListingLocator::Durable(RemoteListingId::Tpt {
             product_id: PRODUCT_ID,
         }),
@@ -1193,7 +1178,6 @@ fn a_read_back_under_the_probe_capability_is_refused() {
         interactions: vec![],
     });
     let refused = futures::executor::block_on(adapter.read_back(
-        org(),
         ListingLocator::Durable(RemoteListingId::Tpt {
             product_id: PRODUCT_ID,
         }),
@@ -1282,7 +1266,7 @@ fn revise_moves_the_status_selector_and_echoes_the_existing_thumbnails() {
             ],
         };
         let adapter = adapter(cassette);
-        let evidence = futures::executor::block_on(adapter.revise(org(), revise_plan(to), NOW))
+        let evidence = futures::executor::block_on(adapter.revise(revise_plan(to), NOW))
             .unwrap_or_else(|error| panic!("{label}: the recorded edit replays: {error:?}"));
         assert_eq!(
             evidence.landed,
@@ -1365,7 +1349,6 @@ fn a_removal_posts_remove_resource_and_accepts_only_its_own_id_back() {
     };
     let removing = adapter(delete_cassette(product, delete_answer(PRODUCT_ID)));
     let evidence = futures::executor::block_on(removing.remove(
-        org(),
         plan(RemoteListingId::Tpt {
             product_id: PRODUCT_ID,
         }),
@@ -1394,7 +1377,6 @@ fn a_removal_posts_remove_resource_and_accepts_only_its_own_id_back() {
 
     let elsewhere =
         futures::executor::block_on(adapter(delete_cassette(product, delete_answer(9))).remove(
-            org(),
             plan(RemoteListingId::Tpt {
                 product_id: PRODUCT_ID,
             }),

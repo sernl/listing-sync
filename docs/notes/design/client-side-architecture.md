@@ -58,7 +58,10 @@ The pure core ships client-side unchanged: `tam-limits` (278), `tam-types` (1,54
 The adapters that move are `tam-marketplace-tes` (4,189) and `tam-marketplace-tpt` (8,666), neither of which depends on tokio or sqlx.
 That is 12,855 lines encoding everything learned from the HAR captures, already live-proven — the TPT write path was live-fired and survived a 35-agent review — and in a native process it compiles and runs unchanged, envelope byte-identical to what was captured.
 
-The server-bound control plane stays where it is: `tam-storage`, `tam-api`, `tam-engine`, `tam-worker`, `tam-sync-worker`, `tam-analytics`, `tam-canary`, `tam-import`, `tam-admin`, `tam-server` and the SvelteKit dashboard.
+The server-bound control plane stays where it is: `tam-storage`, `tam-api`, `tam-engine`, `tam-worker`, `tam-admin`, `tam-server` and the SvelteKit dashboard.
+Corrected 2026-09-03: `tam-sync-worker`, `tam-analytics`, `tam-canary` and `tam-import` were listed here too, which contradicts D1, because each of the four originates a scheduled request to a no-API marketplace under a seller session from a server timer (`docs/notes/design/engine-driver-split.md` section 5, findings 13 and 14).
+All four move to the device: the analytics capture becomes a device-pulled read item, `tam-sync-worker`'s Tes read leg moves and the crate keeps its enqueue half, `tam-canary` becomes a founder-run desktop command, and `tam-import` is restricted to manifest bytes or routed the same way.
+`tam-worker` stays for what never leaves the server, the cross-tenant lease scan and the reaper, while the driver it hosts today moves with the interpreter.
 The real work is not the transport at all.
 It is splitting `crates/tam-engine/src/driver.rs` (1,581 lines) so the effect interpreter runs against a remote ledger behind a repository trait instead of against concrete `tam-storage` repositories.
 

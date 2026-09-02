@@ -40,12 +40,7 @@ use tam_marketplace_tes::endpoints::{
     self, DraftId, FreeLicence, TesListing, TesPrice, TesPricing, ZZ_TITLE_PREFIX,
 };
 use tam_marketplace_tes::{route_name, ReqwestTransport, TesAdapter, TesSession};
-use tam_types::{FieldKey, FileId, InventoryId, OrgId, Timestamp, Uuid};
-
-/// Neither identifier reaches Tes. The org scopes nothing here because this
-/// script holds no database, and the file id is what the one file the operator
-/// named on the command line answers to.
-const ORG: OrgId = OrgId(Uuid([0; 16]));
+use tam_types::{FieldKey, FileId, InventoryId, Timestamp, Uuid};
 
 /// The price a paid run posts unless `--price` names another, in the minor
 /// units the wire carries. It is the amount the 2026-08-28 publish capture
@@ -151,7 +146,6 @@ async fn observe(
 ) -> Result<ObservedListing, AdapterError> {
     adapter
         .read_back(
-            ORG,
             ListingLocator::Durable(RemoteListingId::Tes {
                 url: format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0),
             }),
@@ -433,7 +427,7 @@ async fn create(
 
 async fn run_preflight(adapter: &Adapter) -> Result<(), Failure> {
     let fingerprint = adapter
-        .assert_form_schema(ORG, FormId(Uuid([1; 16])))
+        .assert_form_schema(FormId(Uuid([1; 16])))
         .await
         .map_err(|error| failed("the preflight failed", &error))?;
     println!(

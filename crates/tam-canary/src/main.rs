@@ -13,7 +13,7 @@ use tam_engine::canary::{probe, ProbeVerdict};
 use tam_marketplace::{FileContent, FileSource, FileSourceError, FormId};
 use tam_marketplace_tes::{ReqwestTransport, TesAdapter, TesSession};
 use tam_storage::HaltRepo;
-use tam_types::{FileId, InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{FileId, InventoryId, Timestamp, Uuid};
 
 /// The canary never uploads; the adapter's file seam is satisfied by a
 /// source that refuses everything.
@@ -64,14 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (inventory, form_seed) in [(InventoryId::TesGb, 0x01u8), (InventoryId::TesUs, 0x02)] {
         let transport = ReqwestTransport::new(&session)?;
         let adapter = TesAdapter::new(inventory, transport, NoFiles)?;
-        let verdict = probe(
-            &adapter,
-            &halts,
-            OrgId(Uuid([0; 16])),
-            FormId(Uuid([form_seed; 16])),
-            now,
-        )
-        .await?;
+        let verdict = probe(&adapter, &halts, FormId(Uuid([form_seed; 16])), now).await?;
         match verdict {
             ProbeVerdict::Clean => eprintln!("canary {inventory:?}: clean"),
             ProbeVerdict::Drifted { detail } => {

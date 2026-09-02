@@ -26,7 +26,7 @@ use tam_marketplace::{
 };
 use tam_types::{
     ContentHash, CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, FileId,
-    ImportedPrice, ImportedTerm, InventoryId, OrgId, Timestamp,
+    ImportedPrice, ImportedTerm, InventoryId, Timestamp,
 };
 
 use crate::classify::{
@@ -1030,7 +1030,6 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
     /// of its members.
     async fn assert_form_schema(
         &self,
-        _org: OrgId,
         form: FormId,
     ) -> Result<FormSchemaFingerprint, AdapterError> {
         let written = write_model::written_field_paths();
@@ -1074,7 +1073,6 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
     /// one hop whose failure is an ambiguity.
     async fn submit(
         &self,
-        _org: OrgId,
         key: IdempotencyKey,
         fields: FieldSet,
         now: Timestamp,
@@ -1130,7 +1128,6 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
     /// and is Phase 4's to answer.
     async fn revise(
         &self,
-        _org: OrgId,
         plan: RevisePlan,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
@@ -1159,7 +1156,6 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
     /// its own to state.
     async fn remove(
         &self,
-        _org: OrgId,
         plan: RemovalPlan,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
@@ -1183,7 +1179,6 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
     /// product is the narrowest read that query supports.
     async fn read_back(
         &self,
-        _org: OrgId,
         locator: ListingLocator,
         reason: FetchReason,
         observed_at: Timestamp,

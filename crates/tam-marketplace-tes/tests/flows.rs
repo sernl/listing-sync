@@ -17,11 +17,10 @@ use tam_marketplace_tes::endpoints::{
 };
 use tam_marketplace_tes::{schema, TesAdapter};
 use tam_types::{
-    CopyFormat, Currency, FailureCode, FieldKey, FileId, InventoryId, Money, OrgId, PriceIntent,
-    TermKind, Timestamp, Uuid,
+    CopyFormat, Currency, FailureCode, FieldKey, FileId, InventoryId, Money, PriceIntent, TermKind,
+    Timestamp, Uuid,
 };
 
-const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
 /// The driver's clock reading a submit is handed. Tes ignores it — its JSON
 /// API stamps its own instants — so any fixed instant is the honest value.
 const NOW: Timestamp = Timestamp(1_756_000_000_000);
@@ -187,7 +186,6 @@ fn the_full_submit_flow_replays_and_lands() {
     };
     let adapter = adapter(cassette, vec![(file_id, content)]);
     let evidence = futures::executor::block_on(adapter.submit(
-        ORG,
         tam_marketplace::IdempotencyKey(Uuid([1; 16])),
         sample_field_set(file_id),
         NOW,
@@ -568,7 +566,6 @@ fn a_field_set_declaring_html_submits_the_draft_under_the_html_type() {
         body_format: Some(CopyFormat::Html),
     };
     futures::executor::block_on(adapter.submit(
-        ORG,
         tam_marketplace::IdempotencyKey(Uuid([4; 16])),
         fields,
         NOW,
@@ -597,7 +594,6 @@ fn a_description_without_a_declared_format_is_refused_rather_than_assumed() {
         ..sample_field_set_without_files()
     };
     let refused = futures::executor::block_on(adapter.submit(
-        ORG,
         tam_marketplace::IdempotencyKey(Uuid([5; 16])),
         fields,
         NOW,
@@ -813,7 +809,6 @@ fn a_paid_field_set_parses_back_into_the_priced_draft_the_projection_named() {
         body_format: Some(CopyFormat::Markdown),
     };
     futures::executor::block_on(adapter.submit(
-        ORG,
         tam_marketplace::IdempotencyKey(Uuid([2; 16])),
         fields,
         NOW,
@@ -847,7 +842,6 @@ fn a_paid_token_without_a_usable_amount_is_refused_rather_than_freed() {
             body_format: Some(CopyFormat::Markdown),
         };
         let refused = futures::executor::block_on(adapter.submit(
-            ORG,
             tam_marketplace::IdempotencyKey(Uuid([3; 16])),
             fields,
             NOW,
@@ -1011,9 +1005,8 @@ fn revise_to_live_publishes_and_revise_to_draft_reposts_the_metadata() {
             }],
         };
         let adapter = adapter(cassette, vec![]);
-        let evidence =
-            futures::executor::block_on(adapter.revise(ORG, revise_plan(transition), NOW))
-                .unwrap_or_else(|error| panic!("{label}: the cell posts its route: {error:?}"));
+        let evidence = futures::executor::block_on(adapter.revise(revise_plan(transition), NOW))
+            .unwrap_or_else(|error| panic!("{label}: the cell posts its route: {error:?}"));
         assert_eq!(
             evidence.landed_on_route.as_deref(),
             Some(route),
@@ -1058,7 +1051,6 @@ fn an_edit_of_a_published_resource_is_uncaptured_rather_than_guessed() {
             vec![],
         );
         let refused = futures::executor::block_on(adapter.revise(
-            ORG,
             revise_plan(LifecycleTransition {
                 from: ListingState::Live,
                 to,
@@ -1105,7 +1097,7 @@ fn a_removal_deletes_the_route_the_stated_state_lives_at() {
             }],
         };
         let adapter = adapter(cassette, vec![]);
-        let evidence = futures::executor::block_on(adapter.remove(ORG, removal_plan(state), NOW))
+        let evidence = futures::executor::block_on(adapter.remove(removal_plan(state), NOW))
             .unwrap_or_else(|error| {
                 panic!("{label}: the stated state decides the route: {error:?}")
             });
@@ -1146,7 +1138,6 @@ fn a_revise_and_a_create_mint_the_same_landed_identifier() {
         ],
     };
     let submitted = futures::executor::block_on(adapter(created, vec![]).submit(
-        ORG,
         tam_marketplace::IdempotencyKey(Uuid([2; 16])),
         sample_field_set_without_files(),
         NOW,
@@ -1160,7 +1151,6 @@ fn a_revise_and_a_create_mint_the_same_landed_identifier() {
         }],
     };
     let evidence = futures::executor::block_on(adapter(revised, vec![]).revise(
-        ORG,
         revise_plan(LifecycleTransition {
             from: ListingState::Draft,
             to: ListingState::Draft,
@@ -1432,8 +1422,7 @@ fn the_preflight_names_a_vanished_written_field() {
         ],
     };
     let adapter = adapter(cassette, vec![]);
-    let drifted =
-        futures::executor::block_on(adapter.assert_form_schema(ORG, FormId(Uuid([7; 16]))));
+    let drifted = futures::executor::block_on(adapter.assert_form_schema(FormId(Uuid([7; 16]))));
     let Err(AdapterError::SchemaDrift(report)) = drifted else {
         panic!("a draft missing a written field must be drift, got {drifted:?}");
     };
@@ -1478,7 +1467,7 @@ fn the_probe_writes_before_asserting_because_an_empty_draft_omits_null_scalars()
     };
     let adapter = adapter(cassette, vec![]);
     let fingerprint =
-        futures::executor::block_on(adapter.assert_form_schema(ORG, FormId(Uuid([7; 16]))));
+        futures::executor::block_on(adapter.assert_form_schema(FormId(Uuid([7; 16]))));
     assert!(
         fingerprint.is_ok(),
         "a probe that wrote every field must observe every field: {fingerprint:?}"
@@ -1497,7 +1486,6 @@ fn read_back_is_gated_and_maps_the_lifecycle() {
     let adapter = adapter(cassette, vec![]);
     let observed_at = Timestamp(1_756_000_000_000);
     let observed = futures::executor::block_on(adapter.read_back(
-        ORG,
         ListingLocator::Durable(RemoteListingId::Tes {
             url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
         }),
@@ -1545,7 +1533,6 @@ fn a_resource_that_is_not_there_reads_back_absent() {
         url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
     };
     let observed = futures::executor::block_on(adapter.read_back(
-        ORG,
         ListingLocator::Durable(subject.clone()),
         FetchReason::VerifyAttempt {
             attempt: WriteAttemptId(Uuid([0x61; 16])),
@@ -1906,9 +1893,8 @@ fn a_delete_that_404s_is_evidence_for_the_poll_and_a_400_is_still_a_refusal() {
         }],
     };
     let gone = adapter(cassette, vec![]);
-    let evidence =
-        futures::executor::block_on(gone.remove(ORG, removal_plan(ListingState::Draft), NOW))
-            .unwrap_or_else(|error| panic!("a 404 delete is evidence, not a rejection: {error:?}"));
+    let evidence = futures::executor::block_on(gone.remove(removal_plan(ListingState::Draft), NOW))
+        .unwrap_or_else(|error| panic!("a 404 delete is evidence, not a rejection: {error:?}"));
     assert_eq!(
         evidence.http_status,
         Some(404),
@@ -1924,7 +1910,7 @@ fn a_delete_that_404s_is_evidence_for_the_poll_and_a_400_is_still_a_refusal() {
     };
     let refusing = adapter(refused, vec![]);
     let refusal =
-        futures::executor::block_on(refusing.remove(ORG, removal_plan(ListingState::Draft), NOW));
+        futures::executor::block_on(refusing.remove(removal_plan(ListingState::Draft), NOW));
     assert!(
         matches!(
             refusal,

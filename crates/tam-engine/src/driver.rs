@@ -19,7 +19,7 @@ use tam_marketplace::{
 use tam_storage::{
     append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
     EventScope, HaltCause, HaltRepo, ItemVerdict, LandingEffect, LeaseRef, LeaseRepo, LeasedItem,
-    NewAttempt, NewOutboxMessage, OutboxRepo, RateBudgetRepo, StorageError, WriteAttemptRepo,
+    NewAttempt, NewOutboxMessage, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
     BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId,
@@ -396,12 +396,7 @@ async fn verify_with_backoff<A: MarketplaceAdapter, N: NowSource, P: Pause>(
         }
         let observed = ctx
             .adapter
-            .read_back(
-                lease.org,
-                request.locator.clone(),
-                request.reason.clone(),
-                now,
-            )
+            .read_back(request.locator.clone(), request.reason.clone(), now)
             .await;
         match observed {
             // Every `AdapterError` is a condition rather than lag — absence
@@ -544,7 +539,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
             let now = ctx.clock.now();
             match effect {
                 Effect::AssertFormSchema { form } => {
-                    let asserted = ctx.adapter.assert_form_schema(org, form).await;
+                    let asserted = ctx.adapter.assert_form_schema(form).await;
                     pending = Some(match asserted {
                         Ok(fingerprint) => {
                             ctx.leases.preflight_succeeded(&lease_ref).await?;
@@ -607,7 +602,7 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                         .await;
                     }
                     record_action(ctx, lease, sequence, "submit", now).await?;
-                    let submitted = ctx.adapter.submit(org, key, fields, now).await;
+                    let submitted = ctx.adapter.submit(key, fields, now).await;
                     pending = Some(Input::SubmitResult(submitted));
                 }
                 Effect::Revise {
@@ -634,7 +629,6 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                     let revised = ctx
                         .adapter
                         .revise(
-                            org,
                             RevisePlan {
                                 subject,
                                 fields,
@@ -668,7 +662,6 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
                     let removed = ctx
                         .adapter
                         .remove(
-                            org,
                             RemovalPlan {
                                 attempt,
                                 subject,
@@ -1371,9 +1364,6 @@ async fn notify(
     tx.commit().await?;
     Ok(())
 }
-
-/// Silences the unused-import warning path for OutboxRepo's inherent fn use.
-const _: fn(sqlx::PgPool) -> OutboxRepo = OutboxRepo::new;
 
 #[cfg(test)]
 mod tests {

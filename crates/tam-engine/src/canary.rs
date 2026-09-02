@@ -6,7 +6,7 @@
 
 use tam_marketplace::{AdapterError, FormId, MarketplaceAdapter};
 use tam_storage::{HaltCause, HaltRepo, StorageError};
-use tam_types::{OrgId, Timestamp};
+use tam_types::Timestamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeVerdict {
@@ -18,11 +18,10 @@ pub enum ProbeVerdict {
 pub async fn probe(
     adapter: &impl MarketplaceAdapter,
     halts: &HaltRepo,
-    org: OrgId,
     form: FormId,
     now: Timestamp,
 ) -> Result<ProbeVerdict, StorageError> {
-    match adapter.assert_form_schema(org, form).await {
+    match adapter.assert_form_schema(form).await {
         Ok(_fingerprint) => Ok(ProbeVerdict::Clean),
         Err(AdapterError::SchemaDrift(drift)) => {
             let detail = format!("added {:?}, removed {:?}", drift.added, drift.removed);

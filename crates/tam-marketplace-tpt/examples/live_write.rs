@@ -38,16 +38,11 @@ use tam_marketplace::{
 };
 use tam_marketplace_tpt::write_model::{self, AuthorshipDeclaration, StatusUser};
 use tam_marketplace_tpt::{ProductId, ReqwestTransport, TptAdapter, TptSession};
-use tam_types::{
-    CopyFormat, Currency, FieldKey, FileId, Money, OrgId, PriceIntent, Timestamp, Uuid,
-};
+use tam_types::{CopyFormat, Currency, FieldKey, FileId, Money, PriceIntent, Timestamp, Uuid};
 
 const DEFAULT_JAR: &str = "probes/local/tpt-cookies.jar";
-/// Neither identifier reaches TPT. The org scopes nothing here because this
-/// script holds no database, and the file id is what the projection carries
-/// for the one file the operator named on the command line.
-const ORG: OrgId = OrgId(Uuid([0; 16]));
-/// See [`ORG`].
+/// The identifier does not reach TPT: it is what the projection carries for
+/// the one file the operator named on the command line.
 const FILE: FileId = FileId(Uuid([1; 16]));
 
 /// A file the operator named on the command line, handed back whichever id is
@@ -185,7 +180,7 @@ async fn create(
 ) -> Result<ProductId, Failure> {
     let fields = fields_of(adapter, listing)?;
     let evidence = adapter
-        .submit(ORG, IdempotencyKey(Uuid(seed(now))), fields, now)
+        .submit(IdempotencyKey(Uuid(seed(now))), fields, now)
         .await
         .map_err(|error| failed("the create failed", &error))?;
     match evidence.landed {
@@ -207,7 +202,6 @@ async fn observe(
 ) -> Result<ObservedListing, AdapterError> {
     adapter
         .read_back(
-            ORG,
             ListingLocator::Durable(product.remote()),
             FetchReason::VerifyAttempt {
                 attempt: WriteAttemptId(Uuid(seed(now))),
@@ -487,7 +481,7 @@ async fn finish(
 
 async fn run_preflight(adapter: &Adapter) -> Result<(), Failure> {
     let fingerprint = adapter
-        .assert_form_schema(ORG, FormId(Uuid([1; 16])))
+        .assert_form_schema(FormId(Uuid([1; 16])))
         .await
         .map_err(|error| failed("the preflight failed", &error))?;
     println!(

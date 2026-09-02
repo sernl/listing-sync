@@ -21,7 +21,7 @@ use tam_marketplace::{
 };
 use tam_types::{
     ContentHash, CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, ImportedPrice,
-    ImportedTerm, InventoryId, Money, OrgId, PriceIntent, TermKind, Timestamp,
+    ImportedTerm, InventoryId, Money, PriceIntent, TermKind, Timestamp,
 };
 
 use crate::classify::{
@@ -584,7 +584,6 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// draft cannot witness the written-field set.
     async fn assert_form_schema(
         &self,
-        _org: OrgId,
         form: FormId,
     ) -> Result<FormSchemaFingerprint, AdapterError> {
         let created = self.send(endpoints::create_draft_request()).await?;
@@ -626,7 +625,6 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// the JSON API stamps its own.
     async fn submit(
         &self,
-        _org: OrgId,
         _key: IdempotencyKey,
         fields: FieldSet,
         _now: Timestamp,
@@ -671,7 +669,6 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// listing would edit an overlay and leave the live listing standing.
     async fn revise(
         &self,
-        _org: OrgId,
         plan: RevisePlan,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
@@ -718,7 +715,6 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
     /// closed `Effect` set that is the only thing able to reach this call.
     async fn remove(
         &self,
-        _org: OrgId,
         plan: RemovalPlan,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
@@ -734,7 +730,6 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
 
     async fn read_back(
         &self,
-        _org: OrgId,
         locator: ListingLocator,
         _reason: FetchReason,
         observed_at: Timestamp,

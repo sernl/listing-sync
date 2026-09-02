@@ -26,14 +26,10 @@ use tam_marketplace::{
 };
 use tam_marketplace_tpt::read_model::TptPrice;
 use tam_marketplace_tpt::{InstantPause, ProductId, ReqwestTransport, TptAdapter, TptSession};
-use tam_types::{FileId, InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{FileId, InventoryId, Timestamp};
 
 const DEFAULT_JAR: &str = "probes/local/tpt-cookies.jar";
 const SHOWN: usize = 10;
-
-/// Neither identifier reaches TPT. The org scopes nothing here because this
-/// script holds no database, and the read-back ignores it.
-const ORG: OrgId = OrgId(Uuid([0; 16]));
 
 type Failure = Box<dyn std::error::Error>;
 type Adapter = TptAdapter<ReqwestTransport, NoFiles, InstantPause>;
@@ -166,7 +162,6 @@ async fn read_product(
 ) -> Result<(), Failure> {
     let observed = adapter
         .read_back(
-            ORG,
             ListingLocator::Durable(product.remote()),
             FetchReason::FirstPartyExport {
                 inventory: InventoryId::Tpt,

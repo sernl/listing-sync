@@ -108,7 +108,6 @@ impl MarketplaceAdapter for ScriptedAdapter {
 
     async fn assert_form_schema(
         &self,
-        _org: OrgId,
         _form: FormId,
     ) -> Result<FormSchemaFingerprint, AdapterError> {
         let position = self.preflight_cursor.fetch_add(1, Ordering::SeqCst);
@@ -123,7 +122,6 @@ impl MarketplaceAdapter for ScriptedAdapter {
 
     async fn submit(
         &self,
-        _org: OrgId,
         _key: IdempotencyKey,
         _fields: FieldSet,
         _now: Timestamp,
@@ -142,7 +140,6 @@ impl MarketplaceAdapter for ScriptedAdapter {
     /// test that grew a revise or a removal by accident says so.
     async fn revise(
         &self,
-        _org: OrgId,
         _plan: RevisePlan,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
@@ -155,7 +152,6 @@ impl MarketplaceAdapter for ScriptedAdapter {
 
     async fn remove(
         &self,
-        _org: OrgId,
         _plan: RemovalPlan,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
@@ -166,7 +162,6 @@ impl MarketplaceAdapter for ScriptedAdapter {
 
     async fn read_back(
         &self,
-        _org: OrgId,
         locator: ListingLocator,
         _reason: FetchReason,
         _observed_at: Timestamp,
