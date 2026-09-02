@@ -10,5 +10,6 @@ pub mod breaker;
 pub mod broker_client;
 pub mod canary;
 pub mod driver;
+pub mod ledger;
 pub mod outbox;
 pub mod seed;

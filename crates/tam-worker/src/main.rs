@@ -56,6 +56,7 @@ use tam_domain::{ItemOperation, ItemOutcome};
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::{claim_account, request_lease, ClaimError, LeasePurpose};
 use tam_engine::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
+use tam_engine::ledger::{PgJournal, PgOutbox};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_marketplace::transport::{Transport, TransportError};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
@@ -147,6 +148,8 @@ struct Pump {
     halts: HaltRepo,
     attempts: WriteAttemptRepo,
     budgets: RateBudgetRepo,
+    journal: PgJournal,
+    outbox: PgOutbox,
     broker_socket: std::path::PathBuf,
     kek: Kek,
     store_root: std::path::PathBuf,
@@ -505,7 +508,8 @@ impl Pump {
             halts: &self.halts,
             attempts: &self.attempts,
             budgets: &self.budgets,
-            pool: &self.pool,
+            journal: &self.journal,
+            outbox: &self.outbox,
             clock: &WallClock,
             cancel: &self.cancel,
             pause: &SleepingPause,
@@ -860,6 +864,8 @@ async fn run_pump(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
         halts: HaltRepo::new(pool.clone()),
         attempts: WriteAttemptRepo::new(pool.clone()),
         budgets: RateBudgetRepo::new(pool.clone()),
+        journal: PgJournal::new(pool.clone()),
+        outbox: PgOutbox::new(pool.clone()),
         broker_socket,
         kek,
         store_root,

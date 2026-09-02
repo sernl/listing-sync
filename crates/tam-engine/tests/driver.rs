@@ -15,6 +15,7 @@ use tam_domain::{ItemOutcome, StepBudget};
 use tam_engine::driver::{
     run_item, DriverContext, MachineSeed, NowSource, RunVerdict, PREFLIGHT_FAILURES_MAX,
 };
+use tam_engine::ledger::{PgJournal, PgOutbox};
 use tam_engine::seed::verify_policy;
 use tam_marketplace::FetchReason;
 use tam_marketplace::{
@@ -403,7 +404,8 @@ async fn drive(
         halts: &HaltRepo::new(engine.clone()),
         attempts: &WriteAttemptRepo::new(engine.clone()),
         budgets: &RateBudgetRepo::new(engine.clone()),
-        pool: engine,
+        journal: &PgJournal::new(engine.clone()),
+        outbox: &PgOutbox::new(engine.clone()),
         clock: &clock,
         // The fixture's own, so an adapter call can cancel the run it is
         // being driven under; never cancelled unless a hook was asked for.

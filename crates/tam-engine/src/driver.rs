@@ -17,9 +17,9 @@ use tam_marketplace::{
     RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_storage::{
-    append_event, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
-    EventScope, HaltCause, HaltRepo, ItemVerdict, LandingEffect, LeaseRef, LeaseRepo, LeasedItem,
-    NewAttempt, NewOutboxMessage, RateBudgetRepo, StorageError, WriteAttemptRepo,
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, EventScope, HaltCause,
+    HaltRepo, ItemVerdict, LandingEffect, LeaseRef, LeaseRepo, LeasedItem, NewAttempt,
+    NewOutboxMessage, RateBudgetRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
     BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, OrgId,
@@ -78,13 +78,41 @@ pub struct MachineSeed {
     pub verify: VerifyPolicy,
 }
 
-pub struct DriverContext<'a, A, N, P> {
+/// The item's event journal as a capability. The interpreter records what it
+/// did; allocating the per-organisation sequence and writing the row belongs
+/// to the implementation, which is what takes the raw pool — and with it
+/// `sqlx` — out of this module's own signature.
+///
+/// Written with an explicit `impl Future` return rather than `async fn`,
+/// because `async_fn_in_trait` is a hard error under a deny-warnings build
+/// and the desugaring is what a multi-threaded runtime requires anyway.
+pub trait JournalPort: Send + Sync {
+    fn record(
+        &self,
+        scope: &EventScope,
+        payload: &JobEventPayload,
+        stamp: Stamp,
+    ) -> impl std::future::Future<Output = Result<(), StorageError>> + Send;
+}
+
+/// The seller-notification outbox as a capability. At-least-once delivery
+/// deduped on `(org, topic, dedupe_key)` is the storage side's contract; this
+/// states only that the interpreter can queue one.
+pub trait NotifyPort: Send + Sync {
+    fn append(
+        &self,
+        message: &NewOutboxMessage,
+    ) -> impl std::future::Future<Output = Result<(), StorageError>> + Send;
+}
+
+pub struct DriverContext<'a, A, N, P, J, O> {
     pub adapter: &'a A,
     pub leases: &'a LeaseRepo,
     pub halts: &'a HaltRepo,
     pub attempts: &'a WriteAttemptRepo,
     pub budgets: &'a RateBudgetRepo,
-    pub pool: &'a sqlx::PgPool,
+    pub journal: &'a J,
+    pub outbox: &'a O,
     pub clock: &'a N,
     pub cancel: &'a CancellationToken,
     /// The wait between verification reads. A capability rather than a
@@ -371,8 +399,14 @@ impl VerifyStop {
 /// `SyncState::Terminal` after a reconciled settle, and `exhaust_budget`
 /// answers a terminal machine `InputNotApplicable`. Walking away covers both
 /// callers with one rule.
-async fn verify_with_backoff<A: MarketplaceAdapter, N: NowSource, P: Pause>(
-    ctx: &DriverContext<'_, A, N, P>,
+async fn verify_with_backoff<
+    A: MarketplaceAdapter,
+    N: NowSource,
+    P: Pause,
+    J: JournalPort,
+    O: NotifyPort,
+>(
+    ctx: &DriverContext<'_, A, N, P, J, O>,
     lease: &LeasedItem,
     request: Verification<'_>,
 ) -> Result<VerifyOutcome, EngineError> {
@@ -483,8 +517,14 @@ const _: () = assert!(
     clippy::too_many_lines,
     reason = "the effect loop is one cohesive interpreter; the lint is advisory here by charter"
 )]
-pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
-    ctx: &DriverContext<'_, A, N, P>,
+pub async fn run_item<
+    A: MarketplaceAdapter,
+    N: NowSource,
+    P: Pause,
+    J: JournalPort,
+    O: NotifyPort,
+>(
+    ctx: &DriverContext<'_, A, N, P, J, O>,
     lease: &LeasedItem,
     seed: MachineSeed,
 ) -> Result<RunVerdict, EngineError> {
@@ -972,7 +1012,14 @@ pub async fn run_item<A: MarketplaceAdapter, N: NowSource, P: Pause>(
 /// means consuming inside the transport seam, which is recorded as founder-
 /// gated rather than assumed here.
 async fn consume_write_grant(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     org: OrgId,
     connection: ConnectionId,
     now: Timestamp,
@@ -989,7 +1036,14 @@ async fn consume_write_grant(
 /// sent, so the attempt settles `'abandoned'` exactly as the submit path's
 /// refusal does, and the run abandons into the stealer.
 async fn rate_refused_before_the_write(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     lease_ref: &LeaseRef,
     settling: AttemptRef,
     operation: &ItemOperation,
@@ -1047,7 +1101,14 @@ async fn rate_refused_before_the_write(
 /// and the gate lifts, where the alternative spends every item in the queue on
 /// the same dead leases and settles them all `failed`/`Other`.
 async fn preflight_failed(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     lease: &LeasedItem,
     error: &AdapterError,
     at: Timestamp,
@@ -1204,7 +1265,14 @@ const fn may_settle_unverified(operation: &ItemOperation) -> bool {
 /// verification could not finish. Neither writes the mapping — `Addressed`
 /// names the listing in the attempt row and leaves the binding alone.
 async fn settle_open_attempt(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     lease: &LeaseRef,
     settling: AttemptRef,
     verdict: &AttemptVerdict,
@@ -1260,29 +1328,40 @@ const fn block_cause_name(cause: BlockCause) -> &'static str {
 }
 
 async fn record_event(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     lease: &LeasedItem,
     payload: &JobEventPayload,
     at: Timestamp,
 ) -> Result<(), StorageError> {
-    let mut tx = ctx.pool.begin().await?;
-    append_event(
-        &mut tx,
-        &EventScope {
-            org: lease.org,
-            job: lease.job,
-            item: Some(lease.item),
-        },
-        payload,
-        Stamp::system(SystemComponent::Engine, at),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
+    ctx.journal
+        .record(
+            &EventScope {
+                org: lease.org,
+                job: lease.job,
+                item: Some(lease.item),
+            },
+            payload,
+            Stamp::system(SystemComponent::Engine, at),
+        )
+        .await
 }
 
 async fn record_action(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     lease: &LeasedItem,
     sequence: u32,
     label: &str,
@@ -1326,7 +1405,14 @@ async fn record_action(
 /// reachable from this step today, and were one to become so, waiting is the
 /// conservative reading of an error whose determinism is not established.
 pub async fn seed_refused(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     lease: &LeasedItem,
     error: &EngineError,
     at: Timestamp,
@@ -1355,27 +1441,29 @@ pub async fn seed_refused(
 }
 
 async fn notify(
-    ctx: &DriverContext<'_, impl MarketplaceAdapter, impl NowSource, impl Pause>,
+    ctx: &DriverContext<
+        '_,
+        impl MarketplaceAdapter,
+        impl NowSource,
+        impl Pause,
+        impl JournalPort,
+        impl NotifyPort,
+    >,
     org: OrgId,
     lease: &LeasedItem,
     event: SellerEvent,
     at: Timestamp,
 ) -> Result<(), StorageError> {
-    let mut tx = ctx.pool.begin().await?;
-    tam_storage::OutboxRepo::append(
-        &mut tx,
-        &NewOutboxMessage {
+    ctx.outbox
+        .append(&NewOutboxMessage {
             org,
             id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
             topic: seller_event_topic(event).to_owned(),
             dedupe_key: format!("{event:?}:{:02x?}", lease.item.0 .0),
             payload: json!({ "event": format!("{event:?}") }),
             at,
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
+        })
+        .await
 }
 
 #[cfg(test)]

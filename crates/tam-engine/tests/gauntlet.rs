@@ -22,6 +22,7 @@ use tam_domain::{
     VocabularyId, VocabularyPath,
 };
 use tam_engine::driver::{run_item, DriverContext, EngineError, NowSource, RunVerdict};
+use tam_engine::ledger::{PgJournal, PgOutbox};
 use tam_engine::seed::{prepare_item, seed_for_removal, seed_from_projection, ItemPreparation};
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::transport::{
@@ -787,7 +788,8 @@ async fn pump(
         halts: &halts,
         attempts: &attempts,
         budgets: &budgets,
-        pool,
+        journal: &PgJournal::new(pool.clone()),
+        outbox: &PgOutbox::new(pool.clone()),
         clock: &Clock,
         cancel: &cancel,
         pause: &pause,

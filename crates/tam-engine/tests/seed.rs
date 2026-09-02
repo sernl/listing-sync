@@ -17,6 +17,7 @@ use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
 use tam_engine::driver::{seed_refused, DriverContext, NowSource, RunVerdict};
+use tam_engine::ledger::{PgJournal, PgOutbox};
 use tam_engine::seed::{prepare_item, seed_from_projection, ItemPreparation};
 use tam_marketplace::cassette::{Cassette, CassetteTransport};
 use tam_marketplace::idempotency::derive_idempotency_key;
@@ -1413,7 +1414,8 @@ async fn refuse_one(app: &PgPool, engine: &PgPool, leases: &LeaseRepo) -> (Lease
         halts: &tam_storage::HaltRepo::new(engine.clone()),
         attempts: &tam_storage::WriteAttemptRepo::new(engine.clone()),
         budgets: &tam_storage::RateBudgetRepo::new(engine.clone()),
-        pool: engine,
+        journal: &PgJournal::new(engine.clone()),
+        outbox: &PgOutbox::new(engine.clone()),
         clock: &FixedClock,
         cancel: &cancel,
         pause: &tam_marketplace::InstantPause,
