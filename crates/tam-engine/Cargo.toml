@@ -27,6 +27,7 @@ pg-tests = []
 base64 = "0.22"
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 tam-marketplace-tes = { path = "../tam-marketplace-tes" }
+tam-engine-driver = { path = "../tam-engine-driver", features = ["testing"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 

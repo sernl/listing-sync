@@ -12,5 +12,16 @@ tam-limits = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-types = { path = "../tam-types" }
 
+[features]
+# The conformance bodies and the in-memory ledger, so `tam-engine` can run the
+# same assertions against Postgres. Off by default: a client build ships
+# neither.
+testing = []
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+# The suite's in-memory instantiation needs the fixtures the feature gates.
+tam-engine-driver = { path = ".", features = ["testing"] }
+
 [lints]
 workspace = true

@@ -411,3 +411,156 @@ impl tam_engine_driver::ports::Cancellation for TokenCancellation<'_> {
         self.0.is_cancelled()
     }
 }
+
+/// The Postgres side of the conformance suite's observations.
+///
+/// Gated on `pg-tests` because it exists only so one test body can run against
+/// two ledgers: it reads with runtime SQL and panics on a broken read, which is
+/// right for a fixture and wrong for anything shipped. Nothing here writes, and
+/// nothing here exposes an operation absent from [`ItemLedger`].
+#[cfg(feature = "pg-tests")]
+#[expect(
+    clippy::expect_used,
+    reason = "a conformance inspector whose read fails has a broken fixture, and should say so loudly rather than assert against a default"
+)]
+impl tam_engine_driver::ports::LedgerInspector for PgLedger {
+    async fn item(&self, item: tam_domain::JobItemId) -> tam_engine_driver::ports::ItemObservation {
+        let row: (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i32,
+        ) = sqlx::query_as(
+            "SELECT state, outcome, blocked_on, failure_code, failure_detail, \
+                        preflight_failures FROM job_item WHERE id = $1",
+        )
+        .bind(uuid::Uuid::from_bytes(item.0 .0))
+        .fetch_one(&self.pool)
+        .await
+        .expect("the item row reads");
+        tam_engine_driver::ports::ItemObservation {
+            state: row.0,
+            outcome: row.1,
+            blocked_on: row.2,
+            failure_code: row.3,
+            failure_detail: row.4,
+            preflight_failures: row.5,
+        }
+    }
+
+    async fn attempt(
+        &self,
+        mapping: tam_types::MappingId,
+    ) -> Option<tam_engine_driver::ports::AttemptObservation> {
+        let row: Option<(String, bool, Option<String>, Option<String>, Option<i64>)> =
+            sqlx::query_as(
+                "SELECT state, settled_at IS NOT NULL, remote_id_kind, remote_url, \
+                        remote_numeric_id FROM write_attempt WHERE mapping_id = $1 \
+                 ORDER BY opened_at DESC LIMIT 1",
+            )
+            .bind(uuid::Uuid::from_bytes(mapping.0 .0))
+            .fetch_optional(&self.pool)
+            .await
+            .expect("the attempt row reads");
+        row.map(
+            |(state, settled, remote_id_kind, remote_url, remote_numeric_id)| {
+                tam_engine_driver::ports::AttemptObservation {
+                    state,
+                    settled,
+                    remote_id_kind,
+                    remote_url,
+                    remote_numeric_id,
+                }
+            },
+        )
+    }
+
+    async fn binding(
+        &self,
+        mapping: tam_types::MappingId,
+    ) -> Option<tam_engine_driver::ports::BindingObservation> {
+        let row: Option<(
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<bool>,
+            Option<bool>,
+        )> = sqlx::query_as(
+            "SELECT binding_state, remote_id_kind, remote_url, verify_state, \
+                        verified_at IS NULL, verify_stale_since = first_seen_at \
+                 FROM mapping WHERE id = $1",
+        )
+        .bind(uuid::Uuid::from_bytes(mapping.0 .0))
+        .fetch_optional(&self.pool)
+        .await
+        .expect("the mapping row reads");
+        row.map(|r| tam_engine_driver::ports::BindingObservation {
+            binding_state: r.0,
+            remote_id_kind: r.1,
+            remote_url: r.2,
+            verify_state: r.3,
+            never_verified: r.4.unwrap_or(true),
+            stale_since_first_seen: r.5.unwrap_or(false),
+        })
+    }
+
+    async fn connection_state(
+        &self,
+        org: tam_types::OrgId,
+        inventory: InventoryId,
+    ) -> Option<String> {
+        sqlx::query_scalar("SELECT state FROM connection WHERE org_id = $1 AND marketplace = $2")
+            .bind(uuid::Uuid::from_bytes(org.0 .0))
+            .bind(marketplace_wire(inventory))
+            .fetch_optional(&self.pool)
+            .await
+            .expect("the connection row reads")
+    }
+
+    async fn halt_count(&self, org: tam_types::OrgId) -> usize {
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM org_inventory_halt WHERE org_id = $1")
+                .bind(uuid::Uuid::from_bytes(org.0 .0))
+                .fetch_one(&self.pool)
+                .await
+                .expect("the halt count reads");
+        usize::try_from(count).unwrap_or(0)
+    }
+
+    async fn outbox_count(&self, org: tam_types::OrgId, topic: Option<&str>) -> usize {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM outbox_message WHERE org_id = $1 \
+               AND ($2::text IS NULL OR topic = $2)",
+        )
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .bind(topic)
+        .fetch_one(&self.pool)
+        .await
+        .expect("the outbox count reads");
+        usize::try_from(count).unwrap_or(0)
+    }
+
+    async fn event_count(&self, item: tam_domain::JobItemId) -> usize {
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM job_event WHERE job_item_id = $1")
+                .bind(uuid::Uuid::from_bytes(item.0 .0))
+                .fetch_one(&self.pool)
+                .await
+                .expect("the event count reads");
+        usize::try_from(count).unwrap_or(0)
+    }
+}
+
+/// The wire spelling the `connection` row keys on. A connection is per
+/// marketplace rather than per inventory, so TesGb and TesUs resolve to one.
+#[cfg(feature = "pg-tests")]
+fn marketplace_wire(inventory: InventoryId) -> &'static str {
+    match inventory.marketplace() {
+        tam_types::Marketplace::Tes => "tes",
+        tam_types::Marketplace::Tpt => "tpt",
+        tam_types::Marketplace::Etsy => "etsy",
+    }
+}

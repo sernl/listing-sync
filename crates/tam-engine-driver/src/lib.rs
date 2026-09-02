@@ -23,6 +23,10 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
 pub mod driver;
+#[cfg(any(test, feature = "testing"))]
+pub mod memory;
 pub mod ports;
 pub mod vocabulary;

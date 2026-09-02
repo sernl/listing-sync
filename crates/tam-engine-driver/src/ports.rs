@@ -16,8 +16,8 @@
 //! - [`ItemLedger::open_attempt`] takes a caller-minted attempt id, so a lost
 //!   response is recoverable rather than burning the item's whole budget.
 
-use tam_domain::SellerEvent;
-use tam_types::{ConnectionId, InventoryId, JobEventPayload, Timestamp};
+use tam_domain::{JobItemId, SellerEvent};
+use tam_types::{ConnectionId, InventoryId, JobEventPayload, MappingId, OrgId, Timestamp};
 
 use crate::vocabulary::{
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind, ItemVerdict, LeaseRef,
@@ -136,4 +136,86 @@ pub trait ItemLedger: Send + Sync {
         event: SellerEvent,
         at: Timestamp,
     ) -> impl core::future::Future<Output = Result<(), LedgerError>> + Send;
+}
+
+/// What a test may observe of a ledger, and nothing a client may.
+///
+/// It exists so one test body can assert against two implementations. Every
+/// method is a read of state the interpreter already caused; none of them
+/// writes, and none exposes an operation absent from [`ItemLedger`], which is
+/// the property that keeps the conformance suite from proving the boundary
+/// and widening it in the same stroke.
+///
+/// It has no wire form and is never served: the Postgres implementation lives
+/// beside the repositories it reads, and the in-memory one is the fixture
+/// itself.
+pub trait LedgerInspector {
+    /// The item row: state, outcome, what it is blocked on, and the failure
+    /// pair a settle recorded.
+    fn item(&self, item: JobItemId) -> impl core::future::Future<Output = ItemObservation> + Send;
+
+    /// The fencing attempt for a mapping, if one was ever opened.
+    fn attempt(
+        &self,
+        mapping: MappingId,
+    ) -> impl core::future::Future<Output = Option<AttemptObservation>> + Send;
+
+    /// What the mapping is bound to, and how stale the binding's verification
+    /// is. `None` where no mapping row exists.
+    fn binding(
+        &self,
+        mapping: MappingId,
+    ) -> impl core::future::Future<Output = Option<BindingObservation>> + Send;
+
+    /// The connection's lifecycle state for this organisation's inventory.
+    fn connection_state(
+        &self,
+        org: OrgId,
+        inventory: InventoryId,
+    ) -> impl core::future::Future<Output = Option<String>> + Send;
+
+    /// How many tenant-inventory halts stand for this organisation.
+    fn halt_count(&self, org: OrgId) -> impl core::future::Future<Output = usize> + Send;
+
+    /// Queued seller notifications, filtered by topic where one is named.
+    fn outbox_count(
+        &self,
+        org: OrgId,
+        topic: Option<&str>,
+    ) -> impl core::future::Future<Output = usize> + Send;
+
+    /// Events recorded against this item.
+    fn event_count(&self, item: JobItemId) -> impl core::future::Future<Output = usize> + Send;
+}
+
+/// The item row as a test reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ItemObservation {
+    pub state: String,
+    pub outcome: Option<String>,
+    pub blocked_on: Option<String>,
+    pub failure_code: Option<String>,
+    pub failure_detail: Option<String>,
+    pub preflight_failures: i32,
+}
+
+/// The fencing attempt as a test reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttemptObservation {
+    pub state: String,
+    pub settled: bool,
+    pub remote_id_kind: Option<String>,
+    pub remote_url: Option<String>,
+    pub remote_numeric_id: Option<i64>,
+}
+
+/// The mapping's binding as a test reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingObservation {
+    pub binding_state: String,
+    pub remote_id_kind: Option<String>,
+    pub remote_url: Option<String>,
+    pub verify_state: String,
+    pub never_verified: bool,
+    pub stale_since_first_seen: bool,
 }
