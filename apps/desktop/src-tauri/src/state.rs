@@ -22,6 +22,11 @@ pub struct DesktopState {
     /// different questions: the gate says whether work may run, and this says
     /// why it may not, which is what the interface shows.
     revoked: AtomicBool,
+    /// Whether the last check-in found a console session to speak under. A
+    /// separate fact from the gate and from revocation: a machine sitting at
+    /// a sign-in screen is neither entitled nor revoked, and the interface
+    /// owes the seller that distinction rather than a bare "not syncing".
+    signed_in: AtomicBool,
     /// How this device reaches the server's registry. `Offline` by default,
     /// because this slice ships no transport and a client that believed it had
     /// checked in would never learn it had been revoked.
@@ -45,6 +50,7 @@ impl DesktopState {
             store,
             gate: Mutex::new(EntitlementGate::closed()),
             revoked: AtomicBool::new(false),
+            signed_in: AtomicBool::new(false),
             plane,
         }
     }
@@ -87,6 +93,20 @@ impl DesktopState {
     pub fn set_revoked(&self, revoked: bool) {
         self.revoked.store(revoked, Ordering::SeqCst);
     }
+
+    /// Whether the last check-in had a console session to speak under.
+    ///
+    /// Starts false, because a device that has never checked in has not found
+    /// one, and claiming otherwise would let the interface show a working
+    /// state the device has no evidence for.
+    #[must_use]
+    pub fn signed_in(&self) -> bool {
+        self.signed_in.load(Ordering::SeqCst)
+    }
+
+    pub fn set_signed_in(&self, signed_in: bool) {
+        self.signed_in.store(signed_in, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
@@ -121,6 +141,11 @@ mod tests {
             !state.revoked(),
             "a device nobody has signed out is not revoked; the closed gate is the \
              absence of an entitlement, which is a different fact"
+        );
+        assert!(
+            !state.signed_in(),
+            "a device that has never checked in has found no session, and must not \
+             claim one it has no evidence for"
         );
     }
 }

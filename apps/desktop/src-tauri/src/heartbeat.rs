@@ -116,6 +116,11 @@ pub enum ControlPlaneError {
     /// The device is not in the registry, so a heartbeat has nothing to stamp.
     /// The caller re-registers rather than retrying.
     Unregistered,
+    /// Nobody is signed in to the console on this device, so there is no
+    /// session to speak under and no request was made. Not a fault and not a
+    /// revocation: it is the ordinary state of a machine at a sign-in screen,
+    /// and it resolves itself when the seller signs in.
+    NoSession,
 }
 
 impl core::fmt::Display for ControlPlaneError {
@@ -124,6 +129,7 @@ impl core::fmt::Display for ControlPlaneError {
             Self::NotConfigured => f.write_str("this build has no control-plane transport"),
             Self::Refused(why) => write!(f, "the control plane refused: {why}"),
             Self::Unregistered => f.write_str("this device is not registered"),
+            Self::NoSession => f.write_str("nobody is signed in to the console on this device"),
         }
     }
 }
@@ -242,10 +248,23 @@ pub async fn check_in(
     plane: &dyn ControlPlane,
 ) -> Result<CheckIn, CheckInError> {
     let sessions = report_of(state.store()).await?;
-    let answer = plane.heartbeat(&state.device().id, &sessions).await?;
+    let answer = match plane.heartbeat(&state.device().id, &sessions).await {
+        Ok(answer) => answer,
+        Err(why) => {
+            // Not being signed in is a fact about this device that the
+            // interface shows, so it is recorded even though the call failed.
+            // Nothing else is: an unreachable server tells us nothing about
+            // our standing, and least of all that we are still signed in.
+            if why == ControlPlaneError::NoSession {
+                state.set_signed_in(false);
+            }
+            return Err(why.into());
+        }
+    };
     if answer.revoked {
         wipe(state).await?;
     }
+    state.set_signed_in(true);
     state.set_revoked(answer.revoked);
     Ok(answer)
 }
@@ -257,7 +276,12 @@ pub async fn first_run(
     state: &DesktopState,
     plane: &dyn ControlPlane,
 ) -> Result<CheckIn, CheckInError> {
-    plane.register(state.device(), HostFacts::here()).await?;
+    if let Err(why) = plane.register(state.device(), HostFacts::here()).await {
+        if why == ControlPlaneError::NoSession {
+            state.set_signed_in(false);
+        }
+        return Err(why.into());
+    }
     check_in(state, plane).await
 }
 

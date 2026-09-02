@@ -19,6 +19,11 @@
 //! The server side of this contract is pinned by `crates/tam-api/tests/
 //! devices_flow.rs`, which drives the same two paths and the same body keys
 //! against the real router over a real database.
+//!
+//! The session this client speaks under is resolved per call from a
+//! [`SessionSource`] rather than held, and is checked before the transport is
+//! reached: a device nobody has signed in on makes no request at all, rather
+//! than one the server would answer with a blank 401.
 
 use core::future::Future;
 use core::pin::Pin;
@@ -27,19 +32,40 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::console_session::{SessionSource, SESSION_COOKIE};
 use crate::device::{DeviceId, DeviceIdentity};
 use crate::heartbeat::{
     CheckIn, ControlPlane, ControlPlaneError, HostFacts, PlaneFuture, SessionReport,
 };
 
-/// The cookie the API reads the console session from, mirroring
-/// `tam_api::SESSION_COOKIE`.
+/// Where the control plane is, when nothing overrides it.
 ///
-/// A literal rather than an import: depending on `tam-api` from here would
-/// pull axum, sqlx and the entire server graph into a client binary. The
-/// pg-gated `devices_flow.rs` pins the same literal on the server side, so a
-/// rename fails there rather than silently unauthenticating this client.
-pub const SESSION_COOKIE: &str = "tam_session";
+/// The same origin `tauri.conf.json`'s content-security policy already names
+/// as the one the console may reach, so the two cannot disagree without one of
+/// them being edited.
+pub const DEFAULT_BASE_URL: &str = "https://api.teachouse.io";
+
+/// The development override. `just web-dev` serves the console on the vite
+/// origin and proxies `/v1` from there to a local `tam-server`, so in
+/// development both the session cookie and the control plane live on that one
+/// origin.
+pub const BASE_URL_ENV: &str = "TAM_CONTROL_PLANE";
+
+/// The control plane's origin: the override if the environment sets one, and
+/// the compiled-in default otherwise.
+#[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the desktop client is a configuration-reading process boundary; this is the one \
+              site that reads it, which is what the ban asks for"
+)]
+pub fn base_url() -> String {
+    std::env::var(BASE_URL_ENV)
+        .ok()
+        .map(|raw| raw.trim().to_owned())
+        .filter(|raw| !raw.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned())
+}
 
 /// How long a check-in may take end to end. Generous, because the seller's
 /// connection is a home connection, and bounded, because a check-in that hung
@@ -72,28 +98,29 @@ pub type TransportFuture<'a> = Pin<Box<dyn Future<Output = Result<Reply, String>
 /// argument, so the only thing a caller can vary is which of our own paths it
 /// posts to and what metadata it sends.
 pub trait Transport: Send + Sync {
-    fn post<'a>(&'a self, path: &'a str, body: String) -> TransportFuture<'a>;
+    /// `session` is the console session cookie value this request speaks
+    /// under. A parameter rather than a field, so no implementation can retain
+    /// one and none has to be invalidated when the seller signs out.
+    fn post<'a>(&'a self, path: &'a str, session: &'a str, body: String) -> TransportFuture<'a>;
 }
 
 /// The socket-opening [`Transport`].
 ///
-/// `Debug` is hand-written because a derived one would print the session
-/// token, which is the credential that authenticates this device to us. The
-/// same reason `CookieJar` writes its own.
+/// Holds no session: one arrives per request and is dropped with it, so there
+/// is no field a credential could be read out of and none to clear on
+/// sign-out.
 pub struct HttpTransport {
     client: reqwest::Client,
     base: String,
-    session: String,
 }
 
 impl core::fmt::Debug for HttpTransport {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // Non-exhaustive rather than complete: the client itself is a pool
-        // handle nobody reads, and the one field that must never print is
-        // deliberately shown as a word instead of a value.
+        // Non-exhaustive rather than complete: the client is a pool handle
+        // nobody reads. There is deliberately nothing else to show, because
+        // the only credential this type ever touches is a parameter.
         f.debug_struct("HttpTransport")
             .field("base", &self.base)
-            .field("session", &"redacted")
             .finish_non_exhaustive()
     }
 }
@@ -105,11 +132,7 @@ impl HttpTransport {
     /// table requires of every client: `reqwest::Client::new` is banned
     /// precisely because it has neither.
     ///
-    /// `session` is the console session this device speaks under. Where it
-    /// comes from is the console's own exchange and is not this module's
-    /// business; what is this module's business is that it travels as a cookie
-    /// header and reaches no formatter.
-    pub fn new(base_url: &str, session: &str) -> Result<Self, ControlPlaneError> {
+    pub fn new(base_url: &str) -> Result<Self, ControlPlaneError> {
         install_crypto_provider();
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -119,7 +142,6 @@ impl HttpTransport {
         Ok(Self {
             client,
             base: base_url.trim_end_matches('/').to_owned(),
-            session: session.to_owned(),
         })
     }
 }
@@ -145,14 +167,14 @@ fn install_crypto_provider() {
 }
 
 impl Transport for HttpTransport {
-    fn post<'a>(&'a self, path: &'a str, body: String) -> TransportFuture<'a> {
+    fn post<'a>(&'a self, path: &'a str, session: &'a str, body: String) -> TransportFuture<'a> {
         Box::pin(async move {
             let response = self
                 .client
                 .post(format!("{}{path}", self.base))
                 .header("content-type", "application/json")
                 .header("accept", "application/json")
-                .header("cookie", format!("{SESSION_COOKIE}={}", self.session))
+                .header("cookie", format!("{SESSION_COOKIE}={session}"))
                 .body(body)
                 .send()
                 .await
@@ -200,17 +222,45 @@ struct HeartbeatReply {
 /// The registry, over HTTP.
 pub struct HttpControlPlane {
     transport: Arc<dyn Transport>,
+    sessions: Arc<dyn SessionSource>,
 }
 
 impl HttpControlPlane {
     #[must_use]
-    pub fn new(transport: Arc<dyn Transport>) -> Self {
-        Self { transport }
+    pub fn new(transport: Arc<dyn Transport>, sessions: Arc<dyn SessionSource>) -> Self {
+        Self {
+            transport,
+            sessions,
+        }
     }
 
-    /// The ordinary construction: a real socket against our own base URL.
-    pub fn against(base_url: &str, session: &str) -> Result<Self, ControlPlaneError> {
-        Ok(Self::new(Arc::new(HttpTransport::new(base_url, session)?)))
+    /// The ordinary construction: a real socket against our own base URL,
+    /// speaking under whatever session the source resolves at the time.
+    pub fn against(
+        base_url: &str,
+        sessions: Arc<dyn SessionSource>,
+    ) -> Result<Self, ControlPlaneError> {
+        Ok(Self::new(Arc::new(HttpTransport::new(base_url)?), sessions))
+    }
+
+    /// Resolves the session, then posts.
+    ///
+    /// The order is the point. A device nobody has signed in on makes no
+    /// request at all, rather than one the server answers with the same blank
+    /// 401 it gives a forged cookie — which the client could not tell from a
+    /// revocation, and which would cost a round trip on every tick of a
+    /// machine sitting at a sign-in screen.
+    async fn dispatch(&self, path: &str, body: String) -> Result<Reply, ControlPlaneError> {
+        let session = self
+            .sessions
+            .session()
+            .await
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))?
+            .ok_or(ControlPlaneError::NoSession)?;
+        self.transport
+            .post(path, &session, body)
+            .await
+            .map_err(ControlPlaneError::Refused)
     }
 }
 
@@ -253,11 +303,7 @@ impl ControlPlane for HttpControlPlane {
             })
             .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
 
-            let reply = self
-                .transport
-                .post(REGISTER_PATH, body)
-                .await
-                .map_err(ControlPlaneError::Refused)?;
+            let reply = self.dispatch(REGISTER_PATH, body).await?;
             if reply.status == 200 {
                 Ok(())
             } else {
@@ -284,11 +330,7 @@ impl ControlPlane for HttpControlPlane {
             })
             .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
 
-            let reply = self
-                .transport
-                .post(&heartbeat_path(device), body)
-                .await
-                .map_err(ControlPlaneError::Refused)?;
+            let reply = self.dispatch(&heartbeat_path(device), body).await?;
             if reply.status != 200 {
                 return Err(refusal(&reply));
             }
@@ -309,12 +351,14 @@ impl ControlPlane for HttpControlPlane {
 #[cfg(test)]
 mod tests {
     use super::{
-        heartbeat_path, HttpControlPlane, HttpTransport, Reply, Transport, TransportFuture,
-        REGISTER_PATH,
+        base_url, heartbeat_path, HttpControlPlane, HttpTransport, Reply, Transport,
+        TransportFuture, DEFAULT_BASE_URL, REGISTER_PATH,
     };
+    use crate::console_session::{NoSession, SessionFuture, SessionSource, SessionUnreadable};
     use crate::device::{DeviceId, DeviceIdentity};
     use crate::heartbeat::{
-        check_in, ControlPlane, ControlPlaneError, HostFacts, Offline, SessionReport, SessionState,
+        check_in, first_run, ControlPlane, ControlPlaneError, HostFacts, Offline, SessionReport,
+        SessionState,
     };
     use crate::session::memory::MemorySessionStore;
     use crate::session::{Cookie, CookieJar, SessionRecord, SessionStore};
@@ -336,7 +380,14 @@ mod tests {
     /// out over a socket.
     struct Fake {
         reply: Result<Reply, String>,
-        seen: tokio::sync::Mutex<Vec<(String, String)>>,
+        seen: tokio::sync::Mutex<Vec<Sent>>,
+    }
+
+    #[derive(Clone)]
+    struct Sent {
+        path: String,
+        session: String,
+        body: String,
     }
 
     impl Fake {
@@ -357,7 +408,7 @@ mod tests {
             }
         }
 
-        async fn last(&self) -> (String, String) {
+        async fn last(&self) -> Sent {
             self.seen
                 .lock()
                 .await
@@ -365,20 +416,72 @@ mod tests {
                 .cloned()
                 .expect("the transport was reached")
         }
+
+        async fn calls(&self) -> usize {
+            self.seen.lock().await.len()
+        }
     }
 
     impl Transport for Fake {
-        fn post<'a>(&'a self, path: &'a str, body: String) -> TransportFuture<'a> {
+        fn post<'a>(
+            &'a self,
+            path: &'a str,
+            session: &'a str,
+            body: String,
+        ) -> TransportFuture<'a> {
             let reply = self.reply.clone();
             Box::pin(async move {
-                self.seen.lock().await.push((path.to_owned(), body));
+                self.seen.lock().await.push(Sent {
+                    path: path.to_owned(),
+                    session: session.to_owned(),
+                    body,
+                });
                 reply
             })
         }
     }
 
+    /// A session that is simply there. The ordinary case.
+    struct Signed(&'static str);
+
+    impl SessionSource for Signed {
+        fn session(&self) -> SessionFuture<'_> {
+            Box::pin(async move { Ok(Some(self.0.to_owned())) })
+        }
+    }
+
+    /// A session that is absent to begin with and appears later, which is what
+    /// actually happens: the application starts, and the seller signs in
+    /// afterwards in the window.
+    #[derive(Default)]
+    struct AppearsLater {
+        value: tokio::sync::Mutex<Option<String>>,
+    }
+
+    impl AppearsLater {
+        async fn sign_in(&self, session: &str) {
+            *self.value.lock().await = Some(session.to_owned());
+        }
+    }
+
+    impl SessionSource for AppearsLater {
+        fn session(&self) -> SessionFuture<'_> {
+            Box::pin(async move { Ok(self.value.lock().await.clone()) })
+        }
+    }
+
+    /// A cookie store that cannot be opened, which is a fault rather than an
+    /// absence.
+    struct Unreadable;
+
+    impl SessionSource for Unreadable {
+        fn session(&self) -> SessionFuture<'_> {
+            Box::pin(async { Err(SessionUnreadable("the window is gone".to_owned())) })
+        }
+    }
+
     fn plane(fake: Arc<Fake>) -> HttpControlPlane {
-        HttpControlPlane::new(fake)
+        HttpControlPlane::new(fake, Arc::new(Signed("s3ss10n")))
     }
 
     fn held(marketplace: Marketplace, label: Option<&str>) -> SessionReport {
@@ -397,8 +500,13 @@ mod tests {
             .await
             .expect("a two-hundred registers");
 
-        let (path, body) = fake.last().await;
-        assert_eq!(path, REGISTER_PATH);
+        let sent_call = fake.last().await;
+        let body = sent_call.body.clone();
+        assert_eq!(sent_call.path, REGISTER_PATH);
+        assert_eq!(
+            sent_call.session, "s3ss10n",
+            "the request speaks under the console's own session"
+        );
         let sent: serde_json::Value = serde_json::from_str(&body).expect("the body is JSON");
         assert_eq!(sent["id"], DEVICE);
         assert_eq!(sent["name"], "founder-pc");
@@ -430,9 +538,10 @@ mod tests {
             .expect("a two-hundred is a check-in");
         assert!(!answer.revoked);
 
-        let (path, body) = fake.last().await;
-        assert_eq!(path, heartbeat_path(&identity().id));
-        assert_eq!(path, format!("/v1/devices/{DEVICE}/heartbeat"));
+        let sent_call = fake.last().await;
+        let body = sent_call.body.clone();
+        assert_eq!(sent_call.path, heartbeat_path(&identity().id));
+        assert_eq!(sent_call.path, format!("/v1/devices/{DEVICE}/heartbeat"));
         let sent: serde_json::Value = serde_json::from_str(&body).expect("the body is JSON");
         let lines = sent["sessions"].as_array().expect("sessions is an array");
         assert_eq!(lines.len(), 2);
@@ -478,7 +587,7 @@ mod tests {
             .await
             .expect("the check-in lands");
 
-        let (_, body) = fake.last().await;
+        let body = fake.last().await.body;
         assert!(
             !body.contains("s3cr3t") && !body.contains("sessionKey"),
             "a cookie reached the control plane, which is the one thing this client \
@@ -602,6 +711,135 @@ mod tests {
         );
     }
 
+    /// A machine at a sign-in screen. The assertion that matters is the call
+    /// count: an unauthenticated request would be answered with the same blank
+    /// 401 a forged cookie gets, which this client could not tell from a
+    /// revocation, so the request must not be made at all.
+    #[tokio::test]
+    async fn with_nobody_signed_in_no_request_is_made_and_the_state_says_so() {
+        let fake = Arc::new(Fake::answering(200, r#"{"revoked":false}"#));
+        let store = Arc::new(MemorySessionStore::new());
+        store
+            .put(&SessionRecord {
+                marketplace: Marketplace::Tpt,
+                account_label: None,
+                captured_at: Timestamp(1_756_000_000_000),
+                device_id: DeviceId::from_raw(DEVICE),
+                jar: CookieJar::default(),
+            })
+            .await
+            .expect("the session stores");
+        let held: Arc<dyn SessionStore> = store.clone();
+        let state = DesktopState::with_control_plane(
+            identity(),
+            held,
+            Arc::new(HttpControlPlane::new(fake.clone(), Arc::new(NoSession))),
+        );
+
+        let refused = check_in(&state, state.control_plane())
+            .await
+            .expect_err("there is no session to speak under");
+        assert_eq!(
+            refused.to_string(),
+            ControlPlaneError::NoSession.to_string()
+        );
+        assert_eq!(
+            fake.calls().await,
+            0,
+            "the transport must not be reached at all without a session"
+        );
+        assert!(
+            !state.signed_in(),
+            "the interface has to be able to say that nobody is signed in here"
+        );
+        assert!(
+            !state.revoked(),
+            "not being signed in is not a revocation, and must not read as one"
+        );
+        assert!(
+            store
+                .get(Marketplace::Tpt)
+                .await
+                .expect("the store reads")
+                .is_some(),
+            "and it wipes nothing: signing out of the console is not signing the device out"
+        );
+    }
+
+    /// The ordinary start-up order: the application runs before the seller
+    /// signs in, so the first check-in finds nothing and a later one succeeds
+    /// without anything having to be reconstructed.
+    #[tokio::test]
+    async fn a_session_that_appears_after_start_is_picked_up_on_the_next_check_in() {
+        let fake = Arc::new(Fake::answering(200, r#"{"revoked":false}"#));
+        let sessions = Arc::new(AppearsLater::default());
+        let store = Arc::new(MemorySessionStore::new());
+        let held: Arc<dyn SessionStore> = store.clone();
+        let state = DesktopState::with_control_plane(
+            identity(),
+            held,
+            Arc::new(HttpControlPlane::new(fake.clone(), sessions.clone())),
+        );
+
+        first_run(&state, state.control_plane())
+            .await
+            .expect_err("nobody is signed in yet, so even registration cannot speak");
+        assert_eq!(fake.calls().await, 0);
+        assert!(!state.signed_in());
+
+        sessions.sign_in("later-s3ss10n").await;
+
+        let answer = first_run(&state, state.control_plane())
+            .await
+            .expect("the session is there now");
+        assert!(!answer.revoked);
+        assert!(
+            state.signed_in(),
+            "the state follows the session rather than the start-up order"
+        );
+        assert_eq!(
+            fake.calls().await,
+            2,
+            "the registration and the check-in both went out once a session existed"
+        );
+        assert_eq!(
+            fake.last().await.session,
+            "later-s3ss10n",
+            "and they spoke under the session that appeared, not one captured at start"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cookie_store_that_cannot_be_opened_is_a_refusal_rather_than_a_sign_out() {
+        let fake = Arc::new(Fake::answering(200, r#"{"revoked":false}"#));
+        let plane = HttpControlPlane::new(fake.clone(), Arc::new(Unreadable));
+        let refused = plane
+            .heartbeat(&identity().id, &[])
+            .await
+            .expect_err("a store we cannot read is not a device that is signed out");
+        let ControlPlaneError::Refused(why) = refused else {
+            panic!("a fault is a refusal, not an absence: {refused:?}");
+        };
+        assert!(why.contains("the window is gone"), "{why}");
+        assert_eq!(fake.calls().await, 0);
+    }
+
+    #[test]
+    fn the_base_url_is_the_compiled_in_default_unless_the_environment_overrides_it() {
+        // The process running the tests sets no override, which is also the
+        // shipped condition.
+        assert_eq!(
+            base_url(),
+            DEFAULT_BASE_URL,
+            "a build with no override speaks to the origin the content-security policy \
+             in tauri.conf.json already names"
+        );
+        assert!(
+            !DEFAULT_BASE_URL.ends_with('/'),
+            "the base is joined to paths that begin with a slash"
+        );
+    }
+
     /// The seam is still substitutable, which is what keeps a build with no
     /// configured base URL honest rather than silently successful.
     #[tokio::test]
@@ -630,24 +868,26 @@ mod tests {
     /// the first check-in; it fails here instead.
     #[test]
     fn a_client_builds_without_an_update_check_having_run_first() {
-        HttpTransport::new("https://app.example.test", "t")
+        HttpTransport::new("https://app.example.test")
             .expect("the crypto provider is installed before the client is built");
         // Twice, because `install_default` refuses a second install and the
         // guard has to treat that as success rather than as a fault.
-        HttpTransport::new("https://app.example.test", "t")
+        HttpTransport::new("https://app.example.test")
             .expect("a second client builds against the provider already installed");
     }
 
-    #[test]
-    fn the_transport_never_prints_the_session_it_speaks_under() {
-        let transport =
-            HttpTransport::new("https://app.example.test/", "deadbeef").expect("the client builds");
-        let printed = format!("{transport:?}");
+    #[tokio::test]
+    async fn no_refusal_quotes_the_session_it_spoke_under() {
+        let refused = plane(Arc::new(Fake::answering(500, "internal error")))
+            .heartbeat(&identity().id, &[])
+            .await
+            .expect_err("a five-hundred is a refusal");
+        let printed = refused.to_string();
         assert!(
-            !printed.contains("deadbeef"),
-            "the session token is the credential that authenticates this device to us: {printed}"
+            !printed.contains("s3ss10n"),
+            "the session is the credential that authenticates this device to us, and a \
+             refusal is a string that gets shown: {printed}"
         );
-        assert!(printed.contains("app.example.test"));
     }
 
     #[test]
@@ -655,8 +895,7 @@ mod tests {
         // A trailing slash on the configured base plus a leading slash on the
         // path is the ordinary way to get `//v1/devices`, which our router
         // does not mount.
-        let transport =
-            HttpTransport::new("https://app.example.test/", "t").expect("the client builds");
+        let transport = HttpTransport::new("https://app.example.test/").expect("the client builds");
         assert!(
             format!("{transport:?}").contains("https://app.example.test\""),
             "the trailing slash is trimmed once, at construction"

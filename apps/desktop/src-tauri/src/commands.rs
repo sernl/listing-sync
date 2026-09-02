@@ -66,6 +66,10 @@ pub struct DeviceState {
     /// standing rather than that we are in good standing, which is why the
     /// interface must not read `revoked: false` alone as permission.
     pub reached_server: bool,
+    /// Somebody is signed in to the console on this device, so there is a
+    /// session to speak under. False is the ordinary state of a machine at a
+    /// sign-in screen, and is a different fact from either of the two above.
+    pub signed_in: bool,
 }
 
 /// Opens the marketplace's own login page in a window on this device, waits
@@ -164,10 +168,12 @@ pub async fn device_check_in(app: AppHandle) -> Result<DeviceState, CommandError
         Ok(answer) => Ok(DeviceState {
             revoked: answer.revoked,
             reached_server: true,
+            signed_in: true,
         }),
         Err(CheckInError::Plane(_)) => Ok(DeviceState {
             revoked: state.revoked(),
             reached_server: false,
+            signed_in: state.signed_in(),
         }),
         Err(why) => Err(CommandError::from(why)),
     }

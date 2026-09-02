@@ -3,7 +3,7 @@
 Decision D14's server-side half: which of the seller's own machines exist, what each one holds, and how the seller signs one out.
 
 - date: 2026-09-03
-- status: built and green under `just db-test`, `just web-check` and the desktop crate's own tests; the desktop client now carries the wire transport too, and what remains unwired is where its base URL and session come from
+- status: built and green under `just db-test`, `just web-check` and the desktop crate's own tests; the desktop client is wired end to end, reading the console's own session from its window and checking in on a timer
 - decisions it implements: D14 (per-surface marketplace login, the device registry, the "Your devices" page with per-device sign-out), D1 (the two-branch automation rule the registry's contents obey), D10 and D11 (the entitlement the check-in closes on revocation), D30 (the wording the page uses about where a login lives)
 
 ## Why a registry of our own
@@ -132,10 +132,26 @@ Two custody properties are enforced there rather than remembered.
 The session token this client speaks under never reaches a formatter, because `HttpTransport` writes its own `Debug`, the same reason `CookieJar` does.
 And a test drives a real captured session with a real cookie through `check_in` and asserts that neither the cookie name nor its value appears in the bytes that would go out, which is the property the whole architecture rests on asserted at the one place bytes leave the machine for us.
 
-What is still not wired is where the client's two configuration values come from.
-`HttpControlPlane::against(base_url, session)` takes the control-plane base URL and the console session cookie, and nothing constructs it yet: `DesktopState::new` still defaults to `Offline`.
-The session in particular cannot be read by the console's own JavaScript, because the cookie is HttpOnly; the route that would work is the one `connect_marketplace` already uses for marketplaces, reading it from the main window's cookie store from Rust.
-That is a deliberate stopping point rather than an oversight, and it is the next step for this surface.
+The client is now wired end to end.
+`lib.rs` constructs `HttpControlPlane::against(base_url(), WebviewSession)` during setup, so a shipped build reaches the real registry.
+
+The base URL is `control_plane::base_url()`: the compiled-in `https://api.teachouse.io`, which is the origin `tauri.conf.json`'s content-security policy already names, overridable by `TAM_CONTROL_PLANE` for development.
+In development that override points at the vite origin, where `just web-dev` serves the console and proxies `/v1` to a local `tam-server`, so the session cookie and the control plane are the same origin there.
+
+The session is resolved per request rather than captured, and that is not a refinement.
+The cookie is HttpOnly, so the console's own JavaScript can neither read it nor hand it over; `WebviewSession` reads it from the main window's cookie store from Rust, the same route `connect_marketplace` uses for a marketplace login and for the same reason.
+Per request rather than once, because the application starts before the seller signs in and a session captured at construction would be missing forever, and because the device stops speaking the moment the seller signs out without anything having to notice and clear a field.
+Nothing retains it: `HttpTransport` has no session field at all, so there is no place a credential could be read out of and none to invalidate.
+
+Not being signed in is its own state, distinct from both revocation and an unreachable server.
+`SessionSource` answering `None` produces `ControlPlaneError::NoSession` before the transport is reached, so a machine sitting at a sign-in screen makes no request at all rather than one the server would answer with the same blank 401 it gives a forged cookie — an answer this client could not tell from a revocation.
+It wipes nothing and revokes nothing; it records only that nobody is signed in, which `DesktopState::signed_in` holds and the `device_check_in` command reports beside `revoked` and `reached_server`.
+A cookie store that cannot be read is a refusal rather than an absence, because a fault is not a sign-out.
+
+The schedule runs.
+`run_schedule` ticks at the scheduler's cadence for the life of the process and calls `heartbeat::cycle`, which checks in and then pulls work.
+The check-in is the half that matters today: it is how a device the seller signed out learns to wipe between console loads, and the work pull reaches `NoWork` until the engine driver split lands a real source.
+The first tick of an interval completes immediately, so there is a check-in at start-up too; it races the window's creation and loses harmlessly, because no window means no session, which is exactly `NoSession`.
 
 ## What is verified
 
