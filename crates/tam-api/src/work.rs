@@ -16,8 +16,13 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tam_domain::ItemOperation;
+use tam_engine::ledger::to_wire_item;
 use tam_engine::seed::{prepare_item, ItemPreparation};
+use tam_engine_driver::vocabulary::{ItemVerdict, LeaseRef};
+use tam_marketplace::IdempotencyKey;
 use tam_storage::{DeviceClaim, DeviceRef, LeaseRepo};
+use tam_types::{InventoryId, JobId, MappingId};
 
 use crate::error::{APIError, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
@@ -44,19 +49,25 @@ pub enum ClaimView {
 
 /// One item's declarative intent.
 ///
-/// `server_now` travels beside `server_deadline` so the device drives its own
-/// budgets off the difference rather than off its local clock: the two
-/// together are a duration the server vouches for, where an absolute instant
-/// alone would be two clocks being compared.
+/// The lease and the operation are the interpreter's own types rather than
+/// strings restated here, so the envelope on the wire and the envelope the
+/// driver runs against have exactly one definition. A field that drifted would
+/// be a compile error rather than a client that parses the wrong shape.
+///
+/// `server_now_ms` travels beside `server_deadline_ms` so the device drives its
+/// budgets off the difference rather than off its local clock: the two together
+/// are a duration the server vouches for, where an absolute instant alone would
+/// be two clocks being compared.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct WorkOrder {
-    pub item: String,
-    pub job: String,
-    pub mapping: String,
-    pub inventory: String,
-    pub lease_epoch: i64,
-    /// What to do, in the ledger's vocabulary rather than the marketplace's.
-    pub operation: String,
+    /// The lease this work is done under, and the fence every write carries.
+    pub lease: LeaseRef,
+    pub job: JobId,
+    pub mapping: MappingId,
+    pub inventory: InventoryId,
+    /// What to do, in the ledger's vocabulary rather than any marketplace's.
+    pub operation: ItemOperation,
+    pub idempotency_key: IdempotencyKey,
     /// The projected listing, absent for a removal, which describes nothing.
     pub listing: Option<serde_json::Value>,
     pub server_now_ms: i64,
@@ -109,6 +120,9 @@ pub(crate) async fn claim(
     // The whole taxonomy stays here: `prepare_item` writes the seller's
     // decision surface and answers a projected listing, so D1's declarative
     // intent is literally the return value of one server-side call.
+    // The storage row crosses into the interpreter's vocabulary once, here,
+    // through the same conversion the worker uses.
+    let driven = to_wire_item(&leased);
     let prepared = prepare_item(&state.pool, &leased, now)
         .await
         .map_err(|error| state.internal(&format!("{error:?}")))?;
@@ -117,7 +131,7 @@ pub(crate) async fn claim(
             operation,
             projected,
         } => (
-            format!("{operation:?}"),
+            operation,
             projected
                 .as_ref()
                 .map(|listing| serde_json::json!({ "title": listing.title })),
@@ -133,12 +147,12 @@ pub(crate) async fn claim(
         }
     };
     Ok(Json(ClaimView::Work(Box::new(WorkOrder {
-        item: format!("{:02x?}", leased.item.0 .0),
-        job: format!("{:02x?}", leased.job.0 .0),
-        mapping: format!("{:02x?}", leased.mapping.0 .0),
-        inventory: format!("{:?}", leased.inventory),
-        lease_epoch: leased.lease_epoch,
+        lease: driven.lease_ref(),
+        job: driven.job,
+        mapping: driven.mapping,
+        inventory: driven.inventory,
         operation,
+        idempotency_key: driven.idempotency_key,
         listing,
         server_now_ms: now.0,
         server_deadline_ms: now.0 + CLAIM_TTL_SECS * 1_000,
@@ -147,11 +161,14 @@ pub(crate) async fn claim(
 }
 
 /// What the device reports back when it is done.
-#[derive(Debug, Deserialize, Serialize)]
+///
+/// The lease is the interpreter's own `LeaseRef` and the verdict its own
+/// `ItemVerdict`, for the same reason the work order carries the operation
+/// rather than a string: the device settles with the value it ran against.
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct SettleBody {
-    pub item: String,
-    pub lease_epoch: i64,
-    pub outcome: String,
+    pub lease: LeaseRef,
+    pub verdict: ItemVerdict,
 }
 
 /// The device settles what it claimed.
@@ -171,7 +188,7 @@ pub(crate) async fn settle(
          LIMIT 1",
     )
     .bind(uuid::Uuid::from_bytes(context.org.0 .0))
-    .bind(body.lease_epoch)
+    .bind(body.lease.lease_epoch)
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| state.internal(&error.to_string()))?

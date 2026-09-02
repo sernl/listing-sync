@@ -13,6 +13,7 @@ pub mod cassette;
 pub mod idempotency;
 pub mod transport;
 
+use serde::{Deserialize, Serialize};
 use tam_types::{
     AttemptId, ContentHash, CopyFormat, FailureCode, FailureDetail, FieldKey, FieldMismatch,
     FileId, ImportedPrice, ImportedTerm, InventoryId, Marketplace, MismatchClass, PriceIntent,
@@ -28,12 +29,13 @@ pub struct FormId(pub Uuid);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ActionId(pub Uuid);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct IdempotencyKey(pub Uuid);
 
 /// A marketplace's durable identifier for a listing, one variant per
 /// marketplace, so a TPT identifier cannot be stored where a Tes one belongs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteListingId {
     /// The resource URL, which Tes states stays tied to the original resource
     /// title even after the author retitles it.
@@ -286,7 +288,8 @@ pub enum RemoteLifecycleKind {
 /// submission, so published is not the terminal state and a boolean is wrong.
 /// `Draft` is unconditional here; whether a given inventory can be driven into
 /// it is the per-inventory `DraftSupport` capability, which the M-1 probe sets.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteLifecycle {
     Absent,
     Draft,
@@ -312,14 +315,15 @@ pub enum RemoteLifecycle {
 /// platforms distinguish on the *write* path. Narrower than
 /// [`RemoteLifecycleKind`], which is the *observation* vocabulary and carries
 /// moderation states no write can address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ListingState {
     Draft,
     Live,
 }
 
 /// Where the caller states the listing is now and where this write leaves it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LifecycleTransition {
     pub from: ListingState,
     pub to: ListingState,

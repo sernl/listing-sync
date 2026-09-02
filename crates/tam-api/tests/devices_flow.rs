@@ -495,10 +495,19 @@ async fn a_settle_from_a_device_other_than_the_holder_is_refused(pool: PgPool) {
             method: Method::POST,
             path: &format!("/v1/devices/{second}/settle"),
             token: &TOKEN_A,
+            // The settle carries the interpreter's own vocabulary now, so the
+            // body is the lease it ran under and the verdict it reached.
             body: Some(serde_json::json!({
-                "item": "unknown",
-                "lease_epoch": 1,
-                "outcome": "succeeded",
+                "lease": {
+                    "org": ORG_A,
+                    "item": Uuid([0x11; 16]),
+                    "lease_epoch": 1,
+                },
+                "verdict": {
+                    "outcome": "succeeded",
+                    "failure_code": null,
+                    "failure_detail": null,
+                },
             })),
             wall: t1,
         },

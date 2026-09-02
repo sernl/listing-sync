@@ -33,9 +33,11 @@ use tam_types::{
 /// hub is where it is reasoned about.
 pub use tam_types::TermKind;
 
+use serde::{Deserialize, Serialize};
+
 use crate::equivalence::{Election, Loss, VocabularyGap};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct JobItemId(pub Uuid);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,7 +404,8 @@ pub enum ProjectionBlocked {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ItemOutcome {
     Succeeded,
     /// The listing is live and provably shorter or lossier than intended.
@@ -491,7 +494,8 @@ pub enum SellerEvent {
 /// functions of it. A create holds no subject because nothing exists yet; a
 /// revise and a remove must hold one, because only a bound mapping can be
 /// revised or removed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ItemOperation {
     Create,
     /// A publish whose subject is not known at enqueue time. A create binds a

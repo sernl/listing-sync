@@ -7,12 +7,13 @@
 //! through a conversion the compiler checks rather than silently re-cutting
 //! the client contract.
 //!
-//! The serde derives are deliberately absent for now. Three types these
-//! embed — `JobItemId`, `ItemOperation` and `IdempotencyKey` — carry none
-//! upstream, so deriving here would mean adding them to `tam-domain` and
-//! `tam-marketplace`. That is the open half of the design note's finding 17
-//! and belongs with it, not here.
+//! Every type here derives `Serialize` and `Deserialize`, and so do the types
+//! they embed, derived where those live rather than restated here. One
+//! definition is the whole point: the desktop client imports these, and
+//! `tam-api` serialises them directly, so the envelope on the wire and the
+//! envelope in the interpreter cannot drift apart.
 
+use serde::{Deserialize, Serialize};
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{FailureCode, FailureDetail, InventoryId, JobId, MappingId, OrgId, Uuid};
@@ -20,7 +21,7 @@ use tam_types::{FailureCode, FailureDetail, InventoryId, JobId, MappingId, OrgId
 /// Which organisation, item and epoch a fenced write speaks for. Every ledger
 /// method is keyed on one, so the server derives org, connection, inventory
 /// and epoch from the lease it issued rather than trusting a client argument.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaseRef {
     pub org: OrgId,
     pub item: JobItemId,
@@ -28,7 +29,7 @@ pub struct LeaseRef {
 }
 
 /// One claimed item, as the server handed it over.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeasedItem {
     pub org: OrgId,
     pub item: JobItemId,
@@ -54,7 +55,7 @@ impl LeasedItem {
 }
 
 /// What a write attempt intends: the projected body and its hash.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttemptIntent {
     pub body: serde_json::Value,
     pub hash: Vec<u8>,
@@ -63,7 +64,7 @@ pub struct AttemptIntent {
 /// What opening an attempt asserts. A struct rather than four more
 /// parameters, which is also what keeps the identity and the intent
 /// travelling together.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewAttempt {
     /// Minted by the caller, so a lost response is recoverable by re-offering
     /// the same id rather than by spending another of the item's attempts.
@@ -74,7 +75,7 @@ pub struct NewAttempt {
 
 /// The two rows a settlement writes: the fenced attempt, and the mapping a
 /// landed write binds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttemptRef {
     pub attempt: Uuid,
     pub mapping: MappingId,
@@ -86,7 +87,7 @@ pub struct AttemptRef {
 /// listing and changed nothing still says which listing that was. Splitting
 /// these is what stops a committed removal binding the mapping to a listing
 /// that no longer exists.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LandingEffect {
     /// The verdict named no listing; there is nothing to record.
     None,
@@ -104,7 +105,7 @@ pub enum LandingEffect {
 }
 
 /// How an attempt settled in the ledger's own vocabulary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttemptVerdict {
     pub state: String,
     pub failure_code: Option<FailureCode>,
@@ -112,7 +113,7 @@ pub struct AttemptVerdict {
 }
 
 /// What the settle did to the binding, as the server decided it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[must_use]
 pub enum BindDisposition {
     NotLanded,
@@ -128,7 +129,7 @@ pub enum BindDisposition {
 }
 
 /// How an item settled in the ledger's own vocabulary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemVerdict {
     pub outcome: ItemOutcome,
     pub failure_code: Option<FailureCode>,
@@ -138,7 +139,7 @@ pub struct ItemVerdict {
 /// Where an item's run of failed preflights stands: how many in a row, and
 /// whether every one was the marketplace's edge rather than something the
 /// seller could act on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreflightStreak {
     pub failures: u32,
     pub edge_only: bool,
@@ -147,7 +148,7 @@ pub struct PreflightStreak {
 /// A windowed allowance the server issued. The window and the ceiling are
 /// absent by construction: a governed party that supplied either would be
 /// setting its own rate limit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BudgetGrant {
     Granted { used: i32 },
     Exhausted,
@@ -155,7 +156,7 @@ pub enum BudgetGrant {
 
 /// Which allowance a grant is drawn against. The driver states what it is
 /// about to do; the server decides what that costs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrantKind {
     /// A lifecycle write: a create, a revise or a removal.
     Write,
@@ -170,7 +171,7 @@ pub enum GrantKind {
 /// The two named variants are the two the driver actually tests for; every
 /// other server-side condition arrives opaque, because the interpreter's only
 /// answer to one is the stall bias.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LedgerError {
     /// The mapping already has an open attempt, which is the duplicate-create
     /// fence holding.

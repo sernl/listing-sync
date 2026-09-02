@@ -22,6 +22,9 @@ tam-domain = { path = "../tam-domain" }
 # The declarative-intent surface answers a projected listing, and
 # `prepare_item` is the server-side producer of one.
 tam-engine = { path = "../tam-engine" }
+# The envelope and the settle carry the interpreter's own vocabulary rather
+# than restating it, so the wire has exactly one definition.
+tam-engine-driver = { path = "../tam-engine-driver" }
 tam-limits = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-pipeline = { path = "../tam-pipeline" }

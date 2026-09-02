@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 
 [dependencies]
+# The ledger vocabulary the device exchanges is defined once and derived
+# here, so the wire shapes and the domain types cannot drift apart.
+serde = { version = "1", features = ["derive"] }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-types       = { path = "../tam-types" }
 

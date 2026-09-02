@@ -221,11 +221,15 @@ web-typegen:
 #
 # --lib is load-bearing: the fixture generator is a bin in the same crate and
 # does not cross-compile.
+# The artefact path honours CARGO_TARGET_DIR rather than assuming `target/`,
+# because agents working this repository in parallel each set their own: two
+# sharing one target directory measured 2.1 times slower, so a private one is
+# the standing arrangement and a hardcoded path silently breaks it.
 web-wasm:
     cargo build --target wasm32-unknown-unknown --release --lib -p tam-core-wasm
     wasm-bindgen --target web --out-name core \
         --out-dir web/src/lib/core/generated \
-        target/wasm32-unknown-unknown/release/tam_core_wasm.wasm
+        "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/tam_core_wasm.wasm"
 
 # Re-record what the native path decides for each fixture draft. The vitest
 # suite and a Rust test both compare against the recorded file, so run this

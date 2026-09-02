@@ -4967,6 +4967,7 @@ dependencies = [
  "tam-authoring",
  "tam-domain",
  "tam-engine",
+ "tam-engine-driver",
  "tam-limits",
  "tam-marketplace",
  "tam-pipeline",
@@ -5020,6 +5021,7 @@ dependencies = [
 name = "tam-desktop"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "jsonwebtoken",
  "keyring",
  "reqwest 0.13.4",
@@ -5027,6 +5029,9 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tam-marketplace",
+ "tam-marketplace-tes",
+ "tam-marketplace-tpt",
  "tam-types",
  "tauri",
  "tauri-build",
@@ -5041,6 +5046,7 @@ name = "tam-domain"
 version = "0.0.0"
 dependencies = [
  "proptest",
+ "serde",
  "tam-marketplace",
  "tam-types",
 ]
