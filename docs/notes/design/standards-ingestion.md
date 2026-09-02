@@ -185,14 +185,21 @@ Two pieces of wiring are outstanding and were deliberately not done here, becaus
 The repository itself is small: an upsert keyed on `(framework, source_guid)` that sets `retired_at` on rows the new snapshot no longer names, and reads for prefix, grade, subject, keyword and children.
 No API is wired.
 
-One enforcement gap is worth naming rather than leaving to be discovered.
-`tam-standards` is pure by construction — its only dependencies are `serde`, `serde_json` and the workspace's pinned `sha2`, and it performs no I/O — but the justfile's `purity` recipe names four crates explicitly and this is not one of them.
-Adding `-p tam-standards` to that recipe is a one-line change to a file outside this change's scope, and until it happens the purity property here rests on review rather than on the gate.
+`tam-standards` is pure by construction — its only dependencies are `serde`, `serde_json` and the workspace's pinned `sha2`, and it performs no I/O — and the justfile's `purity` recipe now names it alongside `tam-types`, `tam-marketplace`, `tam-domain` and `tam-taxonomy`.
+So a `cargo add` of tokio, reqwest or sqlx into it fails the lane rather than resting on review.
+
+## Decided here
+
+Compression, 2026-09-03: the four data files are committed as plain JSON Lines, and neither crate takes a direct dependency on a compression crate.
+The four files total 6.37 MB and would gzip to 1.28 MB, a fifth of the size, so the saving was real and was still declined for three reasons.
+The plain files are already in main's history, so compressing now adds bytes rather than saving them.
+A direct dependency edge is founder-gated even when the package is already resolved in the tree, as `flate2` 1.1.9 is through `zip` and `png`.
+And the landed state is green and simpler.
+A deterministic gzip codec — a pinned header and level, a manifest byte cap on the decoder, and a test that re-compressing a committed file reproduces its own manifest hash — was designed and can be revisited if a refresh cadence ever justifies it.
 
 ## Open questions
 
-1. Compression. The four files total 6.37 MB uncompressed and gzip -9 to 1.28 MB, a fifth of the size. There is no compression dependency in the workspace today, so none was added: `flate2` is already in `Cargo.lock` at 1.1.9 under MIT and Apache-2.0 and would add no new crate to the tree, but a new direct dependency is a founder decision. The files are committed uncompressed until that decision.
-2. The Texas coverage gap against TEA's own feed. Whether to accept it, or to revisit D19 for a verification-only pull that diffs the mirror against TEA quarterly without ingesting from it.
-3. Whether to ingest Texas career-and-technical education, 190 sets that TPT sellers do sell into and that the research note's scope excluded.
-4. Whether the picker's canonical row for a duplicated code is chosen by rule or shown as several. The data says several exist; the product has to say which one a seller sees.
-5. Whether Virginia should be diffed against the Satchel Rosetta Exchange as a second opinion, as the research note suggested. Both are third-party transcriptions of PDFs, and diffing them is the only available fidelity check.
+1. The Texas coverage gap against TEA's own feed. Whether to accept it, or to revisit D19 for a verification-only pull that diffs the mirror against TEA quarterly without ingesting from it.
+2. Whether to ingest Texas career-and-technical education, 190 sets that TPT sellers do sell into and that the research note's scope excluded.
+3. Whether the picker's canonical row for a duplicated code is chosen by rule or shown as several. The data says several exist; the product has to say which one a seller sees.
+4. Whether Virginia should be diffed against the Satchel Rosetta Exchange as a second opinion, as the research note suggested. Both are third-party transcriptions of PDFs, and diffing them is the only available fidelity check.
