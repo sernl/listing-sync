@@ -3,7 +3,7 @@
 The first landable slice of Phase 2: a Tauri v2 application that hosts the existing SvelteKit console and owns the seller's marketplace sessions on the seller's own device.
 
 - date: 2026-09-03
-- status: built and green under `just check`; no marketplace request is made anywhere in it
+- status: built and green under `just check`; every marketplace request it makes is issued from the seller's own machine under the seller's own session, and the server sends declarative intent rather than requests
 - decisions it implements: D1 (two-branch automation), D2 (Windows desktop first, Tauri v2), D10 and D11 (the entitlement-token exception and its latency), D12 (the webview probe that gated this surface), D14 (per-surface login and the device registry), D27, D29 (build infrastructure), D30 (the user-facing wording)
 
 ## What exists

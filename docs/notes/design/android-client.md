@@ -185,6 +185,18 @@ Its CI guidance mentions Android only as a build target — "If your application
 The decisive fact is on our side of the wire rather than theirs: `tauri-plugin-updater` declares `platforms.support.android.level = "none"` in its own manifest (tauri-plugin-updater 2.11.0, `Cargo.toml`), so there is no in-app updater on Android to point at an endpoint at all.
 The Cloud can therefore host an APK as a generic asset for the sideload channel, which is worth doing because it is free and already in the pipeline, but Android updates ship through Play, exactly as the rethink memo said at line 507.
 
+That is now built rather than planned.
+`.github/workflows/desktop-release.yml` carries an `android` job that builds the arm64 release APK on a version tag, in parallel with the Windows bundles, and uploads it to the same CrabNebula release with no `--public-platform` and no `--update-platform` — the documented form for a platform-independent asset, and the only one available given that neither platform list names Android (<https://docs.crabnebula.dev/cloud/cli/upload-assets/>, fetched 2026-09-03).
+A generic asset is still fetched from the CDN by file name, at `https://cdn.crabnebula.app/download/<org-slug>/<app-slug>/latest/<asset-file-name>` (<https://docs.crabnebula.dev/cloud/cli/fetch-latest-release/>, fetched 2026-09-03), which is exactly what a sideload link needs and all it needs.
+The APK is also attached to the GitHub release for the tag.
+
+The whole job is gated on the signing secrets rather than only its upload.
+An unsigned APK cannot be installed, so building one would spend twenty minutes of every tag to produce nothing a seller could use; the `verify` job computes the boolean from the three `ANDROID_KEY_*` secrets and the Android job's `if:` reads it, so an unconfigured repository skips the job and says so in the run summary.
+Both Android profiles build arm64 alone, here and in `android-build.yml`, so a hand-run build and a tagged one ship the same ABI set; armv7 returns as its own decision if a seller's phone needs it.
+The remaining guard is the filename Gradle chooses: the collect step matches `*-release.apk` alone, so a keystore that failed to apply leaves only `*-release-unsigned.apk`, matches nothing and fails the job instead of publishing something no one can install.
+The key material never reaches the working tree unignored: `gen/android/.gitignore` already lists `keystore.properties` and `key.properties`, which is the generated project's own doing rather than ours.
+The NDK version reaches this workflow and `android-build.yml` alike through `.github/scripts/android-pins.sh`, which reads it from `flake.nix`, so the pin has one home.
+
 The workflow runs on `ubuntu-latest`, which is the cheap half of the tree.
 GitHub prices a Linux 2-core runner at $0.006 a minute against a Windows 2-core runner's $0.010, and a private repository on the Free plan includes 2,000 minutes a month (<https://docs.github.com/en/billing/concepts/product-billing/github-actions>, fetched 2026-09-03).
 Against the quota rather than the overage price, Linux counts at one minute per minute and Windows at two, so an Android job is the cheapest thing this repository can run on a runner and a debug-APK-per-push cadence is affordable in a way the Windows release job would not be.

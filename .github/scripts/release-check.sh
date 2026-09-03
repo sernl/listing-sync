@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Refuse a release the updater could never serve.
+# Refuse a release the updater could never serve, or that says nothing.
 #
 # One definition, two callers: `just release-check` and the desktop-release
 # workflow's verify job. The workflow runs before anything is built, so a
@@ -55,6 +55,18 @@ if [ -n "$tag" ]; then
     fi
 fi
 
+# A release with no notes is a release nobody can read. The notes are written
+# for a seller rather than derived from commits, so they cannot be generated
+# here and their absence has to be an error rather than an empty string.
+if [ -n "$conf_version" ]; then
+    notes="$root/docs/releases/$conf_version.md"
+    if [ ! -f "$notes" ]; then
+        fail "no release notes at docs/releases/$conf_version.md"
+    elif [ -z "$(tr -d '[:space:]' < "$notes")" ]; then
+        fail "release notes at docs/releases/$conf_version.md are empty"
+    fi
+fi
+
 # The updater refuses an unsigned update and cannot be told otherwise, so a
 # release built against a placeholder key ships an app whose updates can never
 # verify. Same for the endpoint: ORG/APP resolves to nothing.
@@ -69,4 +81,4 @@ if [ "$failed" -ne 0 ]; then
     exit 1
 fi
 
-echo "release-check: version $conf_version, updater key and endpoint set${tag:+, tag $tag matches}"
+echo "release-check: version $conf_version, updater key and endpoint set, notes present${tag:+, tag $tag matches}"

@@ -41,9 +41,6 @@ concurrency:
 env:
   # The same CLI the dev shell carries (nixpkgs cargo-tauri 2.11.4).
   TAURI_CLI_VERSION: "2.11.4"
-  # The same NDK `flake.nix` pins, so a runner build and a local one compile
-  # against one toolchain rather than two.
-  ANDROID_NDK_VERSION: "29.0.14206865"
 
 jobs:
   apk:
@@ -66,21 +63,25 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # `flake.nix` owns the NDK version and this reads it, so a runner build
+      # and a local one compile against one toolchain rather than two.
+      - name: read the pinned Android toolchain
+        id: pins
+        run: sh .github/scripts/android-pins.sh >> "$GITHUB_OUTPUT"
+
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
         with:
           packages: >-
             platform-tools
             platforms;android-36
             build-tools;35.0.0
-            ndk;29.0.14206865
+            ndk;${{ steps.pins.outputs.ndk }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
-          # No `toolchain:` input: the action reads rust-toolchain.toml. It
-          # carries one Android triple, because `just check-portable` proves one
-          # per surface rather than one per ABI, so the release ABI is added
-          # here beside it.
-          target: armv7-linux-androideabi
+          # No `toolchain:` and no `target:`: the action reads
+          # rust-toolchain.toml, which already carries aarch64-linux-android,
+          # and both profiles build that ABI alone.
           cache: true
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -121,7 +122,7 @@ jobs:
 
       - name: point the build at the pinned NDK
         env:
-          NDK_VERSION: ${{ env.ANDROID_NDK_VERSION }}
+          NDK_VERSION: ${{ steps.pins.outputs.ndk }}
         run: |
           set -euo pipefail
           ndk="$ANDROID_HOME/ndk/$NDK_VERSION"
@@ -168,15 +169,15 @@ jobs:
           chmod 600 "$properties"
           echo "release signing is configured"
 
-      # arm64 only for a debug build, which is a device to install on rather
-      # than a release; arm64 and armv7 for a release, which are the two ABIs a
-      # phone actually runs.
+      # arm64 for both profiles, so this hand-run build and the tagged release
+      # ship the same ABI set. armv7 returns as its own decision if a seller's
+      # phone turns out to need it.
       - name: build the APK
         working-directory: apps/desktop
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then
-            cargo tauri android build --apk --ci --target aarch64 --target armv7
+            cargo tauri android build --apk --ci --target aarch64
           else
             cargo tauri android build --apk --debug --ci --target aarch64
           fi

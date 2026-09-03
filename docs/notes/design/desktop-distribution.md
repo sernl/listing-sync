@@ -3,7 +3,7 @@
 How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
 
 - date: 2026-09-03
-- status: `v0.1.1` is published and the Cloud serves its manifest; the endpoint it shipped carried no release channel, which would have 404ed every update check the installed base made, and `0.1.2` carries the fix
+- status: `v0.1.1` is published and the Cloud serves its manifest; the endpoint it shipped carried no release channel, which would have 404ed every update check the installed base made, and `0.1.2` carries the fix, the first written release notes, a GitHub release beside the Cloud one, and an Android APK when a signing key exists
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 
@@ -163,11 +163,37 @@ Read from <https://github.com/actions/attest-build-provenance>, fetched 2026-09-
 The step therefore carries `if: ${{ !github.event.repository.private }}`, so it is inert today and becomes live the moment the repository is made public, with no edit.
 SHA-256 checksums are unconditional and are the provenance that does work today, together with the minisign `.sig` files, which are a stronger claim than a checksum because they bind the artefact to a key rather than to a listing.
 
+The Android APK rides along, built in parallel with the Windows bundles and published only when it can be installed.
+The Cloud has no Android platform identifier — neither the `--public-platform` list nor the `--update-platform` list has one (<https://docs.crabnebula.dev/cloud/cli/upload-assets/>, fetched 2026-09-03) — so the APK is uploaded with no platform flag at all, which is the documented form for an asset that is platform-independent and is what the Cloud calls a generic asset.
+Such an asset is still served from the CDN by file name, at `https://cdn.crabnebula.app/download/<org-slug>/<app-slug>/latest/<asset-file-name>` (<https://docs.crabnebula.dev/cloud/cli/fetch-latest-release/>, fetched 2026-09-03).
+It gets no download button and drives no updater, which costs nothing here because `tauri-plugin-updater` supports Android at level `none` anyway; `docs/notes/design/android-client.md` holds that reading.
+An unsigned APK cannot be installed, so the job runs only when all three `ANDROID_KEY_*` secrets exist.
+The `verify` job answers that question — `secrets` is not a context an `if:` may read, but a job-level `env:` is, so the boolean is computed there once and travels as an output — and when the answer is no the run summary records that the APK was skipped for want of a signing key.
+Building one anyway would cost twenty minutes of every tag and produce nothing installable, so the skip is the whole saving.
+`publish` and `github-release` still name `android` in their `needs`, and their conditions spell out what they tolerate: Android skipped, never Android failed, and never a failed Windows build.
+Setting the three secrets is the only change needed to make the next tag carry an APK.
+The NDK version reaches both Android workflows through `.github/scripts/android-pins.sh`, which reads it from `flake.nix`, so the pin has one home rather than three.
+
 Version consistency is checked before anything is built, by `.github/scripts/release-check.sh`, which the workflow and `just release-check` both call so that there is one definition.
 It compares the tag against `apps/desktop/src-tauri/tauri.conf.json` and the `[package]` version in `apps/desktop/src-tauri/Cargo.toml`, and it fails on a placeholder updater public key or an unedited `ORG`/`APP` endpoint, so that a release cannot be cut against a build whose updater could never verify anything.
+It also refuses a tag whose `docs/releases/<version>.md` is missing or blank, because notes are written for a seller rather than derived from commits, so nothing here can generate them and their absence has to be an error.
 Run it with no argument to check the tree, or `just release-check v0.2.0` to check a tag you are about to create.
 It is deliberately not part of `just check` or `just pre-push`: it was red by design for as long as the updater key and endpoint were placeholders, and a gate that is red for a reason everyone has agreed to stops being read.
 Both are set now, so it passes.
+
+## Release notes, and the two places a release lands
+
+`docs/releases/<version>.md` is the notes for that version, written for a seller and not as a changelog of commits.
+One file is the source for both destinations, so the Cloud and GitHub cannot describe the same release differently.
+
+`cn release draft` is the only verb that accepts them: it takes `--notes` and `--notes-file`, and neither `upload` nor `publish` has any such flag.
+Read from `cn release draft --help` and `cn release publish --help`, cn 0.13.4, on 2026-09-03.
+That is why `v0.1.1`'s manifest carries `"notes":""` and always will — the draft that made it was created without them, and no later verb can add them.
+
+The workflow also creates a GitHub release for the tag, carrying the same notes file, both installers, the updater `.sig` files, `SHA256SUMS.txt` and `latest.json`.
+`latest.json` is there because it is the hosting escape hatch described above and the workflow artefact it otherwise lives in expires after thirty days, whereas a release asset does not.
+The job is the only one in the file with `contents: write`, and it is the only one that needs it.
+A release cut to a channel is marked `--prerelease`, so a beta does not present itself as the repository's latest release.
 
 ## What the founder must do
 
@@ -224,6 +250,7 @@ Create the GitHub secrets, at <https://github.com/sernl/listing-sync/settings/se
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password answered at generation; set it to an empty secret if you generated without one
 - `CN_API_KEY` — the CrabNebula key
 - `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` — the service principal; leave all three unset to build and release unsigned, which the workflow supports and reports
+- `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_BASE64` — the upload keystore, base64 of the file itself; leave any of the three unset and the Android job is skipped entirely, the release ships Windows only, and the run summary says why
 
 Create the repository variables, at <https://github.com/sernl/listing-sync/settings/variables/actions>, by exactly these names:
 
@@ -233,7 +260,8 @@ Create the repository variables, at <https://github.com/sernl/listing-sync/setti
 - `UPDATER_BASE_URL` — optional; the base URL the fallback manifest's `url` fields are built from, and harmless to leave unset
 
 Then cut a release.
-Bump the version in both `apps/desktop/src-tauri/tauri.conf.json` and `apps/desktop/src-tauri/Cargo.toml` to the same value, run `just release-check v<version>` locally until it passes, commit, and push the tag.
+Write `docs/releases/<version>.md` first, for a seller rather than for a reviewer, then bump the version in both `apps/desktop/src-tauri/tauri.conf.json` and `apps/desktop/src-tauri/Cargo.toml` to the same value, run `just release-check v<version>` locally until it passes, commit, and push the tag.
+`just release-check` fails while the notes are missing or blank, so the order is enforced rather than remembered.
 Watch it with `gh run watch`, and read the log through the repository's capture convention rather than the terminal.
 When it finishes, download the installer from the CrabNebula release page and verify three things by hand, because the workflow cannot verify any of them for you.
 Check the signature: right-click the `.exe`, Properties, Digital Signatures, and confirm the publisher name is what the certificate profile says.
