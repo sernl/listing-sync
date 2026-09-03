@@ -956,6 +956,12 @@ export interface StandardView {
 	statement: string;
 	/** The subject its mirrored set carries, so a code never renders bare. */
 	subject?: string;
+	/** The grades the mirrored set covers, in the words a teacher uses.
+	 *
+	 *  Rendered by the server rather than derived here, so one set reads the
+	 *  same wherever it appears. Absent where the set records no grades at all,
+	 *  which the picker shows as no grade rather than as an empty one. */
+	grade_band?: string;
 	/** The mirror's own identifier, and the only unique field on this view.
 	 *
 	 *  A code is not unique: 814 TEKS codes name more than one addressable node

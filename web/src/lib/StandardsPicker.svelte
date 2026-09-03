@@ -97,6 +97,7 @@
 					<span>
 						<b>{item.code}</b>
 						{#if item.subject}<span class="tag-note">{item.subject}</span>{/if}
+						{#if item.grade_band}<span class="tag-note">{item.grade_band}</span>{/if}
 						{item.statement}
 					</span>
 				</label>

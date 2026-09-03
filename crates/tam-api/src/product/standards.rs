@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tam_domain::product::StandardsFramework;
 use tam_standards::crawl::postable;
 use tam_standards::format::{load_framework, parse_manifest, StandardsDocument};
+use tam_standards::grades::{GradeBand, GradeLevel};
 use tam_standards::model::Framework;
 use tam_standards::notices::{mirror_attribution, required_notices, Placement};
 use tam_standards::search::{fold_code, Match, StandardsIndex};
@@ -151,6 +152,14 @@ pub struct StandardView {
     /// The subject the mirrored set carries, so a code never renders bare.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// The grades the mirrored set covers, in the words a teacher uses, so a
+    /// code never renders bare beside its subject.
+    ///
+    /// Rendered here rather than served structured: a client given the levels
+    /// and the interval would have to reimplement the ordering that turns them
+    /// into a phrase, and two clients would render one set two ways.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade_band: Option<String>,
     /// The mirror's own identifier for this node, and the only field on this
     /// view that is unique.
     ///
@@ -387,6 +396,10 @@ pub(crate) async fn standards_search(
                 code: hit.node.code.clone().unwrap_or_default(),
                 statement: hit.node.statement.clone(),
                 subject: hit.subject().map(str::to_owned),
+                grade_band: hit
+                    .document
+                    .set_of(hit.node)
+                    .and_then(|set| grade_band_of(&set.grade_band)),
                 source_guid: hit.node.source_guid.clone(),
                 tpt_node_id: window
                     .as_ref()
@@ -407,6 +420,40 @@ pub(crate) async fn standards_search(
         items,
         notices,
     }))
+}
+
+/// The words a teacher reads for the grades a set covers.
+///
+/// From the derived interval where one parses, because that is the ordered
+/// answer and reads as a range; from the source's own level codes otherwise,
+/// verbatim and in the order the mirror recorded them, because a set whose
+/// coding this crate could not parse still has grades a teacher recognises and
+/// showing them unparsed beats showing nothing. A set carrying neither answers
+/// `None`, which the wire omits and the picker renders as no grade rather than
+/// as an empty one.
+fn grade_band_of(band: &GradeBand) -> Option<String> {
+    if let Some(interval) = band.interval {
+        let low = grade_level_word(interval.low);
+        let high = grade_level_word(interval.high);
+        return Some(if low == high {
+            low
+        } else {
+            format!("{low}–{high}")
+        });
+    }
+    if band.levels.is_empty() {
+        return None;
+    }
+    Some(band.levels.join(", "))
+}
+
+/// One level in the words a teacher uses rather than the source's own coding.
+fn grade_level_word(level: GradeLevel) -> String {
+    match level {
+        GradeLevel::PREKINDERGARTEN => "Pre-K".to_owned(),
+        GradeLevel::KINDERGARTEN => "Kindergarten".to_owned(),
+        other => format!("Grade {}", other.0),
+    }
 }
 
 /// Refuses a query too long or too many-worded to be a real one, before
@@ -440,10 +487,11 @@ fn check_query(query: &str) -> Result<(), APIError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        domain_framework_of, framework_of, notices_of, placement_str, prime, search, CORPUS,
-        RESULTS_MAX,
+        domain_framework_of, framework_of, grade_band_of, notices_of, placement_str, prime, search,
+        CORPUS, RESULTS_MAX,
     };
     use tam_domain::product::StandardsFramework;
+    use tam_standards::grades::{GradeBand, GradeLevel};
     use tam_standards::model::Framework;
     use tam_standards::notices::required_notices;
     use tam_standards::notices::Placement;
@@ -598,6 +646,62 @@ mod tests {
         assert!(
             nonsense.is_empty(),
             "a query neither index answers returns nothing rather than everything"
+        );
+    }
+
+    /// The words a teacher reads, from whichever of the two the set carries.
+    #[test]
+    fn a_grade_band_reads_as_a_range_a_teacher_recognises() {
+        let interval = |low: i8, high: i8| GradeBand {
+            levels: vec![],
+            interval: Some(tam_standards::grades::GradeInterval {
+                low: GradeLevel(low),
+                high: GradeLevel(high),
+            }),
+            uncovered: vec![],
+        };
+        assert_eq!(
+            grade_band_of(&interval(3, 5)).as_deref(),
+            Some("Grade 3–Grade 5")
+        );
+        assert_eq!(
+            grade_band_of(&interval(-1, 0)).as_deref(),
+            Some("Pre-K–Kindergarten"),
+            "the two levels below first grade have names rather than numbers"
+        );
+        assert_eq!(
+            grade_band_of(&interval(7, 7)).as_deref(),
+            Some("Grade 7"),
+            "a single-grade set reads as one grade rather than as a range onto itself"
+        );
+    }
+
+    /// A set whose coding this crate could not parse still has grades a
+    /// teacher recognises, so they are shown as the mirror recorded them
+    /// rather than withheld.
+    #[test]
+    fn an_unparsed_band_falls_back_to_the_source_own_levels() {
+        assert_eq!(
+            grade_band_of(&GradeBand {
+                levels: vec!["Upper primary".to_owned(), "Lower secondary".to_owned()],
+                interval: None,
+                uncovered: vec![],
+            })
+            .as_deref(),
+            Some("Upper primary, Lower secondary")
+        );
+    }
+
+    #[test]
+    fn a_set_carrying_no_grades_at_all_answers_nothing() {
+        assert_eq!(
+            grade_band_of(&GradeBand {
+                levels: vec![],
+                interval: None,
+                uncovered: vec![],
+            }),
+            None,
+            "absent is rendered as no grade rather than as an empty one"
         );
     }
 

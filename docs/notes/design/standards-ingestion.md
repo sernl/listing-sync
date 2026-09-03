@@ -334,6 +334,12 @@ It then runs through `spawn_supervised_blocking` in `crates/tam-api/src/blocking
 The wrapper awaits the handle and turns a `JoinError` into an error the caller must handle, which is the ban's own reason satisfied at one sanctioned site rather than at every call.
 
 The loss derivation for standards a marketplace will not carry landed in `web/src/lib/tpt-form.ts` with this change rather than with step 5, because the identifier that fixed the picker had to reach `StandardPick` in the same file.
+That derivation reads the absent `tpt_node_id` rather than the engine's own record, because `StandardsProjection` and `NotCarried` in `crates/tam-marketplace-tpt/src/standards.rs` are computed by nothing: no engine, importer or API path refers to them, so the record exists and is inert.
+The server withholds the node id for both reasons the record distinguishes, `Unbound` and `OutsideCrawlWindow`, so the console cannot tell them apart and does not try; a seller's situation is the same in both, and the sentence states the outcome rather than guessing the cause.
+When something computes the record, the derivation is replaced without what a seller reads changing.
+
+`StandardView` now carries `grade_band` beside `subject`, which completes the picker requirement this note states: subject and grade beside every Texas and Virginia code, and never a bare one.
+It is rendered server-side from the derived interval where one parses and from the source's own level codes otherwise, because a client given the levels and the interval would reimplement the ordering that turns them into a phrase and two clients would render one set two ways.
 
 The corpus parse costs 0.43 seconds for 19,769 rows across 6.3 MB, measured over three runs: the manifest, four framework files each verified against its recorded content hash, and the node-id table.
 Paid once at boot and by no request, which is the whole argument for priming at startup rather than behind the first search.
