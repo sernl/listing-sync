@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ApiFailure, api, type PublishIntent } from '$lib/api';
-	import { bulkTarget, type InventoryRow } from '$lib/inventory';
+	import { bulkTarget, type BulkTarget, type InventoryRow } from '$lib/inventory';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import type { InventoryId } from '$lib/generated/vocab';
 
@@ -27,6 +27,12 @@
 	// reuses it, so the retry and the double-click are the same job.
 	let keys: Record<string, string> = {};
 
+	// The mappings this dialog minted, keyed by item and marketplace. A send
+	// that added mappings and then failed to enqueue must not add them again
+	// on the retry: the server refuses a second add, so the retry would fail
+	// on work the first attempt already did.
+	let added: Record<string, string> = {};
+
 	$effect(() => {
 		if (open && element !== null && !element.open) {
 			element.showModal();
@@ -49,9 +55,30 @@
 		ticked = next;
 	}
 
+	/** Every mapping the send needs on one marketplace, mapping the items that
+	 *  lack one first. The add is the ordinary catalogue write: it mints an
+	 *  unbound mapping and contacts nobody, so the job that follows travels the
+	 *  path a mapping chosen at create time travels. */
+	async function mappingsFor(target: BulkTarget): Promise<string[]> {
+		const minted: string[] = [];
+		for (const product of target.unmapped) {
+			const held = added[`${product}:${target.inventory}`];
+			if (held !== undefined) {
+				minted.push(held);
+				continue;
+			}
+			const mapping = await api.addMapping(product, target.inventory);
+			added[`${product}:${target.inventory}`] = mapping.id;
+			minted.push(mapping.id);
+		}
+		return [...target.mappings, ...minted];
+	}
+
 	async function send() {
 		const chosen = targets.filter(
-			(target) => ticked.has(target.inventory) && target.mappings.length > 0
+			(target) =>
+				ticked.has(target.inventory) &&
+				target.mappings.length + target.unmapped.length > 0
 		);
 		if (chosen.length === 0) {
 			return;
@@ -64,24 +91,33 @@
 			// inventory. Sequential so a refusal names the marketplace it belongs
 			// to and the ones before it stay enqueued.
 			for (const target of chosen) {
+				const mappings = await mappingsFor(target);
 				const key = (keys[`${target.inventory}:${intent}`] ??= crypto.randomUUID());
-				const created = await api.createJob(target.inventory, target.mappings, key, intent);
+				const created = await api.createJob(target.inventory, mappings, key, intent);
 				runs.push({ inventory: target.inventory, job: created.job });
 			}
 			keys = {};
+			added = {};
 			ticked = new Set();
 			onStarted(runs);
 		} catch (failure) {
-			refusal =
-				failure instanceof ApiFailure
-					? failure.message
-					: 'The send did not start. Nothing was enqueued twice; try again.';
+			refusal = refusalOf(failure);
 			if (runs.length > 0) {
 				onStarted(runs);
 			}
 		} finally {
 			sending = false;
 		}
+	}
+
+	function refusalOf(failure: unknown): string {
+		if (!(failure instanceof ApiFailure)) {
+			return 'The send did not start. Nothing was enqueued twice; try again.';
+		}
+		if (failure.code() === 'mapping_already_exists') {
+			return 'One of these items reaches that marketplace already, which this board did not know when you opened it. Reload and send again.';
+		}
+		return failure.message;
 	}
 </script>
 
@@ -90,8 +126,8 @@
 		<h2 id="cross-list-title">Cross-list {rows.length} {rows.length === 1 ? 'item' : 'items'}</h2>
 		<p>
 			Pick where this send goes. Each line says how many of the selected items that
-			marketplace already carries a mapping for, counted from your own records without contacting
-			anyone.
+			marketplace already carries and how many it will be added to, counted from your own
+			records without contacting anyone.
 		</p>
 
 		<div class="inline-choices">
@@ -120,31 +156,35 @@
 		</p>
 
 		{#each targets as target (target.inventory)}
-			<label class="choice {target.mappings.length === 0 ? 'off' : ''}">
+			{@const reaches = target.mappings.length + target.unmapped.length}
+			<label class="choice {reaches === 0 ? 'off' : ''}">
 				<input
 					type="checkbox"
 					checked={ticked.has(target.inventory)}
-					disabled={sending || target.mappings.length === 0}
+					disabled={sending || reaches === 0}
 					onchange={(event) => toggle(target.inventory, event.currentTarget.checked)}
 				/>
 				<span class="t">{platformTitle(target.inventory)}</span>
-				<span class="why {target.mappings.length === 0 ? 'bad' : 'ok'}">
-					{#if target.mappings.length === 0}
-						none of the selected items is mapped here
-					{:else if target.skipped === 0}
-						{target.mappings.length} of {rows.length}
+				<span class="why {reaches === 0 ? 'bad' : 'ok'}">
+					{#if reaches === 0}
+						nothing is selected
+					{:else if target.unmapped.length === 0}
+						{target.mappings.length} of {rows.length}, all mapped here already
+					{:else if target.mappings.length === 0}
+						{target.unmapped.length} of {rows.length}, each added to this marketplace first
 					{:else}
-						{target.mappings.length} of {rows.length}; {target.skipped} passed over, not mapped here
+						{target.mappings.length} of {rows.length} mapped here; {target.unmapped.length} added
+						first
 					{/if}
 				</span>
 			</label>
 		{/each}
 
 		<p class="foot-note">
-			An item that is not mapped to a marketplace is passed over rather than added to it:
-			marketplaces are chosen when a draft is created, and there is no endpoint yet that adds one
-			afterwards. Work for Tes and TPT runs on your own device, so a send waits while that device
-			is off.
+			An item this marketplace does not carry is added to it before the send, which writes your
+			own catalogue and contacts nobody; the send that follows is the same one a marketplace
+			chosen at create time gets. Work for Tes and TPT runs on your own device, so a send waits
+			while that device is off.
 		</p>
 
 		{#if refusal !== null}

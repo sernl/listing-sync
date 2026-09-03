@@ -32,8 +32,9 @@ use tam_pipeline::pipeline::{ingest, ArchiveMode, IngestContext, IngestError};
 use tam_pipeline::scan::EicarScanner;
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
-    intent_digest, AnsweredElection, BlobRepo, ElectionRepo, JobRepo, MappingRecord, MappingRepo,
-    NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink, TptBaseRepo,
+    intent_digest, AnsweredElection, BlobRepo, ElectionRepo, JobRepo, MappingAdd, MappingRecord,
+    MappingRepo, NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink,
+    TptBaseRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileRole, InventoryId, JobId,
@@ -44,7 +45,7 @@ use tam_types::{
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::product::{record_of, verdict, DraftHead, TptBaseInput};
 use crate::quota::{quota_for, QuotaKind};
-use crate::resources::{kind_from_str, kind_str};
+use crate::resources::{kind_from_str, kind_str, MappingHeadView};
 use crate::{AppState, OrgContext};
 
 /// The intent version the item idempotency key is derived under, matching
@@ -872,6 +873,71 @@ fn unbound_mapping(
         publish: PublishMode::DryRun,
         lifecycle: RemoteLifecycle::Absent,
     }
+}
+
+// ------------------------------------------------------- add a marketplace
+
+/// Which marketplace to add. The mapping's identifier is the server's to
+/// mint, and its state is not a client's to choose: it starts where a create
+/// would have started it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddMappingBody {
+    pub inventory: InventoryId,
+}
+
+/// Adds a marketplace to a product that already exists.
+///
+/// The marketplaces a product reaches are chosen when its draft is created,
+/// and cross-listing to one it was not created with is the action that had no
+/// endpoint at all (gap G1 in `docs/notes/design/seller-dashboard.md`). The
+/// mapping this mints is the create's own unbound mapping, so a send through
+/// `POST /{version}/jobs` afterwards is the same path a mapping chosen at
+/// create time travels; nothing here contacts a marketplace.
+pub(crate) async fn add_mapping(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product)): Path<(String, String)>,
+    Json(body): Json<AddMappingBody>,
+) -> Result<(StatusCode, Json<MappingHeadView>), APIError> {
+    let product = parse_product_id(&product)?;
+    let stored = ProductRepo::new(state.pool.clone())
+        .get(context.org, product)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such product"))?;
+
+    let now = (state.wall)();
+    let mapping = MappingId(fresh_uuid());
+    let repo = MappingRepo::new(state.pool.clone());
+    let added = repo
+        .add(
+            context.org,
+            &unbound_mapping(
+                context.org,
+                product,
+                body.inventory,
+                mapping,
+                stored.product.price,
+            ),
+            0,
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if added == MappingAdd::AlreadyMapped {
+        return Err(coded(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "this item already reaches that marketplace",
+            APIErrorCode::MappingAlreadyExists,
+        ));
+    }
+
+    let head = repo
+        .head(context.org, mapping)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| state.internal("the mapping just written was not readable"))?;
+    Ok((StatusCode::CREATED, Json(MappingHeadView::of(head))))
 }
 
 // -------------------------------------------------------------------- edit

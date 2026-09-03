@@ -122,6 +122,10 @@
 	let editRefusal = $state<string | null>(null);
 	let publishing = $state(false);
 	let deleting = $state(false);
+	// The marketplace being added, so the row that started it is the one that
+	// shows the wait, and a second click cannot start a second add.
+	let adding = $state<InventoryId | null>(null);
+	let addRefusal = $state<string | null>(null);
 	// Runs started from this page in this session, kept only until the bounded
 	// read below carries them: a run the server has not listed yet would
 	// otherwise vanish between starting it and the refetch landing.
@@ -258,6 +262,28 @@
 		toast('info', `Send started on ${started.length} marketplaces.`);
 	}
 
+	/** Adds a marketplace this item does not reach, then opens the send it is
+	 *  the first half of. The add writes the catalogue and contacts nobody; how
+	 *  the listing is sent, and whether it goes live, stays the seller's choice
+	 *  on the dialog rather than one this control makes for them. */
+	async function crossListTo(inventory: InventoryId) {
+		adding = inventory;
+		addRefusal = null;
+		try {
+			await api.addMapping(id, inventory);
+			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
+			toast('info', `${platformTitle(inventory)} added. Choose how it is sent.`);
+			publishing = true;
+		} catch (failure) {
+			addRefusal =
+				failure instanceof ApiFailure
+					? failure.message
+					: `${platformTitle(inventory)} was not added.`;
+		} finally {
+			adding = null;
+		}
+	}
+
 	async function deleted() {
 		deleting = false;
 		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
@@ -314,7 +340,7 @@
 
 		<Panel
 			title="Marketplaces"
-			description="Where this item stands on each one, and what it is waiting on. Chosen when the draft was created; there is no way to add one afterwards, so this set is fixed."
+			description="Where this item stands on each one, and what it is waiting on. A marketplace the item was not created with can be added here."
 		>
 			{#each mappings as mapping (mapping.id)}
 				{@const chip = chips.get(mapping.inventory)}
@@ -366,19 +392,21 @@
 					<button
 						class="btn small"
 						type="button"
-						disabled
-						title="No endpoint maps an existing item onto a new marketplace yet."
+						disabled={adding !== null}
+						onclick={() => void crossListTo(inventory)}
 					>
-						Cross-list here
+						{adding === inventory ? 'Adding…' : 'Cross-list here'}
 					</button>
 				</div>
 			{/each}
+			{#if addRefusal !== null}
+				<p class="refusal">{addRefusal}</p>
+			{/if}
 			<p class="foot-note">
-				Cross-listing somewhere new is disabled because nothing on the server does it yet: there is
-				no endpoint that maps an existing item onto a marketplace it was not created with. Until
-				there is, reaching one of the marketplaces above means authoring the draft with that
-				marketplace chosen. Etsy is not among them and is not listed here, because this console has
-				no create path for it at all.
+				Cross-listing here adds the marketplace to this item and opens the send; the add writes
+				your own catalogue and contacts nobody, and nothing reaches the marketplace until that
+				send runs. Etsy is not listed here, because this console has no create path for it at
+				all.
 			</p>
 		</Panel>
 

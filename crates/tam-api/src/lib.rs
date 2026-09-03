@@ -185,6 +185,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(catalogue::delete_product),
         )
         .route(
+            "/{version}/products/{product}/mappings",
+            post(catalogue::add_mapping),
+        )
+        .route(
             "/{version}/vocabulary/{inventory}",
             get(vocabulary::vocabulary_view),
         )

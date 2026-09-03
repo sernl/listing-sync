@@ -184,6 +184,30 @@ describe('the authoring endpoints', () => {
 		expect(seen[0].body).toEqual({ remove_from: ['TesGb'], leave_live: false });
 	});
 
+	it('adds a marketplace to an item under that item', async () => {
+		const seen: Array<{ url: string; method?: string; body: unknown }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+				return jsonResponse(201, {
+					id: 'm-new',
+					product: 'p1',
+					inventory: 'Tpt',
+					binding_state: 'unbound',
+					lifecycle_state: 'absent',
+					updated_at: 5000
+				});
+			})
+		);
+		const head = await api.addMapping('p1', 'Tpt');
+		expect(seen[0].method).toBe('POST');
+		expect(seen[0].url).toBe('/v1/products/p1/mappings');
+		expect(seen[0].body).toEqual({ inventory: 'Tpt' });
+		expect(head.id).toBe('m-new');
+		expect(head.binding_state).toBe('unbound');
+	});
+
 	it('reads one marketplace vocabulary per inventory', async () => {
 		const seen: string[] = [];
 		vi.stubGlobal(

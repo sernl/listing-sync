@@ -506,16 +506,20 @@ export function inventoryTally(
 	return { total: rows.length, shown: shown.length, attention, listedOn: listedOn.size };
 }
 
-/** The mappings a bulk send would address on one marketplace, and the rows it
- *  would pass over.
+/** The mappings a bulk send would address on one marketplace, and the items it
+ *  would have to map onto that marketplace first.
  *
- * Reported rather than silently dropped: a seller who selected twelve rows
- * and sends to a marketplace nine of them carry needs to be told about the
- * three, which is the failure mode Vendoo's bulk modal is criticised for. */
+ * Both reported rather than one silently dropped: a seller who selected twelve
+ * rows and sends to a marketplace nine of them carry needs to be told what
+ * happens to the three, which is the failure mode Vendoo's bulk modal is
+ * criticised for. They are now added rather than passed over, so the count the
+ * dialog states is a count of items it will map. */
 export interface BulkTarget {
 	inventory: InventoryId;
 	mappings: string[];
-	skipped: number;
+	/** The products with no mapping onto this marketplace, by identifier, in
+	 *  the order the table shows them. */
+	unmapped: string[];
 }
 
 export function bulkTarget(
@@ -523,16 +527,16 @@ export function bulkTarget(
 	inventory: InventoryId
 ): BulkTarget {
 	const mappings: string[] = [];
-	let skipped = 0;
+	const unmapped: string[] = [];
 	for (const row of rows) {
 		const mapping = row.mapped.get(inventory);
 		if (mapping === undefined) {
-			skipped += 1;
+			unmapped.push(row.product.id);
 			continue;
 		}
 		mappings.push(mapping.id);
 	}
-	return { inventory, mappings, skipped };
+	return { inventory, mappings, unmapped };
 }
 
 export interface RunRow {

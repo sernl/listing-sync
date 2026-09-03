@@ -679,6 +679,20 @@ pub struct MappingHeadView {
     pub updated_at: Timestamp,
 }
 
+impl MappingHeadView {
+    #[must_use]
+    pub fn of(row: tam_storage::MappingHead) -> Self {
+        Self {
+            id: row.id,
+            product: row.product,
+            inventory: row.inventory,
+            binding_state: row.binding_state,
+            lifecycle_state: row.lifecycle_state,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
 pub(crate) async fn list_mappings(
     State(state): State<AppState>,
     context: OrgContext,
@@ -688,17 +702,7 @@ pub(crate) async fn list_mappings(
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     Ok(Json(MappingsView {
-        mappings: rows
-            .into_iter()
-            .map(|row| MappingHeadView {
-                id: row.id,
-                product: row.product,
-                inventory: row.inventory,
-                binding_state: row.binding_state,
-                lifecycle_state: row.lifecycle_state,
-                updated_at: row.updated_at,
-            })
-            .collect(),
+        mappings: rows.into_iter().map(MappingHeadView::of).collect(),
     }))
 }
 

@@ -98,13 +98,17 @@ pub enum APIErrorCode {
     /// A local delete would leave a bound listing standing on a platform it
     /// does not remove from. `detail.bound` names them.
     ListingStillBound,
+    /// The product already reaches the marketplace the add names. Named apart
+    /// from a bare validation refusal because the client's remedy is to read
+    /// the mapping it already has rather than to correct the request.
+    MappingAlreadyExists,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -123,6 +127,7 @@ impl APIErrorCode {
         Self::QuotaExceeded,
         Self::UncapturedTransition,
         Self::ListingStillBound,
+        Self::MappingAlreadyExists,
         Self::Internal,
     ];
 
@@ -147,6 +152,7 @@ impl APIErrorCode {
             Self::QuotaExceeded => "quota_exceeded",
             Self::UncapturedTransition => "uncaptured_transition",
             Self::ListingStillBound => "listing_still_bound",
+            Self::MappingAlreadyExists => "mapping_already_exists",
             Self::Internal => "internal",
         }
     }
@@ -372,6 +378,7 @@ mod tests {
                 | APIErrorCode::QuotaExceeded
                 | APIErrorCode::UncapturedTransition
                 | APIErrorCode::ListingStillBound
+                | APIErrorCode::MappingAlreadyExists
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

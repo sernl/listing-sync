@@ -61,7 +61,9 @@ pub use jobs::{
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
-pub use mapping::{BoundListing, LossScope, MappingHead, MappingRecord, MappingRepo, RecordedLoss};
+pub use mapping::{
+    BoundListing, LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, RecordedLoss,
+};
 pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo};
 pub use product::{ProductEdit, ProductRecord, ProductRepo, ProductSummary};

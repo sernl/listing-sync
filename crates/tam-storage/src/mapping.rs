@@ -53,6 +53,23 @@ fn map_bound_claim<T>(outcome: Result<T, sqlx::Error>) -> Result<T, StorageError
     }
 }
 
+/// Whether adding a marketplace to a product minted a mapping, or the product
+/// already carried one for it.
+///
+/// Decided by `mapping_one_per_inventory` rather than by a read before the
+/// write, so two adds racing on one product agree on one mapping instead of
+/// both believing they created it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappingAdd {
+    Added,
+    AlreadyMapped,
+}
+
+/// The unique constraint that carries one-mapping-per-marketplace, named here
+/// because the answer to violating it is a refusal the seller can act on
+/// rather than a fault.
+const ONE_PER_INVENTORY: &str = "mapping_one_per_inventory";
+
 pub struct MappingRepo {
     pool: PgPool,
 }
@@ -189,6 +206,26 @@ impl MappingRepo {
 
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Adds one marketplace to a product that already exists, minting the same
+    /// mapping a create naming that marketplace would have minted.
+    pub async fn add(
+        &self,
+        org: OrgId,
+        mapping: &Mapping,
+        normaliser_version: u32,
+        at: Timestamp,
+    ) -> Result<MappingAdd, StorageError> {
+        match self.insert(org, mapping, normaliser_version, at).await {
+            Ok(()) => Ok(MappingAdd::Added),
+            Err(StorageError::Db(sqlx::Error::Database(database)))
+                if database.constraint() == Some(ONE_PER_INVENTORY) =>
+            {
+                Ok(MappingAdd::AlreadyMapped)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn get(
@@ -940,7 +977,8 @@ impl MappingRepo {
     pub async fn list_heads(&self, org: OrgId) -> Result<Vec<MappingHead>, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let rows = sqlx::query!(
+        let rows = sqlx::query_as!(
+            HeadRow,
             "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at \
              FROM mapping WHERE org_id = $1 ORDER BY product_id, inventory",
             uuid_to_db(org.0),
@@ -948,19 +986,51 @@ impl MappingRepo {
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(MappingHead {
-                    id: MappingId(uuid_from_db(row.id)),
-                    product: ProductId(uuid_from_db(row.product_id)),
-                    inventory: crate::codec::inventory_from_db(&row.inventory)?,
-                    binding_state: row.binding_state,
-                    lifecycle_state: row.lifecycle_state,
-                    updated_at: timestamp_from_db(row.updated_at),
-                })
-            })
-            .collect()
+        rows.into_iter().map(decode_head).collect()
     }
+
+    /// One mapping's head, so a write that mints a mapping answers with the
+    /// same projection the listing serves rather than a second rendering of
+    /// the state columns.
+    pub async fn head(
+        &self,
+        org: OrgId,
+        id: MappingId,
+    ) -> Result<Option<MappingHead>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let row = sqlx::query_as!(
+            HeadRow,
+            "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at \
+             FROM mapping WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(id.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        row.map(decode_head).transpose()
+    }
+}
+
+struct HeadRow {
+    id: uuid::Uuid,
+    product_id: uuid::Uuid,
+    inventory: String,
+    binding_state: String,
+    lifecycle_state: String,
+    updated_at: DateTime<Utc>,
+}
+
+fn decode_head(row: HeadRow) -> Result<MappingHead, StorageError> {
+    Ok(MappingHead {
+        id: MappingId(uuid_from_db(row.id)),
+        product: ProductId(uuid_from_db(row.product_id)),
+        inventory: inventory_from_db(&row.inventory)?,
+        binding_state: row.binding_state,
+        lifecycle_state: row.lifecycle_state,
+        updated_at: timestamp_from_db(row.updated_at),
+    })
 }
 
 /// A bound mapping and the listing identifier it binds.

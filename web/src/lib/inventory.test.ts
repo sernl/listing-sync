@@ -399,16 +399,16 @@ describe('the tally and the bulk target', () => {
 		expect(tally).toEqual({ total: 2, shown: 1, attention: 1, listedOn: 1 });
 	});
 
-	it('names the mappings a bulk send would address and the rows it passes over', () => {
+	it('names the mappings a bulk send would address and the items it must map first', () => {
 		expect(bulkTarget(rows, 'Tpt')).toEqual({
 			inventory: 'Tpt',
 			mappings: ['m-Tpt'],
-			skipped: 1
+			unmapped: ['p2']
 		});
 		expect(bulkTarget(rows, 'TesGb')).toEqual({
 			inventory: 'TesGb',
 			mappings: [],
-			skipped: 2
+			unmapped: ['p1', 'p2']
 		});
 	});
 });

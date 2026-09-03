@@ -121,9 +121,10 @@ Which branch a marketplace is on is not served; it is a total map over the gener
 
 ## Endpoint gaps
 
-G1. Adding a marketplace to an existing product.
-Mappings are chosen when the draft is created and there is no way to add one afterwards, so the central Vendoo action — cross-list this to somewhere it is not yet — cannot be performed at all.
-Shape needed: `POST /{version}/products/{product}/mappings` taking `{ inventory }` and answering `{ mapping, inventory }`, refusing an inventory the product already carries.
+G1. Adding a marketplace to an existing product. Served.
+`POST /{version}/products/{product}/mappings` takes `{ inventory }` and answers the whole `MappingHead`, which is what the chip strip renders, rather than the `{ mapping, inventory }` pair this gap first asked for.
+The mapping it mints is the create's own unbound mapping, so the send that follows is the ordinary job path; an inventory the product already carries is refused with `mapping_already_exists`.
+The item screen's cross-list control and the bulk dialog's unmapped targets both run through it.
 
 G2. A mapping's own work.
 Job items are reachable only through the job that holds them, so answering "what is happening to this listing on this marketplace" costs a read of every recent run and is bounded rather than complete.

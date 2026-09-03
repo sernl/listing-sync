@@ -36,6 +36,7 @@ export type APIErrorCode =
   | "quota_exceeded"
   | "uncaptured_transition"
   | "listing_still_bound"
+  | "mapping_already_exists"
   | "internal";
 
 export type APIErrorKind =

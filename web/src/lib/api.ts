@@ -957,6 +957,12 @@ export const api = {
 		request<ProductsPage>(`/v1/products${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
 	product: (id: string) => request<ProductView>(`/v1/products/${id}`),
 	mappings: () => request<{ mappings: MappingHead[] }>('/v1/mappings'),
+	/** Add a marketplace to an item that already exists. The mapping comes
+	 *  back unbound, exactly as a create's own does, so a send afterwards is
+	 *  the ordinary job path; nothing here contacts the marketplace. An item
+	 *  that already reaches it is refused with `mapping_already_exists`. */
+	addMapping: (product: string, inventory: InventoryId) =>
+		post<MappingHead>(`/v1/products/${product}/mappings`, { inventory }),
 	analytics: () => request<AnalyticsSummary>('/v1/analytics/summary'),
 
 	/** One marketplace's authoring vocabulary. Cached per inventory: it is
