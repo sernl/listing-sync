@@ -20,9 +20,13 @@ describe('the bulk verbs', () => {
 		}
 	});
 
-	it('offers the two the API already serves', () => {
+	it('offers the three the API already serves', () => {
 		const built = BULK_ACTIONS.filter((action) => action.missing === null);
-		expect(built.map((action) => action.verb)).toEqual(['cross_list', 'delete']);
+		expect(built.map((action) => action.verb)).toEqual([
+			'cross_list',
+			'mark_listed',
+			'delete'
+		]);
 	});
 
 	it('gives every verb it cannot run a reason naming what is missing', () => {
@@ -32,10 +36,10 @@ describe('the bulk verbs', () => {
 		}
 	});
 
-	it('names the endpoint gap for the two that are endpoint gaps', () => {
+	it('names the endpoint gap for the one that is still an endpoint gap', () => {
 		const byVerb = new Map(BULK_ACTIONS.map((action) => [action.verb, action]));
 		expect(byVerb.get('labels')?.missing).toContain('G6');
-		expect(byVerb.get('mark_listed')?.missing).toContain('G3');
+		expect(byVerb.get('mark_listed')?.missing).toBeNull();
 	});
 
 	it('does not claim a missing endpoint for the verb whose endpoint exists', () => {

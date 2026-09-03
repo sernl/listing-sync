@@ -102,13 +102,26 @@ pub enum APIErrorCode {
     /// from a bare validation refusal because the client's remedy is to read
     /// the mapping it already has rather than to correct the request.
     MappingAlreadyExists,
+    /// The pasted listing URL is not a listing page this server can read.
+    /// `detail.named` carries the marketplace it does name, where it named one
+    /// at all, so a client can tell the right link on the wrong row from a
+    /// link that is not a listing.
+    ListingUrlUnusable,
+    /// The mapping already binds a listing, or has a create out whose outcome
+    /// a bind would overwrite. `detail.state` names which.
+    MappingNotBindable,
+    /// Another of this organisation's mappings already binds the listing the
+    /// paste names. Says nothing about which one: two of a seller's own items
+    /// claiming one listing is theirs to untangle, and naming the other
+    /// mapping here would leak nothing useful to them.
+    ListingAlreadyClaimed,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -128,6 +141,9 @@ impl APIErrorCode {
         Self::UncapturedTransition,
         Self::ListingStillBound,
         Self::MappingAlreadyExists,
+        Self::ListingUrlUnusable,
+        Self::MappingNotBindable,
+        Self::ListingAlreadyClaimed,
         Self::Internal,
     ];
 
@@ -153,6 +169,9 @@ impl APIErrorCode {
             Self::UncapturedTransition => "uncaptured_transition",
             Self::ListingStillBound => "listing_still_bound",
             Self::MappingAlreadyExists => "mapping_already_exists",
+            Self::ListingUrlUnusable => "listing_url_unusable",
+            Self::MappingNotBindable => "mapping_not_bindable",
+            Self::ListingAlreadyClaimed => "listing_already_claimed",
             Self::Internal => "internal",
         }
     }
@@ -379,6 +398,9 @@ mod tests {
                 | APIErrorCode::UncapturedTransition
                 | APIErrorCode::ListingStillBound
                 | APIErrorCode::MappingAlreadyExists
+                | APIErrorCode::ListingUrlUnusable
+                | APIErrorCode::MappingNotBindable
+                | APIErrorCode::ListingAlreadyClaimed
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

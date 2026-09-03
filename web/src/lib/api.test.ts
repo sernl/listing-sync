@@ -208,6 +208,57 @@ describe('the authoring endpoints', () => {
 		expect(head.binding_state).toBe('unbound');
 	});
 
+	it('binds a listing under the mapping, sending the URL the seller pasted', async () => {
+		const seen: Array<{ url: string; method?: string; body: unknown }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+				return jsonResponse(200, {
+					id: 'm1',
+					product: 'p1',
+					inventory: 'Tpt',
+					binding_state: 'bound',
+					lifecycle_state: 'live',
+					updated_at: 5000,
+					listing_url: 'https://www.teacherspayteachers.com/Product/listing-17511712'
+				});
+			})
+		);
+		const head = await api.bindMapping(
+			'm1',
+			'https://www.teacherspayteachers.com/Product/fractions-17511712'
+		);
+		expect(seen[0].method).toBe('POST');
+		expect(seen[0].url).toBe('/v1/mappings/m1/bind');
+		expect(seen[0].body).toEqual({
+			listing_url: 'https://www.teacherspayteachers.com/Product/fractions-17511712'
+		});
+		expect(head.binding_state).toBe('bound');
+	});
+
+	it('surfaces the bind refusal with its code, so a bad link reads as a bad link', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				jsonResponse(422, {
+					status: 422,
+					errors: [
+						{
+							code: 'listing_url_unusable',
+							kind: 'validation',
+							message: 'that link is a listing on a different marketplace'
+						}
+					]
+				})
+			)
+		);
+		const failure = await api.bindMapping('m1', 'https://www.tes.com/teaching-resource/x-1').catch(
+			(caught: unknown) => caught
+		);
+		expect((failure as ApiFailure).code()).toBe('listing_url_unusable');
+	});
+
 	it('reads one marketplace vocabulary per inventory', async () => {
 		const seen: string[] = [];
 		vi.stubGlobal(

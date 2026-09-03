@@ -31,8 +31,8 @@ That is the argument for stating the device-driven reality on the dashboard rath
 `/inventory` is the board, and it is the centre of the product.
 One row per item, carrying its title, price, the per-marketplace chip strip, its captured views and sales, and when it was last touched.
 Search over the title, filter by marketplace and by standing, and five bulk verbs over the selected rows.
-Two of the five run: cross-list, and delete.
-Three are rendered disabled with the reason on the control and again under the table: bulk edit, which needs a screen rather than an endpoint; bulk labels, which needs G6; and bulk mark-as-listed, which needs G3 and a bind verb on top of it.
+Three of the five run: cross-list, mark-as-listed, and delete.
+Two are rendered disabled with the reason on the control and again under the table: bulk edit, which needs a screen rather than an endpoint, and bulk labels, which needs G6.
 Bulk delete asks which way the listings already on a marketplace should go and defaults to neither, because removing everywhere fires one write per listing from one click and leaving them standing abandons listings nothing here tracks; that is the seller's decision at the moment they take it, not one the console makes for them.
 There is no bulk delist-and-relist under any name, and a test refuses one.
 
@@ -175,7 +175,11 @@ G11. A thumbnail on the product list.
 The phone card therefore carries four of the five fields the cross-reference names for an inventory card, and renders no placeholder tile for an image that is not served.
 Shape needed: a cover image URL on `ProductHead`.
 
-G12. Binding a listing the console did not create.
-Vendoo's "Mark as Listed" takes a pasted listing URL and binds an existing marketplace listing to the item, which is how an imported or pre-existing catalogue is adopted; nothing here binds a mapping to a listing the engine did not create, so the verb is disabled on the item screen and in bulk.
-It sits on top of G3 rather than beside it: G3 serves the URL a bound mapping already has, and this one accepts a URL for a mapping that has none.
-Shape needed: `POST /{version}/mappings/{mapping}/bind` taking `{ listing_url }`, refusing a mapping that is already bound.
+G12. Binding a listing the console did not create. Served.
+`POST /{version}/mappings/{mapping}/bind` takes `{ listing_url }` and answers the bound `MappingHead`; the item screen offers it per marketplace and the board offers it over a selection.
+The URL is parsed by host and path rather than by its trailing digits, in `parse_listing_url` beside G3's renderer, and a round-trip test holds the two directions together.
+Host and path are both checked because every marketplace's page ends in digits: the adapters' own parsers read a `Location` header from a redirect they had just caused, where the marketplace was never in doubt, and a pasted URL has no such provenance.
+A Tes paste is stored as the canonical `/api/v2/resources/{id}` identity rather than the page that was pasted, because `DraftId::canonical_url` requires one spelling per resource: a second one makes a later write report a divergent landing against the mapping it just wrote, and defeats `mapping_one_bound_url`.
+The binding starts `Verification::Stale` at the bind instant, which is the state migration 0004 gives a bound mapping nothing has read back, and the engine's read-back is what confirms it; nothing on this path contacts a marketplace, so a seller can attach a listing that is gone or is not theirs and the read-back is what catches it.
+Four refusals are named rather than collapsed: a link for another marketplace, a link that is not a listing page, a mapping that already binds one or has a create out, and a listing another of the seller's own items already claims.
+Re-binding a `severed` mapping is deliberately not offered here: it carries a sever generation and the content keys hanging off it, which is reconciliation's path rather than a paste.

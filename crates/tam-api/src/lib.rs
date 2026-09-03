@@ -256,6 +256,10 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/elections/rules", post(resources::upsert_rule))
         .route("/{version}/mappings", get(resources::list_mappings))
         .route(
+            "/{version}/mappings/{mapping}/bind",
+            post(resources::bind_mapping),
+        )
+        .route(
             "/{version}/analytics/summary",
             get(analytics::analytics_summary),
         )

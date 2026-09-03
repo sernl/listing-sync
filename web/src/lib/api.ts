@@ -968,6 +968,14 @@ export const api = {
 	 *  that already reaches it is refused with `mapping_already_exists`. */
 	addMapping: (product: string, inventory: InventoryId) =>
 		post<MappingHead>(`/v1/products/${product}/mappings`, { inventory }),
+	/** Bind a mapping to a listing the console did not create, by its page URL.
+	 *  Writes the catalogue only: no marketplace is contacted, so the binding
+	 *  starts unverified and the engine's own read-back is what confirms the
+	 *  listing exists and is the seller's. Refuses a link for another
+	 *  marketplace, a link that is not a listing page, a mapping that already
+	 *  binds one, and a listing another of the seller's items already claims. */
+	bindMapping: (mapping: string, listingUrl: string) =>
+		post<MappingHead>(`/v1/mappings/${mapping}/bind`, { listing_url: listingUrl }),
 	analytics: () => request<AnalyticsSummary>('/v1/analytics/summary'),
 
 	/** One marketplace's authoring vocabulary. Cached per inventory: it is

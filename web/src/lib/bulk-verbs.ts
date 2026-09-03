@@ -28,8 +28,7 @@ const MISSING: Record<BulkVerb, string | null> = {
 	edit: 'No screen chooses which fields change across a selection. The per-item edit is served, at PATCH /v1/products/{id}; the screen is what does not exist.',
 	labels:
 		'No endpoint holds labels, so there is nothing to set. Labels are gap G6, and filtering stays title, marketplace and standing until they land.',
-	mark_listed:
-		'No endpoint binds a listing by its URL, and none serves a listing URL to bind against. That is gap G3 and a bind verb on top of it.'
+	mark_listed: null
 };
 
 const LABEL: Record<BulkVerb, string> = {
@@ -44,10 +43,10 @@ const LABEL: Record<BulkVerb, string> = {
  *  waiting, with the destructive verb last in its group. */
 export const BULK_VERBS: readonly BulkVerb[] = [
 	'cross_list',
+	'mark_listed',
 	'delete',
 	'edit',
-	'labels',
-	'mark_listed'
+	'labels'
 ];
 
 export const BULK_ACTIONS: readonly BulkAction[] = BULK_VERBS.map((verb) => ({

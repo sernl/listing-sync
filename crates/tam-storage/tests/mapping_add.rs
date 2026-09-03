@@ -10,11 +10,14 @@
 #![cfg(feature = "pg-tests")]
 
 use sqlx::PgPool;
-use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, Verification};
+use tam_domain::{
+    Binding, CanonicalProduct, FieldPolicies, FieldPolicy, Mapping, PublishMode, Verification,
+};
 use tam_marketplace::{RemoteLifecycle, RemoteListingId};
-use tam_storage::{MappingAdd, MappingRepo, ProductRepo};
+use tam_storage::{MappingAdd, MappingRepo, PastedBind, ProductRepo};
 use tam_types::{
-    InventoryId, MappingId, OrgId, PriceIntent, PriceRule, ProductId, Timestamp, Uuid,
+    ContentHash, FileId, FileKind, FileRole, InventoryId, MappingId, OrgId, PayloadSet,
+    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Uuid,
 };
 
 mod common;
@@ -25,6 +28,29 @@ const PRODUCT_2: ProductId = ProductId(Uuid([0x02; 16]));
 const MAPPING_1: MappingId = MappingId(Uuid([0x31; 16]));
 const MAPPING_2: MappingId = MappingId(Uuid([0x32; 16]));
 const NOW: Timestamp = Timestamp(5_000);
+
+/// A second product in the same organisation, carrying its own payload file.
+///
+/// `product_file` is keyed by `(org_id, id)`, so two products in one tenant
+/// cannot share a file identifier; reusing the fixture's whole product for a
+/// same-tenant second row collides on that key rather than on anything the
+/// test is about.
+fn second_product() -> CanonicalProduct {
+    let mut product = minimal_product();
+    product.id = PRODUCT_2;
+    product.payload = PayloadSet::new(
+        ProductFile {
+            id: FileId(Uuid([0x22; 16])),
+            role: FileRole::Payload,
+            kind: FileKind::Pdf,
+            hash: ContentHash([0x52; 32]),
+            byte_len: 4,
+            scan: ScanOutcome::Pending,
+        },
+        vec![],
+    );
+    product
+}
 
 fn unbound(org: OrgId, product: ProductId, inventory: InventoryId, id: MappingId) -> Mapping {
     Mapping {
@@ -293,4 +319,207 @@ async fn a_head_carries_the_listing_only_while_the_mapping_is_bound(pool: PgPool
         single.remote, bound_head.remote,
         "the one-mapping read and the listing agree on the binding"
     );
+}
+
+/// Adopting a listing this tree did not create: the binding it writes, and the
+/// two states it refuses.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_paste_binds_an_unbound_mapping_and_leaves_it_awaiting_verification(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the product inserts");
+    let repo = MappingRepo::new(pool.clone());
+    repo.add(
+        ORG_A,
+        &unbound(ORG_A, PRODUCT_1, InventoryId::Tpt, MAPPING_1),
+        0,
+        NOW,
+    )
+    .await
+    .expect("the add lands");
+
+    let listing = RemoteListingId::Tpt {
+        product_id: 17_511_712,
+    };
+    assert_eq!(
+        repo.bind_pasted(ORG_A, MAPPING_1, &listing, NOW)
+            .await
+            .expect("the bind lands"),
+        PastedBind::Bound
+    );
+
+    let record = repo
+        .get(ORG_A, MAPPING_1)
+        .await
+        .expect("the aggregate reads")
+        .expect("the mapping is there");
+    match &record.mapping.binding {
+        Binding::Bound {
+            id,
+            first_seen,
+            verified,
+        } => {
+            assert_eq!(
+                *id, listing,
+                "the binding names the listing that was pasted"
+            );
+            assert_eq!(*first_seen, NOW);
+            assert_eq!(
+                *verified,
+                Verification::Stale { since: NOW },
+                "nothing read the listing back, so the binding is a claim awaiting verification"
+            );
+        }
+        other @ (Binding::Unbound
+        | Binding::Creating { .. }
+        | Binding::AmbiguousCreate { .. }
+        | Binding::Severed { .. }) => {
+            panic!("a pasted bind leaves the mapping bound, not {other:?}")
+        }
+    }
+
+    let head = repo
+        .head(ORG_A, MAPPING_1)
+        .await
+        .expect("the head reads")
+        .expect("the mapping is readable");
+    assert_eq!(head.remote, Some(listing), "the head carries the binding");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_second_paste_onto_a_bound_mapping_is_refused_by_state(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the product inserts");
+    let repo = MappingRepo::new(pool.clone());
+    repo.add(
+        ORG_A,
+        &unbound(ORG_A, PRODUCT_1, InventoryId::Tpt, MAPPING_1),
+        0,
+        NOW,
+    )
+    .await
+    .expect("the add lands");
+    let first = RemoteListingId::Tpt {
+        product_id: 17_511_712,
+    };
+    repo.bind_pasted(ORG_A, MAPPING_1, &first, NOW)
+        .await
+        .expect("the first bind lands");
+
+    assert_eq!(
+        repo.bind_pasted(
+            ORG_A,
+            MAPPING_1,
+            &RemoteListingId::Tpt {
+                product_id: 99_999_999
+            },
+            NOW,
+        )
+        .await
+        .expect("the second paste answers rather than faulting"),
+        PastedBind::NotUnbound {
+            state: "bound".to_owned()
+        },
+    );
+    let record = repo
+        .get(ORG_A, MAPPING_1)
+        .await
+        .expect("the aggregate reads")
+        .expect("the mapping is there");
+    assert!(
+        matches!(record.mapping.binding, Binding::Bound { ref id, .. } if *id == first),
+        "the refused paste left the first binding exactly as it was"
+    );
+}
+
+/// Two of a seller's own items must not both claim one listing: the partial
+/// unique indexes of migration 0018 are what decide it, so the refusal is
+/// proven against the database rather than against a read.
+#[sqlx::test(migrations = "./migrations")]
+async fn two_mappings_cannot_claim_one_listing(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    let products = ProductRepo::new(pool.clone());
+    products
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the first product inserts");
+    products
+        .insert(ORG_A, &second_product(), NOW)
+        .await
+        .expect("the second product inserts");
+
+    let repo = MappingRepo::new(pool.clone());
+    for (product, id) in [(PRODUCT_1, MAPPING_1), (PRODUCT_2, MAPPING_2)] {
+        repo.add(
+            ORG_A,
+            &unbound(ORG_A, product, InventoryId::Tpt, id),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the add lands");
+    }
+
+    let listing = RemoteListingId::Tpt {
+        product_id: 17_511_712,
+    };
+    assert_eq!(
+        repo.bind_pasted(ORG_A, MAPPING_1, &listing, NOW)
+            .await
+            .expect("the first claim lands"),
+        PastedBind::Bound
+    );
+    assert_eq!(
+        repo.bind_pasted(ORG_A, MAPPING_2, &listing, NOW)
+            .await
+            .expect("the second claim answers rather than faulting"),
+        PastedBind::ListingClaimed
+    );
+    let second_head = repo
+        .head(ORG_A, MAPPING_2)
+        .await
+        .expect("the head reads")
+        .expect("the mapping is readable");
+    assert_eq!(
+        second_head.remote, None,
+        "the refused claim left the second mapping unbound"
+    );
+}
+
+/// A Tes listing binds by its canonical identity, which is what
+/// `mapping_one_bound_url` indexes.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_tes_paste_binds_the_canonical_identity(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the product inserts");
+    let repo = MappingRepo::new(pool.clone());
+    repo.add(
+        ORG_A,
+        &unbound(ORG_A, PRODUCT_1, InventoryId::TesGb, MAPPING_1),
+        0,
+        NOW,
+    )
+    .await
+    .expect("the add lands");
+
+    let listing = RemoteListingId::Tes {
+        url: "https://www.tes.com/api/v2/resources/13264370".to_owned(),
+    };
+    repo.bind_pasted(ORG_A, MAPPING_1, &listing, NOW)
+        .await
+        .expect("the bind lands");
+    let head = repo
+        .head(ORG_A, MAPPING_1)
+        .await
+        .expect("the head reads")
+        .expect("the mapping is readable");
+    assert_eq!(head.remote, Some(listing));
 }

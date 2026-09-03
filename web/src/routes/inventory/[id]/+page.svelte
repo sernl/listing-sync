@@ -126,6 +126,13 @@
 	// shows the wait, and a second click cannot start a second add.
 	let adding = $state<InventoryId | null>(null);
 	let addRefusal = $state<string | null>(null);
+	// Which mapping is having a listing attached to it, and what the seller has
+	// typed. One at a time: the form opens on the row it belongs to, so a URL
+	// cannot be pasted against a marketplace the seller is not looking at.
+	let attaching = $state<string | null>(null);
+	let attachUrl = $state('');
+	let attachRefusal = $state<string | null>(null);
+	let attachSending = $state(false);
 	// Runs started from this page in this session, kept only until the bounded
 	// read below carries them: a run the server has not listed yet would
 	// otherwise vanish between starting it and the refetch landing.
@@ -284,6 +291,38 @@
 		}
 	}
 
+	function openAttach(mapping: string) {
+		attaching = mapping;
+		attachUrl = '';
+		attachRefusal = null;
+	}
+
+	/** Attaches a listing that already exists on the marketplace to this item.
+	 *  A catalogue write and nothing else: no marketplace is contacted, so the
+	 *  binding is a claim the next sync reads back rather than a verified
+	 *  fact. */
+	async function attach(mapping: string) {
+		if (attachUrl.trim().length === 0) {
+			return;
+		}
+		attachSending = true;
+		attachRefusal = null;
+		try {
+			await api.bindMapping(mapping, attachUrl.trim());
+			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
+			attaching = null;
+			attachUrl = '';
+			toast('info', 'Listing attached. The next sync reads it back.');
+		} catch (failure) {
+			attachRefusal =
+				failure instanceof ApiFailure
+					? failure.message
+					: 'That listing could not be attached.';
+		} finally {
+			attachSending = false;
+		}
+	}
+
 	async function deleted() {
 		deleting = false;
 		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
@@ -382,7 +421,47 @@
 					{:else}
 						<span class="pill {verdict.tone}">{verdict.line}</span>
 					{/if}
+					{#if mapping.binding_state === 'unbound'}
+						<button
+							class="btn small"
+							type="button"
+							disabled={attachSending}
+							onclick={() =>
+								attaching === mapping.id ? (attaching = null) : openAttach(mapping.id)}
+						>
+							{attaching === mapping.id ? 'Cancel' : 'Mark as listed'}
+						</button>
+					{/if}
 				</div>
+				{#if attaching === mapping.id}
+					<div class="row attach">
+						<label class="what">
+							<span class="s">
+								Paste the address of this item's listing as it already stands on
+								{platformTitle(mapping.inventory)}. Nothing is sent there; this records where
+								the listing is so later edits reach it.
+							</span>
+							<input
+								type="url"
+								placeholder="https://…"
+								disabled={attachSending}
+								bind:value={attachUrl}
+							/>
+						</label>
+						<span class="grow"></span>
+						<button
+							class="cta small"
+							type="button"
+							disabled={attachSending || attachUrl.trim().length === 0}
+							onclick={() => void attach(mapping.id)}
+						>
+							{attachSending ? 'Attaching…' : 'Attach'}
+						</button>
+					</div>
+					{#if attachRefusal !== null}
+						<p class="refusal">{attachRefusal}</p>
+					{/if}
+				{/if}
 			{:else}
 				<p class="quiet">This item carries no marketplace mapping.</p>
 			{/each}

@@ -5,6 +5,7 @@
 	import { allPages, api, type MappingHead } from '$lib/api';
 	import { formatMetric } from '$lib/analytics-view';
 	import CrossListDialog from '$lib/CrossListDialog.svelte';
+	import MarkListedDialog from '$lib/MarkListedDialog.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import {
 		STATE_LABEL,
@@ -102,15 +103,25 @@
 	let standing = $state<StandingFilter>('all');
 	let crossListing = $state(false);
 	let deleting = $state(false);
+	let markingListed = $state(false);
 
-	/** Only the two built verbs open anything; the other three are disabled at
+	/** Only the three built verbs open anything; the other two are disabled at
 	 *  the control, so this is exhaustive over what can actually be clicked. */
 	function start(verb: BulkVerb) {
 		if (verb === 'cross_list') {
 			crossListing = true;
+		} else if (verb === 'mark_listed') {
+			markingListed = true;
 		} else if (verb === 'delete') {
 			deleting = true;
 		}
+	}
+
+	async function markedListed(bound: number) {
+		markingListed = false;
+		selected = new Set();
+		toast('info', `${bound} ${bound === 1 ? 'listing' : 'listings'} attached.`);
+		await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
 	}
 
 	async function deleted(count: number) {
@@ -454,6 +465,13 @@
 	rows={chosen}
 	onClose={() => (crossListing = false)}
 	onStarted={started}
+/>
+
+<MarkListedDialog
+	open={markingListed}
+	rows={chosen}
+	onClose={() => (markingListed = false)}
+	onBound={markedListed}
 />
 
 <BulkDeleteDialog

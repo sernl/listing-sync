@@ -70,6 +70,29 @@ pub enum MappingAdd {
 /// rather than a fault.
 const ONE_PER_INVENTORY: &str = "mapping_one_per_inventory";
 
+/// What binding a mapping to a listing the seller named answered.
+///
+/// A seller adopting a listing this tree did not create is the one bind with
+/// no write attempt behind it, so it is decided here rather than through the
+/// attempt-landing path in `jobs`, which classifies divergence against a write
+/// it had just made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PastedBind {
+    Bound,
+    /// The mapping is not in a state a paste can bind. A bound one already
+    /// names a listing; a `creating` or `ambiguous_create` one has a write out
+    /// whose outcome would be overwritten; a `severed` one needs the
+    /// reconciliation path, because re-binding it carries a sever generation
+    /// and the content keys that hang off it.
+    NotUnbound {
+        state: String,
+    },
+    /// Another mapping in this organisation and marketplace already claims
+    /// that listing, which `mapping_one_bound_url` and
+    /// `mapping_one_bound_numeric_id` are what decide.
+    ListingClaimed,
+}
+
 pub struct MappingRepo {
     pool: PgPool,
 }
@@ -225,6 +248,88 @@ impl MappingRepo {
                 Ok(MappingAdd::AlreadyMapped)
             }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Binds a mapping to a listing the seller named, with no marketplace
+    /// request behind it.
+    ///
+    /// The binding starts `Verification::Stale` at the bind instant, which is
+    /// the state migration 0004 gives a bound mapping nothing has verified:
+    /// `mapping_verify_bound` requires a bound stale row to carry the instant,
+    /// and the engine's read-back is what later moves it to clean or
+    /// mismatched. Nothing here contacts the marketplace, so the binding is a
+    /// claim awaiting that read-back rather than a verified fact.
+    ///
+    /// The `unbound` guard is in the statement rather than in a read before
+    /// it, so two pastes racing on one mapping cannot both believe they bound
+    /// it.
+    pub async fn bind_pasted(
+        &self,
+        org: OrgId,
+        mapping: MappingId,
+        listing: &RemoteListingId,
+        at: Timestamp,
+    ) -> Result<PastedBind, StorageError> {
+        let remote = RemoteIdColumns::encode(listing)?;
+        let at_db = timestamp_to_db(at)?;
+        let org_db = uuid_to_db(org.0);
+        let mapping_db = uuid_to_db(mapping.0);
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let bound = sqlx::query!(
+            "UPDATE mapping SET \
+             binding_state = 'bound', remote_id_kind = $3, remote_url = $4, \
+             remote_numeric_id = $5, first_seen_at = $6, \
+             verify_state = 'stale', verified_at = NULL, verify_stale_since = $6, \
+             updated_at = $6 \
+             WHERE org_id = $1 AND id = $2 AND binding_state = 'unbound'",
+            org_db,
+            mapping_db,
+            remote.kind,
+            remote.url,
+            remote.numeric_id,
+            at_db,
+        )
+        .execute(&mut *tx)
+        .await;
+        let bound = match bound {
+            Ok(done) => done,
+            Err(sqlx::Error::Database(database))
+                if matches!(
+                    database.constraint(),
+                    Some("mapping_one_bound_url" | "mapping_one_bound_numeric_id")
+                ) =>
+            {
+                tx.rollback().await?;
+                return Ok(PastedBind::ListingClaimed);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if bound.rows_affected() > 0 {
+            tx.commit().await?;
+            return Ok(PastedBind::Bound);
+        }
+
+        // Nothing moved, so the mapping is in some other binding state; naming
+        // it is what lets the caller say which, rather than answering a bare
+        // refusal for four different situations.
+        let state = sqlx::query!(
+            "SELECT binding_state FROM mapping WHERE org_id = $1 AND id = $2",
+            org_db,
+            mapping_db,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        match state {
+            Some(row) => Ok(PastedBind::NotUnbound {
+                state: row.binding_state,
+            }),
+            None => Err(StorageError::Inconsistent {
+                reason: "the mapping to bind does not exist".to_owned(),
+            }),
         }
     }
 

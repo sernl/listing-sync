@@ -414,3 +414,223 @@ async fn an_add_naming_no_such_product_is_not_found(pool: PgPool) {
     let error: APIError = parse(&body);
     assert_eq!(error.errors[0].code, Some(APIErrorCode::ResourceMissing));
 }
+
+fn bind_path(mapping: MappingId) -> String {
+    format!("/v1/mappings/{}/bind", mapping.0.to_hyphenated())
+}
+
+/// The whole point of the verb: a listing this tree never created becomes the
+/// mapping's, with no marketplace contacted on the way.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_pasted_page_binds_the_mapping_and_serves_its_url_back(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+    let id = MappingId(Uuid([0x31; 16]));
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &mapping(id, tam_types::InventoryId::Tpt, None),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+
+    let (status, body) = call(
+        pool,
+        Some(&TOKEN_A),
+        Method::POST,
+        &bind_path(id),
+        Some(serde_json::json!({
+            "listing_url": "https://www.teacherspayteachers.com/Product/fractions-pack-17511712"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let head: MappingHeadView = parse(&body);
+    assert_eq!(head.binding_state, "bound");
+    assert_eq!(
+        head.listing_url.as_deref(),
+        Some("https://www.teacherspayteachers.com/Product/listing-17511712"),
+        "the bound mapping serves the page the seller can open, under the canonical slug"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_link_for_another_marketplace_is_refused_by_name(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+    let id = MappingId(Uuid([0x31; 16]));
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &mapping(id, tam_types::InventoryId::Tpt, None),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+
+    let (status, body) = call(
+        pool.clone(),
+        Some(&TOKEN_A),
+        Method::POST,
+        &bind_path(id),
+        Some(serde_json::json!({
+            "listing_url": "https://www.tes.com/teaching-resource/pack-13264370"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = parse(&body);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::ListingUrlUnusable),
+        "a Tes page on a TPT row is the right link on the wrong item"
+    );
+
+    let (_status, body) = call(pool, Some(&TOKEN_A), Method::GET, "/v1/mappings", None).await;
+    let view: MappingsView = parse(&body);
+    assert_eq!(view.mappings[0].binding_state, "unbound");
+    assert_eq!(view.mappings[0].listing_url, None);
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_link_that_is_not_a_listing_page_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+    let id = MappingId(Uuid([0x31; 16]));
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &mapping(id, tam_types::InventoryId::Tpt, None),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+
+    for pasted in [
+        "17511712",
+        "https://example.com/Product/x-17511712",
+        "https://www.teacherspayteachers.com/Store/seller-17511712",
+    ] {
+        let (status, body) = call(
+            pool.clone(),
+            Some(&TOKEN_A),
+            Method::POST,
+            &bind_path(id),
+            Some(serde_json::json!({ "listing_url": pasted })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "not a TPT product page: {pasted}"
+        );
+        let error: APIError = parse(&body);
+        assert_eq!(error.errors[0].code, Some(APIErrorCode::ListingUrlUnusable));
+    }
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_mapping_that_already_binds_a_listing_refuses_a_paste(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+    let id = MappingId(Uuid([0x31; 16]));
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &mapping(
+                id,
+                tam_types::InventoryId::Tpt,
+                Some(RemoteListingId::Tpt {
+                    product_id: 17_511_712,
+                }),
+            ),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the bound mapping inserts");
+
+    let (status, body) = call(
+        pool,
+        Some(&TOKEN_A),
+        Method::POST,
+        &bind_path(id),
+        Some(serde_json::json!({
+            "listing_url": "https://www.teacherspayteachers.com/Product/other-99999999"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = parse(&body);
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::MappingNotBindable));
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn another_tenants_mapping_is_not_found(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+    let id = MappingId(Uuid([0x31; 16]));
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &mapping(id, tam_types::InventoryId::Tpt, None),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+
+    let (status, body) = call(
+        pool.clone(),
+        Some(&TOKEN_B),
+        Method::POST,
+        &bind_path(id),
+        Some(serde_json::json!({
+            "listing_url": "https://www.teacherspayteachers.com/Product/x-17511712"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let error: APIError = parse(&body);
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::ResourceMissing));
+
+    let (_status, body) = call(pool, Some(&TOKEN_A), Method::GET, "/v1/mappings", None).await;
+    let view: MappingsView = parse(&body);
+    assert_eq!(
+        view.mappings[0].binding_state, "unbound",
+        "the other tenant's refused paste changed nothing here"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_bind_without_a_session_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+    let id = MappingId(Uuid([0x31; 16]));
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &mapping(id, tam_types::InventoryId::Tpt, None),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+
+    let (status, _body) = call(
+        pool,
+        None,
+        Method::POST,
+        &bind_path(id),
+        Some(serde_json::json!({
+            "listing_url": "https://www.teacherspayteachers.com/Product/x-17511712"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

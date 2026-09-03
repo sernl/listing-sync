@@ -37,6 +37,9 @@ export type APIErrorCode =
   | "uncaptured_transition"
   | "listing_still_bound"
   | "mapping_already_exists"
+  | "listing_url_unusable"
+  | "mapping_not_bindable"
+  | "listing_already_claimed"
   | "internal";
 
 export type APIErrorKind =

@@ -6,8 +6,12 @@
 //! whose page shape nothing here has observed, because a wrong URL on an "open
 //! the live listing" control sends a seller to another author's page or to a
 //! 404, which is worse than the control being absent.
+//!
+//! The inverse also lives here: a URL a seller pasted is parsed back to an
+//! identifier by [`parse_listing_url`], so the two directions cannot drift.
 
 use tam_marketplace::RemoteListingId;
+use tam_types::Marketplace;
 
 /// TPT's origin, restated rather than imported.
 ///
@@ -66,10 +70,96 @@ fn tes_resource_id(url: &str) -> Option<&str> {
     Some(candidate)
 }
 
+/// Why a pasted listing URL could not become an identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UrlRefusal {
+    /// The URL is a listing page, but on a different marketplace than the one
+    /// the mapping reaches. Named rather than folded into `Unrecognised`
+    /// because the seller's remedy differs: this is the right link pasted onto
+    /// the wrong row.
+    WrongMarketplace { named: Marketplace },
+    /// No marketplace here recognises the URL. Also the answer for a
+    /// marketplace whose page shape is unobserved, which is Etsy today.
+    Unrecognised,
+}
+
+/// The identifier a marketplace's own listing page names.
+///
+/// Host and path are both checked, because the identifier alone is evidence of
+/// nothing: every marketplace's page ends in digits, so a parser that read only
+/// the trailing number would accept one marketplace's link as another's. The
+/// adapters' own parsers read a `Location` header from a redirect they had just
+/// caused, where the marketplace was never in doubt; a URL a seller pasted has
+/// no such provenance and is validated here instead.
+///
+/// Tes answers the canonical `/api/v2/resources/{id}` identity rather than the
+/// page that was pasted. `DraftId::canonical_url` in `tam-marketplace-tes`
+/// requires it: that string is what a bind writes and what
+/// `mapping_one_bound_url` indexes, so a second spelling of one resource makes
+/// a later write report a divergent landing against the mapping it just wrote.
+pub fn parse_listing_url(expected: Marketplace, url: &str) -> Result<RemoteListingId, UrlRefusal> {
+    let (host, path) = split_url(url).ok_or(UrlRefusal::Unrecognised)?;
+    let found = recognise(&host, path).ok_or(UrlRefusal::Unrecognised)?;
+    let named = found.marketplace();
+    if named == expected {
+        Ok(found)
+    } else {
+        Err(UrlRefusal::WrongMarketplace { named })
+    }
+}
+
+/// The host without its scheme, credentials, port or `www.`, and the path
+/// without its query or fragment. Hand-split rather than parsed: this crate is
+/// in the pure set and depends on no URL library.
+fn split_url(url: &str) -> Option<(String, &str)> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let rest = rest.split(['?', '#']).next()?;
+    let (authority, path) = match rest.split_once('/') {
+        Some((authority, path)) => (authority, path),
+        None => (rest, ""),
+    };
+    // Credentials before an `@` are the classic way to dress one host as
+    // another, so the host is what follows the last one.
+    let authority = authority.rsplit('@').next()?;
+    let host = authority.split(':').next()?.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host).to_owned();
+    Some((host, path))
+}
+
+fn recognise(host: &str, path: &str) -> Option<RemoteListingId> {
+    let (head, rest) = match path.split_once('/') {
+        Some(split) => split,
+        None => (path, ""),
+    };
+    if host == "teacherspayteachers.com" && head.eq_ignore_ascii_case("Product") {
+        return trailing_id(rest).map(|product_id| RemoteListingId::Tpt { product_id });
+    }
+    if host == "tes.com"
+        && (head.eq_ignore_ascii_case("teaching-resource") || path.starts_with("api/v2/resources/"))
+    {
+        return trailing_id(path).map(|id| RemoteListingId::Tes {
+            url: format!("{TES_ORIGIN}/api/v2/resources/{id}"),
+        });
+    }
+    None
+}
+
+/// The identifier a listing path ends in: every shape here puts it last, after
+/// a decorative slug where one exists.
+fn trailing_id(path: &str) -> Option<u64> {
+    path.trim_end_matches('/')
+        .rsplit(['-', '/'])
+        .next()
+        .and_then(|tail| tail.parse::<u64>().ok())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::listing_url;
+    use super::{listing_url, parse_listing_url, UrlRefusal};
     use tam_marketplace::RemoteListingId;
+    use tam_types::Marketplace;
 
     #[test]
     fn a_tpt_listing_is_its_numeric_id_under_a_constant_slug() {
@@ -147,5 +237,126 @@ mod tests {
             None,
             "no Etsy adapter exists, so its page shape is unobserved rather than known"
         );
+    }
+
+    #[test]
+    fn a_pasted_tpt_product_page_parses_to_its_numeric_id() {
+        for pasted in [
+            "https://www.teacherspayteachers.com/Product/fractions-pack-17511712",
+            "https://teacherspayteachers.com/Product/listing-17511712",
+            "http://www.teacherspayteachers.com/Product/x-17511712/",
+            "https://www.teacherspayteachers.com/Product/x-17511712?utm_source=pin",
+        ] {
+            assert_eq!(
+                parse_listing_url(Marketplace::Tpt, pasted),
+                Ok(RemoteListingId::Tpt {
+                    product_id: 17_511_712
+                }),
+                "the slug, scheme, www and query are all decoration: {pasted}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pasted_tes_page_becomes_the_canonical_identity_rather_than_the_page() {
+        for pasted in [
+            "https://www.tes.com/teaching-resource/fractions-revision-pack-13264370",
+            "https://www.tes.com/teaching-resource/-13264370",
+            "https://www.tes.com/api/v2/resources/13264370",
+        ] {
+            assert_eq!(
+                parse_listing_url(Marketplace::Tes, pasted),
+                Ok(RemoteListingId::Tes {
+                    url: "https://www.tes.com/api/v2/resources/13264370".to_owned()
+                }),
+                "one resource has one spelling in the bind columns: {pasted}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_right_link_on_the_wrong_row_is_refused_by_name() {
+        assert_eq!(
+            parse_listing_url(
+                Marketplace::Tpt,
+                "https://www.tes.com/teaching-resource/pack-13264370"
+            ),
+            Err(UrlRefusal::WrongMarketplace {
+                named: Marketplace::Tes
+            }),
+            "a Tes page is a real listing page, just not this mapping's"
+        );
+        assert_eq!(
+            parse_listing_url(
+                Marketplace::Tes,
+                "https://www.teacherspayteachers.com/Product/x-17511712"
+            ),
+            Err(UrlRefusal::WrongMarketplace {
+                named: Marketplace::Tpt
+            })
+        );
+    }
+
+    /// The failure the adapters' own parsers would wave through: they read the
+    /// trailing digits of a `Location` header and validate no host at all.
+    #[test]
+    fn a_bare_number_or_a_foreign_host_is_not_a_listing() {
+        for pasted in [
+            "17511712",
+            "https://example.com/Product/x-17511712",
+            "https://www.teacherspayteachers.example.com/Product/x-17511712",
+            "https://www.teacherspayteachers.com/Store/seller-17511712",
+            "https://www.teacherspayteachers.com/Product/no-digits",
+            "https://www.tes.com/teaching-resource/",
+            "",
+        ] {
+            assert_eq!(
+                parse_listing_url(Marketplace::Tpt, pasted),
+                Err(UrlRefusal::Unrecognised),
+                "nothing here is a TPT product page: {pasted}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_host_dressed_up_with_credentials_is_read_as_its_real_host() {
+        assert_eq!(
+            parse_listing_url(
+                Marketplace::Tpt,
+                "https://www.teacherspayteachers.com@example.com/Product/x-17511712"
+            ),
+            Err(UrlRefusal::Unrecognised),
+            "the host is what follows the last @, not what precedes it"
+        );
+    }
+
+    #[test]
+    fn etsy_can_be_neither_rendered_nor_parsed_yet() {
+        assert_eq!(
+            parse_listing_url(Marketplace::Etsy, "https://www.etsy.com/listing/1234567890"),
+            Err(UrlRefusal::Unrecognised),
+            "no Etsy adapter exists, so its page shape is unobserved in both directions"
+        );
+    }
+
+    /// The two directions are one fact, so a change to either that broke the
+    /// other would fail here rather than in a seller's browser.
+    #[test]
+    fn parsing_a_rendered_page_returns_the_identifier_it_was_rendered_from() {
+        for id in [
+            RemoteListingId::Tpt {
+                product_id: 17_511_712,
+            },
+            RemoteListingId::Tes {
+                url: "https://www.tes.com/api/v2/resources/13264370".to_owned(),
+            },
+        ] {
+            let page = listing_url(&id).expect("both marketplaces render a page");
+            assert_eq!(
+                parse_listing_url(id.marketplace(), &page),
+                Ok(id.clone()),
+                "render then parse is the identity for {id:?}"
+            );
+        }
     }
 }

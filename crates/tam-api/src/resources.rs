@@ -12,12 +12,12 @@ use tam_domain::equivalence::{
     resolution_for, ElectionAnswer, ElectionRule, ElectionRuleError, ElectionTriggerKind, Mode,
     NewElectionRule,
 };
-use tam_domain::registry::listing_url::listing_url;
+use tam_domain::registry::listing_url::{listing_url, parse_listing_url, UrlRefusal};
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
     ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, MappingRepo, NewAnswer, OpenElection,
-    ProductRepo, TaxonomyRepo,
+    PastedBind, ProductRepo, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
@@ -710,6 +710,116 @@ pub(crate) async fn list_mappings(
     Ok(Json(MappingsView {
         mappings: rows.into_iter().map(MappingHeadView::of).collect(),
     }))
+}
+
+// ---------------------------------------------------------------- bind
+
+/// The listing page the seller pasted. One field, because everything else a
+/// bind needs is either the mapping's own or the server's to decide: which
+/// marketplace it must name comes from the mapping, and the verification state
+/// it starts in is not a client's to choose.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BindMappingBody {
+    pub listing_url: String,
+}
+
+/// Binds a mapping to a listing this tree did not create.
+///
+/// The seller's own catalogue is the only thing written: the URL is parsed to
+/// the marketplace's identifier and stored, and no marketplace is contacted
+/// here or anywhere on this path. The binding therefore starts unverified —
+/// `Verification::Stale` at the bind instant, which is the state migration
+/// 0004 gives a bound mapping nothing has read back — and the engine's own
+/// read-back is what confirms the listing exists and matches. A seller can
+/// paste a listing that is gone or is not theirs; that read-back is what
+/// catches it, and until then the mapping states a claim rather than a fact.
+pub(crate) async fn bind_mapping(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, mapping)): Path<(String, String)>,
+    Json(body): Json<BindMappingBody>,
+) -> Result<Json<MappingHeadView>, APIError> {
+    let mapping = MappingId(parse_id(&mapping)?);
+    let repo = MappingRepo::new(state.pool.clone());
+    let head = repo
+        .head(context.org, mapping)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such mapping"))?;
+
+    let listing = parse_listing_url(head.inventory.marketplace(), body.listing_url.trim())
+        .map_err(|refusal| unusable_url(head.inventory, refusal))?;
+
+    let outcome = repo
+        .bind_pasted(context.org, mapping, &listing, (state.wall)())
+        .await
+        .map_err(|error| match error {
+            // The guarded UPDATE reports a vanished mapping this way, which is
+            // a race with a delete rather than a fault of ours.
+            StorageError::Inconsistent { .. } => missing("no such mapping"),
+            other @ (StorageError::Db(_)
+            | StorageError::TimestampOutOfRange { .. }
+            | StorageError::CorruptRow { .. }
+            | StorageError::OrgMismatch
+            | StorageError::StaleLease
+            | StorageError::DuplicateIdempotencyKey { .. }
+            | StorageError::AttemptInFlight
+            | StorageError::MappingAlreadyBound
+            | StorageError::ListingAlreadyBound) => storage_fault(&state, &other),
+        })?;
+    match outcome {
+        PastedBind::Bound => {}
+        PastedBind::NotUnbound { state: binding } => {
+            return Err(APIError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                APIErrorEntry::new(match binding.as_str() {
+                    "bound" => "this item is already listed on that marketplace",
+                    "severed" => {
+                        "this item's listing there was cut loose, which reconciliation reattaches rather than a paste"
+                    }
+                    _ => "a send is already out for this item on that marketplace",
+                })
+                .code(APIErrorCode::MappingNotBindable)
+                .kind(APIErrorKind::Validation)
+                .detail(serde_json::json!({ "state": binding })),
+            ));
+        }
+        PastedBind::ListingClaimed => {
+            return Err(APIError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                APIErrorEntry::new("another of your items already claims that listing")
+                    .code(APIErrorCode::ListingAlreadyClaimed)
+                    .kind(APIErrorKind::Validation),
+            ));
+        }
+    }
+
+    let bound = repo
+        .head(context.org, mapping)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| state.internal("the mapping just bound was not readable"))?;
+    Ok(Json(MappingHeadView::of(bound)))
+}
+
+fn unusable_url(inventory: InventoryId, refusal: UrlRefusal) -> APIError {
+    let (message, named) = match refusal {
+        UrlRefusal::WrongMarketplace { named } => (
+            "that link is a listing on a different marketplace",
+            Some(named),
+        ),
+        UrlRefusal::Unrecognised => ("that link is not a listing page we can read", None),
+    };
+    APIError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        APIErrorEntry::new(message)
+            .code(APIErrorCode::ListingUrlUnusable)
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({
+                "expected": inventory.marketplace(),
+                "named": named,
+            })),
+    )
 }
 
 // ------------------------------------------------------------------- status
