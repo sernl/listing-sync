@@ -52,7 +52,15 @@ function mapping(
 	binding_state: string,
 	lifecycle_state: string
 ): MappingHead {
-	return { id, product: `p-${id}`, inventory, binding_state, lifecycle_state, updated_at: 0 };
+	return {
+		id,
+		product: `p-${id}`,
+		inventory,
+		binding_state,
+		lifecycle_state,
+		updated_at: 0,
+		listing_url: null
+	};
 }
 
 function connection(id: string, status: ConnectionView['status']): ConnectionView {

@@ -372,7 +372,12 @@
 					{#if chip}
 						<span class="pill {chip.tone}">{chip.label}</span>
 						{#if chip.action}
-							<a class="btn small" href={chip.action.href}>{chip.action.label}</a>
+							<a
+								class="btn small"
+								href={chip.action.href}
+								target={chip.action.external ? '_blank' : undefined}
+								rel={chip.action.external ? 'noopener noreferrer' : undefined}
+							>{chip.action.label}</a>
 						{/if}
 					{:else}
 						<span class="pill {verdict.tone}">{verdict.line}</span>

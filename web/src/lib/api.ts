@@ -162,6 +162,11 @@ export interface MappingHead {
 	binding_state: string;
 	lifecycle_state: string;
 	updated_at: number;
+	/** The listing's own page on the marketplace, derived by the server from
+	 *  the identifier the binding holds. Null while the mapping binds nothing,
+	 *  and null for a marketplace whose page shape the server has not
+	 *  observed. */
+	listing_url: string | null;
 }
 
 export interface CreatedJob {

@@ -21,7 +21,8 @@ function mapping(id: string, productId: string): MappingHead {
 		inventory: 'Tpt',
 		binding_state: 'bound',
 		lifecycle_state: 'live',
-		updated_at: 0
+		updated_at: 0,
+		listing_url: null
 	};
 }
 

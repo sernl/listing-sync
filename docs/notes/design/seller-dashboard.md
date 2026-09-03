@@ -90,12 +90,14 @@ Nothing in the API records that a payload changed after a publish, so rendering 
 ## The actions each state admits
 
 Not listed, with a mapping: send it, which enqueues through `POST /v1/jobs` with intent `draft` or `live`.
-Not listed, with no mapping: cross-list here, which needs gap G1 and is disabled with that stated until it lands.
+Not listed, with no mapping: cross-list here, which adds the marketplace through `POST /v1/products/{product}/mappings` and then opens the send.
+The add writes the catalogue and contacts nobody, and the intent stays the seller's choice on the send rather than one the control makes for them.
 
 Draft: publish here, the same endpoint with intent `live`.
 
 Listed: revise, which is an edit through `PATCH /v1/products/{id}` followed by a send; and remove from this marketplace, through `DELETE /v1/products/{id}` with `remove_from`.
-Open the live listing is not offered, because no endpoint serves the listing's URL; that is gap G3.
+Open the live listing, which the chip itself carries: `listing_url` on the mapping is the page, derived by the server from the identifier the binding already holds.
+A marketplace whose page shape the server has not observed serves null there, and the chip falls back to opening the item rather than guessing a URL.
 
 In flight: watch the run, which links to `/sync/{job}`.
 
@@ -130,9 +132,12 @@ G2. A mapping's own work.
 Job items are reachable only through the job that holds them, so answering "what is happening to this listing on this marketplace" costs a read of every recent run and is bounded rather than complete.
 Shape needed: `latest_item` on `MappingHead`, carrying `{ job, item, state, outcome, blocked_on, settled_at }` or null.
 
-G3. The live listing's URL.
-Vendoo's glyph strip clicks through to the listing on the marketplace, which is the single most-used affordance on its inventory board, and nothing here serves the URL.
-Shape needed: `listing_url: string | null` on `MappingHead`.
+G3. The live listing's URL. Served.
+`listing_url: string | null` on `MappingHead`, derived rather than stored: `listing_url` in `crates/tam-domain/src/registry/listing_url.rs` renders the page from the identifier the binding holds, and no request is made to produce it.
+It answers only while the binding is `bound`, because a severed mapping still carries remote-id columns and the console reads severed as not listed, so serving one would link a seller to a listing this tree no longer claims.
+Tes normalises both stored shapes to `https://www.tes.com/teaching-resource/-{id}`: the create path stores the canonical `/api/v2/resources/{id}`, which is an API route a seller opening it would read as JSON, and the import path stores a page.
+TPT renders `/Product/listing-{id}` under a constant slug, because `tam-marketplace-tpt`'s `classify` module establishes that any slug serves the correct product; a title-derived slug was rejected because it would put a join onto `product` on every mapping read to decorate a path the marketplace discards.
+Etsy answers null until an adapter exists, and a stored value matching no known shape answers null rather than a guess.
 
 G4. Elections have no client binding.
 `GET /{version}/elections/items` is served and its `DecisionView` carries `product` and `inventory`, which is exactly the per-item per-marketplace "waiting on your answer" signal, but `web/src/lib/api.ts` has no method for it.

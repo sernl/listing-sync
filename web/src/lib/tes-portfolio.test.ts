@@ -28,7 +28,8 @@ function mapping(
 		inventory,
 		binding_state: binding,
 		lifecycle_state: lifecycle,
-		updated_at: 0
+		updated_at: 0,
+		listing_url: null
 	};
 }
 

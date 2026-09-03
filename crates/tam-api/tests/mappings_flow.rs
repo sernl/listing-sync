@@ -16,10 +16,12 @@ use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::resources::{MappingHeadView, MappingsView};
 use tam_api::{router, APIError, APIErrorCode, AppState, Config, SESSION_COOKIE};
+use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, Verification};
+use tam_marketplace::{RemoteLifecycle, RemoteListingId};
 use tam_storage::{ProductRepo, SessionRepo, SessionToken};
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
-    PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, UserId, Uuid,
+    ContentHash, CopyFormat, FileId, FileKind, FileRole, ListingCopy, MappingId, OrgId, PayloadSet,
+    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Title, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -159,6 +161,38 @@ fn parse<T: serde::de::DeserializeOwned>(body: &[u8]) -> T {
     serde_json::from_slice(body).expect("the body parses")
 }
 
+fn mapping(
+    id: MappingId,
+    inventory: tam_types::InventoryId,
+    remote: Option<RemoteListingId>,
+) -> Mapping {
+    Mapping {
+        id,
+        org: ORG_A,
+        product: PRODUCT_A,
+        inventory,
+        binding: match remote {
+            None => Binding::Unbound,
+            Some(id) => Binding::Bound {
+                id,
+                first_seen: NOW,
+                verified: Verification::Stale { since: NOW },
+            },
+        },
+        policies: FieldPolicies {
+            title: FieldPolicy::Managed,
+            description: FieldPolicy::Managed,
+            price: FieldPolicy::Managed,
+            taxonomy: FieldPolicy::Managed,
+            grades: FieldPolicy::Managed,
+            files: FieldPolicy::Managed,
+        },
+        price_rule: PriceRule::Explicit(PriceIntent::Free),
+        publish: PublishMode::DryRun,
+        lifecycle: RemoteLifecycle::Absent,
+    }
+}
+
 fn add_path(product: ProductId) -> String {
     format!("/v1/products/{}/mappings", product.0.to_hyphenated())
 }
@@ -191,6 +225,87 @@ async fn an_add_answers_the_new_mapping_and_the_listing_carries_it(pool: PgPool)
     let view: MappingsView = parse(&body);
     assert_eq!(view.mappings.len(), 1);
     assert_eq!(view.mappings[0].id, head.id);
+}
+
+/// The listing's page reaches the client on the mapping, derived from the
+/// identifier the binding holds. Two marketplaces in one read, because the
+/// derivation is per marketplace and a single one would not show that.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_bound_mapping_serves_the_page_a_seller_opens(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+
+    let repo = tam_storage::MappingRepo::new(pool.clone());
+    for (id, inventory, remote) in [
+        (
+            MappingId(Uuid([0x31; 16])),
+            tam_types::InventoryId::Tpt,
+            Some(RemoteListingId::Tpt {
+                product_id: 17_511_712,
+            }),
+        ),
+        (
+            MappingId(Uuid([0x32; 16])),
+            tam_types::InventoryId::TesGb,
+            Some(RemoteListingId::Tes {
+                url: "https://www.tes.com/api/v2/resources/13264370".to_owned(),
+            }),
+        ),
+        (
+            MappingId(Uuid([0x33; 16])),
+            tam_types::InventoryId::TesUs,
+            None,
+        ),
+    ] {
+        repo.insert(ORG_A, &mapping(id, inventory, remote), 0, NOW)
+            .await
+            .expect("the mapping inserts");
+    }
+
+    let (status, body) = call(pool, Some(&TOKEN_A), Method::GET, "/v1/mappings", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let view: MappingsView = parse(&body);
+    let url_of = |id: MappingId| -> Option<String> {
+        view.mappings
+            .iter()
+            .find(|head| head.id == id)
+            .and_then(|head| head.listing_url.clone())
+    };
+    assert_eq!(
+        url_of(MappingId(Uuid([0x31; 16]))).as_deref(),
+        Some("https://www.teacherspayteachers.com/Product/listing-17511712"),
+        "a bound TPT listing serves its product page under the constant slug"
+    );
+    assert_eq!(
+        url_of(MappingId(Uuid([0x32; 16]))).as_deref(),
+        Some("https://www.tes.com/teaching-resource/-13264370"),
+        "the stored Tes API route is normalised to the page rather than served raw"
+    );
+    assert_eq!(
+        url_of(MappingId(Uuid([0x33; 16]))),
+        None,
+        "an unbound mapping binds no listing, so it serves no page"
+    );
+}
+
+/// The freshly added mapping is unbound, so the write that mints it answers a
+/// null page rather than one derived from nothing.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_added_marketplace_serves_no_page_yet(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+
+    let (status, body) = call(
+        pool,
+        Some(&TOKEN_A),
+        Method::POST,
+        &add_path(PRODUCT_A),
+        Some(serde_json::json!({ "inventory": "Tpt" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let head: MappingHeadView = parse(&body);
+    assert_eq!(head.listing_url, None);
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

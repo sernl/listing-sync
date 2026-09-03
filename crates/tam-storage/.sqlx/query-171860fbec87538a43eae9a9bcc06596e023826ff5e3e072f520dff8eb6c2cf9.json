@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at FROM mapping WHERE org_id = $1 ORDER BY product_id, inventory",
+  "query": "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at, remote_id_kind, remote_url, remote_numeric_id FROM mapping WHERE org_id = $1 AND id = $2",
   "describe": {
     "columns": [
       {
@@ -32,10 +32,26 @@
         "ordinal": 5,
         "name": "updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "remote_id_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "remote_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "remote_numeric_id",
+        "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -45,8 +61,11 @@
       false,
       false,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "9d680bc1e533dd6df3cf555f521c19847106a1dc038af39b6c9e67f7684049e5"
+  "hash": "171860fbec87538a43eae9a9bcc06596e023826ff5e3e072f520dff8eb6c2cf9"
 }

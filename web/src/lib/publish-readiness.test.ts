@@ -17,6 +17,7 @@ function mapping(patch: Partial<MappingHead> = {}): MappingHead {
 		binding_state: 'unbound',
 		lifecycle_state: 'absent',
 		updated_at: 0,
+		listing_url: null,
 		...patch
 	};
 }

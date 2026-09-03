@@ -12,6 +12,7 @@ use tam_domain::equivalence::{
     resolution_for, ElectionAnswer, ElectionRule, ElectionRuleError, ElectionTriggerKind, Mode,
     NewElectionRule,
 };
+use tam_domain::registry::listing_url::listing_url;
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
@@ -677,6 +678,10 @@ pub struct MappingHeadView {
     pub binding_state: String,
     pub lifecycle_state: String,
     pub updated_at: Timestamp,
+    /// The listing's own page on the marketplace, where the binding names one
+    /// and the marketplace's page shape is known. Derived from the identifier
+    /// the binding already holds; no request is made to produce it.
+    pub listing_url: Option<String>,
 }
 
 impl MappingHeadView {
@@ -689,6 +694,7 @@ impl MappingHeadView {
             binding_state: row.binding_state,
             lifecycle_state: row.lifecycle_state,
             updated_at: row.updated_at,
+            listing_url: row.remote.as_ref().and_then(listing_url),
         }
     }
 }

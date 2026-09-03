@@ -155,6 +155,10 @@ export const ATTENTION_STATES: readonly MarketplaceState[] = [
 export interface ChipAction {
 	label: string;
 	href: string;
+	/** Whether the href leaves this console. Set only where it does, so a
+	 *  renderer knows to open a new tab and withhold the referrer; every
+	 *  in-app route omits it. */
+	external?: boolean;
 }
 
 export interface MarketplaceChip {
@@ -298,7 +302,14 @@ function ofMapping(input: ChipInput, mapping: MappingHead): Verdict {
 			return {
 				state: 'listed',
 				detail: 'This marketplace is showing the listing.',
-				action: { label: 'Open the item', href: `/inventory/${input.product}` }
+				// The listing's own page is what a seller wants from a listed
+				// chip, and it is the affordance Vendoo's strip is most used
+				// for. Falls back to the item where the server serves no URL:
+				// a marketplace whose page shape it has not observed.
+				action:
+					mapping.listing_url === null
+						? { label: 'Open the item', href: `/inventory/${input.product}` }
+						: { label: 'Open the listing', href: mapping.listing_url, external: true }
 			};
 		case 'draft':
 			return {

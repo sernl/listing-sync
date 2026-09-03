@@ -10,8 +10,8 @@
 #![cfg(feature = "pg-tests")]
 
 use sqlx::PgPool;
-use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode};
-use tam_marketplace::RemoteLifecycle;
+use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, Verification};
+use tam_marketplace::{RemoteLifecycle, RemoteListingId};
 use tam_storage::{MappingAdd, MappingRepo, ProductRepo};
 use tam_types::{
     InventoryId, MappingId, OrgId, PriceIntent, PriceRule, ProductId, Timestamp, Uuid,
@@ -227,5 +227,70 @@ async fn one_tenants_added_marketplace_is_invisible_to_another(pool: PgPool) {
         .expect("tenant b's own add lands"),
         MappingAdd::Added,
         "the one-per-marketplace constraint is per tenant, not global"
+    );
+}
+
+/// The head carries the bound listing so the API can derive the page a seller
+/// opens; an unbound mapping carries none, which is what makes `listing_url`
+/// null rather than a link to a listing that does not exist.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_head_carries_the_listing_only_while_the_mapping_is_bound(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the product inserts");
+
+    let repo = MappingRepo::new(pool.clone());
+    repo.add(
+        ORG_A,
+        &unbound(ORG_A, PRODUCT_1, InventoryId::TesGb, MAPPING_1),
+        0,
+        NOW,
+    )
+    .await
+    .expect("the unbound add lands");
+
+    let mut bound = unbound(ORG_A, PRODUCT_1, InventoryId::Tpt, MAPPING_2);
+    bound.binding = Binding::Bound {
+        id: RemoteListingId::Tpt {
+            product_id: 17_511_712,
+        },
+        first_seen: NOW,
+        verified: Verification::Stale { since: NOW },
+    };
+    repo.insert(ORG_A, &bound, 0, NOW)
+        .await
+        .expect("the bound mapping inserts");
+
+    let heads = repo.list_heads(ORG_A).await.expect("the heads read");
+    let unbound_head = heads
+        .iter()
+        .find(|head| head.id == MAPPING_1)
+        .expect("the unbound mapping lists");
+    assert_eq!(
+        unbound_head.remote, None,
+        "an unbound mapping binds no listing, so the head names none"
+    );
+    let bound_head = heads
+        .iter()
+        .find(|head| head.id == MAPPING_2)
+        .expect("the bound mapping lists");
+    assert_eq!(
+        bound_head.remote,
+        Some(RemoteListingId::Tpt {
+            product_id: 17_511_712
+        }),
+        "the head carries the identifier the binding holds"
+    );
+
+    let single = repo
+        .head(ORG_A, MAPPING_2)
+        .await
+        .expect("the head reads")
+        .expect("the bound mapping is readable");
+    assert_eq!(
+        single.remote, bound_head.remote,
+        "the one-mapping read and the listing agree on the binding"
     );
 }

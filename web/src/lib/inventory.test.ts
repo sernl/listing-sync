@@ -33,6 +33,7 @@ function mapping(partial: Partial<MappingHead> & { inventory: InventoryId }): Ma
 		binding_state: 'bound',
 		lifecycle_state: 'live',
 		updated_at: 5,
+		listing_url: null,
 		...partial
 	};
 }
@@ -122,6 +123,31 @@ describe('a chip with no run touching it', () => {
 		});
 		expect(never.state).toBe('not_listed');
 		expect(never.action?.href).toBe('/inventory/p1');
+	});
+
+	it('a listed chip opens the listing itself when the server serves its page', () => {
+		const listed = chip('Tpt', {
+			mapping: mapping({
+				inventory: 'Tpt',
+				listing_url: 'https://www.teacherspayteachers.com/Product/listing-17511712'
+			})
+		});
+		expect(listed.state).toBe('listed');
+		expect(listed.action).toEqual({
+			label: 'Open the listing',
+			href: 'https://www.teacherspayteachers.com/Product/listing-17511712',
+			external: true
+		});
+	});
+
+	it('a listed chip with no served page falls back to the item rather than guessing', () => {
+		const listed = chip('Etsy', {
+			mapping: mapping({ id: 'm-Etsy', inventory: 'Etsy', listing_url: null }),
+			connection: connection('Etsy')
+		});
+		expect(listed.state).toBe('listed');
+		expect(listed.action).toEqual({ label: 'Open the item', href: '/inventory/p1' });
+		expect(listed.action?.external).toBeUndefined();
 	});
 
 	it('separates a draft from a live listing', () => {

@@ -971,6 +971,13 @@ pub struct MappingHead {
     pub binding_state: String,
     pub lifecycle_state: String,
     pub updated_at: Timestamp,
+    /// The listing this mapping binds, decoded only while the binding is
+    /// `bound`.
+    ///
+    /// A severed mapping still carries remote-id columns, and the console
+    /// reads severed as not listed, so serving the identifier for one would
+    /// offer a seller a link to a listing this tree no longer claims.
+    pub remote: Option<RemoteListingId>,
 }
 
 impl MappingRepo {
@@ -979,7 +986,8 @@ impl MappingRepo {
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query_as!(
             HeadRow,
-            "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at \
+            "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at, \
+             remote_id_kind, remote_url, remote_numeric_id \
              FROM mapping WHERE org_id = $1 ORDER BY product_id, inventory",
             uuid_to_db(org.0),
         )
@@ -1001,7 +1009,8 @@ impl MappingRepo {
         pin_org(&mut tx, org).await?;
         let row = sqlx::query_as!(
             HeadRow,
-            "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at \
+            "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at, \
+             remote_id_kind, remote_url, remote_numeric_id \
              FROM mapping WHERE org_id = $1 AND id = $2",
             uuid_to_db(org.0),
             uuid_to_db(id.0),
@@ -1020,9 +1029,27 @@ struct HeadRow {
     binding_state: String,
     lifecycle_state: String,
     updated_at: DateTime<Utc>,
+    remote_id_kind: Option<String>,
+    remote_url: Option<String>,
+    remote_numeric_id: Option<i64>,
 }
 
 fn decode_head(row: HeadRow) -> Result<MappingHead, StorageError> {
+    let remote = if row.binding_state == "bound" {
+        let kind = row
+            .remote_id_kind
+            .as_deref()
+            .ok_or_else(|| StorageError::CorruptRow {
+                reason: format!("bound mapping {} carries no remote id kind", row.id),
+            })?;
+        Some(remote_id_from_db(
+            kind,
+            row.remote_url,
+            row.remote_numeric_id,
+        )?)
+    } else {
+        None
+    };
     Ok(MappingHead {
         id: MappingId(uuid_from_db(row.id)),
         product: ProductId(uuid_from_db(row.product_id)),
@@ -1030,6 +1057,7 @@ fn decode_head(row: HeadRow) -> Result<MappingHead, StorageError> {
         binding_state: row.binding_state,
         lifecycle_state: row.lifecycle_state,
         updated_at: timestamp_from_db(row.updated_at),
+        remote,
     })
 }
 
