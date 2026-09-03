@@ -28,21 +28,24 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 		label: 'Workspace',
 		items: [
 			{ href: '/', label: 'Dashboard', icon: '▦' },
-			{ href: '/listings', label: 'Listings', icon: '▤' },
-			{ href: '/sync', label: 'Sync', icon: '⇄' },
-			{ href: '/connections', label: 'Connections', icon: '⚲' },
+			{ href: '/inventory', label: 'Inventory', icon: '▤' },
+			{ href: '/marketplaces', label: 'Marketplaces', icon: '⚲' },
 			{ href: '/analytics', label: 'Analytics', icon: '◔' },
-			{ href: '/queue', label: 'Reconciliation', icon: '☰', count: 'reconciliation' }
+			{ href: '/reconciliation', label: 'Reconciliation', icon: '☰', count: 'reconciliation' }
 		]
+	},
+	{
+		label: 'Automations',
+		items: [{ href: '/sync', label: 'Sync', icon: '⇄' }]
 	},
 	{
 		label: 'Buyer',
 		items: [{ href: '/purchases', label: 'Purchases', icon: '◨', soon: true }]
 	},
 	{
-		label: 'Tools',
+		label: 'Crosslist',
 		items: [
-			{ href: '/library', label: 'Library', icon: '≣', soon: true },
+			{ href: '/resources', label: 'Resources', icon: '≣', soon: true },
 			{ href: '/templates', label: 'Templates', icon: '❏', soon: true },
 			{ href: '/notifications', label: 'Notifications', icon: '◷', soon: true },
 			{ href: '/status', label: 'Status', icon: '◉' },
@@ -72,7 +75,7 @@ export const ADMIN_GROUP: NavGroup = {
 };
 
 /** Pinned below the groups, beside the account card. */
-export const SETTINGS_ITEM: NavItem = { href: '/settings', label: 'Settings', icon: '⚙' };
+export const SETTINGS_ITEM: NavItem = { href: '/settings', label: 'Account Settings', icon: '⚙' };
 
 const ALL_ITEMS: readonly NavItem[] = [
 	...NAV_GROUPS.flatMap((group) => group.items),
@@ -116,7 +119,11 @@ export function breadcrumbFor(pathname: string): string {
  * Prefixes rather than whole paths: `/jobs/<id>` has to land on the same job
  * under its new name, and a redirect table listing identifiers could not. */
 export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
-	{ from: '/jobs', to: '/sync' }
+	{ from: '/jobs', to: '/sync' },
+	{ from: '/listings', to: '/inventory' },
+	{ from: '/connections', to: '/marketplaces' },
+	{ from: '/queue', to: '/reconciliation' },
+	{ from: '/library', to: '/resources' }
 ];
 
 export function legacyDestination(pathname: string): string | null {
@@ -146,9 +153,9 @@ export function initialsOf(name: string | undefined | null): string {
 	return words.slice(0, 2).join('').toUpperCase();
 }
 
-/** Where the top-bar search sends the browser. A blank query is the listings
- *  page with no filter rather than an empty `?q=`. */
+/** Where the top-bar search sends the browser. A blank query is the inventory
+ *  board with no filter rather than an empty `?q=`. */
 export function searchHref(query: string): string {
 	const trimmed = query.trim();
-	return trimmed.length === 0 ? '/listings' : `/listings?q=${encodeURIComponent(trimmed)}`;
+	return trimmed.length === 0 ? '/inventory' : `/inventory?q=${encodeURIComponent(trimmed)}`;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	ADMIN_GROUP,
+	LEGACY_REDIRECTS,
 	NAV_GROUPS,
 	SETTINGS_ITEM,
 	breadcrumbFor,
@@ -24,7 +25,7 @@ describe('the sidebar', () => {
 
 	it('gives a count chip only where an endpoint answers one', () => {
 		const counted = EVERY_ITEM.filter((item) => item.count !== undefined);
-		expect(counted.map((item) => item.href)).toEqual(['/queue']);
+		expect(counted.map((item) => item.href)).toEqual(['/reconciliation']);
 	});
 
 	it('never marks a destination both counted and unbuilt', () => {
@@ -35,7 +36,7 @@ describe('the sidebar', () => {
 describe('the current destination', () => {
 	it('is the dashboard only on the dashboard, because every path is under it', () => {
 		expect(isCurrent('/', '/')).toBe(true);
-		expect(isCurrent('/listings', '/')).toBe(false);
+		expect(isCurrent('/inventory', '/')).toBe(false);
 	});
 
 	it('stays lit on a child path', () => {
@@ -78,9 +79,9 @@ describe('the operator group', () => {
 describe('the breadcrumb', () => {
 	it('names the page the browser is on', () => {
 		expect(breadcrumbFor('/')).toBe('Dashboard');
-		expect(breadcrumbFor('/listings')).toBe('Listings');
-		expect(breadcrumbFor('/queue')).toBe('Reconciliation');
-		expect(breadcrumbFor('/settings')).toBe('Settings');
+		expect(breadcrumbFor('/inventory')).toBe('Inventory');
+		expect(breadcrumbFor('/reconciliation')).toBe('Reconciliation');
+		expect(breadcrumbFor('/settings')).toBe('Account Settings');
 	});
 
 	it('names the parent of a detail page rather than the dashboard', () => {
@@ -110,8 +111,29 @@ describe('the redirects from the old paths', () => {
 		);
 	});
 
+	it('send every screen that was renamed to its new path', () => {
+		expect(legacyDestination('/listings')).toBe('/inventory');
+		expect(legacyDestination('/listings/new')).toBe('/inventory/new');
+		expect(legacyDestination('/connections')).toBe('/marketplaces');
+		expect(legacyDestination('/queue')).toBe('/reconciliation');
+		expect(legacyDestination('/library')).toBe('/resources');
+	});
+
+	it('carry an item identifier through the inventory rename', () => {
+		expect(legacyDestination('/listings/9f2c8a11-0000-4000-8000-000000000000')).toBe(
+			'/inventory/9f2c8a11-0000-4000-8000-000000000000'
+		);
+	});
+
+	it('name a destination the sidebar still holds, so no redirect lands on nothing', () => {
+		const destinations = new Set(EVERY_ITEM.map((item) => item.href));
+		for (const { to } of LEGACY_REDIRECTS) {
+			expect(destinations.has(to)).toBe(true);
+		}
+	});
+
 	it('leave every path that did not move alone', () => {
-		for (const path of ['/', '/listings', '/sync', '/connections', '/jobsy', '/queue']) {
+		for (const path of ['/', '/inventory', '/sync', '/marketplaces', '/jobsy', '/reconciliation']) {
 			expect(legacyDestination(path)).toBeNull();
 		}
 	});
@@ -137,13 +159,13 @@ describe('the account initials', () => {
 });
 
 describe('the search destination', () => {
-	it('is the unfiltered listings page for a blank query', () => {
-		expect(searchHref('')).toBe('/listings');
-		expect(searchHref('   ')).toBe('/listings');
+	it('is the unfiltered inventory board for a blank query', () => {
+		expect(searchHref('')).toBe('/inventory');
+		expect(searchHref('   ')).toBe('/inventory');
 	});
 
 	it('carries the trimmed query, encoded', () => {
-		expect(searchHref('  poetry unit  ')).toBe('/listings?q=poetry%20unit');
-		expect(searchHref('a&b')).toBe('/listings?q=a%26b');
+		expect(searchHref('  poetry unit  ')).toBe('/inventory?q=poetry%20unit');
+		expect(searchHref('a&b')).toBe('/inventory?q=a%26b');
 	});
 });

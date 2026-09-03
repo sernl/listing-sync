@@ -201,7 +201,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
 				tone: 'bad',
 				title: `Reconnect ${connection.marketplace}`,
 				body: present(connection.status).explanation,
-				action: { label: 'Open connections', href: '/connections' }
+				action: { label: 'Open Marketplaces', href: '/marketplaces' }
 			});
 		}
 	}
@@ -239,7 +239,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
 				tone: 'warn',
 				title: `${connection.marketplace} is unstable`,
 				body: present(connection.status).explanation,
-				action: { label: 'Open connections', href: '/connections' }
+				action: { label: 'Open Marketplaces', href: '/marketplaces' }
 			});
 		}
 	}
@@ -253,7 +253,7 @@ export function attention(input: AttentionInput): AttentionItem[] {
 				'questions'
 			)} waiting`,
 			body: 'A listing carries a term with no translation yet, and each one you answer stays answered.',
-			action: { label: 'Answer in Reconciliation', href: '/queue' }
+			action: { label: 'Answer in Reconciliation', href: '/reconciliation' }
 		});
 	}
 	return items;

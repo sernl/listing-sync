@@ -1487,7 +1487,7 @@ dl.facts dd:last-child {
 
 /* The authoring surface: the create form, the platform pickers, the upload
    control, and the two dialogs the publish and the delete open. Everything
-   below is used under /listings/new and /listings/<id>. */
+   below is used under /inventory/new and /inventory/<id>. */
 
 .form.wide {
 	max-width: none;

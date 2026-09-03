@@ -35,7 +35,7 @@
 				<span class="big" aria-hidden="true">⇄</span>
 				<b>No sync has run yet</b>
 				<p>
-					Start one from Listings: choose the resources to send, and the engine takes them
+					Start one from Inventory: choose the items to send, and the engine takes them
 					from there. Every run keeps its own record here.
 				</p>
 			</div>

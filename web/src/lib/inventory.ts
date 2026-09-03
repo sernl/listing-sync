@@ -1,4 +1,4 @@
-// Where one resource stands on one marketplace, and what the seller can do
+// Where one item stands on one marketplace, and what the seller can do
 // about it. This is the inventory board's whole vocabulary: one chip per
 // marketplace per row, its words, its tone and the one action it admits.
 // Pure, so it tests without a component.
@@ -222,11 +222,11 @@ function gateAction(
 	}
 	switch (GATE_DESTINATION[gate as BlockedGate]) {
 		case 'queue':
-			return { label: 'Answer in Reconciliation', href: '/queue' };
+			return { label: 'Answer in Reconciliation', href: '/reconciliation' };
 		case 'connections':
-			return { label: 'Open connections', href: '/connections' };
+			return { label: 'Open Marketplaces', href: '/marketplaces' };
 		case 'listing':
-			return { label: 'Open the listing', href: `/listings/${product}` };
+			return { label: 'Open the item', href: `/inventory/${product}` };
 		default:
 			return run;
 	}
@@ -259,7 +259,7 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 				state: 'stranded',
 				detail: `A send reached this marketplace and was interrupted, so it is held rather than retried blind. It is waiting on ${waitingOn(gate)}.`,
 				action: signInGate(gate)
-					? { label: 'Open connections', href: '/connections' }
+					? { label: 'Open Marketplaces', href: '/marketplaces' }
 					: gateAction(gate, input.product, entry.job)
 			};
 		case 'blocked':
@@ -269,7 +269,7 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 					detail: onSellerDevice(input.inventory)
 						? 'This is waiting on you signing in to the marketplace on your own device.'
 						: 'This is waiting on you signing in to the marketplace again.',
-					action: { label: 'Open connections', href: '/connections' }
+					action: { label: 'Open Marketplaces', href: '/marketplaces' }
 				};
 			}
 			return {
@@ -298,32 +298,32 @@ function ofMapping(input: ChipInput, mapping: MappingHead): Verdict {
 			return {
 				state: 'listed',
 				detail: 'This marketplace is showing the listing.',
-				action: { label: 'Open the listing', href: `/listings/${input.product}` }
+				action: { label: 'Open the item', href: `/inventory/${input.product}` }
 			};
 		case 'draft':
 			return {
 				state: 'draft',
 				detail: 'This marketplace holds the listing and is not showing it to buyers yet.',
-				action: { label: 'Open the listing', href: `/listings/${input.product}` }
+				action: { label: 'Open the item', href: `/inventory/${input.product}` }
 			};
 		case 'unsent':
 			return {
 				state: 'not_listed',
-				detail: 'Chosen for this resource and never sent.',
-				action: { label: 'Open the listing', href: `/listings/${input.product}` }
+				detail: 'Chosen for this item and never sent.',
+				action: { label: 'Open the item', href: `/inventory/${input.product}` }
 			};
 		case 'other':
 			return {
 				state: 'in_flight',
 				detail:
 					'A send is out and we have not recorded what came of it. Nothing else is sent until it settles.',
-				action: { label: 'Open the listing', href: `/listings/${input.product}` }
+				action: { label: 'Open the item', href: `/inventory/${input.product}` }
 			};
 	}
 }
 
 /**
- * One chip: where this resource stands on this marketplace.
+ * One chip: where this item stands on this marketplace.
  *
  * The precedence is deliberate. What the newest run says outranks the stored
  * standing, because the standing is what was true and the run is what is
@@ -354,7 +354,7 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 		return dressed({
 			state: 'not_listed',
 			detail:
-				'This marketplace has never seen this resource, and marketplaces are chosen when the draft is created.',
+				'This marketplace has never seen this item, and marketplaces are chosen when the draft is created.',
 			action: null
 		});
 	}
@@ -371,7 +371,7 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 			detail: `No account is linked for this marketplace yet.${
 				standing.state === 'listed' ? ' The listing itself is still up.' : ''
 			}`,
-			action: { label: 'Open connections', href: '/connections' }
+			action: { label: 'Open Marketplaces', href: '/marketplaces' }
 		});
 	}
 	if (input.connection.status === 'disconnected') {
@@ -382,7 +382,7 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 						standing.state === 'listed' ? ' The listing itself is still up.' : ''
 					}`
 				: 'Nothing usable is stored for this marketplace; re-link it to let queued work continue.',
-			action: { label: 'Open connections', href: '/connections' }
+			action: { label: 'Open Marketplaces', href: '/marketplaces' }
 		});
 	}
 	return dressed(standing);
@@ -408,7 +408,7 @@ export interface InventoryRow {
 /** Which marketplaces this row shows a chip for.
  *
  * Every marketplace this console can author for, so "not listed here" is
- * visible rather than absent, plus any this resource is already mapped onto,
+ * visible rather than absent, plus any this item is already mapped onto,
  * so a mapping made elsewhere never disappears from the strip. */
 export function stripFor(mappings: readonly MappingHead[]): InventoryId[] {
 	const shown = new Set<InventoryId>([

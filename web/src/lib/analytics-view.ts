@@ -20,7 +20,7 @@ export interface MetricColumn {
 export const METRIC_COLUMNS: readonly MetricColumn[] = [
 	{ key: 'sales_count', heading: 'Sales' },
 	{ key: 'earnings', heading: 'Earnings' },
-	{ key: 'resource_views', heading: 'Resource views' }
+	{ key: 'resource_views', heading: 'Item views' }
 ];
 
 // A fixed locale rather than the visitor's: this grouping is asserted in a

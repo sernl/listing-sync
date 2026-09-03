@@ -87,9 +87,9 @@
 
 <dialog bind:this={element} aria-labelledby="cross-list-title" onclose={onClose}>
 	<div class="dialog-body">
-		<h2 id="cross-list-title">Cross-list {rows.length} {rows.length === 1 ? 'resource' : 'resources'}</h2>
+		<h2 id="cross-list-title">Cross-list {rows.length} {rows.length === 1 ? 'item' : 'items'}</h2>
 		<p>
-			Pick where this send goes. Each line says how many of the selected resources that
+			Pick where this send goes. Each line says how many of the selected items that
 			marketplace already carries a mapping for, counted from your own records without contacting
 			anyone.
 		</p>
@@ -130,7 +130,7 @@
 				<span class="t">{platformTitle(target.inventory)}</span>
 				<span class="why {target.mappings.length === 0 ? 'bad' : 'ok'}">
 					{#if target.mappings.length === 0}
-						none of the selected resources is mapped here
+						none of the selected items is mapped here
 					{:else if target.skipped === 0}
 						{target.mappings.length} of {rows.length}
 					{:else}
@@ -141,7 +141,7 @@
 		{/each}
 
 		<p class="foot-note">
-			A resource that is not mapped to a marketplace is passed over rather than added to it:
+			An item that is not mapped to a marketplace is passed over rather than added to it:
 			marketplaces are chosen when a draft is created, and there is no endpoint yet that adds one
 			afterwards. Work for Tes and TPT runs on your own device, so a send waits while that device
 			is off.

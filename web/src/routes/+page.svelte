@@ -174,7 +174,7 @@
 			{:else if rows.length === 0}
 				<div class="clear">
 					<span class="big" aria-hidden="true">⇄</span>
-					No sync has run yet. Start one from Listings and its progress appears here.
+					No sync has run yet. Start one from Inventory and its progress appears here.
 				</div>
 			{:else}
 				{#each rows as row (row.job)}
@@ -194,7 +194,7 @@
 			{#if attentionItems.length === 0}
 				<div class="clear">
 					<span class="big" aria-hidden="true">✓</span>
-					Nothing is waiting on you. Connections are healthy, no write failed in the runs
+					Nothing is waiting on you. Every marketplace is connected, no write failed in the runs
 					read, and the reconciliation queue is drained.
 				</div>
 			{:else}
@@ -217,10 +217,10 @@
 
 	<Panel
 		title="Recently updated listings"
-		description="Your five most recently touched resources."
+		description="Your five most recently touched items."
 	>
 		{#snippet more()}
-			<a class="more" href="/listings">View all</a>
+			<a class="more" href="/inventory">View all</a>
 		{/snippet}
 		{#if catalogue.isPending}
 			<p class="quiet">Reading the catalogue…</p>

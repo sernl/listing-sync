@@ -104,7 +104,7 @@
 	let seededFor = '';
 
 	// The URL carries the filter, so the box is seeded from it when the page
-	// changes and left alone while it is being typed in: on the listings page
+	// changes and left alone while it is being typed in: on the inventory board
 	// every keystroke rewrites the URL, and re-reading it here would fight the
 	// caret.
 	$effect(() => {
@@ -115,18 +115,18 @@
 		}
 	});
 
-	// On the listings page the box filters as it is typed in, by rewriting the
-	// query the table reads; anywhere else it waits for a submit, which is the
-	// navigation.
+	// On the inventory board the box filters as it is typed in, by rewriting
+	// the query the table reads; anywhere else it waits for a submit, which is
+	// the navigation.
 	function typed() {
-		if (pathname === '/listings') {
+		if (pathname === '/inventory') {
 			void goto(searchHref(query), { replaceState: true, keepFocus: true, noScroll: true });
 		}
 	}
 
 	function submitSearch(event: SubmitEvent) {
 		event.preventDefault();
-		void goto(searchHref(query), { keepFocus: pathname === '/listings' });
+		void goto(searchHref(query), { keepFocus: pathname === '/inventory' });
 	}
 
 	function shortcut(event: KeyboardEvent) {
@@ -237,19 +237,19 @@
 			</span>
 			<form class="search" role="search" onsubmit={submitSearch}>
 				<span aria-hidden="true">⌕</span>
-				<label class="sr-only" for="console-search">Search listings</label>
+				<label class="sr-only" for="console-search">Search items</label>
 				<input
 					id="console-search"
 					name="q"
 					type="search"
-					placeholder="Search listings…"
+					placeholder="Search items…"
 					bind:this={searchBox}
 					bind:value={query}
 					oninput={typed}
 				/>
 				<kbd>ctrl K</kbd>
 			</form>
-			<a class="cta" href="/listings/new">New listing</a>
+			<a class="cta" href="/inventory/new">New item</a>
 		</div>
 
 		{@render children()}

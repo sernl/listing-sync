@@ -121,7 +121,7 @@ describe('a chip with no run touching it', () => {
 			mapping: mapping({ inventory: 'Tpt', binding_state: 'unbound' })
 		});
 		expect(never.state).toBe('not_listed');
-		expect(never.action?.href).toBe('/listings/p1');
+		expect(never.action?.href).toBe('/inventory/p1');
 	});
 
 	it('separates a draft from a live listing', () => {
@@ -155,7 +155,7 @@ describe('a chip the newest run speaks for', () => {
 		});
 		expect(held.state).toBe('stranded');
 		expect(held.detail).toContain('you signing in again');
-		expect(held.action?.href).toBe('/connections');
+		expect(held.action?.href).toBe('/marketplaces');
 	});
 
 	it('names a parked item with no gate rather than inventing one', () => {
@@ -169,14 +169,14 @@ describe('a chip the newest run speaks for', () => {
 			work: work({ state: 'blocked', blocked_on: 'awaiting_seller_signin' })
 		});
 		expect(signIn.state).toBe('needs_signin');
-		expect(signIn.action?.href).toBe('/connections');
+		expect(signIn.action?.href).toBe('/marketplaces');
 
 		const question = chip('Tpt', {
 			mapping: bound,
 			work: work({ state: 'blocked', blocked_on: 'reconciliation' })
 		});
 		expect(question.state).toBe('blocked');
-		expect(question.action?.href).toBe('/queue');
+		expect(question.action?.href).toBe('/reconciliation');
 	});
 
 	it('sends a cover gate to the listing and every unrouted gate to the run', () => {
@@ -185,7 +185,7 @@ describe('a chip the newest run speaks for', () => {
 				mapping: bound,
 				work: work({ state: 'blocked', blocked_on: 'cover_missing' })
 			}).action?.href
-		).toBe('/listings/p1');
+		).toBe('/inventory/p1');
 		expect(
 			chip('Tpt', {
 				mapping: bound,
