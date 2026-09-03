@@ -3,9 +3,10 @@
 	import {
 		SIGN_IN_LABEL,
 		bandNotice,
+		deviceFootnote,
 		deviceRows,
 		deviceSummary,
-		needingSignIn,
+		needingDeviceSignIn,
 		schedulesRunning,
 		signInStates
 	} from '$lib/devices-view';
@@ -30,7 +31,7 @@
 	const rows = $derived(deviceRows(devices, now));
 	const summary = $derived(deviceSummary(rows));
 	const states = $derived(signInStates(devices, connections, now));
-	const waiting = $derived(needingSignIn(states));
+	const waiting = $derived(needingDeviceSignIn(states));
 	const notice = $derived(bandNotice(summary, schedulesRunning(rows)));
 
 	function standingLabel(standing: (typeof rows)[number]['standing']): string {
@@ -106,26 +107,7 @@
 			</div>
 		{/each}
 
-		<p class="foot-note">
-			{summary.checkingIn} of {summary.total}
-			{summary.total === 1 ? 'machine has' : 'machines have'} checked in within the last two hours.
-			{#if summary.quiet > 0}
-				{summary.quiet}
-				{summary.quiet === 1 ? 'has' : 'have'} gone quiet.
-			{/if}
-			{#if summary.signedOut > 0}
-				{summary.signedOut}
-				{summary.signedOut === 1 ? 'is' : 'are'} signed out.
-			{/if}
-			{#if summary.wipesOutstanding > 0}
-				{summary.wipesOutstanding}
-				{summary.wipesOutstanding === 1 ? 'machine was' : 'machines were'} signed out and
-				{summary.wipesOutstanding === 1 ? 'has' : 'have'} not been heard from since, so
-				{summary.wipesOutstanding === 1 ? 'it' : 'they'} may still hold the marketplace logins
-				listed against
-				{summary.wipesOutstanding === 1 ? 'it' : 'them'}.
-			{/if}
-		</p>
+		<p class="foot-note">{deviceFootnote(summary)}</p>
 
 		{#each rows as row (row.device.id)}
 			<div class="row">

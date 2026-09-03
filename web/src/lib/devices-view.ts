@@ -116,7 +116,7 @@ export const SIGN_IN_LABEL: Record<SignInState, string> = {
 	unverified: 'Not verified',
 	no_account: 'Not linked',
 	no_device: 'No device',
-	all_signed_out: 'Signed out',
+	all_signed_out: 'No machine signed in',
 	served_here: 'Served here'
 };
 
@@ -259,13 +259,25 @@ export function signInStates(
 	});
 }
 
-/** The marketplaces waiting on the seller signing in somewhere.
+/** The marketplaces waiting on the seller signing in on one of their own
+ *  machines.
  *
- * Only `needs_signin`: a seller with no machine registered, or one who signed
- * every machine out, is not being asked to sign in to a marketplace, and
- * counting them here would name an action they cannot take next. */
-export function needingSignIn(states: readonly MarketplaceSignIn[]): MarketplaceSignIn[] {
-	return states.filter((entry) => entry.state === 'needs_signin');
+ * Only `needs_signin`, because a seller with no machine registered, or one who
+ * signed every machine out, is not being asked to sign in to a marketplace,
+ * and counting them here would name an action they cannot take next.
+ *
+ * And only the device branch. A marketplace served from our own
+ * infrastructure whose connection dropped is re-linked on the connections
+ * page, which the dashboard's attention panel already says and this panel
+ * cannot link to; carrying it here made one dropped connection speak three
+ * times on one screen, twice in words that named the wrong remedy. */
+export function needingDeviceSignIn(
+	states: readonly MarketplaceSignIn[]
+): MarketplaceSignIn[] {
+	return states.filter(
+		(entry) =>
+			entry.state === 'needs_signin' && TRANSPORT_OF[entry.marketplace] === 'SellerDevice'
+	);
 }
 
 /** Whether anything scheduled can run at all right now.
@@ -327,4 +339,66 @@ export function bandNotice(summary: DeviceSummary, running: boolean): BandNotice
 		headline: 'Nothing scheduled is running',
 		body: 'A machine is checking in, and none holds a marketplace login yet, so there is nothing for it to run.'
 	};
+}
+
+function count(n: number, one: string, many: string): string {
+	return n === 1 ? one : many;
+}
+
+/**
+ * The sentence under the marketplace rows.
+ *
+ * The denominator is the machines that could check in, not every machine ever
+ * registered: a machine the seller signed out is not failing to report, and
+ * counting it as one that has not checked in states something false and then
+ * repairs it a sentence later. Where nothing is left to count, the sentence
+ * leads with that instead of dividing by it.
+ *
+ * How many have gone quiet is deliberately not stated: quiet is exactly the
+ * live machines less the ones checking in, so the figure is already on the
+ * page and repeating it is a second way to say one thing.
+ *
+ * Returned as a string rather than branched in the markup, so each reading is
+ * a test. Empty for a registry with no machines, which the band answers with
+ * its own placeholder.
+ */
+export function deviceFootnote(summary: DeviceSummary): string {
+	if (summary.total === 0) {
+		return '';
+	}
+	const live = summary.total - summary.signedOut;
+	const wipes =
+		summary.wipesOutstanding === 0
+			? ''
+			: ` ${summary.wipesOutstanding} ${count(
+					summary.wipesOutstanding,
+					'machine was',
+					'machines were'
+				)} signed out and ${count(
+					summary.wipesOutstanding,
+					'has',
+					'have'
+				)} not been heard from since, so ${count(
+					summary.wipesOutstanding,
+					'it',
+					'they'
+				)} may still hold the marketplace logins listed against ${count(
+					summary.wipesOutstanding,
+					'it',
+					'them'
+				)}.`;
+	if (live === 0) {
+		return `Every machine you have registered is signed out.${wipes}`;
+	}
+	const signedOut =
+		summary.signedOut === 0
+			? ''
+			: ` ${summary.signedOut} ${count(summary.signedOut, 'other is', 'others are')} signed out.`;
+	return (
+		`${summary.checkingIn} of ${live} ${count(
+			live,
+			'machine has',
+			'machines have'
+		)} checked in within the last two hours.${signedOut}${wipes}`
+	);
 }
