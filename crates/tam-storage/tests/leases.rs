@@ -268,11 +268,22 @@ async fn set_session_status(
 /// The seller-device claim, as the tests take it. `acquire` is the other
 /// branch's scan and no longer sees a Tes or Tpt item at all, so a fixture
 /// that means to lease one claims as a device.
+async fn claim(app: &PgPool, org: OrgId, device: &str, ttl: i64) -> Option<LeasedItem> {
+    claim_with_reconcile(app, org, device, ttl, true).await
+}
+
+/// The same claim, told whether a reconcile can run.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn claim(app: &PgPool, org: OrgId, device: &str, ttl: i64) -> Option<LeasedItem> {
+async fn claim_with_reconcile(
+    app: &PgPool,
+    org: OrgId,
+    device: &str,
+    ttl: i64,
+    reconcile: bool,
+) -> Option<LeasedItem> {
     // Each worker name is a device now, so the fixture registers whichever one
     // is claiming. Registration is what these tests assume rather than what
     // they are about; the tests that are about it revoke explicitly.
@@ -284,6 +295,7 @@ async fn claim(app: &PgPool, org: OrgId, device: &str, ttl: i64) -> Option<Lease
                 ttl_seconds: ttl,
                 grace_hours: 24,
                 marketplace: None,
+                reconcile,
             },
             T0,
         )
@@ -2278,6 +2290,7 @@ async fn a_second_device_is_told_the_slot_is_held_rather_than_that_nothing_is_qu
                     ttl_seconds: 60,
                     grace_hours: 24,
                     marketplace: None,
+                    reconcile: true,
                 },
                 T0
             )
@@ -2296,6 +2309,7 @@ async fn a_second_device_is_told_the_slot_is_held_rather_than_that_nothing_is_qu
                 ttl_seconds: 60,
                 grace_hours: 24,
                 marketplace: None,
+                reconcile: true,
             },
             T0,
         )
@@ -2421,6 +2435,7 @@ async fn a_filtered_claim_returns_only_the_marketplace_it_asked_for(app: PgPool)
                 ttl_seconds: 60,
                 grace_hours: 24,
                 marketplace: Some(Marketplace::Tpt),
+                reconcile: true,
             },
             T0,
         )
@@ -2449,6 +2464,7 @@ async fn a_filtered_claim_returns_only_the_marketplace_it_asked_for(app: PgPool)
                 ttl_seconds: 60,
                 grace_hours: 24,
                 marketplace: Some(Marketplace::Tes),
+                reconcile: true,
             },
             T0,
         )
@@ -3518,5 +3534,164 @@ async fn the_reaper_parks_a_stranded_create_rather_than_settling_or_stealing_it(
         vec!["in_flight".to_owned()],
         "the fence it was holding is still standing, which is what makes it reconcilable \
          rather than merely retryable"
+    );
+}
+
+/// A requeued item is not a reconcile, even while its create's attempt is
+/// still standing.
+///
+/// `charge_and_requeue` bumps the item's epoch and deliberately leaves the
+/// attempt alone, so the pairing it produces is an attempt
+/// `WriteAttemptRepo::settle` is fenced against. Handing that out as a
+/// reconcile is unrecoverable rather than merely wrong: the run would
+/// enumerate the seller's catalogue, find the listing, fail to settle it and
+/// abandon, charged nothing and re-served first on the next poll without end.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_requeued_item_is_not_handed_the_attempt_its_epoch_has_moved_past(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x6D, true).await;
+    enqueue_one(&engine, &tenant, 0x6E, 0x70).await;
+    let (item, attempt) = strand_a_create(&app, &engine, tenant.org, tenant.mapping).await;
+
+    let reconciling = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the stranded create is claimable");
+    assert_eq!(
+        reconciling.stranded_attempt,
+        Some(attempt),
+        "the premise: at a matching epoch this is a reconcile"
+    );
+    let charged = LeaseRepo::new(engine.clone())
+        .charge_and_requeue(
+            &reconciling.lease_ref(),
+            ATTEMPTS_MAX,
+            Some(FailureDetail("the fixture could not prepare it".to_owned())),
+            T0,
+        )
+        .await
+        .expect("the charge runs");
+    assert_eq!(
+        charged,
+        Charged::Requeued,
+        "the fixture depends on the requeue arm rather than the give-up arm"
+    );
+
+    let again = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the requeued item is claimable again");
+    assert_eq!(again.item, item, "the same item comes back");
+    assert_eq!(
+        again.stranded_attempt, None,
+        "and it comes back as ordinary work: the attempt standing against it was opened \
+         under an epoch this item has moved past, so nothing this run does could settle it"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["in_flight".to_owned()],
+        "the attempt is still standing, which is what makes the run abandon on the fence \
+         rather than mint a second listing -- bounded by the attempt budget"
+    );
+}
+
+/// The reaper parks only a create it could actually reconcile.
+///
+/// An attempt opened under an epoch the item has moved past cannot be settled
+/// by any later run, so parking on it would hold the item in the reconcile
+/// park for ever, uncharged. It falls through to the steal instead, which is
+/// the bounded pre-existing failure.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_reaper_leaves_a_stale_epoch_attempt_to_the_steal(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x74, true).await;
+    let item = enqueue_one(&engine, &tenant, 0x75, 0x76).await;
+    let lease = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the item leases");
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &lease.lease_ref(),
+            Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the fencing attempt opens");
+    // The item moves on without its attempt, which is exactly what
+    // `charge_and_requeue` does; done here directly so the row is left leased
+    // and expired for the reaper to find.
+    sqlx::query(
+        "UPDATE job_item SET lease_epoch = lease_epoch + 1, \
+             lease_expires_at = now() - interval '1 hour' WHERE id = $1",
+    )
+    .bind(db_uuid(item.0))
+    .execute(&engine)
+    .await
+    .expect("the item's epoch moves past its attempt's and the lease ages");
+
+    let touched = LeaseRepo::new(engine.clone())
+        .expire_and_steal(Timestamp(T0.0 + 61_000), ATTEMPTS_MAX)
+        .await
+        .expect("the reaper runs");
+    assert_eq!(touched, 1, "the expired lease was acted on exactly once");
+
+    let (state, blocked_on, attempts, _, _) = item_disposition(&engine, tenant.org, item).await;
+    assert_eq!(
+        (state.as_str(), blocked_on.as_deref()),
+        ("queued", None),
+        "it was stolen rather than parked: a park here would hold it in the reconcile queue \
+         waiting for a settle no epoch can perform"
+    );
+    assert_eq!(
+        attempts, 1,
+        "and the steal charged it, which is what bounds the failure"
+    );
+}
+
+/// A stranded create is not served where nothing could reconcile it.
+///
+/// The reconcile searches the seller's catalogue for a correlation marker, and
+/// no inventory is configured with a strategy that writes one, so serving the
+/// item would settle it ambiguous to learn what the caller already knew. It
+/// stays parked instead, still fencing its mapping, for the build that can
+/// reconcile it. Both halves are asserted against the same fixture so the flag
+/// is provably what decided.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stranded_create_is_left_parked_where_no_reconcile_can_run(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x77, true).await;
+    enqueue_one(&engine, &tenant, 0x78, 0x79).await;
+    let (stranded, attempt) = strand_a_create(&app, &engine, tenant.org, tenant.mapping).await;
+
+    assert!(
+        claim_with_reconcile(&app, tenant.org, DEVICE, 60, false)
+            .await
+            .is_none(),
+        "the queue looks empty rather than handing out an item whose reconcile cannot run"
+    );
+    let (state, blocked_on, attempts, _, _) = item_disposition(&engine, tenant.org, stranded).await;
+    assert_eq!(
+        (state.as_str(), blocked_on.as_deref(), attempts),
+        ("parked_live", Some(AWAITING_SELLER_SIGNIN), 0),
+        "and it is left exactly where the reaper put it, charged nothing"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["in_flight".to_owned()],
+        "with its fence still standing, so no later pass can create a second listing"
+    );
+
+    let leased = claim_with_reconcile(&app, tenant.org, DEVICE, 60, true)
+        .await
+        .expect("the same item is claimable once a reconcile can run");
+    assert_eq!(
+        (leased.item, leased.stranded_attempt),
+        (stranded, Some(attempt)),
+        "the flag was the only thing standing between the device and the same item"
     );
 }

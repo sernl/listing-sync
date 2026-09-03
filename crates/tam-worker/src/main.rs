@@ -900,7 +900,10 @@ async fn run_pump(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
         let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
         match leases.expire_and_steal(now, attempts_max).await {
             Ok(0) => {}
-            Ok(stolen) => eprintln!("tam-worker {worker_name}: stole {stolen} expired leases"),
+            // Reaped rather than stolen: the pass settles, steals and parks, and a
+            // stranded create takes the park arm, so naming this a steal reports one
+            // that did not happen.
+            Ok(reaped) => eprintln!("tam-worker {worker_name}: reaped {reaped} expired leases"),
             Err(error) => eprintln!("tam-worker {worker_name}: steal failed: {error}"),
         }
         match leases.revive_expired(now, attempts_max).await {

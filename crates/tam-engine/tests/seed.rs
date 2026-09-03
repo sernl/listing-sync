@@ -1551,6 +1551,7 @@ async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::Leas
                 ttl_seconds: ttl,
                 grace_hours: 24,
                 marketplace: None,
+                reconcile: true,
             },
             NOW,
         )

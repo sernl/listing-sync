@@ -18,7 +18,8 @@ use axum::Json;
 use tam_domain::LEASE_TTL_SECS;
 use tam_engine::ledger::{to_storage_lease, to_wire_item, PgLedger};
 use tam_engine::seed::{
-    preparation as preparation_for, prepare_and_dispose, prepare_item, Disposed, ItemPreparation,
+    preparation as preparation_for, prepare_and_dispose, prepare_item, reconcile_is_available,
+    Disposed, ItemPreparation,
 };
 use tam_engine_driver::vocabulary::{
     AttemptRef, ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall, LedgerError,
@@ -69,6 +70,9 @@ pub(crate) async fn claim(
                 ttl_seconds: i64::from(LEASE_TTL_SECS),
                 grace_hours: ENTITLEMENT_GRACE_HOURS,
                 marketplace: filter.marketplace,
+                // The engine owns the create strategy, so it owns whether a
+                // stranded create is worth taking out of its park.
+                reconcile: reconcile_is_available(),
             },
             now,
         )

@@ -63,14 +63,6 @@ fn delete_request(state: ListingState, id: DraftId) -> tam_marketplace::transpor
     }
 }
 
-/// The canonical resource identity, and the one thing every evidence-producing
-/// cell must agree on: `landed` becomes the bind's remote-id columns, so a
-/// revise that minted the route it posted would make `settle` report
-/// `DivergentLanding` against the mapping it had just successfully revised.
-fn canonical_url(id: DraftId) -> String {
-    format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0)
-}
-
 /// What one lifecycle write observed about itself. Every cell posts and
 /// classifies and none of them verifies, so `observed_lag` is false
 /// throughout: the lag is the driver's to observe, and no cell polls inside
@@ -83,7 +75,7 @@ fn write_evidence(response: &HttpResponse, route: String, id: DraftId) -> Submit
         response_body_digest: Some(ContentHash(digest)),
         landed_on_route: Some(route),
         landed: Some(RemoteListingId::Tes {
-            url: canonical_url(id),
+            url: id.canonical_url(),
         }),
         observed_lag: false,
     }
@@ -648,12 +640,12 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         Ok(SubmitEvidence {
             http_status: Some(200),
             response_body_digest: Some(ContentHash(digest)),
-            landed_on_route: Some(canonical_url(id)),
+            landed_on_route: Some(id.canonical_url()),
             // The durable identifier the create returned, so the pre-settle
             // verification read addresses the resource directly rather than
             // search for a marker the JSON API never carried.
             landed: Some(RemoteListingId::Tes {
-                url: canonical_url(id),
+                url: id.canonical_url(),
             }),
             observed_lag: false,
         })
@@ -723,7 +715,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         classify_delete_status(&response)?;
         let route = match plan.state {
             ListingState::Draft => format!("{}/api/v2/resources/{}/draft", endpoints::ORIGIN, id.0),
-            ListingState::Live => canonical_url(id),
+            ListingState::Live => id.canonical_url(),
         };
         Ok(write_evidence(&response, route, id))
     }

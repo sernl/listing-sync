@@ -922,6 +922,14 @@ pub struct ClaimPolicy {
     pub ttl_seconds: i64,
     pub grace_hours: i64,
     pub marketplace: Option<Marketplace>,
+    /// Whether a stranded create may be taken out of its park.
+    ///
+    /// False leaves one exactly where the reaper put it rather than leasing
+    /// it out. The reconcile searches the seller's catalogue for a
+    /// correlation marker, so under a strategy that writes none there is
+    /// nothing to find and serving the item would only spend it. The caller
+    /// decides because the create strategy is the engine's, not this crate's.
+    pub reconcile: bool,
 }
 
 /// What a device's claim came to.
@@ -1092,12 +1100,16 @@ impl LeaseRepo {
             ttl_seconds,
             grace_hours,
             marketplace,
+            reconcile,
         } = *policy;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let leased = sqlx::query!(
             r#"WITH candidate AS (
-                 SELECT ji.org_id, ji.id
+                 -- The pre-update state travels with the candidate, because
+                 -- the UPDATE below clears the park and the RETURNING can no
+                 -- longer tell which arm admitted the row.
+                 SELECT ji.org_id, ji.id, ji.state AS was
                  FROM job_item ji
                  JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
                  JOIN marketplace_inventory mi
@@ -1108,7 +1120,15 @@ impl LeaseRepo {
                         -- on that mapping until this one is settled: every
                         -- pass that leaves it stranded leaves a fence
                         -- standing.
-                        OR (ji.state = 'parked_live'
+                        --
+                        -- Only where the caller says a reconcile can actually
+                        -- run. Under a strategy that writes no marker the
+                        -- search has nothing to look for, and serving the item
+                        -- would settle it ambiguous to learn what the caller
+                        -- already knew; declining leaves it parked and
+                        -- reconcilable by a later build.
+                        OR ($5::bool
+                            AND ji.state = 'parked_live'
                             AND ji.blocked_on = 'awaiting_seller_signin'
                             AND EXISTS (SELECT 1 FROM write_attempt wa
                                   WHERE wa.org_id = ji.org_id
@@ -1187,13 +1207,25 @@ impl LeaseRepo {
                  item.subject_numeric_id, item.state_from, item.state_to,
                  item.requires_bound_on,
                  j2.inventory AS "inventory!",
-                 (SELECT wa.id FROM write_attempt wa
-                   WHERE wa.org_id = item.org_id AND wa.job_item_id = item.id
-                     AND wa.state = 'in_flight') AS stranded_attempt"#,
+                 -- A reconcile, and only a reconcile: the park arm is what
+                 -- admitted this row, and the attempt was opened under the
+                 -- epoch the item still carries. Without the epoch the claim
+                 -- hands out an attempt `WriteAttemptRepo::settle` is fenced
+                 -- against, so the run enumerates the seller's catalogue,
+                 -- finds the listing, fails to settle it and abandons --
+                 -- charged nothing, re-parked by the reaper, and served first
+                 -- again on the next poll, without end.
+                 CASE WHEN candidate.was = 'parked_live' THEN
+                   (SELECT wa.id FROM write_attempt wa
+                     WHERE wa.org_id = item.org_id AND wa.job_item_id = item.id
+                       AND wa.state = 'in_flight'
+                       AND wa.lease_epoch = item.lease_epoch)
+                 END AS stranded_attempt"#,
             device,
             f64::from(i32::try_from(ttl_seconds).unwrap_or(i32::MAX)),
             i32::try_from(grace_hours).unwrap_or(i32::MAX),
             marketplace.map(marketplace_to_db),
+            reconcile,
         )
         .fetch_optional(&mut *tx)
         .await;
@@ -1754,7 +1786,8 @@ impl LeaseRepo {
                AND ji.operation = 'create' \
                AND EXISTS (SELECT 1 FROM write_attempt wa \
                      WHERE wa.org_id = ji.org_id AND wa.job_item_id = ji.id \
-                       AND wa.state = 'in_flight') \
+                       AND wa.state = 'in_flight' \
+                       AND wa.lease_epoch = ji.lease_epoch) \
                AND NOT EXISTS (SELECT 1 FROM mapping m \
                      WHERE m.org_id = ji.org_id AND m.id = ji.mapping_id \
                        AND m.binding_state = 'bound')",

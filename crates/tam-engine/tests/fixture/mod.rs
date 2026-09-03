@@ -205,6 +205,7 @@ pub(crate) async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_st
                 ttl_seconds: ttl,
                 grace_hours: 24,
                 marketplace: None,
+                reconcile: true,
             },
             T0,
         )

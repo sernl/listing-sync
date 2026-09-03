@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item ji SET state = 'parked_live', blocked_on = $1, park_expires_at = NULL, lease_owner = NULL, lease_expires_at = NULL WHERE ji.state IN ('leased', 'running', 'verifying') AND ji.lease_expires_at <= now() AND ji.operation = 'create' AND EXISTS (SELECT 1 FROM write_attempt wa WHERE wa.org_id = ji.org_id AND wa.job_item_id = ji.id AND wa.state = 'in_flight' AND wa.lease_epoch = ji.lease_epoch) AND NOT EXISTS (SELECT 1 FROM mapping m WHERE m.org_id = ji.org_id AND m.id = ji.mapping_id AND m.binding_state = 'bound')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5198b6f91a82c81edf99f8a990d950d76770ee34c0bdcb2dafc50e041cdfa566"
+}

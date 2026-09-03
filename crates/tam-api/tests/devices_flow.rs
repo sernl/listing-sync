@@ -911,6 +911,7 @@ async fn claimed(pool: &PgPool) -> serde_json::Value {
                 ttl_seconds: i64::from(tam_domain::LEASE_TTL_SECS),
                 grace_hours: 24,
                 marketplace: None,
+                reconcile: true,
             },
             NOW,
         )

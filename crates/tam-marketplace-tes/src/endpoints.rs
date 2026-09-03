@@ -7,12 +7,33 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use tam_marketplace::transport::{FilePart, HttpRequest, RequestAuth};
+use tam_marketplace::RemoteListingId;
 use tam_types::{CopyFormat, InventoryId};
 
 pub const ORIGIN: &str = "https://www.tes.com";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DraftId(pub i64);
+
+impl DraftId {
+    /// The canonical resource identity, and the one thing every path that can
+    /// bind a mapping must agree on: this string becomes the bind's remote-id
+    /// columns, `classify_bind` compares them by exact equality, and
+    /// `mapping_one_bound_url` indexes them, so a second spelling of one
+    /// resource makes a later write report `DivergentLanding` against the
+    /// mapping it had just successfully written.
+    #[must_use]
+    pub fn canonical_url(self) -> String {
+        format!("{ORIGIN}/api/v2/resources/{}", self.0)
+    }
+
+    #[must_use]
+    pub fn remote(self) -> RemoteListingId {
+        RemoteListingId::Tes {
+            url: self.canonical_url(),
+        }
+    }
+}
 
 /// The catalogue and the import manifest both carry a resource as its bare
 /// numeric id, which is how a platform-agnostic importer names one without
@@ -748,6 +769,17 @@ pub struct CatalogueEntry {
     pub published: bool,
     pub licence: Option<String>,
     pub price_pence: Option<i64>,
+}
+
+impl CatalogueEntry {
+    /// This row's durable identity in the spelling the write path records,
+    /// which is what a reconcile has to bind: the import's own
+    /// `teaching-resource/-{id}` form addresses the same resource and is a
+    /// different string, and the ledger compares strings.
+    #[must_use]
+    pub fn remote(&self) -> RemoteListingId {
+        DraftId(self.id).remote()
+    }
 }
 
 #[must_use]

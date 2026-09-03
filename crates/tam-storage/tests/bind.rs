@@ -241,6 +241,7 @@ async fn claim_lease(app: &PgPool) -> Result<Option<LeaseRef>, StorageError> {
                     ttl_seconds: 600,
                     grace_hours: 24,
                     marketplace: None,
+                    reconcile: true,
                 },
                 T0,
             )

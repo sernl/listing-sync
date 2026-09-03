@@ -675,6 +675,14 @@ pub async fn a_reconcile_that_finds_the_listing_settles_it<L: ItemLedger + Ledge
     lease: &LeasedItem,
     found: RemoteListingId,
 ) {
+    // The scripted read-back echoes a `Durable` locator back and invents
+    // `LANDED_URL` for a `Marker` one, so a fixture whose found id is
+    // `LANDED_URL` cannot tell the two apart: an implementation that kept the
+    // marker locator on the verifying read would still pass. This body names a
+    // listing only the find could have supplied.
+    let RemoteListingId::Tes { url: expected } = found.clone() else {
+        panic!("this body's fixture names a Tes listing: {found:?}");
+    };
     let switch = Switch::default();
     let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
     let verdict = drive_reconcile(
@@ -703,7 +711,7 @@ pub async fn a_reconcile_that_finds_the_listing_settles_it<L: ItemLedger + Ledge
     // rather than a second the run opened behind it.
     assert_eq!(
         (attempt.state.as_str(), attempt.remote_url.as_deref()),
-        ("committed", Some(LANDED_URL)),
+        ("committed", Some(expected.as_str())),
         "settled on the committed class and addressed to the listing the search found, \
          which is the whole chain: the find supplied the identifier, the read-back \
          verified it, and the settle recorded it"
@@ -717,7 +725,7 @@ pub async fn a_reconcile_that_finds_the_listing_settles_it<L: ItemLedger + Ledge
             binding.binding_state.as_str(),
             binding.remote_url.as_deref()
         ),
-        ("bound", Some(LANDED_URL)),
+        ("bound", Some(expected.as_str())),
         "and the mapping is bound to it, so no later pass can create a second"
     );
 }

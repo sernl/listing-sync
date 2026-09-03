@@ -27,7 +27,7 @@ use tam_marketplace::{
 };
 use tam_marketplace_tes::TesAdapter;
 use tam_marketplace_tpt::TptAdapter;
-use tam_types::Marketplace;
+use tam_types::{FailureCode, FailureDetail, Marketplace};
 
 use crate::device::DeviceId;
 use crate::ledger::{HttpLedger, LedgerTransport};
@@ -374,18 +374,34 @@ impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync> ReconcileSource
         attempt: WriteAttemptId,
     ) -> Result<Option<RemoteListingId>, AdapterError> {
         let ListingLocator::Marker { marker, .. } = locator else {
-            return Ok(None);
+            // Never `Ok(None)`. That answer means a completed enumeration that
+            // did not contain the listing, and it is the one answer the port's
+            // contract says could ever justify releasing the duplicate-create
+            // fence; a search this source cannot perform is indeterminate and
+            // has to say so.
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(
+                    "this reconcile source searches the seller's catalogue by correlation \
+                     marker, and was handed a locator that names none"
+                        .to_owned(),
+                ),
+            });
         };
         let entries = self
             .0
             .list_own_resources(&FetchReason::VerifyAttempt { attempt })
             .await?;
+        // `CatalogueEntry::remote`, never a URL spelled here: the write path
+        // records `canonical_url`, the ledger compares bind identities as
+        // strings, and the import's `teaching-resource/-{id}` form addresses
+        // the same resource under a different one. A reconcile that minted the
+        // import spelling would bind an identity no later revise or removal
+        // could match.
         Ok(entries
             .into_iter()
             .find(|entry| entry.title.contains(&marker.0))
-            .map(|entry| RemoteListingId::Tes {
-                url: format!("https://www.tes.com/teaching-resource/-{}", entry.id),
-            }))
+            .map(|entry| entry.remote()))
     }
 }
 
@@ -401,7 +417,19 @@ impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync, P: Pause + Sync
         attempt: WriteAttemptId,
     ) -> Result<Option<RemoteListingId>, AdapterError> {
         let ListingLocator::Marker { marker, .. } = locator else {
-            return Ok(None);
+            // Never `Ok(None)`. That answer means a completed enumeration that
+            // did not contain the listing, and it is the one answer the port's
+            // contract says could ever justify releasing the duplicate-create
+            // fence; a search this source cannot perform is indeterminate and
+            // has to say so.
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(
+                    "this reconcile source searches the seller's catalogue by correlation \
+                     marker, and was handed a locator that names none"
+                        .to_owned(),
+                ),
+            });
         };
         let entries = self
             .0
@@ -410,9 +438,230 @@ impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync, P: Pause + Sync
         Ok(entries
             .into_iter()
             .find(|entry| entry.name.contains(&marker.0))
-            .map(|entry| RemoteListingId::Tpt {
-                product_id: entry.id.0,
-            }))
+            .map(|entry| entry.remote()))
+    }
+}
+
+/// The two reconcile ports, driven against recorded catalogues.
+///
+/// These are the only non-refusal `ReconcileSource` implementations in the
+/// tree and the only place a found listing acquires its durable identity, so
+/// the identity each one mints is asserted against the spelling the write path
+/// records rather than against itself.
+#[cfg(test)]
+mod reconcile_tests {
+    use super::{TesCatalogue, TptCatalogue};
+    use tam_engine_driver::ports::ReconcileSource;
+    use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
+    use tam_marketplace::transport::HttpResponse;
+    use tam_marketplace::{
+        AdapterError, CorrelationMarker, FileContent, FileSource, FileSourceError, ListingLocator,
+        RemoteListingId, WriteAttemptId,
+    };
+    use tam_marketplace_tes::endpoints::{self as tes_endpoints, DraftId};
+    use tam_marketplace_tes::TesAdapter;
+    use tam_marketplace_tpt::endpoints as tpt_endpoints;
+    use tam_marketplace_tpt::{InstantPause, TptAdapter};
+    use tam_types::{FileId, InventoryId, Uuid};
+
+    const MARKER: &str = "tam-0f0f";
+    const RESOURCE: i64 = 9001;
+    const PRODUCT: u64 = 12_854_712;
+
+    /// A file source no reconcile reaches: an enumeration fetches no file.
+    struct NoFiles;
+
+    impl FileSource for NoFiles {
+        fn fetch(
+            &self,
+            file: FileId,
+        ) -> impl core::future::Future<Output = Result<FileContent, FileSourceError>> + Send
+        {
+            core::future::ready(Err(FileSourceError::Missing(file)))
+        }
+    }
+
+    fn attempt() -> WriteAttemptId {
+        WriteAttemptId(Uuid([0x0F; 16]))
+    }
+
+    fn marker_locator() -> ListingLocator {
+        ListingLocator::Marker {
+            marker: CorrelationMarker(MARKER.to_owned()),
+            inventory: InventoryId::TesGb,
+        }
+    }
+
+    fn ok_body(body: &serde_json::Value) -> HttpResponse {
+        HttpResponse::plain(200, body.to_string().into_bytes())
+    }
+
+    fn tes(cassette: Cassette) -> TesAdapter<CassetteTransport, NoFiles> {
+        TesAdapter::new(
+            InventoryId::TesGb,
+            CassetteTransport::new(cassette),
+            NoFiles,
+        )
+        .expect("TesGb is a Tes inventory")
+    }
+
+    /// The published page, then the two empty pages the walk ends each list on.
+    fn tes_catalogue(title: &str) -> Cassette {
+        let limit = tes_endpoints::CATALOGUE_PAGE_LIMIT;
+        let empty = serde_json::json!([]);
+        Cassette {
+            interactions: vec![
+                Interaction {
+                    request: tes_endpoints::list_resources_request(0, limit),
+                    response: ok_body(&serde_json::json!([{
+                        "id": RESOURCE, "title": title, "licence": "CC-BY",
+                        "price": 0, "draft": false,
+                        "url": "/teaching-resource/fixture-9001"
+                    }])),
+                },
+                Interaction {
+                    request: tes_endpoints::list_resources_request(1, limit),
+                    response: ok_body(&empty),
+                },
+                Interaction {
+                    request: tes_endpoints::list_drafts_request(0, limit),
+                    response: ok_body(&empty),
+                },
+            ],
+        }
+    }
+
+    /// The identity a found Tes listing binds is the write path's, not the
+    /// import path's.
+    ///
+    /// This is the whole point of the assertion: `DraftId::canonical_url` is
+    /// what every evidence-producing write cell records as `landed`, the
+    /// ledger compares bind identities as strings, and the import spells the
+    /// same resource `teaching-resource/-{id}`. A reconcile that minted the
+    /// import form would bind an identity the next revise could not match.
+    #[tokio::test]
+    async fn a_found_tes_listing_carries_the_identity_the_write_path_records() {
+        let adapter = tes(tes_catalogue(&format!("Fractions pack {MARKER}")));
+        let found = TesCatalogue(&adapter)
+            .find_listing(&marker_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found,
+            Some(DraftId(RESOURCE).remote()),
+            "the found listing is named exactly as the lost write response would have named it"
+        );
+        assert_eq!(
+            found,
+            Some(RemoteListingId::Tes {
+                url: "https://www.tes.com/api/v2/resources/9001".to_owned()
+            }),
+            "spelled out once, so a change to the canonical form has to come past this test"
+        );
+    }
+
+    /// A walk that reached its end without the marker is the one answer that
+    /// could ever justify releasing the duplicate-create fence, so it is
+    /// distinguished from every failure to look.
+    #[tokio::test]
+    async fn a_completed_tes_walk_without_the_marker_answers_absent() {
+        let adapter = tes(tes_catalogue("Fractions pack"));
+        let found = TesCatalogue(&adapter)
+            .find_listing(&marker_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found, None,
+            "the seller's whole catalogue was read and the marker was not in it"
+        );
+    }
+
+    /// A walk that could not be completed is indeterminate, never absent.
+    #[tokio::test]
+    async fn a_tes_walk_the_transport_cannot_answer_is_indeterminate() {
+        let adapter = tes(Cassette {
+            interactions: Vec::new(),
+        });
+        let answer = TesCatalogue(&adapter)
+            .find_listing(&marker_locator(), attempt())
+            .await;
+        assert!(
+            answer.is_err(),
+            "a walk that could not be performed says so; answering absent here would be \
+             manufacturing the one answer that releases the fence: {answer:?}"
+        );
+    }
+
+    /// The same identity discipline on Tpt, where the numeric product id is
+    /// the durable name on both paths.
+    #[tokio::test]
+    async fn a_found_tpt_listing_carries_the_identity_the_write_path_records() {
+        let rows = serde_json::json!([
+            { "id": PRODUCT.to_string(), "name": format!("Worksheet {MARKER}"), "price": "$1.00" }
+        ]);
+        let page = serde_json::json!({"data": {"seller": {"resources": {
+            "results": rows,
+            "pageInfo": { "totalResultsCount": 1, "currentPage": 1, "totalPageCount": 1 },
+        }}}});
+        let adapter = TptAdapter::new(
+            CassetteTransport::new(Cassette {
+                interactions: vec![Interaction {
+                    request: tpt_endpoints::my_product_listings_request(2, 0),
+                    response: ok_body(&page),
+                }],
+            }),
+            NoFiles,
+            InstantPause,
+        )
+        .with_page_limit(2);
+        let found = TptCatalogue(&adapter)
+            .find_listing(&marker_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found,
+            Some(RemoteListingId::Tpt {
+                product_id: PRODUCT
+            }),
+            "the product id is the durable name the write path records too"
+        );
+    }
+
+    /// Neither source may answer absent to a search it cannot perform.
+    #[tokio::test]
+    async fn a_reconcile_source_refuses_a_locator_it_cannot_search() {
+        let durable = ListingLocator::Durable(DraftId(RESOURCE).remote());
+        let tes_adapter = tes(Cassette {
+            interactions: Vec::new(),
+        });
+        let refused = TesCatalogue(&tes_adapter)
+            .find_listing(&durable, attempt())
+            .await;
+        assert!(
+            matches!(refused, Err(AdapterError::Rejected { .. })),
+            "a durable locator names no marker, and this source searches by marker: {refused:?}"
+        );
+        assert_eq!(
+            tes_adapter.transport().remaining(),
+            0,
+            "and it refused without issuing a request, which an empty cassette shows by \
+             never having been diverged from"
+        );
+
+        let tpt_adapter = TptAdapter::new(
+            CassetteTransport::new(Cassette {
+                interactions: Vec::new(),
+            }),
+            NoFiles,
+            InstantPause,
+        );
+        let refused = TptCatalogue(&tpt_adapter)
+            .find_listing(&durable, attempt())
+            .await;
+        assert!(
+            matches!(refused, Err(AdapterError::Rejected { .. })),
+            "the same on Tpt: {refused:?}"
+        );
     }
 }
 

@@ -426,11 +426,41 @@ Not reconcile-specific: an ordinary create whose device died between issuing the
 
 Proves that a create whose fate is unknown is decided by evidence or left visibly undecided, and never by a guess.
 Verification: the two outcomes driven end to end against the in-memory ledger, the wire field's presence and absence, the adapters refusing every other fetch reason, and the claim and reaper arms driven against Postgres.
+Carried forward from the 12b review rather than fixed in it: `expire_and_steal` still answers one scalar covering the settle, the steal and the park, so a caller cannot tell a parked item from a stolen one.
+The worker's line was corrected to say reaped rather than stole, which makes the number true; the structured answer `revive_expired` already returns is the better shape and belongs with whatever next needs the breakdown.
+
 One half of the found rule is stated in `docs/design/sync-machine.md` without a test behind it: a read that differs in one field settles degraded, and no run can reach `Outcome::Degraded` today because `settle` classifies from a `FieldDiffReport` and `unnormalised_report` is hard-coded empty until M1g writes the normaliser.
 The sibling test belongs to M1g with the comparison it is about, and until then the rule binds the code that will be written rather than code that exists.
 Kill gate: a path that releases the duplicate-create fence on anything other than a positive identification.
 
 `docs/design/sync-machine.md` gains the transition row and the new error in the same change, and its `MachineError` table was brought back to the code on 2026-09-03 — it had been three variants behind by one before this step added the second.
+
+The reconcile is dormant in production, deliberately and by construction.
+`preparation()` configures one create strategy for every inventory, and the marker's carrier is an open founder decision, so nothing writes a marker and a search would have nothing to look for.
+Rather than leave that implicit, the strategy became a single `CREATE_STRATEGY` constant in `crates/tam-engine/src/seed.rs` and `reconcile_is_available()` is derived from it by a `matches!`, so the commit that answers the founder cannot configure `CorrelationMarker` without the claim beginning to admit stranded creates in the same edit.
+The flag travels on `ClaimPolicy` into the stranded arm of the claim, and while it is false a stranded create is left exactly where the reaper put it: parked, charged nothing, its attempt still fencing its mapping, and reconcilable by the build that can.
+
+The second half is why a dormant path cannot halt an inventory.
+Every other ambiguity row halts the tenant's inventory and is right to, because an ambiguity there means that tenant's automation has stopped being safe to continue; the unsearchable resume means only that this build configures no searchable strategy, which is equally true of every item in the queue and is not a reason to stop it.
+That arm now settles the item ambiguous with one `Notify` and no `Halt`, leaving the attempt standing.
+It is unreachable while the claim gate holds, and that is the point: the gate is the policy and the arm is the bound on being wrong about it, so a resume delivered by any route the gate does not cover costs one item rather than a tenant's queue and an operator's intervention.
+`SellerEvent` has no variant for an item that ended ambiguous, so the arm reuses `ItemParked`, the closed vocabulary's "an item stopped, come and look" signal; a dedicated variant is a client-vocabulary change and belongs with whoever owns `web/`.
+
+Step 12d, the identification a create can be found by, is not yet decided.
+The founder is being asked whether a correlation marker may sit in a seller-visible field at all, and the recommendation is that it need not.
+`docs/design/decisions.md` already records that Tes does not need the marker because draft-then-publish is idempotent there, and neither catalogue enumeration returns a description, so the only field `MarkerField` permits that a walk can actually see is the title — which is the field TPT's Seller Guidelines argue against.
+The marker-free route is therefore the one to scope, and it is this.
+
+A stranded create is identified by the title its own recorded intent already carries.
+`intent_as_json` writes the create's whole `FieldSet` into the `write_attempt` row before the click, so the title is recoverable from the standing attempt with no new column, no new wire field, and nothing added to any listing a buyer sees.
+The resume searches the same catalogue walk the two `ReconcileSource` implementations already perform, matching the recorded title exactly against the seller's own listings rather than by substring, and narrowing by status where the walk exposes one.
+What each walk exposes is the constraint: TPT's `MyResourceFields` gives `name` and `status`, so a candidate can be required to be the seller's own and in the state a fresh create leaves; Tes's catalogue row gives `title` and `published`, so a draft-then-publish create can be required to be unpublished, which is exactly the state its own strategy leaves it in.
+Exactly one candidate binds; zero or several leave the attempt standing and the item ambiguous, because two listings with one title is precisely the duplicate the fence exists to prevent and picking one would be the guess this whole step refuses.
+
+Under that route `ProjectedListing` gains nothing and `preparation()` gains nothing beyond a per-inventory `CREATE_STRATEGY`, because the identification uses fields both adapters already parse.
+The claim gate flips by widening `reconcile_is_available` from "the strategy embeds a marker" to "the strategy leaves a create this walk can identify", which `DraftThenPublish` satisfies on both device-branch marketplaces and `HaltOnAmbiguity` does not.
+The cost this route pays instead of listing pollution is a weaker identification: a seller with two listings of the same name gets an ambiguity where a marker would have given an answer, and a create still sitting in TPT's asynchronous processing queue is absent from the walk exactly as it is under a marker.
+Both are the stall bias doing its job, and both are recoverable by a later pass, which is not true of a wrongly released fence.
 
 Step 13, the entitlement gate inside the loop.
 `AssertFormSchema` consumes a rate grant (finding 12), and the per-effect entitlement check sits at the four network-bearing effects and in `verify_with_backoff`'s per-try preamble, producing the shape `BudgetGrant::Exhausted` already produces rather than a new terminal outcome.

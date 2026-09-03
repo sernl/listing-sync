@@ -592,6 +592,35 @@ fn native_term(path: &VocabularyPath) -> NativeTerm {
 /// all policy: a device that recomputed them would be setting its own budget.
 /// They are gathered here, once, so the claim endpoint and the in-process
 /// worker hand the interpreter the same preparation.
+/// The create strategy every inventory is configured with, and the one place
+/// it is decided.
+///
+/// One constant rather than a per-inventory table because there is one answer
+/// today. The correlation marker's carrier is an open founder decision — the
+/// design records it as "a product decision about listing pollution rather
+/// than an engineering one" — so no inventory has a strategy a reconcile can
+/// search, and `reconcile_is_available` reads this rather than restating it.
+/// The commit that answers the founder changes this and the claim's admission
+/// of stranded creates together, which is the point of deriving one from the
+/// other.
+const CREATE_STRATEGY: CreateStrategy = CreateStrategy::DraftThenPublish {
+    draft_state: RemoteLifecycleKind::Draft,
+};
+
+/// Whether a stranded create is worth taking out of its park.
+///
+/// The reconcile searches the seller's own catalogue for a correlation marker.
+/// Under a strategy that writes none there is nothing to search for: the run
+/// would reach the machine's unsearchable arm and settle the item ambiguous,
+/// spending an item to learn what this constant already says. The claim
+/// declines to serve one instead, so it stays parked exactly as the reaper
+/// left it — still fencing its mapping, and still reconcilable by the build
+/// that can.
+#[must_use]
+pub const fn reconcile_is_available() -> bool {
+    matches!(CREATE_STRATEGY, CreateStrategy::CorrelationMarker { .. })
+}
+
 #[must_use]
 pub fn preparation(
     lease: &LeasedItem,
@@ -602,9 +631,7 @@ pub fn preparation(
         operation,
         projected,
         form: form_id(lease.inventory),
-        strategy: CreateStrategy::DraftThenPublish {
-            draft_state: RemoteLifecycleKind::Draft,
-        },
+        strategy: CREATE_STRATEGY,
         budget: StepBudget {
             actions_remaining: ACTIONS_PER_ITEM,
         },

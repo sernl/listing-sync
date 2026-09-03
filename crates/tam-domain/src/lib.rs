@@ -969,11 +969,35 @@ impl SyncMachine {
                 // a device to enumerate for a marker no create ever wrote.
                 let marker = match self.strategy {
                     CreateStrategy::CorrelationMarker { .. } => marker_for(attempt),
+                    // Ambiguous, and one item's worth of it. Every other
+                    // ambiguity row halts the tenant's inventory, and is right
+                    // to: an ambiguity there means this tenant's automation has
+                    // stopped being safe to continue. Here it means only that
+                    // this build configures no strategy the search can use,
+                    // which is equally true of every item in the queue and is
+                    // not a reason to stop it. The claim declines to serve a
+                    // stranded create at all where that is so; this arm is what
+                    // holds if one ever arrives anyway, and it costs one item.
+                    //
+                    // The attempt is deliberately left standing. It is the
+                    // mapping's only fence against a second live listing, and
+                    // the item stays reconcilable by a build whose strategy can
+                    // be searched.
                     CreateStrategy::DraftThenPublish { .. } | CreateStrategy::HaltOnAmbiguity => {
-                        return self.halt_ambiguous(
-                            attempt,
-                            AmbiguityCause::NoDurableIdentifier,
-                            Capture::Skip,
+                        // `ItemParked` rather than `InventoryHalted`, because
+                        // nothing was halted and the closed vocabulary has no
+                        // variant for this; it is the "an item stopped, come
+                        // and look" signal, which is what happened.
+                        let effects = vec![Effect::Notify {
+                            org: self.org,
+                            event: SellerEvent::ItemParked,
+                        }];
+                        return self.advance(
+                            SyncState::Terminal(ambiguous(
+                                attempt,
+                                AmbiguityCause::NoDurableIdentifier,
+                            )),
+                            effects,
                         );
                     }
                 };
@@ -1953,6 +1977,96 @@ mod machine_tests {
             refused,
             Err(MachineError::EffectBudgetExceeded),
             "a machine with no allowance cannot even ask for the form schema"
+        );
+    }
+
+    /// The one row that enters the graph somewhere other than its beginning.
+    ///
+    /// Two things are asserted rather than one. The state and effects are the
+    /// ambiguous-submit row's, which is what makes the resume an ordinary
+    /// transition rather than a second constructor. And the effect list is
+    /// exact: an `AssertFormSchema` here would be the entry row's effects
+    /// running after all, and on Tes that is a write against a create whose
+    /// listing may already exist.
+    #[test]
+    fn row_awaiting_preflight_resume_stranded_searches_for_the_marker() {
+        let transition = machine(SyncState::AwaitingPreflight, marker_strategy(), 10)
+            .step(Input::ResumeStranded(attempt()), now())
+            .expect("a resume applies in AwaitingPreflight");
+        assert_eq!(
+            transition.next.state,
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: marker_locator(),
+            },
+            "the resume adopts the standing attempt and reaches the state the ambiguous \
+             submit reaches, searching for the marker that attempt would have written"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::Reconcile {
+                attempt: attempt(),
+                locator: marker_locator(),
+            }]),
+            "exactly the search, and nothing else: the entry row's form assertion is \
+             discarded rather than executed"
+        );
+    }
+
+    /// A resume under a strategy nothing can search costs one item, never a
+    /// tenant.
+    ///
+    /// Every other ambiguity row halts the tenant's inventory, and is right to:
+    /// an ambiguity there means this tenant's automation has stopped being safe
+    /// to continue. Here it means only that this build configures no searchable
+    /// strategy, which is equally true of every item in the queue. The absent
+    /// `Halt` is the assertion — a halt here made a routine device
+    /// disconnection stop the tenant's whole queue until an operator cleared a
+    /// row by hand.
+    #[test]
+    fn row_awaiting_preflight_resume_stranded_without_a_marker_costs_one_item() {
+        let transition = machine(SyncState::AwaitingPreflight, draft_strategy(), 10)
+            .step(Input::ResumeStranded(attempt()), now())
+            .expect("a resume applies in AwaitingPreflight");
+        assert!(
+            matches!(
+                transition.next.state,
+                SyncState::Terminal(Outcome::Ambiguous { .. })
+            ),
+            "nothing can be searched for, so the item is ambiguous: {:?}",
+            transition.next.state
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![notify(SellerEvent::ItemParked)]),
+            "the seller is told and nothing else happens: no halt, and no diagnostics for a \
+             read that was never attempted"
+        );
+        assert!(
+            !transition
+                .effects
+                .0
+                .iter()
+                .any(|effect| matches!(effect, Effect::Halt { .. })),
+            "stated separately because it is the whole point of the row"
+        );
+    }
+
+    /// A resume names an operation only a create can be in.
+    #[test]
+    fn row_awaiting_preflight_resume_stranded_refuses_a_revision() {
+        let refused = machine_for(
+            removal(),
+            SyncState::AwaitingPreflight,
+            marker_strategy(),
+            10,
+        )
+        .step(Input::ResumeStranded(attempt()), now());
+        assert_eq!(
+            refused,
+            Err(MachineError::ResumeNotACreate),
+            "a revise re-applies the same fields and a removal re-deletes something already \
+             gone, so both are re-run rather than reconciled"
         );
     }
 
@@ -3270,7 +3384,20 @@ mod machine_tests {
         use proptest::strategy::ValueTree;
         use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 
-        const SAMPLES: u32 = 2_000;
+        // Three conditionals share one witness floor, and the resume is the
+        // rarest of them by construction: it is only ever accepted as a run's
+        // first applicable input and only on a create, which is a third of the
+        // runs drawn. The sample is what was raised to keep fifty witnesses of
+        // each rather than the floor being lowered for the rare one.
+        //
+        // The draw is deterministic — a fixed ChaCha seed, the same pool, the
+        // same strategy — so these are exact rather than expected values, and
+        // a run that reports different ones means the machine or the pool
+        // moved. Measured 2026-09-03 at this sample: committed 164, ambiguous
+        // 989, resumed 108. The resume is the binding margin at a little over
+        // twice the floor; it was 43 against a floor of 50 at two thousand,
+        // which is what raising the sample fixed.
+        const SAMPLES: u32 = 5_000;
         const FLOOR: u32 = 50;
 
         let mut runner = TestRunner::new_with_rng(
@@ -3279,11 +3406,15 @@ mod machine_tests {
         );
         let mut committed = 0_u32;
         let mut ambiguous_count = 0_u32;
+        let mut resumed = 0_u32;
         for _ in 0..SAMPLES {
             let run = arb_run()
                 .new_tree(&mut runner)
                 .expect("the run strategy always produces a value")
                 .current();
+            if run.resumed {
+                resumed += 1;
+            }
             match &run.terminal {
                 Some(Outcome::Committed { .. } | Outcome::Degraded { .. }) => committed += 1,
                 Some(Outcome::Ambiguous { .. }) => ambiguous_count += 1,
@@ -3301,6 +3432,14 @@ mod machine_tests {
             ambiguous_count >= FLOOR,
             "the ambiguous-terminal properties would be near-vacuous: \
              {ambiguous_count} in {SAMPLES}"
+        );
+        // The resume is the one input that enters the graph somewhere other
+        // than its beginning, and the exemption it carries in
+        // `every_ambiguous_terminal_follows_a_recorded_intent` is only
+        // meaningful if runs actually take it.
+        assert!(
+            resumed >= FLOOR,
+            "the resume carve-out would be near-vacuous: {resumed} in {SAMPLES}"
         );
     }
 
@@ -3331,6 +3470,7 @@ mod machine_tests {
             Input::ReconcileResult(Err(AdapterError::Ambiguous(
                 AmbiguityCause::ReadBackIndeterminate,
             ))),
+            Input::ResumeStranded(attempt()),
             Input::ChallengeCleared,
             Input::ParkExpired,
             Input::BudgetExhausted,
@@ -3367,6 +3507,11 @@ mod machine_tests {
     struct Run {
         effects: Vec<Effect>,
         terminal: Option<Outcome>,
+        /// Whether this run entered the graph by adopting a standing attempt
+        /// rather than at the beginning. The intent behind that attempt was
+        /// recorded by the run that stranded it, which is in another run's
+        /// effect list and not in this one.
+        resumed: bool,
         /// Where in `effects` the terminal transition's own effects begin.
         terminal_at: usize,
         machine: SyncMachine,
@@ -3382,6 +3527,7 @@ mod machine_tests {
         let mut effects = Vec::new();
         let mut terminal = None;
         let mut terminal_at = 0;
+        let mut resumed = false;
         for (tick, input) in inputs.iter().enumerate() {
             if terminal.is_some() {
                 break;
@@ -3397,7 +3543,8 @@ mod machine_tests {
             } else {
                 input.clone()
             };
-            if let Ok(transition) = machine.clone().step(delivered, at) {
+            if let Ok(transition) = machine.clone().step(delivered.clone(), at) {
+                resumed |= matches!(delivered, Input::ResumeStranded(_));
                 if let SyncState::Terminal(outcome) = &transition.next.state {
                     terminal = Some(outcome.clone());
                     terminal_at = effects.len();
@@ -3412,6 +3559,7 @@ mod machine_tests {
         Run {
             effects,
             terminal,
+            resumed,
             terminal_at,
             machine,
             start_actions,
@@ -3484,9 +3632,16 @@ mod machine_tests {
 
         /// Every terminal `Ambiguous` is preceded by a `RecordIntent`, so a
         /// crash from an ambiguous write always leaves something to reconcile.
+        ///
+        /// A resumed run is exempt, and the exemption is the property rather
+        /// than a hole in it: the run that stranded the attempt is the one
+        /// that recorded its intent, and a resume exists precisely because
+        /// that run ended without settling what it recorded. Requiring a
+        /// second `RecordIntent` here would require the fence to be opened
+        /// twice for one listing.
         #[test]
         fn every_ambiguous_terminal_follows_a_recorded_intent(run in arb_run()) {
-            if matches!(run.terminal, Some(Outcome::Ambiguous { .. })) {
+            if !run.resumed && matches!(run.terminal, Some(Outcome::Ambiguous { .. })) {
                 let recorded = run.effects[..run.terminal_at]
                     .iter()
                     .any(|effect| matches!(effect, Effect::RecordIntent { .. }));

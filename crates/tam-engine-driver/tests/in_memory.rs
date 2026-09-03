@@ -94,8 +94,12 @@ fn a_reconcile_that_finds_the_listing_settles_it() {
         // The listing the scripted adapter will observe on the verifying
         // read-back, so the run is proved end to end rather than stopping at
         // a mismatch that is only the fixture disagreeing with itself.
+        // Deliberately not `LANDED_URL`: that is what the scripted read-back
+        // invents for a marker locator, so a body asserting against it could
+        // not tell a verifying read that addressed the found listing from one
+        // that re-ran the search.
         tam_marketplace::RemoteListingId::Tes {
-            url: conformance::LANDED_URL.to_owned(),
+            url: "https://www.tes.com/api/v2/resources/7777".to_owned(),
         },
     ));
 }
