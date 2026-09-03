@@ -171,6 +171,11 @@ jobs:
       # account, and so that createUpdaterArtifacts is true for a release and
       # false everywhere else. Tauri merges --config over the base file.
       #
+      # The updater endpoint is composed here too, because a binary must poll
+      # the channel it was published to and only this job knows which that is.
+      # The merge is RFC 7396, so the one-element endpoints array replaces the
+      # base file's rather than appending to it.
+      #
       # The signtool invocation and the metadata file are Microsoft's, from
       # learn.microsoft.com/azure/artifact-signing/how-to-signing-integrations.
       # Neither has been executed here: no Azure account exists.
@@ -188,11 +193,22 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          CN_APPLICATION: ${{ vars.CN_APPLICATION }}
+          CN_CHANNEL: ${{ vars.CN_CHANNEL }}
         run: |
           set -euo pipefail
+          # An empty channel is not the production channel: `?channel=` is a
+          # 404, so an unset CN_CHANNEL must drop the parameter entirely.
+          endpoint="https://cdn.crabnebula.app/update/$CN_APPLICATION/{{target}}-{{arch}}/{{current_version}}"
+          if [ -n "${CN_CHANNEL:-}" ]; then
+            endpoint="$endpoint?channel=$CN_CHANNEL"
+          fi
+          echo "updater endpoint: $endpoint"
           if [ "$SIGNING" != "true" ]; then
             echo "::warning::AZURE_CLIENT_ID is unset; this release will be unsigned and SmartScreen will show no publisher name"
-            jq -n '{bundle: {createUpdaterArtifacts: true}}' > release.conf.json
+            jq -n --arg endpoint "$endpoint" \
+              '{bundle: {createUpdaterArtifacts: true},
+                plugins: {updater: {endpoints: [$endpoint]}}}' > release.conf.json
             cat release.conf.json
             exit 0
           fi
@@ -222,8 +238,9 @@ jobs:
           # rather than advisory; the authority is Microsoft's own.
           command=$(printf '"%s" sign /v /debug /fd SHA256 /tr "http://timestamp.acs.microsoft.com" /td SHA256 /dlib "%s" /dmdf "%s" %%1' \
             "$(cygpath -w "$signtool")" "$(cygpath -w "$dlib")" "$(cygpath -w "$RUNNER_TEMP/signing-metadata.json")")
-          jq -n --arg cmd "$command" \
-            '{bundle: {createUpdaterArtifacts: true, windows: {signCommand: $cmd}}}' > release.conf.json
+          jq -n --arg cmd "$command" --arg endpoint "$endpoint" \
+            '{bundle: {createUpdaterArtifacts: true, windows: {signCommand: $cmd}},
+              plugins: {updater: {endpoints: [$endpoint]}}}' > release.conf.json
           cat release.conf.json
 
       - name: build the Windows bundles

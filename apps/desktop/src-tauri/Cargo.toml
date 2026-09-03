@@ -1,6 +1,6 @@
 [package]
 name        = "tam-desktop"
-version     = "0.1.1"
+version     = "0.1.2"
 edition     = "2021"
 publish     = false
 description = "The Teachouse desktop client: the seller's device, where every no-API marketplace request originates"

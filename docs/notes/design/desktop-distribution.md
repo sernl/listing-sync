@@ -3,7 +3,7 @@
 How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
 
 - date: 2026-09-03
-- status: `v0.1.0` was tagged and built both Windows bundles on a runner, then failed to upload them; the upload step is fixed and the tree is bumped to `0.1.1`, which will be the first published release
+- status: `v0.1.1` is published and the Cloud serves its manifest; the endpoint it shipped carried no release channel, which would have 404ed every update check the installed base made, and `0.1.2` carries the fix
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 
@@ -27,6 +27,18 @@ The endpoint already configured in `apps/desktop/src-tauri/tauri.conf.json` is C
 Source: <https://docs.crabnebula.dev/cloud/auto-updates/tauri/>, fetched 2026-09-03.
 That endpoint is served dynamically from the release the Cloud holds, so with CrabNebula as the update host no `latest.json` has to exist for updates to work.
 The pipeline generates one anyway, and the reason is recorded under "The lock-in escape hatch" below.
+
+That documented shape is incomplete for a channelled release, and `v0.1.1` proved it.
+A release published with `--channel beta` is not visible at the channel-less endpoint: `GET /update/teachouse/teachouse/windows-x86_64/0.1.0` returns 404, while the same URL with `?channel=beta` returns 200 carrying version 0.1.1, its asset URL and its signature.
+The query string is CrabNebula's documented form — "To fetch the latest asset of a particular release channel you can append the `?channel=<channel-name>` query string to the URL" — and that sentence is repeated beneath each of the three CDN endpoints the page lists, the `/update/` one included.
+Source: <https://docs.crabnebula.dev/cloud/cli/fetch-latest-release/>, fetched 2026-09-03.
+An empty parameter is not a fallback to production: `?channel=` returns 404 exactly as the bare URL does, measured against the live CDN on 2026-09-03.
+
+The channel therefore has to follow the build rather than sit only in a checked-in file, because only the release job knows which channel it published to.
+The workflow's overlay step composes `plugins.updater.endpoints` from the `CN_CHANNEL` repository variable, appending `?channel=<name>` when it is set and dropping the parameter when it is not, so a binary always polls the channel it came from.
+Tauri merges `--config` with RFC 7396 JSON Merge Patch, under which an array in the patch replaces the one it patches rather than extending it, so the overlay's single-element `endpoints` array supersedes the base file's instead of leaving a dead first entry ahead of it.
+Read from `crates/tauri-cli/src/helpers/config.rs` and `json_patch::merge` at `tauri-cli-v2.11.4`, the CLI version this workflow pins.
+The base file keeps `?channel=beta` so that a local build points at a channel that actually holds releases.
 
 ## Where the Windows build runs, and why not here
 
@@ -154,7 +166,8 @@ SHA-256 checksums are unconditional and are the provenance that does work today,
 Version consistency is checked before anything is built, by `.github/scripts/release-check.sh`, which the workflow and `just release-check` both call so that there is one definition.
 It compares the tag against `apps/desktop/src-tauri/tauri.conf.json` and the `[package]` version in `apps/desktop/src-tauri/Cargo.toml`, and it fails on a placeholder updater public key or an unedited `ORG`/`APP` endpoint, so that a release cannot be cut against a build whose updater could never verify anything.
 Run it with no argument to check the tree, or `just release-check v0.2.0` to check a tag you are about to create.
-It is deliberately not part of `just check` or `just pre-push`: it fails on today's tree by design, because the updater key and endpoint are still placeholders, and a gate that is red for a reason everyone has agreed to stops being read.
+It is deliberately not part of `just check` or `just pre-push`: it was red by design for as long as the updater key and endpoint were placeholders, and a gate that is red for a reason everyone has agreed to stops being read.
+Both are set now, so it passes.
 
 ## What the founder must do
 
@@ -175,7 +188,8 @@ The field is required by the configuration schema and cannot be left absent, whi
 
 Create the CrabNebula organisation and application, at <https://web.crabnebula.cloud/>, signing in with GitHub.
 Note the two slugs it gives you; the pair is written `org/app`.
-Then replace `ORG` and `APP` in `plugins.updater.endpoints` in the same file, so the endpoint reads `https://cdn.crabnebula.app/update/<org>/<app>/{{target}}-{{arch}}/{{current_version}}`.
+Then replace `ORG` and `APP` in `plugins.updater.endpoints` in the same file, so the endpoint reads `https://cdn.crabnebula.app/update/<org>/<app>/{{target}}-{{arch}}/{{current_version}}?channel=beta`.
+Keep the `?channel=` suffix while releases go to a channel; the release job overwrites this endpoint with the channel it actually published to, so the value here governs local builds only.
 `just release-check` fails while `/ORG/APP/` is still there.
 
 Mint the CrabNebula API key at <https://docs.crabnebula.dev/cloud/org-management/create-api-key/>, choosing a key with write permission.
@@ -251,15 +265,15 @@ That run did leave a `0.1.0` draft on CrabNebula Cloud, unpublished by design; `
 ## What could not be verified here
 
 This section recorded the state before any tag existed, and run 33730896941 superseded most of it on 2026-09-03.
-The CrabNebula organisation, application and API key now exist and the `draft` verb ran successfully against them; `upload` and `publish` have still never completed.
+The CrabNebula organisation, application and API key now exist, and all four verbs have run: `v0.1.1` drafted, uploaded and published, and the CDN serves its manifest.
 The updater keypair exists, `createUpdaterArtifacts` was true in that build, and a `.sig` was produced beside each installer.
 No Azure resource was created, so `AZURE_CLIENT_ID` was unset, every Artifact Signing step was skipped, and the bundles carry no Authenticode signature.
 What follows is the local evidence that existed before that run.
 
 The workflow is clean under `actionlint` 1.7.12, which found and cost two real defects: `secrets` is not a context a step-level `if:` may read, and one glob parsed `ls` output.
-`release-check.sh` is clean under `shellcheck`, and was exercised on four paths against a fixture tree — matching tag, wrong tag, mismatched manifest version, and the real tree, which fails today naming both placeholders.
+`release-check.sh` is clean under `shellcheck`, and was exercised on four paths against a fixture tree — matching tag, wrong tag, mismatched manifest version, and the real tree, which failed while both placeholders were still in it.
 The console job's command sequence was run end to end inside the dev shell and produced `web/build`, and the collect step's find, checksum, glob and manifest logic was run against a fixture bundle tree, producing a `latest.json` carrying the three fields Tauri documents as required.
 
 That covered everything the pipeline does on Linux and nothing it does on Windows, and its own prediction — that the first failure would be a path or an environment detail on the Windows runner rather than a logic error — is exactly what the first tag found.
-Run 33730896941 has since exercised the Windows build, the NSIS and MSI bundling, the updater signing and the `draft` verb, all on a `--channel beta` release, which is what kept that failure off the production channel.
-Still unexercised: `upload` and `publish`, every Azure signing step, and the installed-base update path.
+Runs 33730896941 and 33734883020 have since exercised the Windows build, the NSIS and MSI bundling, the updater signing and all four CrabNebula verbs, on a `--channel beta` release, which is what kept the first failure off the production channel.
+Still unexercised: every Azure signing step, and the installed-base update path — which is the one the missing channel would have broken, and which no amount of green CI would have caught.
