@@ -209,6 +209,11 @@ fn spawn_event_pruner(pruner: PruneRepo, cancel: CancellationToken) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let invocation = parse_invocation()?;
+    // Before anything else: the standards corpus is compiled into this binary,
+    // and a build that cannot parse its own corpus should fail here rather
+    // than at the first seller's search. Parsing it once also means no request
+    // pays for it.
+    tam_api::product::standards::prime()?;
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(8)
         .connect(&invocation.db_url)

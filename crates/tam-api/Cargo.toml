@@ -29,6 +29,7 @@ tam-limits = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }
+tam-standards = { path = "../tam-standards" }
 tam-storage = { path = "../tam-storage" }
 tam-taxonomy = { path = "../tam-taxonomy" }
 tam-types = { path = "../tam-types" }

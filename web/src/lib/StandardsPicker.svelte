@@ -28,8 +28,11 @@
 		enabled: active !== 0
 	}));
 
-	function drop(code: string) {
-		onChange(chosen.filter((pick) => pick.code !== code));
+	/** By the mirror's identifier rather than the code, because a code can name
+	 *  several different standards and removing one must not remove its
+	 *  namesakes. */
+	function drop(sourceGuid: string) {
+		onChange(chosen.filter((pick) => pick.source_guid !== sourceGuid));
 	}
 </script>
 
@@ -78,8 +81,8 @@
 		<p class="quiet">Nothing in this framework matches “{query}”.</p>
 	{:else}
 		<div class="pick-list">
-			{#each found.data?.items ?? [] as item (item.code)}
-				{@const on = chosen.some((pick) => pick.code === item.code)}
+			{#each found.data?.items ?? [] as item (item.source_guid)}
+				{@const on = chosen.some((pick) => pick.source_guid === item.source_guid)}
 				<label class="tick">
 					<input
 						type="checkbox"
@@ -88,25 +91,33 @@
 							onChange(
 								event.currentTarget.checked
 									? [...chosen, { ...item }]
-									: chosen.filter((pick) => pick.code !== item.code)
+									: chosen.filter((pick) => pick.source_guid !== item.source_guid)
 							)}
 					/>
-					<span><b>{item.code}</b> {item.statement}</span>
+					<span>
+						<b>{item.code}</b>
+						{#if item.subject}<span class="tag-note">{item.subject}</span>{/if}
+						{item.statement}
+					</span>
 				</label>
 			{/each}
 		</div>
 	{/if}
 
-	{#if found.data?.attribution}
-		<p class="foot-note">{found.data.attribution}</p>
-	{/if}
+	{#each found.data?.notices ?? [] as notice (notice.text)}
+		<p class="foot-note">{notice.text}</p>
+	{/each}
 
 	{#if chosen.length > 0}
 		<div class="chips" role="list">
-			{#each chosen as pick (pick.code)}
+			{#each chosen as pick (pick.source_guid)}
 				<span class="chip-pick" role="listitem">
 					{pick.code}
-					<button type="button" aria-label="Remove {pick.code}" onclick={() => drop(pick.code)}>×</button>
+					<button
+						type="button"
+						aria-label="Remove {pick.code}"
+						onclick={() => drop(pick.source_guid)}>×</button
+					>
 				</span>
 			{/each}
 		</div>

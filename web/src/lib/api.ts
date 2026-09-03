@@ -948,20 +948,47 @@ export interface CheckView {
 }
 
 export interface StandardView {
+	/** The framework this standard is actually from, read off the match rather
+	 *  than echoed from the request, so a result never misstates where it came
+	 *  from. */
 	framework: number;
 	code: string;
 	statement: string;
+	/** The subject its mirrored set carries, so a code never renders bare. */
+	subject?: string;
+	/** The mirror's own identifier, and the only unique field on this view.
+	 *
+	 *  A code is not unique: 814 TEKS codes name more than one addressable node
+	 *  with a different statement, `1.1.A` four times across four subjects, and
+	 *  all of them arrive as separate items. Key a list on this, never on the
+	 *  code, or reconciliation can attach one standard's row to another's. */
+	source_guid: string;
+	/** Absent for a standard the server can display and cannot yet post: the id
+	 *  is TPT's own search-index identifier, and one no current capture vouches
+	 *  for is withheld rather than guessed. */
 	tpt_node_id?: number;
 }
 
+/** One notice a framework's licence obliges a display to carry, and where.
+ *
+ *  `placement` is `wherever_displayed`, `site_footer_and_every_page_using_the_mark`
+ *  or `with_the_data`. Several rather than one string, because the obligations
+ *  differ in where they must appear and flattening them would discard the half
+ *  a licence turns on. */
+export interface NoticeView {
+	text: string;
+	placement: string;
+}
+
 /** `not_ingested` is a state rather than an empty result: no standard matched
- *  your words, against no standard exists here yet. `attribution` travels with
- *  the results because the licence obliges it wherever a standard is shown. */
+ *  your words, against no standard exists here yet. The notices travel with the
+ *  results because the licence obliges them wherever a standard is shown, and
+ *  they are the server's to state rather than the client's to remember. */
 export interface StandardsSearchView {
 	state: StandardsState;
 	framework: number;
 	items: StandardView[];
-	attribution: string;
+	notices: NoticeView[];
 }
 
 // ----------------------------------------------------------------- taxonomy

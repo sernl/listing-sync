@@ -305,6 +305,43 @@ None touches `crates/tam-engine`, `crates/tam-engine-driver` or `crates/tam-stor
 Steps 2, 3 and 4 share no files with step 1 or with each other and can run in parallel; step 5 depends on step 1.
 Step 4 is a new crate rather than a new dependency, which is the distinction that keeps it inside the enforcement rule rather than against it.
 
+## What step 1 landed
+
+The search route reads the committed corpus rather than answering `not_ingested`.
+
+Three decisions are recorded here because none of them is derivable from the code that implements them.
+
+The corpus is compiled into the server binary with `include_str!` and `include_bytes!`, the same five files and the same reasoning as `crates/tam-standards-crawl/src/main.rs`: a search answers from the ingest the binary was built from rather than from whatever a working copy holds.
+A corpus update is therefore a rebuild rather than a file swap, which is accepted.
+The parsed index lives in a `OnceLock` primed by `crates/tam-server/src/main.rs` during setup, through a call the binary refuses to start on, so a corpus this build cannot read fails the boot rather than the first seller's search and no request pays the parse.
+That is a departure from how this crate reaches a handler, since the pool, the clock and the binary's other decisions all travel through `AppState`; the reason is that the corpus is compiled in and identical for every tenant and every deployment, so there is nothing per-deployment about it to carry.
+What is per-deployment, the crawl window, travels through `AppState` like everything else.
+
+`tpt_node_id` is absent on every result today, by construction rather than by omission.
+`docs/design/data/standards/tpt-node-ids.jsonl` is committed empty, so `postable` answers `Unbound` for every code, and it stays that way until the founder runs the step 4 crawl and commits the table.
+The window itself is a `Config` field, and absent means withhold every id: without a window there is no evidence any id still resolves, and posting one TPT has since rebuilt puts a listing under a standard nobody chose.
+
+The handler serves both halves of the licence obligation, and the reason is worth stating because following this note's own handover literally would have dropped one.
+`required_notices` answers the notices a framework's *owner* imposes, and Texas and Virginia impose none — `notices.rs` returns an empty slice for both and says the list is empty by fact rather than by omission — so a handler reading only that function would have displayed mirrored Texas and Virginia standards under no attribution at all, where the constant it replaced did carry one.
+Their whole obligation is the mirror's CC BY attribution, which `mirror_attribution` builds per set because the rights holder differs across sets, so the handler emits the owner's notices where they exist and the mirror's beside them, deduplicated; the Texas and Virginia case is pinned by a test that asserts both facts together.
+
+Step 1 pulled `subject` forward from step 5 and left `grade_band` behind, which is worth recording because the asymmetry is what let a defect through.
+The note's step 5 asks the picker to show subject and grade beside every Texas and Virginia code and never a bare one; step 1 served the subject half because it cost one field, and deferred the grade half as a wire change.
+Serving half of a requirement stated as a pair is what stopped anyone reading step 1 against step 5's text, and the missing piece found later was not the grade at all but the identifier: 814 TEKS codes name more than one addressable node, so a client keying its list on the code can attach one standard's row to another's, and `source_guid` is now served for that reason.
+
+The keyword scan is bounded and supervised. A query is refused above 120 characters or 12 words before anything scans, because the index reads the whole corpus once per term and an unbounded query was about 370 ms of CPU at 8 KB and 1.5 s at 32 KB, on a request any signed-in member could repeat; the bounded worst case measures 12.4 ms.
+It then runs through `spawn_supervised_blocking` in `crates/tam-api/src/blocking.rs`, which is the wrapper `clippy.toml` names in its ban on `tokio::task::spawn_blocking` and which nothing in this repository had built, so the first caller to need it found a ban pointing at a function that did not exist.
+The wrapper awaits the handle and turns a `JoinError` into an error the caller must handle, which is the ban's own reason satisfied at one sanctioned site rather than at every call.
+
+The loss derivation for standards a marketplace will not carry landed in `web/src/lib/tpt-form.ts` with this change rather than with step 5, because the identifier that fixed the picker had to reach `StandardPick` in the same file.
+
+The corpus parse costs 0.43 seconds for 19,769 rows across 6.3 MB, measured over three runs: the manifest, four framework files each verified against its recorded content hash, and the node-id table.
+Paid once at boot and by no request, which is the whole argument for priming at startup rather than behind the first search.
+
+`crates/tam-api` gained a path dependency on `crates/tam-standards`, which the team lead ruled inside the enforcement rule rather than against it, and the founder may reverse.
+The rule's "adding a dependency" is the `deny.toml` class — third-party crates carrying licences and advisories — beside limits and lints; a workspace-internal edge onto a pure crate touches none of those gates, and `just purity` is unaffected because it checks that the pure crates do not acquire tokio, reqwest or sqlx, which this edge does not do.
+The line in step 4's record about a new crate rather than a new dependency was about that same containment, and does not speak against this edge.
+
 ## What steps 2, 3 and 4 landed
 
 Steps 2, 3 and 4 of the build order are built and green; steps 1 and 5 are not, and what they need is at the end of this section.

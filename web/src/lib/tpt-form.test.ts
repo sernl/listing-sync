@@ -15,6 +15,7 @@ import {
 	minorUnitsOf,
 	OVERRIDABLE,
 	projectionOf,
+	standardsLoss,
 	refusalsOf,
 	refusalsIn,
 	searchFacets,
@@ -576,5 +577,83 @@ describe('the axis rows on a marketplace tab', () => {
 	it('renders no axis row at all until the marketplace vocabulary has arrived', () => {
 		const draft = { ...complete(), inventories: ['TesGb' as const] };
 		expect(projectionOf(draft, 'TesGb', null).rows.every((row) => row.kind === 'field')).toBe(true);
+	});
+});
+
+describe('the standards a marketplace will not carry', () => {
+	function pick(code: string, nodeId?: number, guid = `guid-${code}`) {
+		return {
+			framework: 3054,
+			code,
+			statement: `${code} statement`,
+			source_guid: guid,
+			tpt_node_id: nodeId
+		};
+	}
+
+	it('says nothing where every pick can be posted', () => {
+		expect(standardsLoss([pick('A.1', 11), pick('A.2', 12)])).toBeNull();
+	});
+
+	it('says nothing at all when nothing was picked', () => {
+		expect(standardsLoss([])).toBeNull();
+	});
+
+	/// The case that is true of every standard today, because the node-id table
+	/// is committed empty: a seller sees which of their picks stay behind.
+	it('names each pick that stays in the catalogue, and how many of how many', () => {
+		const loss = standardsLoss([pick('A.1', 11), pick('A.2'), pick('A.3')]);
+		expect(loss).toContain('2 of 3');
+		expect(loss).toContain('A.2');
+		expect(loss).toContain('A.3');
+		expect(loss).not.toContain('A.1');
+	});
+
+	it('reads singly for one pick and plurally for several', () => {
+		expect(standardsLoss([pick('A.2')])).toContain('It stays');
+		expect(standardsLoss([pick('A.2'), pick('A.3')])).toContain('They stay');
+	});
+
+	it('puts the loss on a standards row of the TPT tab', () => {
+		const draft = {
+			...complete(),
+			standards: [pick('A.1', 11), pick('A.2')]
+		};
+		const row = projectionOf(draft, 'Tpt').rows.find((one) => one.key === 'standards');
+		expect(row).toBeDefined();
+		expect(row?.label).toBe('Standards');
+		expect(row?.values).toEqual(['A.1', 'A.2']);
+		expect(row?.loss).toContain('1 of 2');
+	});
+
+	/// No Tes or Etsy field takes a standard, so a standards row on their tab
+	/// would disclose a loss that is not one.
+	it('renders no standards row on a marketplace that carries none', () => {
+		const draft = {
+			...complete(),
+			inventories: ['TesGb' as const],
+			standards: [pick('A.1'), pick('A.2')]
+		};
+		expect(
+			projectionOf(draft, 'TesGb').rows.find((one) => one.key === 'standards')
+		).toBeUndefined();
+	});
+
+	it('renders no standards row where the seller picked none', () => {
+		expect(
+			projectionOf(complete(), 'Tpt').rows.find((one) => one.key === 'standards')
+		).toBeUndefined();
+	});
+
+	/// The reason a pick is identified by the mirror's guid rather than by its
+	/// code: 814 TEKS codes name more than one addressable node, so two picks
+	/// can share a code and mean different standards. The loss must count both.
+	it('counts two standards that share a code as two', () => {
+		const loss = standardsLoss([
+			pick('1.1.A', undefined, 'guid-maths'),
+			pick('1.1.A', undefined, 'guid-science')
+		]);
+		expect(loss).toContain('2 of 2');
+		expect(loss).toContain('They stay');
 	});
 });

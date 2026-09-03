@@ -4972,6 +4972,7 @@ dependencies = [
  "tam-marketplace",
  "tam-pipeline",
  "tam-secrets",
+ "tam-standards",
  "tam-storage",
  "tam-taxonomy",
  "tam-types",

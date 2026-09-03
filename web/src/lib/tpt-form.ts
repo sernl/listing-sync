@@ -27,6 +27,7 @@ import type {
 } from '$lib/api';
 import type { FormGroup, InventoryId, TermKind } from '$lib/generated/vocab';
 import { core, loadCore } from '$lib/core';
+import { MARKETPLACE_OF } from '$lib/listings-view';
 
 // Started at module scope so the rules are ready before the seller has typed
 // anything; guarded because there is no asset to fetch while prerendering.
@@ -65,6 +66,13 @@ export interface StandardPick {
 	framework: number;
 	code: string;
 	statement: string;
+	/** The mirror's own identifier, and what identifies a pick.
+	 *
+	 *  Not the code: 814 TEKS codes name more than one addressable node with a
+	 *  different statement, so comparing picks by code would tie four unrelated
+	 *  standards together — ticking one would tick all four and removing one
+	 *  would remove them all. */
+	source_guid: string;
 	tpt_node_id?: number;
 }
 
@@ -534,9 +542,30 @@ export function projectionOf(
 		// declares no cap for this field has not measured one.
 		loss: declared.get(canonicalKey(entry.field)) ?? null
 	}));
+	// Beside the canonical fields rather than in a line of its own: a seller
+	// reading this tab is already reading what this platform will do with each
+	// part of the listing, and a separate notice is the thing that gets
+	// scrolled past.
+	const standards: ProjectedRow[] =
+		carriesStandards(inventory) && draft.standards.length > 0
+			? [
+					{
+						key: 'standards',
+						kind: 'field' as const,
+						label: 'Standards',
+						values: draft.standards.map((pick) => pick.code),
+						decided_by: { by: 'listing' } as const,
+						loss: standardsLoss(draft.standards)
+					}
+				]
+			: [];
 	return {
 		inventory,
-		rows: [...fields, ...axisRowsOf(draft, preview?.undecided_axes ?? [], vocabulary)]
+		rows: [
+			...fields,
+			...standards,
+			...axisRowsOf(draft, preview?.undecided_axes ?? [], vocabulary)
+		]
 	};
 }
 
@@ -605,6 +634,45 @@ function axisRowsOf(
 			}
 		];
 	});
+}
+
+/** Whether this marketplace carries standards at all.
+ *
+ *  TPT alone. The whole standards stream exists because TPT posts
+ *  `common_core_standard_id` parts, and no Tes or Etsy field takes a standard,
+ *  so a standards row on another marketplace's tab would disclose a loss that
+ *  is not one. Read through `MARKETPLACE_OF` rather than an inventory list, so
+ *  a fourth Tes site inherits the answer without being named here. */
+function carriesStandards(inventory: InventoryId): boolean {
+	return MARKETPLACE_OF[inventory] === 'Tpt';
+}
+
+/** What this marketplace will not carry of the standards a seller picked.
+ *
+ *  Derived from the absent node id rather than read from the engine's own
+ *  record: the server withholds `tpt_node_id` exactly when a standard cannot be
+ *  posted, either because no crawl has bound it or because no current capture
+ *  vouches for the binding it has. The two reasons are indistinguishable from
+ *  here and the seller's situation is the same in both — the tag stays in their
+ *  own catalogue and the listing does not carry it — so the sentence states the
+ *  outcome and does not guess at the cause.
+ *
+ *  `StandardsProjection` and `NotCarried` in
+ *  `crates/tam-marketplace-tpt/src/standards.rs` are the record proper, and
+ *  nothing computes them yet. When something does, this derivation is replaced
+ *  without what a seller reads changing. */
+export function standardsLoss(picks: readonly StandardPick[]): string | null {
+	const dropped = picks.filter((pick) => pick.tpt_node_id === undefined);
+	if (dropped.length === 0) {
+		return null;
+	}
+	const codes = dropped.map((pick) => pick.code).join(', ');
+	const which = dropped.length === 1 ? 'it' : 'they';
+	return `${dropped.length} of ${picks.length} will not reach this platform: ${codes}. ${
+		dropped.length === 1 ? 'It stays' : 'They stay'
+	} in your own catalogue, and ${which} can be sent once we have confirmed how this platform names ${
+		dropped.length === 1 ? 'it' : 'them'
+	}.`;
 }
 
 /** What this platform drops, where its declared cap and this listing's own set

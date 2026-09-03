@@ -19,6 +19,7 @@ pub mod admin;
 pub mod analytics;
 pub mod auth;
 pub mod billing;
+pub mod blocking;
 pub mod catalogue;
 pub mod devices;
 pub mod error;
@@ -69,6 +70,14 @@ pub struct Config {
     /// authenticates the billing webhook. Absent, that route answers 503:
     /// there is no unauthenticated mode of it to fall back to.
     pub paddle_webhook_secret: Option<billing::WebhookSecret>,
+    /// When the standards crawl that vouches for TPT's node ids was taken.
+    ///
+    /// A node id is served only where a capture inside this window stands
+    /// behind it. Absent means every id is withheld, which is the fail-closed
+    /// reading: without a window there is no evidence any id still resolves,
+    /// and posting one TPT has since rebuilt puts a listing under a standard
+    /// nobody chose.
+    pub standards_crawl_window: Option<tam_standards::crawl::CrawlWindow>,
 }
 
 /// How the current instant enters a handler: as a function the binary
