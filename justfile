@@ -35,7 +35,7 @@ check:
 purity:
     #!/usr/bin/env sh
     set -eu
-    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-standards --prefix none)"
+    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-standards -p tam-vocab-drift --prefix none)"
     if printf '%s\n' "$tree" | grep -E '^(tokio|tokio-util|reqwest|sqlx) v'; then
         echo 'purity violation: a banned dependency reached the pure core' >&2
         exit 1
@@ -178,6 +178,20 @@ db-wait:
 
 db-migrate:
     DATABASE_URL={{db_url}} sqlx migrate run --source crates/tam-storage/migrations
+
+# Compare a freshly captured marketplace vocabulary against the committed one.
+# The exit status is the alerting surface, as it is for tam-canary: zero when
+# nothing structural moved, one when a facet appeared, disappeared, or changed
+# its parent or category. A relabelled value with a stable identifier is
+# written to the report and does not fail the run, because labels are read out
+# of the captures rather than stored beside the terms.
+#
+# The fresh capture is a file this recipe is given rather than one it fetches:
+# the re-capture is a marketplace request, and D1 puts that on the seller's own
+# device for a marketplace with no official API.
+vocab-drift inventory committed fresh captured_at:
+    cargo run -q -p tam-vocab-drift -- \
+        {{inventory}} {{committed}} {{fresh}} docs/design/data/drift {{captured_at}}
 
 # Regenerate sqlx offline query metadata (crates/tam-storage/.sqlx, committed)
 db-prepare:

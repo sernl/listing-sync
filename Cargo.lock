@@ -5339,6 +5339,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-vocab-drift"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tam-taxonomy",
+]
+
+[[package]]
 name = "tam-worker"
 version = "0.0.0"
 dependencies = [

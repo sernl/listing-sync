@@ -248,3 +248,29 @@ The layer is additive at every call site, and that shape was a correction rather
 Adding `overrides` to `ListingContext` broke every literal that builds it, including two in crates other streams were editing, and a field a caller silently gains is also a caller opted into a behaviour change it never asked for.
 So the overrides travel as a parameter: `project_listing_with_overrides` and `project_axis_with_overrides` carry them, and `project_listing` and `project_axis` delegate to those with an empty set.
 Every construction of `ListingContext` and `AxisRequest` that compiled before still compiles and still behaves identically, and the opt-in is the call a caller makes rather than a field it fills in.
+
+## Step 6: the drift job
+
+The diff is `crates/tam-taxonomy/src/drift.rs` and the binary around it is `crates/tam-vocab-drift`, split that way for the reason the design gives for keeping the comparison pure: the re-capture is a marketplace request and D1 puts that on the seller's own device for a marketplace with no official API, so the alerting surface must not be able to become the thing that issues it.
+The binary holds no HTTP client and no runtime, and `just purity` now asserts that by naming `tam-vocab-drift` in its subgraph, which turns the D1 boundary for this crate into a gate rather than a convention.
+It is the difference from `tam-standards-fetch`, its model in every other respect: that one holds `reqwest` and touches one host.
+
+Option sets are discovered rather than listed.
+Any top-level key whose value is an object carrying an `options` object is a set, which reaches all ten in the TPT capture and all six in the Tes capture with no table to maintain, and diffs a set the platform adds tomorrow on the day it appears.
+
+The design's three outcomes are four rows, because a stable identifier whose payload moved is two different facts rather than one.
+`Added` and `Removed` are what the design describes.
+A payload change splits into `Restructured`, where `parentId` or `category` moved and the facet therefore changed root or axis, and `Relabelled`, where neither did.
+Only the first three block: a relabelled value with a stable identifier touches nothing structural, because labels are read out of the captures by `native_label` rather than stored beside the terms.
+The split is not decoration — under a single "changed" row a re-parented facet and a renamed one would alert identically, and the derivations treat them completely differently, because a child is paired inside its root's denotation.
+
+The report lands at `docs/design/data/drift/{inventory}-{date}.json` and the exit status is the alerting surface, as it is for `tam-canary`; `just vocab-drift` is the recipe.
+The date is an argument rather than a clock read, so two runs over the same pair of captures produce byte-identical reports and a committed drift file can be compared rather than merely read.
+
+Verified twice over.
+Nine pure tests, including the step's own: one facet deleted from a copy yields exactly one row and a run that does not pass, and it fails if the diff reports clean.
+And end to end against the real binary: the committed TPT capture against itself exits zero over ten sets, the same capture with `escape-rooms` deleted exits non-zero with one `Removed` row, and the Tes capture against itself exits zero over six.
+
+What is deliberately not here is either half of the capture.
+Q4 defers the device-originated TPT and Tes re-capture to the Phase 2 desktop client.
+The Etsy-branch server capture is deferred too, for a reason Q4 did not anticipate: `crates/tam-domain/src/registry/etsy.rs:36-38` binds no equivalence axis and declares none absent, so there is no Etsy vocabulary to diff yet, and writing the fetch before the binding exists would be building against an unmeasured target.
