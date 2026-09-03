@@ -189,6 +189,11 @@ pub mod marketplace {
 /// Relationships between constants, checked at compile time rather than at run
 /// time. Each is a claim that could actually be false after an edit; a claim
 /// the declaration already guarantees is not written here.
+///
+/// The pointer-width claim below is `cfg`-scoped to non-wasm targets. It is a
+/// claim about the axum boundary, which exists only in the server binaries;
+/// `wasm32` is a 32-bit client target that performs no such conversion, so on
+/// wasm the assertion would fail for a boundary the build does not contain.
 const _: () = {
     assert!(
         http::UPLOAD_BODY_BYTES_MAX >= http::REQUEST_BODY_BYTES_MAX,
@@ -203,6 +208,7 @@ const _: () = {
             > ingest::ARCHIVE_UNCOMPRESSED_BYTES_MAX,
         "the ratio cap must be able to bind before the absolute cap, or one of them is dead code"
     );
+    #[cfg(not(target_family = "wasm"))]
     assert!(
         usize::BITS >= 64,
         "byte bounds are u64 and are converted to usize at the axum boundary"

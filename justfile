@@ -60,18 +60,18 @@ portable_targets := "wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple
 # feature, which is reqwest and nothing else; reqwest, tokio and rustls are
 # native-only and stay behind it. The server-bound crates are absent by
 # design: they hold sqlx, axum and a runtime, and no client compiles them.
-portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
+# tam-engine-driver joined on 2026-09-03: the tam-limits usize::BITS assertion
+# that failed it on wasm32 is now cfg-scoped to non-wasm targets by founder
+# decision 3 of docs/research/rethink/oxichrome-extension-client.md, and its
+# other blocker had already gone when blake3's `pure` feature dropped the cc
+# and ml64.exe paths.
+portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes -p tam-engine-driver"
 
-# tam-limits asserts usize::BITS >= 64 at compile time, which is true of every
-# target here except wasm32. Widening that claim is a change to a founder-gated
-# limits file, so the wasm leg omits the crate rather than relaxing it.
-# tam-pipeline is here for that reason alone, through its tam-limits edge, and
-# so is tam-engine-driver: it still reads the attempt budget and the wall-clock
-# deadline. Step 8 of the engine-driver split moves both into the claim
-# envelope beside the rate ceiling, after which the crate joins the list above. The
-# blocker of its own is gone: blake3's `pure` feature, enabled by founder
-# decision on 2026-09-03, drops the cc and ml64.exe paths it could not cross.
-portable_crates_64 := "-p tam-limits -p tam-pipeline -p tam-engine-driver"
+# The 64-bit-only leg. These two are not blocked any more — the narrowed
+# assertion lets tam-limits compile for wasm32, which is how tam-engine-driver
+# reaches it above — and listing them on the wasm leg directly is a separate
+# call rather than a consequence of that one.
+portable_crates_64 := "-p tam-limits -p tam-pipeline"
 
 # Prove every client target still compiles. The standard libraries come from
 # rust-toolchain.toml's `targets`, so this needs the devshell rather than a
@@ -275,6 +275,18 @@ desktop-build:
 desktop-build-windows:
     cd web && npm run build
     cd apps/desktop && env -u CC -u CXX -u NIX_CFLAGS_COMPILE -u NIX_LDFLAGS PATH="$TAURI_WINDOWS_TOOLCHAIN_BIN:$PATH" cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis
+
+# Refuse a release the updater could never serve. Checks that the two version
+# fields agree, that an optional tag agrees with them, and that the updater
+# public key and endpoint are no longer placeholders. The desktop-release
+# workflow runs this same script before it builds anything, so a mismatch
+# costs seconds here rather than a Windows runner's minutes there.
+#
+# The distribution pipeline it gates is docs/notes/design/desktop-distribution.md.
+#
+# Check the tree, or check a tag you are about to create
+release-check tag="":
+    sh .github/scripts/release-check.sh {{ tag }}
 
 # Give tam-auth an environment file, creating one from the template on a
 # machine that has none. An existing auth/.env is never touched.
