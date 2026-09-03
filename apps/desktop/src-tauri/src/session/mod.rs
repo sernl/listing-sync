@@ -12,15 +12,16 @@
 
 // `keyring` 3.6.3 has no Android backend, and this crate's manifest declares
 // it only for the three platforms that do, so on Android the module below has
-// no crate to reach. What stands in its place refuses rather than forgets;
-// `unavailable` says why.
+// no crate to reach. `encrypted` is what holds the jar there instead.
 #[cfg(not(target_os = "android"))]
 pub mod keychain;
+// The Keystore-backed key source, which only Android has. The store it feeds
+// is portable and compiled everywhere; this half is the one platform-bound
+// file, and it is deliberately as thin as a file can be.
+#[cfg(target_os = "android")]
+pub mod android_key;
+pub mod encrypted;
 pub mod memory;
-// Compiled everywhere though selected only on Android, because it holds no
-// platform-specific code and a module compiled only for a target no lane
-// builds is a module whose tests never run.
-pub mod unavailable;
 
 use core::future::Future;
 use core::pin::Pin;

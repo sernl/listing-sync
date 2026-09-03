@@ -3,7 +3,7 @@
 Phase D2's second surface: the same Tauri v2 application, the same SvelteKit console, built for a phone, where D3 limits it to work the seller starts.
 
 - date: 2026-09-03
-- status: the shell, the generated Gradle project, the recipes and the workflow are in the tree and the shell is exercised; no APK has been produced, nothing is signed, and nothing has been uploaded anywhere
+- status: the debug and release APKs both build here and are measured; nothing is signed, nothing has run on a device, and nothing has been uploaded anywhere
 - decisions it implements: D2 (Windows desktop first, then Android, all Tauri v2), D3 (a phone runs user-initiated work only for the no-API branch), D12 (the webview login probe), D14 (per-surface login and the device registry), D29 (Android builds from NixOS through `androidenv`, and the first Play upload is by hand)
 - companions: `docs/notes/design/desktop-client.md` is the client this one is a build of, and `docs/notes/design/desktop-distribution.md` is the Windows pipeline this one parallels
 
@@ -51,24 +51,38 @@ That last property is what makes the second window unnecessary.
 `commands::connect_marketplace` builds a second `WebviewWindowBuilder` today, and Tauri's mobile surface is a single Activity; rather than gamble on a second window existing, the Android path navigates the one webview to the login page, polls `cookies_for_url` against the marketplace origin, and navigates back to the console when the logged-in condition holds.
 Whether a second window would in fact build on Android is left open rather than asserted, because settling it needs a device and settling it changes nothing about the design above.
 
-### The OS keychain, which Stronghold replaces
+### The OS keychain, which a sealed file replaces
 
 `keyring` 3.6.3 has no Android backend.
 Its platform blocks cover Linux, FreeBSD, OpenBSD, macOS, iOS and Windows and stop there (`src/lib.rs:207` to `:293`), and `Cargo.toml` here declares `keyring` only under those same three target predicates, so on `*-linux-android` the crate is not a dependency at all and `session/keychain.rs` does not compile.
-`SessionStore` is already a trait with two implementations, so the seam exists; what is missing is a third implementation and the dependency that backs it.
+`SessionStore` is already a trait with two implementations, so the seam exists; what was missing is a third.
 
-Three candidates, and the recommendation is the second.
-A Kotlin plugin over `androidx.security.crypto`'s `EncryptedSharedPreferences`, which is the platform-blessed route and is a hand-written Tauri plugin, a Gradle dependency and a JNI surface to keep true.
-`tauri-plugin-stronghold`, which is an official Tauri plugin, pure Rust, encrypted at rest with a password-derived key, and works identically on every platform this product targets, at the cost of one more crate and one more decision about where the password comes from.
-The app's own private files directory with no encryption at all, which on a non-rooted device is already unreadable by other applications and is what `payload.rs` and `device.json` will use regardless.
+Three candidates were weighed.
+A Kotlin plugin over `androidx.security.crypto`'s `EncryptedSharedPreferences`, the platform-blessed route, costing a hand-written Tauri plugin, a Gradle dependency and a JNI surface to keep true.
+`tauri-plugin-stronghold`, an official Tauri plugin, pure Rust and identical on every platform this product targets, costing one more crate and a decision about where its password comes from.
+The application's own private files directory with no encryption at all, which on a non-rooted device is already unreadable by other applications and is what `payload.rs` and `device.json` use regardless.
 
-Decided 2026-09-03 by founder decision: Stronghold, as recommended.
-The plugin asserts the support itself rather than leaving it to be inferred — `tauri-plugin-stronghold` 2.3.2 declares `android = { level = "full" }` in the same `[package.metadata.platforms.support]` table where `tauri-plugin-updater` declares `"none"` — and it exposes a Rust API, `stronghold::Stronghold::new(path, password)` with `save`, `inner` and a `Deref` to `iota_stronghold::Stronghold`.
-That last fact is what keeps the shape right: the store is plain Rust behind the `SessionStore` trait the other two implementations already satisfy, with no IPC, no capability entry and no JavaScript surface, so the jar stays on the same side of the line the desktop keeps it on.
+Decided 2026-09-03, in two steps, and the second step reversed the first.
+Stronghold was recommended and taken, then measured and dropped.
+Measuring it is what settled it: `tauri-plugin-stronghold` 2.3.2 adds sixty-seven packages to `Cargo.lock`, and four of them need exceptions in `deny.toml`, a shared gate.
+Two are licence exceptions — `constant_time_eq` 0.1.5 and `tiny-keccak` 2.0.2 on CC0-1.0 — and two are advisory ignores for unmaintained crates, RUSTSEC-2025-0141 against `bincode` 1.3.3 and RUSTSEC-2024-0436 against `paste` 1.0.15, all four arriving under `iota_stronghold` 2.1.0.
+Sixty-seven packages and four gate exceptions, two of them unmaintained, underneath the module that holds the seller's marketplace session is the wrong trade when the device already supplies the secrecy: the Android Keystore holds the key either way, and Stronghold's snapshot encryption would be a second cipher over the same secret.
+
+What replaced it costs nothing new.
+`crates/tam-secrets` already seals bytes for the server's credential vault, and it is exactly the primitive this needs: XChaCha20-Poly1305 with a random per-record data key wrapped under a caller-supplied thirty-two-byte key-encryption key, a random 192-bit nonce at both layers, and additional authenticated data bound through both.
+`Kek::from_bytes` refuses any length but thirty-two with a named error, `Sealed`'s `Debug` redacts every field, and the type is `Zeroize`.
+Reaching it is a workspace path edge rather than a dependency: `chacha20poly1305` 0.10.1 and `aead` 0.5.2 are already in the lock through that crate, so the package count does not move, and `cargo check -p tam-secrets --target aarch64-linux-android` finishes clean.
+
+The store is `session/encrypted.rs`, and nothing in it is Android-specific.
+One file under the application data directory holds one sealed envelope per marketplace, filed under the same `entry_key` the keychain store uses, with the record as JSON inside the envelope and that same key as the additional authenticated data, so an envelope moved to another marketplace's entry fails to authenticate rather than opening as the wrong session.
+A file that exists but does not parse is an error rather than an empty store, because answering a damaged file with "no sessions" would overwrite what might still be recoverable on the next write.
 
 The password is not typed by the seller.
-It is a thirty-two-byte secret generated once, wrapped with an AES-GCM key held in the Android Keystore, and persisted as a wrapped blob in the application's private files directory; Stronghold's own argon2 derivation runs over that, with its salt beside the snapshot.
-The Keystore call is one Kotlin class registered from this crate through `PluginApi::register_android_plugin` and reached with `PluginHandle::run_mobile_plugin` (tauri 2.11.5, `src/plugin/mobile.rs:208` and `:324`), which needs no separate plugin crate, no Gradle module and no direct `jni` dependency, because Tauri's own does the work.
+It is a thirty-two-byte secret generated once, wrapped with an AES-GCM key held in the Android Keystore, and persisted as a wrapped blob in the application's private files directory.
+It reaches the store through a two-method port, `DeviceKeySource`, whose `obtain` returns a `Kek` — the `ZeroizeOnDrop` type, so the secret does not outlive the call that used it — and whose `forget` destroys the key itself.
+That second method is a whole-device wipe and `SessionStore::forget` never calls it, because forgetting one marketplace must not make the others unreadable; what makes a wipe a fact rather than a deletion the filesystem might not have honoured is that the key is gone, so anything that survived the file cannot be read.
+The port's Android implementation is one Kotlin class registered from this crate through `PluginApi::register_android_plugin` and reached with `PluginHandle::run_mobile_plugin` (tauri 2.11.5, `src/plugin/mobile.rs:208` and `:324`), which needs no separate plugin crate, no Gradle module and no direct `jni` dependency, because Tauri's own does the work.
+Its test implementation holds a fixed key, which is what lets the whole store be exercised on the host rather than only cross-compiled.
 
 Three parameters on that Keystore key, and the reasoning for each is worth keeping.
 `setUnlockedDeviceRequired(true)` where the API level allows it, which is 28 and up and therefore behind a version check, because the seller's device being unlocked is already the condition under which any of this runs.
@@ -112,10 +126,25 @@ That tree is committed rather than regenerated, because the release signing conf
 The `signingConfigs` block added there is guarded, which Tauri's own snippet is not: theirs reads `keystore.properties` unconditionally and throws on a machine that has none, which is every machine here, so ours applies the configuration only when the file exists and lets Gradle name the output `app-<abi>-release-unsigned.apk` when it does not.
 
 Three code changes carry the platform difference, and each is narrow.
-`session/keychain.rs` is compiled only on the three platforms `keyring` supports, and `session/unavailable.rs` stands in on Android: it refuses a capture rather than accepting one it cannot keep.
-The in-memory store was the obvious stand-in and is deliberately not used, for the reason its own documentation gives — a session that silently stopped being persisted looks identical to one that was — so an Android build today cannot hold a marketplace session, and says so, until the store question above is answered.
+`session/keychain.rs` is compiled only on the three platforms `keyring` supports, and `session/encrypted.rs` is selected in its place on Android.
+A third module briefly stood between the two, refusing a capture on Android while the store was undecided; it was removed once this one landed, because a build with no key source is not a configuration that ships and a module with no consumer pays no rent.
+The in-memory store was never a candidate for that role, for the reason its own documentation gives — a session that silently stopped being persisted looks identical to one that was.
 `tauri-plugin-updater` is registered under `#[cfg(desktop)]` only, because registering a plugin that declares no Android support would give the console an update surface that answers nothing.
 And the hourly timer is `#[cfg(desktop)]`: on a phone the cycle runs once at start-up and again on every `RunEvent::Resumed`, which is what D3 leaves in place of a schedule and is the only moment a device signed out elsewhere can learn it.
+
+Both APKs were built here on 2026-09-03, arm64 only.
+
+| Artefact | Size | `libtam_desktop.so` inside it |
+|---|---|---|
+| `app-universal-debug.apk` | 202.5 MB | 205.1 MB, unstripped |
+| `app-universal-release-unsigned.apk` | 20.6 MB | 19.0 MB, stripped |
+
+The debug figure is the whole of the difference and it is not a problem to solve.
+Tauri's generated debug build type writes `jniLibs.keepDebugSymbols` for all four ABIs, which keeps the dev profile's full DWARF in the library on purpose, and the release build type carries no such line, so the Android Gradle Plugin strips there.
+Nothing else in either APK is large: `classes.dex` is 2.0 MB in the release build and `resources.arsc` 1.0 MB, with no other entry above 40 KB.
+Twenty megabytes is the number to plan against, and it is one ABI; a universal release carrying arm64 and armv7 will be roughly twice that, which is why Play takes the bundle and splits it per device.
+
+The release APK is named `app-universal-release-unsigned.apk` rather than `app-universal-release.apk`, and that is the guard working rather than an oversight: no `keystore.properties` exists in this tree, so Gradle leaves the signing configuration unset and says so in the filename.
 
 The recipes are `just android-init`, `android-build-debug`, `android-build` and `android-build-aab`, all of them inside that shell.
 The debug recipe builds arm64 alone, because it is a device to install on rather than a release; the release recipe builds arm64 and armv7, which are the two ABIs a phone runs, and adding either x86 ABI for a Chromebook or an emulator is one word.
@@ -125,6 +154,12 @@ Neither a push to `main` nor a version tag starts it, for two separate reasons: 
 A red Android run sitting beside the founder's first desktop release would cost more than the trigger is worth; it returns when the client reaches beta.
 It runs on `ubuntu-latest`, pins the same NDK the flake does and fails by name if `setup-android` did not put it there, and pins every third-party action to a full commit SHA.
 When the keystore secret is absent it says so in the log as a warning and lets the unsigned filename say it again.
+
+## The interface
+
+Founder requirement, 2026-09-03: the Android client's user interface follows Vendoo's Android app in structure, navigation, screen names and feature set, in Teachouse's own colours and typography, with no Vendoo text, asset or layout copied.
+Because Phase 7 shares the console build with the desktop rather than reimplementing it, this is the console's mobile layout rather than a second interface, and the map it follows is `docs/research/rethink/vendoo-console-cross-reference.md`.
+The interface work is therefore sequenced after that document lands, and is not part of the Stronghold session store.
 
 ## Signing and distribution
 

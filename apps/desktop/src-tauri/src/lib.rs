@@ -15,6 +15,27 @@
 //! custody line and what remains owed.
 
 #![forbid(unsafe_code)]
+// `tauri::mobile_entry_point` emits a sibling `stop_unwind` function that
+// wraps the entry in `std::panic::catch_unwind`, because this is an
+// `extern "C"` boundary and unwinding across one is undefined behaviour. That
+// generated item is a sibling of `run` rather than part of it, so no
+// attribute on `run` can cover it and one placed there is reported unfulfilled
+// (verified: tauri-macros 2.6.3, `src/mobile.rs:63`). The expectation is
+// therefore crate-level, and `cfg_attr(mobile, ...)` keeps it off the desktop
+// build, where the macro expands to nothing and there would be nothing to
+// expect. clippy.toml is unchanged, this fails the build the day Tauri stops
+// needing the wrapper, and the residual is stated rather than hidden: the only
+// Android-only source in this crate is `session/android_key.rs`, which the
+// host lane does not lint, so a disallowed call added there would not be
+// caught. Everything else is shared code the host lane checks.
+#![cfg_attr(
+    mobile,
+    expect(
+        clippy::disallowed_methods,
+        reason = "the mobile entry point's catch_unwind is Tauri's, at an FFI boundary that \
+                  requires it; the call site is the macro, not this crate"
+    )
+)]
 
 pub mod commands;
 pub mod connect;
@@ -44,12 +65,12 @@ use crate::heartbeat::cycle;
 use crate::run::wall_now;
 use crate::scheduler::Scheduler;
 // The credential store this platform actually has. `keyring` covers Windows,
-// macOS and Linux; on Android it has no backend at all, and what stands in for
-// it there refuses a capture rather than accepting one it cannot keep.
-#[cfg(not(target_os = "android"))]
-use crate::session::keychain::KeychainSessionStore as PlatformSessionStore;
+// macOS and Linux; on Android it has no backend at all, so the jar is sealed
+// into a file instead, under a key the Android Keystore holds.
 #[cfg(target_os = "android")]
-use crate::session::unavailable::UnavailableSessionStore as PlatformSessionStore;
+use crate::session::encrypted::{DeviceKeySource, EncryptedSessionStore};
+#[cfg(not(target_os = "android"))]
+use crate::session::keychain::KeychainSessionStore;
 use crate::state::DesktopState;
 use crate::webview_session::WebviewSession;
 use crate::work::{DeviceWork, LiveMarketplaces};
@@ -91,6 +112,8 @@ pub fn run() {
     // build where this line is compiled out.
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(session_key_bridge());
     let built = builder
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
@@ -103,7 +126,19 @@ pub fn run() {
             let origin = base_url();
             let sessions = Arc::new(WebviewSession::new(app.handle().clone(), &origin)?);
             let plane = Arc::new(HttpControlPlane::against(&origin, sessions)?);
-            let store = Arc::new(PlatformSessionStore::new());
+            #[cfg(not(target_os = "android"))]
+            let store = Arc::new(KeychainSessionStore::new());
+            // The key source is filed in managed state by the plugin below,
+            // and plugins are initialised before this closure runs, so it is
+            // always there by now (tauri 2.11.5, `src/app.rs:2440` and
+            // `:2531`). Its absence would be a build-order fault rather than
+            // a runtime condition, so it fails start-up loudly through
+            // `startup` rather than degrading to a store that forgets.
+            #[cfg(target_os = "android")]
+            let store = Arc::new(EncryptedSessionStore::in_data_dir(
+                &data_dir,
+                Arc::clone(app.state::<Arc<dyn DeviceKeySource>>().inner()),
+            ));
             // Method-call syntax rather than `Arc::clone`, which would resolve
             // its own type parameter against the annotation and refuse the
             // unsizing coercion these two bindings exist to perform.
@@ -161,12 +196,41 @@ pub fn run() {
         Ok(data_dir) => startup::opening(&data_dir),
         Err(why) => startup::fatal(&why),
     }
-    app.run(move |_app, _event| {
-        #[cfg(mobile)]
-        if matches!(_event, tauri::RunEvent::Resumed) {
+    // Two callbacks rather than one with a platform-dead branch: the desktop
+    // build has nothing to do with the event, and naming a binding it never
+    // reads would be a lie the linter is right to catch.
+    #[cfg(desktop)]
+    app.run(|_, _| {});
+    #[cfg(mobile)]
+    app.run(move |_, event| {
+        if matches!(event, tauri::RunEvent::Resumed) {
             on_resume.notify_one();
         }
     });
+}
+
+/// Registers the Kotlin class that holds the session-sealing secret, and
+/// files the resulting handle in managed state where `setup` picks it up.
+///
+/// A plugin rather than a call in `setup`, because `register_android_plugin`
+/// lives on `PluginApi`, which only a plugin's own setup is handed (tauri
+/// 2.11.5, `src/plugin/mobile.rs:208`). Registering it here rather than
+/// publishing a plugin crate is what keeps this to one Kotlin file with no
+/// Gradle module and no direct `jni` dependency.
+#[cfg(target_os = "android")]
+fn session_key_bridge<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("session-key")
+        .setup(|app, api| {
+            let handle = api.register_android_plugin(
+                session::android_key::PLUGIN_IDENTIFIER,
+                session::android_key::PLUGIN_CLASS,
+            )?;
+            let keys: Arc<dyn DeviceKeySource> =
+                Arc::new(session::android_key::KeystoreKey::new(handle));
+            app.manage(keys);
+            Ok(())
+        })
+        .build()
 }
 
 /// One cycle: check in, then pull whatever work the entitlement gate still
@@ -215,6 +279,10 @@ async fn run_schedule<W: scheduler::WorkSource>(app: AppHandle, work: W) {
 /// timer is the seller: one cycle at start-up, one on every resume, and the
 /// console's own commands in between.
 #[cfg(mobile)]
+#[expect(
+    clippy::infinite_loop,
+    reason = "a supervisor loop for the life of the process; the application exits by exiting"
+)]
 async fn run_schedule<W: scheduler::WorkSource>(
     app: AppHandle,
     work: W,
