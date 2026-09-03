@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>TPT envelope probe</title>
+<style>
+  body { font: 13px/1.45 system-ui, sans-serif; margin: 12px; width: 460px; }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  fieldset { border: 1px solid #ccc; margin: 0 0 10px; padding: 8px; }
+  legend { font-weight: 600; }
+  label { display: block; margin: 4px 0; }
+  input[type=text] { width: 100%; box-sizing: border-box; }
+  button { margin: 2px 4px 2px 0; padding: 4px 8px; }
+  textarea { width: 100%; height: 150px; box-sizing: border-box; font-family: monospace; font-size: 11px; }
+  #status { margin: 6px 0; min-height: 1.4em; }
+</style>
+<body>
+<h1>TeachersPayTeachers header-envelope probe (gate G1)</h1>
+
+<fieldset>
+  <legend>Target</legend>
+  <label>Origin <input id="origin" type="text" value="https://www.teacherspayteachers.com"></label>
+  <label>Login path <input id="loginPath" type="text" value="/Login"></label>
+  <label>Create form path <input id="createPath" type="text" value="/My-Products/New/Digital-Next"></label>
+</fieldset>
+
+<fieldset>
+  <legend>Route A — fetch from the extension's service worker</legend>
+  <button data-command="route-a-login">A on the login page</button>
+  <button data-command="route-a-create">A on the create form</button>
+</fieldset>
+
+<fieldset>
+  <legend>Route B — fetch from a content script in an open marketplace tab</legend>
+  <button data-command="route-b-login">B on the login page</button>
+  <button data-command="route-b-create">B on the create form</button>
+</fieldset>
+
+<fieldset>
+  <legend>Route C — a navigation the extension starts, read from the tab</legend>
+  <button data-command="route-c-create">C on the create form</button>
+</fieldset>
+
+<fieldset>
+  <legend>Route D — a navigation the marketplace page starts, read from the tab</legend>
+  <button data-command="route-d-create">D on the create form</button>
+</fieldset>
+
+<div id="status"></div>
+<button id="collect">Show everything recorded</button>
+<button id="copy">Copy to clipboard</button>
+<button id="save">Save as file</button>
+<textarea id="out" readonly></textarea>
+<script src="popup.js"></script>
+</body>

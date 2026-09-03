@@ -1,0 +1,747 @@
+{
+  "gate": "G3",
+  "host": "offscreen",
+  "variant": "offscreen",
+  "label": "offscreen-3",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+  "totalBytes": 268435456,
+  "partBytes": 5242880,
+  "partCount": 52,
+  "partsSent": 52,
+  "bytesSent": 268435456,
+  "allocMs": 4,
+  "uploadMs": 42258,
+  "uploadThroughputMiBps": 6.06,
+  "slowestPartMs": 816,
+  "partLog": [
+    {
+      "index": 0,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 0
+    },
+    {
+      "index": 1,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 815
+    },
+    {
+      "index": 2,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 1629
+    },
+    {
+      "index": 3,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 2441
+    },
+    {
+      "index": 4,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 3254
+    },
+    {
+      "index": 5,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 4068
+    },
+    {
+      "index": 6,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 4880
+    },
+    {
+      "index": 7,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 5692
+    },
+    {
+      "index": 8,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 6505
+    },
+    {
+      "index": 9,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 7317
+    },
+    {
+      "index": 10,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 8130
+    },
+    {
+      "index": 11,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 8942
+    },
+    {
+      "index": 12,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 9754
+    },
+    {
+      "index": 13,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 10566
+    },
+    {
+      "index": 14,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 11381
+    },
+    {
+      "index": 15,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 12193
+    },
+    {
+      "index": 16,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 13006
+    },
+    {
+      "index": 17,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 13818
+    },
+    {
+      "index": 18,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 14630
+    },
+    {
+      "index": 19,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 15444
+    },
+    {
+      "index": 20,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 16256
+    },
+    {
+      "index": 21,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 17069
+    },
+    {
+      "index": 22,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 17881
+    },
+    {
+      "index": 23,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 18693
+    },
+    {
+      "index": 24,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 19505
+    },
+    {
+      "index": 25,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 20317
+    },
+    {
+      "index": 26,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 21130
+    },
+    {
+      "index": 27,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 21943
+    },
+    {
+      "index": 28,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 22757
+    },
+    {
+      "index": 29,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 23572
+    },
+    {
+      "index": 30,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 24387
+    },
+    {
+      "index": 31,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 25202
+    },
+    {
+      "index": 32,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 26016
+    },
+    {
+      "index": 33,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 26830
+    },
+    {
+      "index": 34,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 27642
+    },
+    {
+      "index": 35,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 28456
+    },
+    {
+      "index": 36,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 29268
+    },
+    {
+      "index": 37,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 30080
+    },
+    {
+      "index": 38,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 30892
+    },
+    {
+      "index": 39,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 31705
+    },
+    {
+      "index": 40,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 32517
+    },
+    {
+      "index": 41,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 33331
+    },
+    {
+      "index": 42,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 811,
+      "atMs": 34143
+    },
+    {
+      "index": 43,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 34954
+    },
+    {
+      "index": 44,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 816,
+      "atMs": 35766
+    },
+    {
+      "index": 45,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 36582
+    },
+    {
+      "index": 46,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 37394
+    },
+    {
+      "index": 47,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 38206
+    },
+    {
+      "index": 48,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 39018
+    },
+    {
+      "index": 49,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 39830
+    },
+    {
+      "index": 50,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 40642
+    },
+    {
+      "index": 51,
+      "bytes": 1048576,
+      "status": 200,
+      "ms": 804,
+      "atMs": 41454
+    }
+  ],
+  "failure": null,
+  "heapAfterUpload": {
+    "usedJsHeapMiB": 257,
+    "totalJsHeapMiB": 257
+  },
+  "driverSurvived": true,
+  "workerTimeline": [
+    {
+      "at": 0,
+      "getContextsAvailable": false
+    }
+  ],
+  "wakeMessageSent": true,
+  "serviceWorkerContextsAfterWake": "TypeError: chrome.runtime.getContexts is not a function",
+  "server": {
+    "label": "offscreen-3",
+    "variant": "offscreen",
+    "partDelaySeconds": 0.8,
+    "workerStarts": [
+      {
+        "at": 1.497,
+        "isFirst": true,
+        "payload": {
+          "spawnAt": 1788405419283
+        }
+      },
+      {
+        "at": 43.828,
+        "isFirst": false,
+        "payload": {
+          "spawnAt": 1788405461643
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "driver-opened",
+        "from": "worker",
+        "spawnAt": 1788405419283,
+        "host": "offscreen",
+        "reasonAccepted": "BLOBS",
+        "at": 1.516
+      },
+      {
+        "name": "driver-alive",
+        "from": "offscreen",
+        "host": "offscreen",
+        "config": {
+          "variant": "offscreen",
+          "partBytes": 5242880,
+          "totalBytes": 268435456,
+          "origin": "http://127.0.0.1:8732",
+          "label": "offscreen-3"
+        },
+        "heap": {
+          "usedJsHeapMiB": 1,
+          "totalJsHeapMiB": 2
+        },
+        "at": 1.556
+      },
+      {
+        "name": "payload-allocated",
+        "from": "offscreen",
+        "bytes": 268435456,
+        "allocMs": 4,
+        "allocError": null,
+        "heap": {
+          "usedJsHeapMiB": 1,
+          "totalJsHeapMiB": 2
+        },
+        "at": 1.562
+      },
+      {
+        "name": "upload-finished",
+        "from": "offscreen",
+        "partsSent": 52,
+        "uploadMs": 42258,
+        "failure": null,
+        "at": 43.822
+      },
+      {
+        "name": "worker-woken-by-message",
+        "from": "worker",
+        "spawnAt": 1788405461643,
+        "message": {
+          "done": true,
+          "host": "offscreen",
+          "partsSent": 52
+        },
+        "at": 43.829
+      }
+    ],
+    "partsReceived": 52,
+    "bytesReceived": 268435456,
+    "firstPartAt": 2.378,
+    "lastPartAt": 43.82,
+    "partIndexesInOrder": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51
+    ],
+    "partSizes": [
+      1048576,
+      5242880
+    ],
+    "partArrivals": [
+      [
+        0,
+        2.378
+      ],
+      [
+        1,
+        3.192
+      ],
+      [
+        2,
+        4.004
+      ],
+      [
+        3,
+        4.816
+      ],
+      [
+        4,
+        5.63
+      ],
+      [
+        5,
+        6.443
+      ],
+      [
+        6,
+        7.254
+      ],
+      [
+        7,
+        8.067
+      ],
+      [
+        8,
+        8.88
+      ],
+      [
+        9,
+        9.692
+      ],
+      [
+        10,
+        10.504
+      ],
+      [
+        11,
+        11.316
+      ],
+      [
+        12,
+        12.128
+      ],
+      [
+        13,
+        12.944
+      ],
+      [
+        14,
+        13.756
+      ],
+      [
+        15,
+        14.569
+      ],
+      [
+        16,
+        15.38
+      ],
+      [
+        17,
+        16.192
+      ],
+      [
+        18,
+        17.007
+      ],
+      [
+        19,
+        17.818
+      ],
+      [
+        20,
+        18.631
+      ],
+      [
+        21,
+        19.444
+      ],
+      [
+        22,
+        20.256
+      ],
+      [
+        23,
+        21.068
+      ],
+      [
+        24,
+        21.879
+      ],
+      [
+        25,
+        22.692
+      ],
+      [
+        26,
+        23.506
+      ],
+      [
+        27,
+        24.32
+      ],
+      [
+        28,
+        25.134
+      ],
+      [
+        29,
+        25.949
+      ],
+      [
+        30,
+        26.764
+      ],
+      [
+        31,
+        27.579
+      ],
+      [
+        32,
+        28.392
+      ],
+      [
+        33,
+        29.204
+      ],
+      [
+        34,
+        30.018
+      ],
+      [
+        35,
+        30.83
+      ],
+      [
+        36,
+        31.642
+      ],
+      [
+        37,
+        32.454
+      ],
+      [
+        38,
+        33.267
+      ],
+      [
+        39,
+        34.079
+      ],
+      [
+        40,
+        34.893
+      ],
+      [
+        41,
+        35.705
+      ],
+      [
+        42,
+        36.517
+      ],
+      [
+        43,
+        37.329
+      ],
+      [
+        44,
+        38.144
+      ],
+      [
+        45,
+        38.956
+      ],
+      [
+        46,
+        39.768
+      ],
+      [
+        47,
+        40.58
+      ],
+      [
+        48,
+        41.392
+      ],
+      [
+        49,
+        42.204
+      ],
+      [
+        50,
+        43.016
+      ],
+      [
+        51,
+        43.82
+      ]
+    ]
+  }
+}

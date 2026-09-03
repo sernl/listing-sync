@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "G2 redirect-location probe",
+  "version": "0.1.0",
+  "description": "Reads a 302 Location header through non-blocking webRequest while the fetch resolves opaqueredirect.",
+  "permissions": ["webRequest"],
+  "host_permissions": ["http://127.0.0.1/*", "http://127.0.0.1:8731/*"],
+  "background": { "service_worker": "background.js" }
+}

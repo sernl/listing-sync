@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "TPT header-envelope probe (gate G1)",
+  "version": "0.1.0",
+  "description": "Records what header envelope each of three request shapes actually sends to TeachersPayTeachers, and what comes back.",
+  "permissions": ["webRequest", "scripting", "tabs", "storage"],
+  "host_permissions": ["https://www.teacherspayteachers.com/*", "http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "TPT envelope probe" }
+}

@@ -1,0 +1,808 @@
+{
+  "gate": "G3",
+  "host": "tab",
+  "variant": "tab",
+  "label": "tab-2",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+  "totalBytes": 268435456,
+  "partBytes": 5242880,
+  "partCount": 52,
+  "partsSent": 52,
+  "bytesSent": 268435456,
+  "allocMs": 7,
+  "uploadMs": 42504,
+  "uploadThroughputMiBps": 6.02,
+  "slowestPartMs": 851,
+  "partLog": [
+    {
+      "index": 0,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 831,
+      "atMs": 0
+    },
+    {
+      "index": 1,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 831,
+      "atMs": 831
+    },
+    {
+      "index": 2,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 830,
+      "atMs": 1662
+    },
+    {
+      "index": 3,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 851,
+      "atMs": 2492
+    },
+    {
+      "index": 4,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 830,
+      "atMs": 3343
+    },
+    {
+      "index": 5,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 828,
+      "atMs": 4173
+    },
+    {
+      "index": 6,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 817,
+      "atMs": 5001
+    },
+    {
+      "index": 7,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 817,
+      "atMs": 5818
+    },
+    {
+      "index": 8,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 819,
+      "atMs": 6635
+    },
+    {
+      "index": 9,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 820,
+      "atMs": 7454
+    },
+    {
+      "index": 10,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 821,
+      "atMs": 8274
+    },
+    {
+      "index": 11,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 821,
+      "atMs": 9095
+    },
+    {
+      "index": 12,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 9916
+    },
+    {
+      "index": 13,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 816,
+      "atMs": 10729
+    },
+    {
+      "index": 14,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 11545
+    },
+    {
+      "index": 15,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 829,
+      "atMs": 12360
+    },
+    {
+      "index": 16,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 818,
+      "atMs": 13189
+    },
+    {
+      "index": 17,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 820,
+      "atMs": 14007
+    },
+    {
+      "index": 18,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 14827
+    },
+    {
+      "index": 19,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 817,
+      "atMs": 15641
+    },
+    {
+      "index": 20,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 16458
+    },
+    {
+      "index": 21,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 17272
+    },
+    {
+      "index": 22,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 18084
+    },
+    {
+      "index": 23,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 18896
+    },
+    {
+      "index": 24,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 19708
+    },
+    {
+      "index": 25,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 821,
+      "atMs": 20522
+    },
+    {
+      "index": 26,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 21343
+    },
+    {
+      "index": 27,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 817,
+      "atMs": 22156
+    },
+    {
+      "index": 28,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 22973
+    },
+    {
+      "index": 29,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 23787
+    },
+    {
+      "index": 30,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 24599
+    },
+    {
+      "index": 31,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 818,
+      "atMs": 25413
+    },
+    {
+      "index": 32,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 823,
+      "atMs": 26231
+    },
+    {
+      "index": 33,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 27054
+    },
+    {
+      "index": 34,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 818,
+      "atMs": 27867
+    },
+    {
+      "index": 35,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 28685
+    },
+    {
+      "index": 36,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 29498
+    },
+    {
+      "index": 37,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 30310
+    },
+    {
+      "index": 38,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 31125
+    },
+    {
+      "index": 39,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 31937
+    },
+    {
+      "index": 40,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 32749
+    },
+    {
+      "index": 41,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 33561
+    },
+    {
+      "index": 42,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 34374
+    },
+    {
+      "index": 43,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 817,
+      "atMs": 35186
+    },
+    {
+      "index": 44,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 36003
+    },
+    {
+      "index": 45,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 36815
+    },
+    {
+      "index": 46,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 813,
+      "atMs": 37629
+    },
+    {
+      "index": 47,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 816,
+      "atMs": 38442
+    },
+    {
+      "index": 48,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 815,
+      "atMs": 39258
+    },
+    {
+      "index": 49,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 814,
+      "atMs": 40073
+    },
+    {
+      "index": 50,
+      "bytes": 5242880,
+      "status": 200,
+      "ms": 812,
+      "atMs": 40887
+    },
+    {
+      "index": 51,
+      "bytes": 1048576,
+      "status": 200,
+      "ms": 805,
+      "atMs": 41699
+    }
+  ],
+  "failure": null,
+  "heapAfterUpload": {
+    "usedJsHeapMiB": 257,
+    "totalJsHeapMiB": 257
+  },
+  "driverSurvived": true,
+  "workerTimeline": [
+    {
+      "at": 0,
+      "getContextsAvailable": true
+    },
+    {
+      "at": 40,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 2836,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 5823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 8823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 11824,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 14823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 17823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 20823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 23823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 26823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 29823,
+      "serviceWorkerContexts": 1
+    },
+    {
+      "at": 32823,
+      "serviceWorkerContexts": 0
+    },
+    {
+      "at": 35823,
+      "serviceWorkerContexts": 0
+    },
+    {
+      "at": 38823,
+      "serviceWorkerContexts": 0
+    },
+    {
+      "at": 41823,
+      "serviceWorkerContexts": 0
+    }
+  ],
+  "wakeMessageSent": true,
+  "serviceWorkerContextsAfterWake": 1,
+  "server": {
+    "label": "tab-2",
+    "variant": "tab",
+    "partDelaySeconds": 0.8,
+    "workerStarts": [
+      {
+        "at": 1.875,
+        "isFirst": true,
+        "payload": {
+          "spawnAt": 1788405298583
+        }
+      },
+      {
+        "at": 44.465,
+        "isFirst": false,
+        "payload": {
+          "spawnAt": 1788405341223
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "driver-opened",
+        "from": "worker",
+        "spawnAt": 1788405298583,
+        "host": "tab",
+        "tabId": 2116200001,
+        "autoDiscardable": false,
+        "at": 1.897
+      },
+      {
+        "name": "driver-alive",
+        "from": "tab",
+        "host": "tab",
+        "config": {
+          "variant": "tab",
+          "partBytes": 5242880,
+          "totalBytes": 268435456,
+          "origin": "http://127.0.0.1:8732",
+          "label": "tab-2"
+        },
+        "heap": {
+          "usedJsHeapMiB": 1,
+          "totalJsHeapMiB": 2
+        },
+        "at": 1.935
+      },
+      {
+        "name": "payload-allocated",
+        "from": "tab",
+        "bytes": 268435456,
+        "allocMs": 7,
+        "allocError": null,
+        "heap": {
+          "usedJsHeapMiB": 1,
+          "totalJsHeapMiB": 2
+        },
+        "at": 1.951
+      },
+      {
+        "name": "upload-finished",
+        "from": "tab",
+        "partsSent": 52,
+        "uploadMs": 42504,
+        "failure": null,
+        "at": 44.459
+      },
+      {
+        "name": "worker-woken-by-message",
+        "from": "worker",
+        "spawnAt": 1788405341223,
+        "message": {
+          "done": true,
+          "host": "tab",
+          "partsSent": 52
+        },
+        "at": 44.477
+      }
+    ],
+    "partsReceived": 52,
+    "bytesReceived": 268435456,
+    "firstPartAt": 2.781,
+    "lastPartAt": 44.457,
+    "partIndexesInOrder": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51
+    ],
+    "partSizes": [
+      1048576,
+      5242880
+    ],
+    "partArrivals": [
+      [
+        0,
+        2.781
+      ],
+      [
+        1,
+        3.611
+      ],
+      [
+        2,
+        4.444
+      ],
+      [
+        3,
+        5.287
+      ],
+      [
+        4,
+        6.125
+      ],
+      [
+        5,
+        6.954
+      ],
+      [
+        6,
+        7.77
+      ],
+      [
+        7,
+        8.587
+      ],
+      [
+        8,
+        9.406
+      ],
+      [
+        9,
+        10.226
+      ],
+      [
+        10,
+        11.046
+      ],
+      [
+        11,
+        11.868
+      ],
+      [
+        12,
+        12.682
+      ],
+      [
+        13,
+        13.497
+      ],
+      [
+        14,
+        14.312
+      ],
+      [
+        15,
+        15.141
+      ],
+      [
+        16,
+        15.959
+      ],
+      [
+        17,
+        16.78
+      ],
+      [
+        18,
+        17.594
+      ],
+      [
+        19,
+        18.41
+      ],
+      [
+        20,
+        19.225
+      ],
+      [
+        21,
+        20.037
+      ],
+      [
+        22,
+        20.849
+      ],
+      [
+        23,
+        21.661
+      ],
+      [
+        24,
+        22.474
+      ],
+      [
+        25,
+        23.296
+      ],
+      [
+        26,
+        24.109
+      ],
+      [
+        27,
+        24.925
+      ],
+      [
+        28,
+        25.74
+      ],
+      [
+        29,
+        26.552
+      ],
+      [
+        30,
+        27.365
+      ],
+      [
+        31,
+        28.183
+      ],
+      [
+        32,
+        29.007
+      ],
+      [
+        33,
+        29.819
+      ],
+      [
+        34,
+        30.638
+      ],
+      [
+        35,
+        31.45
+      ],
+      [
+        36,
+        32.262
+      ],
+      [
+        37,
+        33.078
+      ],
+      [
+        38,
+        33.889
+      ],
+      [
+        39,
+        34.701
+      ],
+      [
+        40,
+        35.513
+      ],
+      [
+        41,
+        36.326
+      ],
+      [
+        42,
+        37.139
+      ],
+      [
+        43,
+        37.955
+      ],
+      [
+        44,
+        38.767
+      ],
+      [
+        45,
+        39.581
+      ],
+      [
+        46,
+        40.395
+      ],
+      [
+        47,
+        41.21
+      ],
+      [
+        48,
+        42.026
+      ],
+      [
+        49,
+        42.84
+      ],
+      [
+        50,
+        43.651
+      ],
+      [
+        51,
+        44.457
+      ]
+    ]
+  }
+}

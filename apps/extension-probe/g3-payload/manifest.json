@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "G3 payload-path probe",
+  "version": "0.1.0",
+  "description": "Drives a 256 MiB multipart upload from an offscreen document or a runner tab while the service worker idles.",
+  "permissions": ["offscreen", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*", "http://127.0.0.1:8732/*"],
+  "background": { "service_worker": "background.js" }
+}

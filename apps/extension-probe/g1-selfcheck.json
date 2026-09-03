@@ -1,0 +1,708 @@
+{
+  "route-a-login": {
+    "gate": "G1",
+    "key": "route-a-login",
+    "recordedAt": "2026-09-03T04:16:44.830Z",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+    "report": {
+      "route": "A",
+      "description": "fetch from the service worker with credentials: include",
+      "target": "http://127.0.0.1:8733/Login",
+      "envelope": {
+        "joinedRequestId": "6",
+        "requestType": "xmlhttprequest",
+        "headersSent": {
+          "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+          "accept": "*/*",
+          "sec-fetch-site": "none",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-dest": "empty",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8"
+        },
+        "expectedHeadersAbsent": [
+          "origin",
+          "referer",
+          "sec-fetch-user"
+        ],
+        "allRequestHeaderNames": [
+          "user-agent",
+          "accept",
+          "sec-fetch-site",
+          "sec-fetch-mode",
+          "sec-fetch-dest",
+          "sec-fetch-storage-access",
+          "accept-encoding",
+          "accept-language",
+          "cookie"
+        ],
+        "requestCookieNames": [
+          "csrftoken",
+          "session_id"
+        ],
+        "responseStatus": 200,
+        "responseStatusLine": "HTTP/1.1 200 OK",
+        "cloudflareResponseHeaders": [
+          {
+            "name": "cf-ray",
+            "value": "7a1b2c3d4e5f6789-LHR"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          }
+        ],
+        "setCookieNames": [
+          "csrfToken",
+          "session_id"
+        ],
+        "allResponseHeaderNames": [
+          "server",
+          "date",
+          "content-type",
+          "access-control-allow-origin",
+          "cf-ray",
+          "cf-cache-status",
+          "set-cookie",
+          "set-cookie",
+          "content-length"
+        ]
+      },
+      "page": {
+        "url": "http://127.0.0.1:8733/Login",
+        "title": "Sign in",
+        "verdict": "CLEAR",
+        "wall": false,
+        "edgeBlock": false,
+        "markers": [],
+        "cookieNamesSeen": [],
+        "csrfTokenReadableFromDocumentCookie": false,
+        "passwordInputs": 1,
+        "formServed": false,
+        "formAnchors": {
+          "data[_Token][key]": false,
+          "data[_Token][fields]": false,
+          "data[_Token][unlocked]": false,
+          "data[_Csrf][csrfKey]": false,
+          "data[_Csrf][csrfToken]": false,
+          "aws credentials block": false
+        },
+        "htmlBytes": 195,
+        "challengeBodyText": null,
+        "fetchStatus": 200,
+        "fetchRedirected": false,
+        "fetchFinalUrl": "http://127.0.0.1:8733/Login"
+      },
+      "trail": [
+        {
+          "stage": "onSendHeaders",
+          "url": "http://127.0.0.1:8733/Login"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "url": "http://127.0.0.1:8733/Login",
+          "statusCode": 200
+        },
+        {
+          "stage": "onCompleted",
+          "url": "http://127.0.0.1:8733/Login",
+          "statusCode": 200
+        }
+      ]
+    }
+  },
+  "route-a-create": {
+    "gate": "G1",
+    "key": "route-a-create",
+    "recordedAt": "2026-09-03T04:16:45.347Z",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+    "report": {
+      "route": "A",
+      "description": "fetch from the service worker with credentials: include",
+      "target": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+      "envelope": {
+        "joinedRequestId": "7",
+        "requestType": "xmlhttprequest",
+        "headersSent": {
+          "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+          "accept": "*/*",
+          "sec-fetch-site": "none",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-dest": "empty",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8"
+        },
+        "expectedHeadersAbsent": [
+          "origin",
+          "referer",
+          "sec-fetch-user"
+        ],
+        "allRequestHeaderNames": [
+          "user-agent",
+          "accept",
+          "sec-fetch-site",
+          "sec-fetch-mode",
+          "sec-fetch-dest",
+          "sec-fetch-storage-access",
+          "accept-encoding",
+          "accept-language",
+          "cookie"
+        ],
+        "requestCookieNames": [
+          "csrftoken",
+          "session_id"
+        ],
+        "responseStatus": 200,
+        "responseStatusLine": "HTTP/1.1 200 OK",
+        "cloudflareResponseHeaders": [
+          {
+            "name": "cf-ray",
+            "value": "7a1b2c3d4e5f6789-LHR"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          }
+        ],
+        "setCookieNames": [
+          "csrfToken",
+          "session_id"
+        ],
+        "allResponseHeaderNames": [
+          "server",
+          "date",
+          "content-type",
+          "access-control-allow-origin",
+          "cf-ray",
+          "cf-cache-status",
+          "set-cookie",
+          "set-cookie",
+          "content-length"
+        ]
+      },
+      "page": {
+        "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+        "title": "New digital product",
+        "verdict": "CLEAR",
+        "wall": false,
+        "edgeBlock": false,
+        "markers": [],
+        "cookieNamesSeen": [],
+        "csrfTokenReadableFromDocumentCookie": false,
+        "passwordInputs": 0,
+        "formServed": true,
+        "formAnchors": {
+          "data[_Token][key]": true,
+          "data[_Token][fields]": true,
+          "data[_Token][unlocked]": true,
+          "data[_Csrf][csrfKey]": true,
+          "data[_Csrf][csrfToken]": true,
+          "aws credentials block": true
+        },
+        "htmlBytes": 655,
+        "challengeBodyText": null,
+        "fetchStatus": 200,
+        "fetchRedirected": false,
+        "fetchFinalUrl": "http://127.0.0.1:8733/My-Products/New/Digital-Next"
+      },
+      "trail": [
+        {
+          "stage": "onSendHeaders",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        },
+        {
+          "stage": "onCompleted",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        }
+      ]
+    }
+  },
+  "route-b-login": {
+    "gate": "G1",
+    "key": "route-b-login",
+    "recordedAt": "2026-09-03T04:16:45.858Z",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+    "report": {
+      "route": "B",
+      "description": "fetch from a content script in an already-open marketplace tab",
+      "target": "http://127.0.0.1:8733/Login",
+      "hostTabUrl": "http://127.0.0.1:8733/",
+      "envelope": {
+        "joinedRequestId": "8",
+        "requestType": "xmlhttprequest",
+        "headersSent": {
+          "sec-ch-ua-platform": "\"Linux\"",
+          "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\"",
+          "sec-ch-ua-mobile": "?0",
+          "accept": "*/*",
+          "sec-fetch-site": "same-origin",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-dest": "empty",
+          "referer": "http://127.0.0.1:8733/",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8"
+        },
+        "expectedHeadersAbsent": [
+          "origin",
+          "sec-fetch-user"
+        ],
+        "allRequestHeaderNames": [
+          "sec-ch-ua-platform",
+          "user-agent",
+          "sec-ch-ua",
+          "sec-ch-ua-mobile",
+          "accept",
+          "sec-fetch-site",
+          "sec-fetch-mode",
+          "sec-fetch-dest",
+          "referer",
+          "accept-encoding",
+          "accept-language",
+          "cookie"
+        ],
+        "requestCookieNames": [
+          "csrftoken",
+          "session_id"
+        ],
+        "responseStatus": 200,
+        "responseStatusLine": "HTTP/1.1 200 OK",
+        "cloudflareResponseHeaders": [
+          {
+            "name": "cf-ray",
+            "value": "7a1b2c3d4e5f6789-LHR"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          }
+        ],
+        "setCookieNames": [
+          "csrfToken",
+          "session_id"
+        ],
+        "allResponseHeaderNames": [
+          "server",
+          "date",
+          "content-type",
+          "access-control-allow-origin",
+          "cf-ray",
+          "cf-cache-status",
+          "set-cookie",
+          "set-cookie",
+          "content-length"
+        ]
+      },
+      "page": {
+        "challengeBodyText": null,
+        "cookieNamesSeen": [
+          "csrftoken"
+        ],
+        "csrfTokenReadableFromDocumentCookie": true,
+        "edgeBlock": false,
+        "fetchFinalUrl": "http://127.0.0.1:8733/Login",
+        "fetchRedirected": false,
+        "fetchStatus": 200,
+        "formAnchors": {
+          "aws credentials block": false,
+          "data[_Csrf][csrfKey]": false,
+          "data[_Csrf][csrfToken]": false,
+          "data[_Token][fields]": false,
+          "data[_Token][key]": false,
+          "data[_Token][unlocked]": false
+        },
+        "formServed": false,
+        "htmlBytes": 195,
+        "markers": [],
+        "passwordInputs": 1,
+        "title": "Sign in",
+        "url": "http://127.0.0.1:8733/Login",
+        "verdict": "CLEAR",
+        "wall": false
+      },
+      "trail": [
+        {
+          "stage": "onSendHeaders",
+          "url": "http://127.0.0.1:8733/Login"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "url": "http://127.0.0.1:8733/Login",
+          "statusCode": 200
+        },
+        {
+          "stage": "onCompleted",
+          "url": "http://127.0.0.1:8733/Login",
+          "statusCode": 200
+        }
+      ]
+    }
+  },
+  "route-b-create": {
+    "gate": "G1",
+    "key": "route-b-create",
+    "recordedAt": "2026-09-03T04:16:46.364Z",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+    "report": {
+      "route": "B",
+      "description": "fetch from a content script in an already-open marketplace tab",
+      "target": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+      "hostTabUrl": "http://127.0.0.1:8733/",
+      "envelope": {
+        "joinedRequestId": "9",
+        "requestType": "xmlhttprequest",
+        "headersSent": {
+          "sec-ch-ua-platform": "\"Linux\"",
+          "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\"",
+          "sec-ch-ua-mobile": "?0",
+          "accept": "*/*",
+          "sec-fetch-site": "same-origin",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-dest": "empty",
+          "referer": "http://127.0.0.1:8733/",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8"
+        },
+        "expectedHeadersAbsent": [
+          "origin",
+          "sec-fetch-user"
+        ],
+        "allRequestHeaderNames": [
+          "sec-ch-ua-platform",
+          "user-agent",
+          "sec-ch-ua",
+          "sec-ch-ua-mobile",
+          "accept",
+          "sec-fetch-site",
+          "sec-fetch-mode",
+          "sec-fetch-dest",
+          "referer",
+          "accept-encoding",
+          "accept-language",
+          "cookie"
+        ],
+        "requestCookieNames": [
+          "csrftoken",
+          "session_id"
+        ],
+        "responseStatus": 200,
+        "responseStatusLine": "HTTP/1.1 200 OK",
+        "cloudflareResponseHeaders": [
+          {
+            "name": "cf-ray",
+            "value": "7a1b2c3d4e5f6789-LHR"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          }
+        ],
+        "setCookieNames": [
+          "csrfToken",
+          "session_id"
+        ],
+        "allResponseHeaderNames": [
+          "server",
+          "date",
+          "content-type",
+          "access-control-allow-origin",
+          "cf-ray",
+          "cf-cache-status",
+          "set-cookie",
+          "set-cookie",
+          "content-length"
+        ]
+      },
+      "page": {
+        "challengeBodyText": null,
+        "cookieNamesSeen": [
+          "csrftoken"
+        ],
+        "csrfTokenReadableFromDocumentCookie": true,
+        "edgeBlock": false,
+        "fetchFinalUrl": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+        "fetchRedirected": false,
+        "fetchStatus": 200,
+        "formAnchors": {
+          "aws credentials block": true,
+          "data[_Csrf][csrfKey]": true,
+          "data[_Csrf][csrfToken]": true,
+          "data[_Token][fields]": true,
+          "data[_Token][key]": true,
+          "data[_Token][unlocked]": true
+        },
+        "formServed": true,
+        "htmlBytes": 655,
+        "markers": [],
+        "passwordInputs": 0,
+        "title": "New digital product",
+        "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+        "verdict": "CLEAR",
+        "wall": false
+      },
+      "trail": [
+        {
+          "stage": "onSendHeaders",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        },
+        {
+          "stage": "onCompleted",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        }
+      ]
+    }
+  },
+  "route-c-create": {
+    "gate": "G1",
+    "key": "route-c-create",
+    "recordedAt": "2026-09-03T04:16:48.881Z",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+    "report": {
+      "route": "C",
+      "description": "a real top-level navigation, read by a content script in that tab",
+      "target": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+      "finalTabUrl": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+      "envelope": {
+        "joinedRequestId": "10",
+        "requestType": "main_frame",
+        "headersSent": {
+          "sec-ch-ua": "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Linux\"",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "sec-fetch-site": "none",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-dest": "document",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8"
+        },
+        "expectedHeadersAbsent": [
+          "origin",
+          "referer",
+          "sec-fetch-user"
+        ],
+        "allRequestHeaderNames": [
+          "sec-ch-ua",
+          "sec-ch-ua-mobile",
+          "sec-ch-ua-platform",
+          "upgrade-insecure-requests",
+          "user-agent",
+          "accept",
+          "sec-fetch-site",
+          "sec-fetch-mode",
+          "sec-fetch-dest",
+          "accept-encoding",
+          "accept-language",
+          "cookie"
+        ],
+        "requestCookieNames": [
+          "csrftoken",
+          "session_id"
+        ],
+        "responseStatus": 200,
+        "responseStatusLine": "HTTP/1.1 200 OK",
+        "cloudflareResponseHeaders": [
+          {
+            "name": "cf-ray",
+            "value": "7a1b2c3d4e5f6789-LHR"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          }
+        ],
+        "setCookieNames": [
+          "csrfToken",
+          "session_id"
+        ],
+        "allResponseHeaderNames": [
+          "server",
+          "date",
+          "content-type",
+          "access-control-allow-origin",
+          "cf-ray",
+          "cf-cache-status",
+          "set-cookie",
+          "set-cookie",
+          "content-length"
+        ]
+      },
+      "page": {
+        "challengeBodyText": null,
+        "cookieNamesSeen": [
+          "csrftoken"
+        ],
+        "csrfTokenReadableFromDocumentCookie": true,
+        "edgeBlock": false,
+        "formAnchors": {
+          "aws credentials block": true,
+          "data[_Csrf][csrfKey]": true,
+          "data[_Csrf][csrfToken]": true,
+          "data[_Token][fields]": true,
+          "data[_Token][key]": true,
+          "data[_Token][unlocked]": true
+        },
+        "formServed": true,
+        "htmlBytes": 640,
+        "markers": [],
+        "passwordInputs": 0,
+        "title": "New digital product",
+        "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+        "verdict": "CLEAR",
+        "wall": false
+      },
+      "trail": [
+        {
+          "stage": "onSendHeaders",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        },
+        {
+          "stage": "onCompleted",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        }
+      ]
+    }
+  },
+  "route-d-create": {
+    "gate": "G1",
+    "key": "route-d-create",
+    "recordedAt": "2026-09-03T04:16:51.391Z",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+    "report": {
+      "route": "D",
+      "description": "a navigation started from inside the marketplace page, read by a content script",
+      "target": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+      "startedFromTabUrl": "http://127.0.0.1:8733/",
+      "finalTabUrl": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+      "envelope": {
+        "joinedRequestId": "11",
+        "requestType": "main_frame",
+        "headersSent": {
+          "sec-ch-ua": "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Linux\"",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "sec-fetch-site": "same-origin",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-dest": "document",
+          "referer": "http://127.0.0.1:8733/",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8"
+        },
+        "expectedHeadersAbsent": [
+          "origin",
+          "sec-fetch-user"
+        ],
+        "allRequestHeaderNames": [
+          "sec-ch-ua",
+          "sec-ch-ua-mobile",
+          "sec-ch-ua-platform",
+          "upgrade-insecure-requests",
+          "user-agent",
+          "accept",
+          "sec-fetch-site",
+          "sec-fetch-mode",
+          "sec-fetch-dest",
+          "referer",
+          "accept-encoding",
+          "accept-language",
+          "cookie"
+        ],
+        "requestCookieNames": [
+          "csrftoken",
+          "session_id"
+        ],
+        "responseStatus": 200,
+        "responseStatusLine": "HTTP/1.1 200 OK",
+        "cloudflareResponseHeaders": [
+          {
+            "name": "cf-ray",
+            "value": "7a1b2c3d4e5f6789-LHR"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          }
+        ],
+        "setCookieNames": [
+          "csrfToken",
+          "session_id"
+        ],
+        "allResponseHeaderNames": [
+          "server",
+          "date",
+          "content-type",
+          "access-control-allow-origin",
+          "cf-ray",
+          "cf-cache-status",
+          "set-cookie",
+          "set-cookie",
+          "content-length"
+        ]
+      },
+      "page": {
+        "challengeBodyText": null,
+        "cookieNamesSeen": [
+          "csrftoken"
+        ],
+        "csrfTokenReadableFromDocumentCookie": true,
+        "edgeBlock": false,
+        "formAnchors": {
+          "aws credentials block": true,
+          "data[_Csrf][csrfKey]": true,
+          "data[_Csrf][csrfToken]": true,
+          "data[_Token][fields]": true,
+          "data[_Token][key]": true,
+          "data[_Token][unlocked]": true
+        },
+        "formServed": true,
+        "htmlBytes": 640,
+        "markers": [],
+        "passwordInputs": 0,
+        "title": "New digital product",
+        "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+        "verdict": "CLEAR",
+        "wall": false
+      },
+      "trail": [
+        {
+          "stage": "onSendHeaders",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        },
+        {
+          "stage": "onCompleted",
+          "url": "http://127.0.0.1:8733/My-Products/New/Digital-Next",
+          "statusCode": 200
+        }
+      ]
+    }
+  }
+}

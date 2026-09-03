@@ -1,0 +1,290 @@
+{
+  "gate": "G2",
+  "manifestVersion": 3,
+  "declaredPermissions": [
+    "webRequest"
+  ],
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+  "webRequestBlockingDeclared": false,
+  "runs": [
+    {
+      "mode": "manual",
+      "requestUrl": "http://127.0.0.1:8731/redirect-source?mode=manual",
+      "fetchResolved": true,
+      "responseType": "opaqueredirect",
+      "responseStatus": 0,
+      "responseUrl": "http://127.0.0.1:8731/redirect-source?mode=manual",
+      "responseHeadersVisibleToFetch": [],
+      "locationFromListener": "/redirect-target?product=88117001",
+      "joinRequestId": "2",
+      "joinByRequestIdStages": [
+        "onBeforeRequest",
+        "onSendHeaders",
+        "onHeadersReceived",
+        "onBeforeRedirect",
+        "onErrorOccurred"
+      ],
+      "joinByUrlStages": [
+        "onBeforeRequest",
+        "onSendHeaders",
+        "onHeadersReceived",
+        "onBeforeRedirect",
+        "onErrorOccurred"
+      ],
+      "onBeforeRedirectFired": true,
+      "stages": [
+        {
+          "stage": "onBeforeRequest",
+          "requestId": "2",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=manual"
+        },
+        {
+          "stage": "onSendHeaders",
+          "requestId": "2",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=manual"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "requestId": "2",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=manual",
+          "statusCode": 302
+        },
+        {
+          "stage": "onBeforeRedirect",
+          "requestId": "2",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=manual",
+          "statusCode": 302,
+          "redirectUrl": "http://127.0.0.1:8731/redirect-target?product=88117001"
+        },
+        {
+          "stage": "onErrorOccurred",
+          "requestId": "2",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=manual",
+          "error": "net::ERR_ABORTED"
+        }
+      ],
+      "rawHeadersReceived": [
+        {
+          "stage": "onHeadersReceived",
+          "at": 1152,
+          "requestId": "2",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=manual",
+          "method": "GET",
+          "type": "xmlhttprequest",
+          "statusCode": 302,
+          "statusLine": "HTTP/1.1 302 Found",
+          "responseHeaders": [
+            [
+              "Server",
+              "BaseHTTP/0.6 Python/3.14.6"
+            ],
+            [
+              "Date",
+              "Thu, 03 Sep 2026 02:34:55 GMT"
+            ],
+            [
+              "Location",
+              "/redirect-target?product=88117001"
+            ],
+            [
+              "X-G2-Marker",
+              "source-302"
+            ],
+            [
+              "Access-Control-Allow-Origin",
+              "*"
+            ],
+            [
+              "Access-Control-Allow-Headers",
+              "content-type"
+            ],
+            [
+              "Access-Control-Allow-Methods",
+              "GET,POST,OPTIONS"
+            ],
+            [
+              "Content-Length",
+              "0"
+            ]
+          ]
+        }
+      ],
+      "fetchThrew": null
+    },
+    {
+      "mode": "follow",
+      "requestUrl": "http://127.0.0.1:8731/redirect-source?mode=follow",
+      "fetchResolved": true,
+      "responseType": "basic",
+      "responseStatus": 200,
+      "responseUrl": "http://127.0.0.1:8731/redirect-target?product=88117001",
+      "responseHeadersVisibleToFetch": [
+        "access-control-allow-headers",
+        "access-control-allow-methods",
+        "access-control-allow-origin",
+        "content-length",
+        "content-type",
+        "date",
+        "server",
+        "x-g2-marker"
+      ],
+      "locationFromListener": "/redirect-target?product=88117001",
+      "joinRequestId": "3",
+      "joinByRequestIdStages": [
+        "onBeforeRequest",
+        "onSendHeaders",
+        "onHeadersReceived",
+        "onBeforeRedirect",
+        "onBeforeRequest",
+        "onSendHeaders",
+        "onHeadersReceived",
+        "onCompleted"
+      ],
+      "joinByUrlStages": [
+        "onBeforeRequest",
+        "onSendHeaders",
+        "onHeadersReceived",
+        "onBeforeRedirect"
+      ],
+      "onBeforeRedirectFired": true,
+      "stages": [
+        {
+          "stage": "onBeforeRequest",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=follow"
+        },
+        {
+          "stage": "onSendHeaders",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=follow"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=follow",
+          "statusCode": 302
+        },
+        {
+          "stage": "onBeforeRedirect",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=follow",
+          "statusCode": 302,
+          "redirectUrl": "http://127.0.0.1:8731/redirect-target?product=88117001"
+        },
+        {
+          "stage": "onBeforeRequest",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-target?product=88117001"
+        },
+        {
+          "stage": "onSendHeaders",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-target?product=88117001"
+        },
+        {
+          "stage": "onHeadersReceived",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-target?product=88117001",
+          "statusCode": 200
+        },
+        {
+          "stage": "onCompleted",
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-target?product=88117001",
+          "statusCode": 200
+        }
+      ],
+      "rawHeadersReceived": [
+        {
+          "stage": "onHeadersReceived",
+          "at": 1567,
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-source?mode=follow",
+          "method": "GET",
+          "type": "xmlhttprequest",
+          "statusCode": 302,
+          "statusLine": "HTTP/1.1 302 Found",
+          "responseHeaders": [
+            [
+              "Server",
+              "BaseHTTP/0.6 Python/3.14.6"
+            ],
+            [
+              "Date",
+              "Thu, 03 Sep 2026 02:34:55 GMT"
+            ],
+            [
+              "Location",
+              "/redirect-target?product=88117001"
+            ],
+            [
+              "X-G2-Marker",
+              "source-302"
+            ],
+            [
+              "Access-Control-Allow-Origin",
+              "*"
+            ],
+            [
+              "Access-Control-Allow-Headers",
+              "content-type"
+            ],
+            [
+              "Access-Control-Allow-Methods",
+              "GET,POST,OPTIONS"
+            ],
+            [
+              "Content-Length",
+              "0"
+            ]
+          ]
+        },
+        {
+          "stage": "onHeadersReceived",
+          "at": 1569,
+          "requestId": "3",
+          "url": "http://127.0.0.1:8731/redirect-target?product=88117001",
+          "method": "GET",
+          "type": "xmlhttprequest",
+          "statusCode": 200,
+          "statusLine": "HTTP/1.1 200 OK",
+          "responseHeaders": [
+            [
+              "Server",
+              "BaseHTTP/0.6 Python/3.14.6"
+            ],
+            [
+              "Date",
+              "Thu, 03 Sep 2026 02:34:55 GMT"
+            ],
+            [
+              "Content-Type",
+              "text/plain"
+            ],
+            [
+              "X-G2-Marker",
+              "target-200"
+            ],
+            [
+              "Access-Control-Allow-Origin",
+              "*"
+            ],
+            [
+              "Access-Control-Allow-Headers",
+              "content-type"
+            ],
+            [
+              "Access-Control-Allow-Methods",
+              "GET,POST,OPTIONS"
+            ],
+            [
+              "Content-Length",
+              "6"
+            ]
+          ]
+        }
+      ],
+      "fetchThrew": null
+    }
+  ]
+}
