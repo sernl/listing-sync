@@ -23,3 +23,6 @@ probes/local/
 
 # local dev state (ephemeral postgres, broker sockets)
 .dev/
+
+# agent-local settings (founder ruling: excluded from the repository)
+.claude/settings.local.json

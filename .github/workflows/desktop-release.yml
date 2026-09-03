@@ -1,0 +1,331 @@
+# The Windows release of the desktop client (D2), built on a GitHub Windows
+# runner because that is where the MSI and signtool are native (D29), and
+# distributed through CrabNebula Cloud.
+#
+# Nothing here has ever been executed: the first tag will be the first run.
+# What each step does and why, and what the founder must supply before a tag
+# can succeed, is docs/notes/design/desktop-distribution.md.
+name: desktop-release
+
+# A tag on this repository is the only trigger. There is no workflow_dispatch,
+# no branch trigger and no schedule, so there is no path to a release build
+# that is not a tag, and every job additionally refuses to run on a fork.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# No permission by default; each job asks for what it needs and no more.
+permissions: {}
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The same CLI the dev shell carries (nixpkgs cargo-tauri 2.11.4), so a
+  # release bundles with the version local builds were exercised against.
+  TAURI_CLI_VERSION: "2.11.4"
+
+jobs:
+  # Refuse the release before anything is built: seconds here rather than a
+  # Windows runner's minutes, and the same script `just release-check` runs.
+  verify:
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: check the tag against the tree
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/release-check.sh "$TAG"
+          printf 'version=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # The draft the Windows job uploads into. Version comes from the Tauri
+  # config through --framework, so the Cloud and the tree cannot disagree.
+  draft:
+    needs: verify
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: require the application slug
+        env:
+          CN_APPLICATION: ${{ vars.CN_APPLICATION }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CN_APPLICATION" ]; then
+            echo "the CN_APPLICATION repository variable is unset; it is the org/app pair" >&2
+            exit 1
+          fi
+      - name: create the release draft
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release draft ${{ vars.CN_APPLICATION }} --framework tauri
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: apps/desktop
+
+  # The console is built here rather than on the Windows runner because it
+  # needs wasm-bindgen, whose CLI version must equal the crate's pin exactly.
+  # Deriving the version from the pin keeps one source of truth; rebuilding
+  # this on Windows would need a second pin in a second package manager.
+  console:
+    needs: verify
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          # No `toolchain:` input: the action reads rust-toolchain.toml, which
+          # is where the channel and the wasm32 target already live.
+          cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: install the wasm-bindgen CLI the crate pins
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^wasm-bindgen[[:space:]]*=[[:space:]]*"=\([0-9.]*\)".*/\1/p' \
+            crates/tam-core-wasm/Cargo.toml | head -1)
+          if [ -z "$version" ]; then
+            echo "no exact wasm-bindgen pin found in crates/tam-core-wasm/Cargo.toml" >&2
+            exit 1
+          fi
+          echo "wasm-bindgen pin: $version"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: build the browser core and the console
+        run: |
+          set -euo pipefail
+          cargo build --target wasm32-unknown-unknown --release --lib -p tam-core-wasm
+          wasm-bindgen --target web --out-name core \
+            --out-dir web/src/lib/core/generated \
+            target/wasm32-unknown-unknown/release/tam_core_wasm.wasm
+          cd web
+          npm ci --no-audit --no-fund
+          npm run build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: console
+          path: web/build
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    needs: [verify, draft, console]
+    if: ${{ !github.event.repository.fork }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      # Provenance attestation only; inert while this repository is private.
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      # `secrets` is not a context a step-level `if:` may read, so the one
+      # question the steps ask of it is answered once, here, as a boolean.
+      SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: console
+          path: web/build
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: true
+      - name: install the Tauri CLI
+        env:
+          CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
+        run: npm install -g "@tauri-apps/cli@$CLI_VERSION"
+
+      # Signing is an overlay rather than a field in tauri.conf.json, so that
+      # `just desktop-build-windows` keeps working with no key and no Azure
+      # account, and so that createUpdaterArtifacts is true for a release and
+      # false everywhere else. Tauri merges --config over the base file.
+      #
+      # The signtool invocation and the metadata file are Microsoft's, from
+      # learn.microsoft.com/azure/artifact-signing/how-to-signing-integrations.
+      # Neither has been executed here: no Azure account exists.
+      - name: install the Artifact Signing client tools
+        if: ${{ env.SIGNING == 'true' }}
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi" -OutFile ArtifactSigningClientTools.msi
+          Start-Process msiexec.exe -Wait -ArgumentList '/I ArtifactSigningClientTools.msi /quiet'
+          Remove-Item ArtifactSigningClientTools.msi
+      - name: compose the release configuration overlay
+        id: overlay
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNING" != "true" ]; then
+            echo "::warning::AZURE_CLIENT_ID is unset; this release will be unsigned and SmartScreen will show no publisher name"
+            jq -n '{bundle: {createUpdaterArtifacts: true}}' > release.conf.json
+            cat release.conf.json
+            exit 0
+          fi
+          for name in AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE; do
+            eval "value=\${$name}"
+            if [ -z "$value" ]; then
+              echo "signing secrets are set but the $name repository variable is not" >&2
+              exit 1
+            fi
+          done
+          jq -n \
+            --arg endpoint "$AZURE_SIGNING_ENDPOINT" \
+            --arg account "$AZURE_SIGNING_ACCOUNT" \
+            --arg profile "$AZURE_SIGNING_PROFILE" \
+            '{Endpoint: $endpoint, CodeSigningAccountName: $account, CertificateProfileName: $profile,
+              ExcludeCredentials: ["ManagedIdentityCredential","WorkloadIdentityCredential",
+                "SharedTokenCacheCredential","VisualStudioCredential","VisualStudioCodeCredential",
+                "AzureCliCredential","AzurePowerShellCredential","AzureDeveloperCliCredential",
+                "InteractiveBrowserCredential"]}' > "$RUNNER_TEMP/signing-metadata.json"
+          dlib=$(find "/c/Program Files" "/c/Program Files (x86)" -name 'Azure.CodeSigning.Dlib.dll' -path '*x64*' 2>/dev/null | head -1)
+          signtool=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -name 'signtool.exe' -path '*x64*' 2>/dev/null | sort | tail -1)
+          if [ -z "$dlib" ] || [ -z "$signtool" ]; then
+            echo "could not locate Azure.CodeSigning.Dlib.dll or signtool.exe after installing the client tools" >&2
+            exit 1
+          fi
+          # A three-day certificate validity makes the timestamp mandatory
+          # rather than advisory; the authority is Microsoft's own.
+          command=$(printf '"%s" sign /v /debug /fd SHA256 /tr "http://timestamp.acs.microsoft.com" /td SHA256 /dlib "%s" /dmdf "%s" %%1' \
+            "$(cygpath -w "$signtool")" "$(cygpath -w "$dlib")" "$(cygpath -w "$RUNNER_TEMP/signing-metadata.json")")
+          jq -n --arg cmd "$command" \
+            '{bundle: {createUpdaterArtifacts: true, windows: {signCommand: $cmd}}}' > release.conf.json
+          cat release.conf.json
+
+      - name: build the Windows bundles
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is unset; the updater artifacts could not be signed" >&2
+            exit 1
+          fi
+          tauri build --bundles nsis,msi --config ../../release.conf.json
+
+      - name: collect the artefacts, their checksums and a fallback manifest
+        id: collect
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          UPDATER_BASE_URL: ${{ vars.UPDATER_BASE_URL }}
+        run: |
+          set -euo pipefail
+          bundle=target/release/bundle
+          out=release-artifacts
+          mkdir -p "$out"
+          find "$bundle/nsis" "$bundle/msi" -type f \
+            \( -name '*.exe' -o -name '*.msi' -o -name '*.sig' \) -exec cp {} "$out/" \;
+          ls -l "$out"
+
+          ( cd "$out" && sha256sum ./*.exe ./*.msi > SHA256SUMS.txt )
+          cat "$out/SHA256SUMS.txt"
+
+          # The NSIS installer is the update payload: it is the one Tauri's
+          # Windows installMode drives without an elevation prompt.
+          set -- "$out"/*-setup.exe
+          if [ ! -f "$1" ]; then
+            echo "no NSIS installer in $out" >&2
+            exit 1
+          fi
+          setup=$(basename "$1")
+          signature=$(cat "$out/$setup.sig")
+          if [ -n "$UPDATER_BASE_URL" ]; then
+            url="${UPDATER_BASE_URL%/}/$setup"
+            note="Fallback manifest. The live endpoint is CrabNebula Cloud, which serves updates dynamically."
+          else
+            url="$setup"
+            note="Fallback manifest with no host: UPDATER_BASE_URL is unset, so url is a bare filename. The live endpoint is CrabNebula Cloud, which serves updates dynamically."
+          fi
+          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --arg s "$signature" --arg u "$url" --arg n "$note" \
+            '{version: $v, notes: $n, pub_date: $d,
+              platforms: {"windows-x86_64": {signature: $s, url: $u}}}' > "$out/latest.json"
+          cat "$out/latest.json"
+          printf 'dir=%s\n' "$out" >> "$GITHUB_OUTPUT"
+
+      # Cryptographic provenance for the artefacts. GitHub gates attestations
+      # in private repositories behind Enterprise Cloud, so this is inert here
+      # and becomes live unchanged if the repository is made public. The
+      # checksums above and the minisign .sig files are what works today.
+      - name: attest build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release-artifacts/*.exe
+            release-artifacts/*.msi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-x86_64
+          path: release-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: upload the bundles to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} --framework tauri
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: apps/desktop
+
+  # A draft nobody published serves no update, so this is the step that makes
+  # the release real. A failed run leaves the draft unpublished on purpose;
+  # `cn release purge` removes it.
+  publish:
+    needs: [verify, windows]
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: publish the release
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release publish ${{ vars.CN_APPLICATION }} --framework tauri
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: apps/desktop

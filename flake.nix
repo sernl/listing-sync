@@ -144,31 +144,52 @@
 
             fmt = craneLib.cargoFmt { inherit src; };
 
-            # The client-target gate, the same five triples and the same two
-            # crate sets `just check-portable` runs. No cargoArtifacts: crane's
-            # host-target artifacts are not reusable across a --target, so this
-            # compiles its own from the vendored source.
-            portable = craneLib.mkCargoDerivation (
-              commonArgs
-              // {
-                cargoArtifacts = null;
-                pnameSuffix = "-portable";
-                doInstallCargoArtifacts = false;
-                buildPhaseCargoCommand = ''
-                  crates="-p tam-types -p tam-marketplace -p tam-domain -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes"
-                  for target in wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-apple-ios aarch64-linux-android; do
-                    # tam-limits asserts usize::BITS >= 64, which wasm32 is
-                    # not, and tam-pipeline depends on tam-limits
-                    case "$target" in
-                      wasm32-*) extra="" ;;
-                      *) extra="-p tam-limits -p tam-pipeline" ;;
-                    esac
-                    cargo check --target "$target" --no-default-features $crates $extra
-                  done
-                '';
-                installPhaseCommand = "touch $out";
-              }
-            );
+            # The client-target gate, running exactly what `just check-portable`
+            # runs. The triples and the two crate sets are read out of the
+            # justfile rather than copied, because the copy that used to live
+            # here drifted: it was still proving six crates after the recipe had
+            # grown to eight, so a green check said less than it claimed.
+            # No cargoArtifacts: crane's host-target artifacts are not reusable
+            # across a --target, so this compiles its own from the vendored
+            # source.
+            portable =
+              let
+                justfileLines = pkgs.lib.splitString "\n" (builtins.readFile ./justfile);
+                # The quoted value of a `name := "..."` line in the justfile.
+                justVar =
+                  name:
+                  let
+                    hits = builtins.filter (m: m != null) (
+                      map (line: builtins.match "${name} := \"([^\"]*)\" *" line) justfileLines
+                    );
+                  in
+                  if hits == [ ] then
+                    throw "flake.nix: the justfile has no `${name} := \"...\"` line, which checks.portable reads its crate list from"
+                  else
+                    builtins.head (builtins.head hits);
+              in
+              craneLib.mkCargoDerivation (
+                commonArgs
+                // {
+                  cargoArtifacts = null;
+                  pnameSuffix = "-portable";
+                  doInstallCargoArtifacts = false;
+                  buildPhaseCargoCommand = ''
+                    crates="${justVar "portable_crates"}"
+                    crates64="${justVar "portable_crates_64"}"
+                    for target in ${justVar "portable_targets"}; do
+                      # The 64-bit-only leg, kept off wasm32 for the reason the
+                      # justfile records beside portable_crates_64.
+                      case "$target" in
+                        wasm32-*) extra="" ;;
+                        *) extra="$crates64" ;;
+                      esac
+                      cargo check --target "$target" --no-default-features $crates $extra
+                    done
+                  '';
+                  installPhaseCommand = "touch $out";
+                }
+              );
 
             nextest = craneLib.cargoNextest (commonArgs // { inherit cargoArtifacts; });
           };

@@ -40,7 +40,7 @@
       "endpoints": [
         "https://cdn.crabnebula.app/update/ORG/APP/{{target}}-{{arch}}/{{current_version}}"
       ],
-      "pubkey": "PLACEHOLDER_FOUNDER_SUPPLIES_THIS"
+      "pubkey": "PLACEHOLDER_FOUNDER_SUPPLIES_THIS_RUN_JUST_RELEASE_CHECK"
     }
   }
 }
