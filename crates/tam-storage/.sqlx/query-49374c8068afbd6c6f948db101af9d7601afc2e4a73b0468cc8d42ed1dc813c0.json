@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM projection_override WHERE org_id = $1 AND inventory = $2 AND axis = $3 AND from_term = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "49374c8068afbd6c6f948db101af9d7601afc2e4a73b0468cc8d42ed1dc813c0"
+}

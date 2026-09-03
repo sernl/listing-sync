@@ -23,6 +23,7 @@ pub mod lowering;
 mod mapping;
 pub mod operators;
 pub mod org;
+pub mod overrides;
 mod product;
 pub mod pruning;
 pub mod sessions;
@@ -62,7 +63,8 @@ pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{
-    BoundListing, LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, RecordedLoss,
+    BoundListing, LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, PastedBind,
+    RecordedLoss,
 };
 pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo};

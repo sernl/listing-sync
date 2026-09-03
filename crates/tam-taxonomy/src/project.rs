@@ -8,7 +8,8 @@
 
 use tam_domain::equivalence::{
     resolved_by, satisfied_by, settled_by, AxisOutcome, Election, ElectionAnswer, ElectionRule,
-    ElectionTrigger, Loss, PricingBranch, SettledElection, VocabularyGap,
+    ElectionTrigger, Loss, OverrideKind, PricingBranch, ProjectionOverride, SettledElection,
+    VocabularyGap,
 };
 use tam_domain::registry::{registry, AxisBinding, Cardinality};
 use tam_domain::{
@@ -163,21 +164,76 @@ pub struct AxisRequest<'a> {
 /// it was; what this adds is the axis-level facts a term never carries — the
 /// target's cardinality, its requiredness, and the product the question is
 /// about.
+/// The relation alone decides, which is every caller that predates the
+/// override layer and every one that has no tenant to speak for.
 #[must_use]
 pub fn project_axis(
     request: AxisRequest<'_>,
     edges: &[ProjectionEdge],
     no_counterparts: &[(CanonicalTermId, VocabularyId)],
 ) -> AxisOutcome {
+    project_axis_with_overrides(request, edges, no_counterparts, &[])
+}
+
+/// The same projection with one tenant's own decisions consulted first.
+///
+/// The overrides arrive as a parameter rather than on `AxisRequest` so that
+/// adding the layer breaks no existing construction of that struct: a caller
+/// that knows nothing about overrides keeps compiling and keeps behaving
+/// exactly as it did.
+///
+/// They are already scoped to the org by the caller, as `rules` is: this
+/// function knows a target and an axis and deliberately not a tenant.
+#[must_use]
+pub fn project_axis_with_overrides(
+    request: AxisRequest<'_>,
+    edges: &[ProjectionEdge],
+    no_counterparts: &[(CanonicalTermId, VocabularyId)],
+    overrides: &[ProjectionOverride],
+) -> AxisOutcome {
     let target = VocabularyId(request.inventory, request.binding.axis);
-    let terms = project_terms(request.terms, target, edges, no_counterparts);
+    // Precedence, and it is total in one direction: a term the seller has
+    // decided for is not put to the relation at all. Filtering here rather
+    // than folding the override in beside the global edges is what makes it a
+    // decision rather than a second claimant -- `project` would see two paths
+    // for one term and return `Ambiguous`, which is the opposite of settling.
+    let overridden: Vec<&ProjectionOverride> = request
+        .terms
+        .iter()
+        .filter_map(|&term| {
+            overrides
+                .iter()
+                .find(|entry| entry.answers(request.inventory, request.binding.axis, term))
+        })
+        .collect();
+    let remaining: Vec<CanonicalTermId> = request
+        .terms
+        .iter()
+        .copied()
+        .filter(|&term| {
+            !overrides
+                .iter()
+                .any(|entry| entry.answers(request.inventory, request.binding.axis, term))
+        })
+        .collect();
+    let terms = project_terms(&remaining, target, edges, no_counterparts);
 
     let mut outcome = AxisOutcome {
         resolved: terms.included,
         loss: terms.loss.iter().filter_map(broadening).collect(),
         omitted: terms.omitted,
+        decided_by_seller: !overridden.is_empty(),
         ..AxisOutcome::default()
     };
+    // Before the cardinality election below, because an overridden value
+    // counts against the target's cap exactly as a resolved one does: the
+    // seller choosing a value does not exempt the target from taking one.
+    for entry in overridden {
+        push_distinct(&mut outcome.resolved, &entry.to);
+        if entry.kind == OverrideKind::Broader {
+            merge_axis_loss(&mut outcome.loss, &entry.to, entry.from);
+        }
+    }
     let raise = |trigger| Election {
         product: request.product,
         inventory: request.inventory,
@@ -348,6 +404,31 @@ fn elect_over_cardinality(
         }
         Cardinality::One | Cardinality::Many { .. } => None,
     }
+}
+
+/// Records a broadening the seller chose, merged onto the path it broadened
+/// to so that four terms broadened onto one value disclose one loss naming
+/// four rather than four losses naming one each, which is what
+/// `project_terms` already does for the relation's own broadenings.
+fn merge_axis_loss(loss: &mut Vec<Loss>, to: &VocabularyPath, dropped: CanonicalTermId) {
+    for existing in loss.iter_mut() {
+        if let Loss::Broadened {
+            to: at,
+            dropped: terms,
+        } = existing
+        {
+            if at == to {
+                if !terms.contains(&dropped) {
+                    terms.push(dropped);
+                }
+                return;
+            }
+        }
+    }
+    loss.push(Loss::Broadened {
+        to: to.clone(),
+        dropped: vec![dropped],
+    });
 }
 
 /// `project_terms` carries its loss as the `TermProjection` that produced it;
@@ -536,16 +617,19 @@ pub fn ingest_by_native_id(
 
 #[cfg(test)]
 mod tests {
-    use super::{ingest, project, project_axis, project_terms, AxisRequest, BlockedTerm};
+    use super::{
+        ingest, project, project_axis, project_axis_with_overrides, project_terms, AxisRequest,
+        BlockedTerm,
+    };
     use tam_domain::equivalence::{
-        AxisOutcome, ElectionTrigger, ElectionTriggerKind, Loss, PricingBranch, SettledElection,
-        VocabularyGap,
+        AxisOutcome, ElectionTrigger, ElectionTriggerKind, Loss, OverrideKind, PricingBranch,
+        ProjectionOverride, SettledElection, VocabularyGap,
     };
     use tam_domain::registry::{AxisBinding, Cardinality, CountCap, Delegation};
     use tam_domain::{
         Decider, EdgeKind, ProjectionEdge, TermKind, TermProjection, VocabularyId, VocabularyPath,
     };
-    use tam_types::{CanonicalTermId, InventoryId, ProductId, Timestamp, Uuid};
+    use tam_types::{CanonicalTermId, InventoryId, OrgId, ProductId, Timestamp, Uuid};
 
     const TERM: CanonicalTermId = CanonicalTermId(Uuid([0x01; 16]));
     const OTHER: CanonicalTermId = CanonicalTermId(Uuid([0x02; 16]));
@@ -673,6 +757,26 @@ mod tests {
             native: "categories",
             cardinality,
             delegation: Delegation::ByOptIn,
+        }
+    }
+
+    fn override_to(
+        from: CanonicalTermId,
+        to: VocabularyPath,
+        kind: OverrideKind,
+    ) -> ProjectionOverride {
+        ProjectionOverride {
+            org: OrgId(Uuid([0x0a; 16])),
+            inventory: InventoryId::TesNz,
+            axis: TermKind::Subject,
+            from,
+            to,
+            kind,
+            decided_by: Decider::Human {
+                user: tam_types::UserId(Uuid([0x0b; 16])),
+                org: OrgId(Uuid([0x0a; 16])),
+            },
+            decided_at: Timestamp(0),
         }
     }
 
@@ -1095,5 +1199,101 @@ mod tests {
     #[test]
     fn an_unmapped_path_ingests_to_nothing() {
         assert_eq!(ingest(&path("Maths"), &[]), None);
+    }
+
+    /// Precedence, which is the whole of the override layer: where the seller
+    /// has decided, the relation is not consulted for that pair at all.
+    ///
+    /// The failure this rules out is not "the relation wins" but something
+    /// worse: an override folded in beside the global edge would give the
+    /// term two paths in one vocabulary, which projects `Ambiguous` and
+    /// blocks the publish. A seller stating a preference would stop their own
+    /// listing going out.
+    #[test]
+    fn an_override_wins_over_every_global_edge_for_that_pair() {
+        let edges = [edge(TERM, path("Maths"), EdgeKind::Exact)];
+        let overrides = [override_to(TERM, path("Science"), OverrideKind::Exact)];
+        let outcome = project_axis_with_overrides(request(&[TERM], MANY), &edges, &[], &overrides);
+        assert_eq!(outcome.resolved, vec![path("Science")]);
+        assert!(outcome.decided_by_seller);
+        assert!(outcome.gaps.is_empty());
+        assert!(outcome.elections.is_empty());
+        assert!(
+            outcome.is_publishable(),
+            "an override settles rather than blocks"
+        );
+    }
+
+    /// The other tenant's projection, which is the same call with an empty
+    /// override set: one seller's decision is invisible to the relation every
+    /// other seller reads.
+    #[test]
+    fn a_term_with_no_override_is_decided_by_the_relation() {
+        let edges = [edge(TERM, path("Maths"), EdgeKind::Exact)];
+        let outcome = project_axis(request(&[TERM], MANY), &edges, &[]);
+        assert_eq!(outcome.resolved, vec![path("Maths")]);
+        assert!(
+            !outcome.decided_by_seller,
+            "nothing was decided by a seller, so the field diff must not claim it was"
+        );
+    }
+
+    /// An override for one term leaves every other term on the relation, so
+    /// the layer is per-pair rather than per-axis.
+    #[test]
+    fn an_override_settles_its_own_term_and_no_other() {
+        let edges = [
+            edge(TERM, path("Maths"), EdgeKind::Exact),
+            edge(OTHER, path("History"), EdgeKind::Exact),
+        ];
+        let overrides = [override_to(TERM, path("Science"), OverrideKind::Exact)];
+        let outcome =
+            project_axis_with_overrides(request(&[TERM, OTHER], MANY), &edges, &[], &overrides);
+        assert_eq!(
+            outcome.resolved,
+            vec![path("History"), path("Science")],
+            "the relation's term keeps its edge and the overridden one takes the seller's path"
+        );
+    }
+
+    /// An override never suppresses a loss. A seller choosing a broader
+    /// target is still broadening, and the disclosure is what makes the
+    /// choice visible in the field diff rather than silent.
+    #[test]
+    fn an_overridden_broadening_still_discloses_the_loss() {
+        let overrides = [override_to(TERM, path("Science"), OverrideKind::Broader)];
+        let outcome = project_axis_with_overrides(request(&[TERM], MANY), &[], &[], &overrides);
+        assert_eq!(outcome.resolved, vec![path("Science")]);
+        assert_eq!(
+            outcome.loss,
+            vec![Loss::Broadened {
+                to: path("Science"),
+                dropped: vec![TERM],
+            }]
+        );
+    }
+
+    /// An overridden value counts against the target's cap exactly as a
+    /// resolved one does. The seller choosing a value does not exempt the
+    /// target from taking only one, so the overflow is still an election
+    /// carrying the whole set rather than a truncation.
+    #[test]
+    fn an_override_counts_against_the_targets_cap() {
+        let edges = [edge(OTHER, path("History"), EdgeKind::Exact)];
+        let overrides = [override_to(TERM, path("Science"), OverrideKind::Exact)];
+        let outcome = project_axis_with_overrides(
+            request(&[TERM, OTHER], Cardinality::One),
+            &edges,
+            &[],
+            &overrides,
+        );
+        assert!(outcome.resolved.is_empty());
+        let [election] = &outcome.elections[..] else {
+            panic!("one election over the two values: {:?}", outcome.elections);
+        };
+        let ElectionTrigger::ElectOne { from } = &election.trigger else {
+            panic!("a single-valued axis elects one: {:?}", election.trigger);
+        };
+        assert_eq!(from, &vec![path("History"), path("Science")]);
     }
 }

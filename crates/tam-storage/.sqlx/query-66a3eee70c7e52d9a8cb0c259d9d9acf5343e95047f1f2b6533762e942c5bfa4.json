@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inventory, axis, from_term, to_segments, to_native_id, kind, decided_by, decided_source, decided_user, decided_org, decided_at FROM projection_override WHERE org_id = $1 ORDER BY inventory, axis, from_term",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "axis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "from_term",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "to_segments",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 4,
+        "name": "to_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "decided_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "decided_source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "decided_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "decided_org",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "66a3eee70c7e52d9a8cb0c259d9d9acf5343e95047f1f2b6533762e942c5bfa4"
+}

@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 34] = [
+const TENANT_TABLES: [&str; 35] = [
     "billing_subscription",
     "binding_candidate",
     "blob",
@@ -40,6 +40,7 @@ const TENANT_TABLES: [&str; 34] = [
     "product_file",
     "product_term",
     "product_tpt_base",
+    "projection_override",
     "rate_budget",
     "reconciliation_item",
     "sync_request",
@@ -122,4 +123,85 @@ async fn every_table_is_classified_and_every_tenant_table_is_fenced(pool: PgPool
             "{tenant} must carry a policy keyed on app.current_org"
         );
     }
+}
+
+/// The override layer's tenancy, proven by driving it rather than by reading
+/// the catalogue: the matrix above shows the policy exists, and this shows it
+/// holds. One seller's mapping decision is invisible to every other seller,
+/// which is the whole reason an override is tenant data while the edge
+/// relation it overrides is global.
+#[sqlx::test(migrations = "./migrations")]
+async fn one_orgs_override_is_invisible_to_another(pool: PgPool) {
+    use tam_domain::equivalence::{NewProjectionOverride, OverrideKind, ProjectionOverride};
+    use tam_domain::{CanonicalTerm, Decider, TermKind, VocabularyId, VocabularyPath};
+    use tam_storage::overrides::OverrideRepo;
+    use tam_storage::TaxonomyRepo;
+    use tam_types::{CanonicalTermId, InventoryId, OrgId, Timestamp, Uuid};
+
+    let org_a = OrgId(Uuid([0xa1; 16]));
+    let org_b = OrgId(Uuid([0xb2; 16]));
+    for (org, name) in [(org_a, "org-a"), (org_b, "org-b")] {
+        sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
+            .bind(uuid::Uuid::from_bytes(org.0 .0))
+            .bind(name)
+            .execute(&pool)
+            .await
+            .expect("the organisation inserts");
+    }
+
+    let term = CanonicalTermId(Uuid([0xc3; 16]));
+    TaxonomyRepo::new(pool.clone())
+        .seed(
+            &[CanonicalTerm {
+                id: term,
+                kind: TermKind::Subject,
+                parent: None,
+                label: "Mathematics".to_owned(),
+            }],
+            &[],
+        )
+        .await
+        .expect("the canonical term seeds");
+
+    let repo = OverrideRepo::new(pool.clone());
+    let entry = ProjectionOverride::new(NewProjectionOverride {
+        org: org_a,
+        inventory: InventoryId::TesGb,
+        axis: TermKind::Subject,
+        from: term,
+        to: VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Subject),
+            segments: vec!["Primary science".to_owned()],
+            native_id: Some("1000928".to_owned()),
+        },
+        kind: OverrideKind::Exact,
+        decided_by: Decider::Imported {
+            source: "test".to_owned(),
+        },
+        decided_at: Timestamp(0),
+    })
+    .expect("a subject override is constructible");
+    repo.upsert(&entry).await.expect("org A records it");
+
+    let a = repo.for_org(org_a).await.expect("org A reads its own");
+    assert_eq!(a, vec![entry.clone()], "org A sees the decision it made");
+
+    let b = repo.for_org(org_b).await.expect("org B reads its own");
+    assert!(
+        b.is_empty(),
+        "org B must not see org A's decision; the forced policy is what stops it"
+    );
+
+    assert!(
+        !repo
+            .remove(org_b, InventoryId::TesGb, TermKind::Subject, term)
+            .await
+            .expect("org B may attempt a withdrawal"),
+        "org B must not be able to withdraw org A's decision either"
+    );
+    assert_eq!(
+        repo.for_org(org_a).await.expect("org A reads again"),
+        vec![entry],
+        "and org A's decision survives the attempt"
+    );
 }

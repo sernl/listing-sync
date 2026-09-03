@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use tam_domain::equivalence::{
-    Election, ElectionRule, Loss, PricingBranch, SettledElection, VocabularyGap,
+    Election, ElectionRule, Loss, PricingBranch, ProjectionOverride, SettledElection, VocabularyGap,
 };
 use tam_domain::registry::{registry, truncate, AxisBinding, FieldSpec};
 use tam_domain::{
@@ -30,7 +30,7 @@ use tam_types::{
     Timestamp,
 };
 
-use crate::project::{ingest, ingest_grades, project_axis, AxisRequest};
+use crate::project::{ingest, ingest_grades, project_axis_with_overrides, AxisRequest};
 
 /// The axes this projection routes, and the reason the list is shorter than
 /// the registry's.
@@ -122,9 +122,31 @@ pub struct ListingContext<'a> {
     pub settled: &'a [SettledElection],
 }
 
+/// The relation alone decides. Every caller that predates the override layer
+/// reaches the projection through here and is unaffected by it.
 pub fn project_listing(
     product: &CanonicalProduct,
     ctx: &ListingContext<'_>,
+) -> Result<ListingProjection, ProjectionBlocked> {
+    project_listing_with_overrides(product, ctx, &[])
+}
+
+/// The same projection with one tenant's own mapping decisions consulted
+/// first, where they name a term.
+///
+/// The overrides are a parameter rather than a `ListingContext` field so that
+/// the layer breaks no existing construction of that struct. That is not only
+/// a courtesy to other crates: a context literal that compiled before and
+/// silently gained a field would be a caller opted into a behaviour change it
+/// never asked for, and here the opt-in is the call it makes.
+///
+/// They must already be scoped to `ctx.org`. The durable read enforces that,
+/// because `projection_override` carries forced row-level security and a
+/// query pinned to one organisation cannot return another's rows.
+pub fn project_listing_with_overrides(
+    product: &CanonicalProduct,
+    ctx: &ListingContext<'_>,
+    overrides: &[ProjectionOverride],
 ) -> Result<ListingProjection, ProjectionBlocked> {
     // Lookup only — no iteration order ever reaches the output.
     let kinds: HashMap<CanonicalTermId, TermKind> =
@@ -184,7 +206,7 @@ pub fn project_listing(
         // requires a value asks for one precisely when the source carried
         // none, which is the whole TPT-to-Tes licence case. `project_axis`
         // returns an empty outcome for every axis that requires nothing.
-        let outcome = project_axis(
+        let outcome = project_axis_with_overrides(
             AxisRequest {
                 product: product.id,
                 inventory: ctx.inventory,
@@ -197,6 +219,7 @@ pub fn project_listing(
             },
             ctx.edges,
             ctx.no_counterparts,
+            overrides,
         );
         match binding.axis {
             TermKind::Subject | TermKind::Topic => included.extend(outcome.resolved),

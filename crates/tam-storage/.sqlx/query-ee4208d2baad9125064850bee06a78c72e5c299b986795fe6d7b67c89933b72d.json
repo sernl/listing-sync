@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO projection_override (org_id, inventory, axis, from_term, to_segments, to_native_id, kind, decided_by, decided_source, decided_user, decided_org, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (org_id, inventory, axis, from_term) DO UPDATE SET to_segments = EXCLUDED.to_segments, to_native_id = EXCLUDED.to_native_id, kind = EXCLUDED.kind, decided_by = EXCLUDED.decided_by, decided_source = EXCLUDED.decided_source, decided_user = EXCLUDED.decided_user, decided_org = EXCLUDED.decided_org, decided_at = EXCLUDED.decided_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "TextArray",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ee4208d2baad9125064850bee06a78c72e5c299b986795fe6d7b67c89933b72d"
+}

@@ -246,6 +246,13 @@ pub struct AxisOutcome {
     pub unrecognised: Vec<VocabularyPath>,
     /// A `NoCounterpart` record says to drop these, and it proceeds.
     pub omitted: Vec<CanonicalTermId>,
+    /// Whether a seller's own override decided any part of this outcome, so
+    /// the field diff can say "you set this" rather than "the relation says
+    /// this". It also bounds the blast radius of a re-poll: a later change to
+    /// the global relation cannot silently change what an overridden term
+    /// published as, and the seller can be told which of their listings rest
+    /// on their own decision rather than ours.
+    pub decided_by_seller: bool,
 }
 
 impl AxisOutcome {
@@ -277,6 +284,110 @@ pub const fn resolution_for(binding: AxisBinding, opted_in: bool) -> Mode {
     match (binding.delegation, opted_in) {
         (Delegation::Never(_), _) | (Delegation::ByOptIn, false) => Mode::SellerDecides,
         (Delegation::ByOptIn, true) => Mode::BestFit,
+    }
+}
+
+/// Which of the two projecting kinds an override may assert.
+///
+/// `Narrower` is absent rather than forgotten: a narrower edge never
+/// participates in an outbound projection, so an override producing one would
+/// be a decision the seller could make and never observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverrideKind {
+    Exact,
+    Broader,
+}
+
+/// One seller's own mapping decision, which wins over every global edge for
+/// the same term and target.
+///
+/// The global relation is a fact about two vocabularies and is ours; this is a
+/// decision about one catalogue and is theirs. Precedence is total and in one
+/// direction: where an override exists for `(org, inventory, axis, term)` the
+/// relation is not consulted for that pair at all, and where none exists the
+/// relation decides exactly as it did before.
+///
+/// An override never suppresses a loss and never converts a block into a
+/// proceed on a non-delegable axis. `resolution_for` already makes
+/// `Delegation::Never` win over any opt-in, and an override is an opt-in of
+/// the strongest kind, so `new` refuses the licence axis and the table refuses
+/// it again in a CHECK.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionOverride {
+    pub org: OrgId,
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub from: CanonicalTermId,
+    pub to: VocabularyPath,
+    pub kind: OverrideKind,
+    pub decided_by: Decider,
+    pub decided_at: Timestamp,
+}
+
+/// The fields `ProjectionOverride::new` validates, named rather than
+/// positional, in the shape `NewElectionRule` uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProjectionOverride {
+    pub org: OrgId,
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub from: CanonicalTermId,
+    pub to: VocabularyPath,
+    pub kind: OverrideKind,
+    pub decided_by: Decider,
+    pub decided_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionOverrideError {
+    /// Issuing a rights grant on the seller's behalf is not a preference we
+    /// can be given, whatever they have asked us to do elsewhere.
+    LicenceNeverOverridden,
+    /// A path with no segments names nothing, so the projection would resolve
+    /// to a value no target can be told.
+    EmptyPath,
+}
+
+impl core::fmt::Display for ProjectionOverrideError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::LicenceNeverOverridden => {
+                f.write_str("the licence axis is never delegated, so it is never overridden")
+            }
+            Self::EmptyPath => f.write_str("an override names a path with no segments"),
+        }
+    }
+}
+
+impl core::error::Error for ProjectionOverrideError {}
+
+impl ProjectionOverride {
+    /// The domain half of the two-layer refusal. The database CHECK is the
+    /// other half, because this one passes for anything that writes the row
+    /// directly.
+    pub fn new(request: NewProjectionOverride) -> Result<Self, ProjectionOverrideError> {
+        if request.axis == TermKind::Licence {
+            return Err(ProjectionOverrideError::LicenceNeverOverridden);
+        }
+        if request.to.segments.is_empty() {
+            return Err(ProjectionOverrideError::EmptyPath);
+        }
+        Ok(Self {
+            org: request.org,
+            inventory: request.inventory,
+            axis: request.axis,
+            from: request.from,
+            to: request.to,
+            kind: request.kind,
+            decided_by: request.decided_by,
+            decided_at: request.decided_at,
+        })
+    }
+
+    /// Whether this override speaks for one term projecting into one target.
+    #[must_use]
+    pub fn answers(&self, inventory: InventoryId, axis: TermKind, term: CanonicalTermId) -> bool {
+        self.inventory == inventory && self.axis == axis && self.from == term
     }
 }
 
@@ -520,12 +631,13 @@ pub fn satisfied_by<'rules>(
 mod tests {
     use super::{
         resolution_for, satisfied_by, Election, ElectionAnswer, ElectionRule, ElectionRuleError,
-        ElectionTrigger, ElectionTriggerKind, Mode, NewElectionRule, PricingBranch,
+        ElectionTrigger, ElectionTriggerKind, Mode, NewElectionRule, NewProjectionOverride,
+        OverrideKind, PricingBranch, ProjectionOverride, ProjectionOverrideError,
     };
     use crate::registry::{registry, AxisBinding, Cardinality, Delegation, NonDelegable};
     use crate::{Decider, TermKind, VocabularyId, VocabularyPath};
     use proptest::prelude::*;
-    use tam_types::{InventoryId, OrgId, ProductId, Timestamp, Uuid};
+    use tam_types::{CanonicalTermId, InventoryId, OrgId, ProductId, Timestamp, Uuid};
 
     const ORG: OrgId = OrgId(Uuid([0x01; 16]));
     const PRODUCT: ProductId = ProductId(Uuid([0x02; 16]));
@@ -787,5 +899,67 @@ mod tests {
                 Some(Delegation::ByOptIn) => prop_assert!(built.is_ok()),
             }
         }
+    }
+
+    fn an_override(axis: TermKind) -> NewProjectionOverride {
+        NewProjectionOverride {
+            org: ORG,
+            inventory: InventoryId::TesGb,
+            axis,
+            from: CanonicalTermId(Uuid([0x03; 16])),
+            to: path("Science"),
+            kind: OverrideKind::Exact,
+            decided_by: decider(),
+            decided_at: Timestamp(0),
+        }
+    }
+
+    /// The domain half of the two-layer refusal. `Delegation::Never` wins over
+    /// any opt-in, and an override is an opt-in of the strongest kind:
+    /// issuing a rights grant on the seller's behalf is not a preference we
+    /// can be given, however they have configured everything else.
+    #[test]
+    fn an_override_may_never_settle_the_licence_axis() {
+        assert_eq!(
+            ProjectionOverride::new(an_override(TermKind::Licence)),
+            Err(ProjectionOverrideError::LicenceNeverOverridden)
+        );
+        for axis in [
+            TermKind::Subject,
+            TermKind::Topic,
+            TermKind::ResourceType,
+            TermKind::Phase,
+        ] {
+            assert!(
+                ProjectionOverride::new(an_override(axis)).is_ok(),
+                "{axis:?} is delegable and must be overridable"
+            );
+        }
+    }
+
+    /// A path with no segments names nothing, so the projection would resolve
+    /// to a value no target could be told.
+    #[test]
+    fn an_override_may_not_name_an_empty_path() {
+        let mut request = an_override(TermKind::Subject);
+        request.to.segments.clear();
+        assert_eq!(
+            ProjectionOverride::new(request),
+            Err(ProjectionOverrideError::EmptyPath)
+        );
+    }
+
+    /// The refusal is a property of the axis rather than of the delegation
+    /// mode the caller happens to hold, so it cannot be configured away.
+    #[test]
+    fn the_licence_refusal_agrees_with_the_delegation_the_registry_declares() {
+        let binding = registry(InventoryId::TesGb)
+            .equivalence_axes
+            .iter()
+            .find(|binding| binding.axis == TermKind::Licence)
+            .copied()
+            .expect("Tes binds the licence axis");
+        assert!(matches!(binding.delegation, Delegation::Never(_)));
+        assert_eq!(resolution_for(binding, true), Mode::SellerDecides);
     }
 }

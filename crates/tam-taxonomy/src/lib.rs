@@ -19,11 +19,14 @@ pub mod tpt_form;
 
 pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
 pub use licences::{derive_licence_crosswalk, LicenceCrosswalk, LicenceError};
-pub use listing::{project_listing, projection_vocabularies, routed_vocabularies, ListingContext};
+pub use listing::{
+    project_listing, project_listing_with_overrides, projection_vocabularies, routed_vocabularies,
+    ListingContext,
+};
 pub use native_labels::native_label;
 pub use project::{
-    ingest, ingest_grades, project, project_axis, project_terms, AxisRequest, BlockedTerm,
-    GradeIngest, TermsOutcome,
+    ingest, ingest_grades, project, project_axis, project_axis_with_overrides, project_terms,
+    AxisRequest, BlockedTerm, GradeIngest, TermsOutcome,
 };
 pub use provenance::{check_native_ids, ForeignNativeId, ForeignNativeIds};
 pub use resource_types::{

@@ -225,4 +225,26 @@ Setting that field read-only would stop TPT writing subjects, topics and grades 
 So the declaration is not made, and the fact D13 wants is instead a property of the relation: inbound resolution follows `Exact` edges alone, no canonical term claims a Tes `mainType` path as `Exact`, and therefore a Tes-sourced product ingests no resource-type term and carries none into a TPT create.
 `no_tes_resource_type_value_ingests_to_a_canonical_term` holds that over every edge the derivation emits.
 This is weaker than the design intended in one specific way, and the difference is worth naming: the property is enforced by the shape of the data rather than declared in the registry, so a future edge authored through the reconciliation queue could break it without any registry check objecting.
-Closing that gap means adding a per-axis direction to `AxisBinding`, which touches `registry/mod.rs` and every `AxisBinding` literal in every registry file, and is a founder decision rather than an implementation detail.
+Closing that gap means adding a per-axis direction to `AxisBinding`, which touches `registry/mod.rs` and every `AxisBinding` literal in every registry file.
+
+That is now a recorded deferral rather than an open question.
+Ruled on 2026-09-03: the relation's shape carries D13 for the present, and the per-axis direction on `AxisBinding` becomes its own change once the API stream's fence over `registry/mod.rs` lifts.
+Until then the fact has exactly one enforcement point, and it is a test rather than a type: `no_tes_resource_type_value_ingests_to_a_canonical_term` in `crates/tam-taxonomy/src/resource_types/tests.rs`.
+Anyone authoring a resource-type edge into a Tes `mainType` path as `Exact` — through the reconciliation queue, or by hand — breaks D13 and that test is what will say so.
+
+## Step 4: the per-seller override layer
+
+Storage is `projection_override`, keyed `(org_id, inventory, axis, from_term)`, tenant data under the forced null-safe policy with `election_rule` as its row-level precedent rather than `projection_edge`.
+It carries no reverse-uniqueness index, because the global exact-reverse index protects a property of the shared relation — inbound resolution is the reverse of the `Exact` edges and must stay a function — and an override is consulted outbound only and never inverted.
+`kind` admits `exact` and `broader` and not `narrower`, because a narrower edge never participates in an outbound projection, so an override producing one would be a decision the seller could make and never observe.
+Licence is refused in a CHECK and again in `ProjectionOverride::new`, in the two-layer form `election_rule` uses, because the domain check passes for anything that writes the row directly.
+
+Precedence is applied by removing overridden terms from what reaches the relation rather than by adding the override beside the global edges.
+That distinction is the whole correctness of the layer and is easy to get backwards: an override folded in beside an existing edge gives one term two paths in one vocabulary, which projects `Ambiguous` and blocks the publish, so a seller stating a preference would stop their own listing going out.
+An overridden value is added before the cardinality election, so a seller's choice counts against the target's cap exactly as a resolved one does; and an overridden broadening still discloses its loss, because an override never suppresses one.
+`AxisOutcome` gains `decided_by_seller`, so a field diff can say "you set this" rather than "the relation says this", and a later re-poll that changes the global relation cannot silently change what an overridden term published as.
+
+The layer is additive at every call site, and that shape was a correction rather than the first attempt.
+Adding `overrides` to `ListingContext` broke every literal that builds it, including two in crates other streams were editing, and a field a caller silently gains is also a caller opted into a behaviour change it never asked for.
+So the overrides travel as a parameter: `project_listing_with_overrides` and `project_axis_with_overrides` carry them, and `project_listing` and `project_axis` delegate to those with an empty set.
+Every construction of `ListingContext` and `AxisRequest` that compiled before still compiles and still behaves identically, and the opt-in is the call a caller makes rather than a field it fills in.
