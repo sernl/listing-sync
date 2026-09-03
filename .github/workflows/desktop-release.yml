@@ -210,16 +210,22 @@ jobs:
           # aarch64-linux-android, and a release builds that ABI alone.
           cache: true
 
+      # An Android build needs the cargo subcommand, not the npm binary. Tauri's
+      # generated Gradle plugin runs `cargo tauri android android-studio-script`
+      # with the executable hardcoded as `cargo` and no property to override it
+      # (gen/android/buildSrc/src/main/java/io/teachouse/desktop/kotlin/BuildTask.kt,
+      # lines 19 and 51), so `cargo-tauri` has to be on the runner however this
+      # file invokes the CLI. binstall fetches Tauri's own published binary for
+      # the pinned version rather than compiling the crate, which is seconds
+      # rather than minutes; it falls back to compiling if the download fails.
+      - uses: cargo-bins/cargo-binstall@75b4bfae1b2c753a6806bbce6e6cb89b602de33c # v1.22.0
       - name: install the Tauri CLI
         env:
           CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
         run: |
           set -euo pipefail
-          npm install -g "@tauri-apps/cli@$CLI_VERSION"
-          # The npm package provides `tauri`; `cargo tauri` is a different
-          # package that is not installed here. Proving the binary now costs
-          # two seconds and is what v0.1.2 spent twenty minutes discovering.
-          tauri --version
+          cargo binstall --no-confirm --locked "tauri-cli@$CLI_VERSION"
+          cargo tauri --version
 
       - name: point the build at the pinned NDK
         env:
@@ -258,7 +264,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           set -euo pipefail
-          tauri android build --apk --ci --target aarch64
+          cargo tauri android build --apk --ci --target aarch64
 
       # Gradle names an unsigned build `...-release-unsigned.apk`, so matching
       # `*-release.apk` alone is the check that signing actually happened: a

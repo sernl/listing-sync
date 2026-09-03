@@ -3,7 +3,7 @@
 How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
 
 - date: 2026-09-03
-- status: `v0.1.1` is the newest published release; `v0.1.2` built but never published, failing in the Android job, and `0.1.3` carries what `0.1.2` was meant to — the channelled updater endpoint, the first written release notes, a GitHub release beside the Cloud one, and an Android APK
+- status: `v0.1.3` is published, with the channelled updater endpoint, written release notes and a GitHub release beside the Cloud one; its Android job failed, so no APK is in it yet, and `android-build.yml`'s `attach_to` input adds one without spending another tag
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 
@@ -289,11 +289,20 @@ The NSIS installer uploads as `--public-platform nsis-x86_64 --update-platform w
 Naming the files also retires the hazard the CLI's own help warns of, that `--framework` "uploads all discovered artifacts to the release, so make sure there is no older bundles mixed in the framework's output directories" — a live risk with a cached target directory.
 `draft` and `publish` keep `--framework tauri`, because neither reads a bundle and it is what stops the Cloud's version and the tree's from disagreeing.
 
-`v0.1.2` is spent for a different reason, and a smaller one.
-Its Android job failed at the build step with `error: no such command: tauri`, because that job installed the CLI from npm, which provides a `tauri` binary, and then invoked `cargo tauri`, which is a separate cargo package that was never installed.
-The Windows job had always invoked the npm binary directly; the Android job did not, and `android-build.yml` carried the same mismatch unnoticed because it is dispatched by hand and had never been run on a runner.
-All three sites now install from npm and invoke `tauri`, and both Android install steps run `tauri --version` immediately afterwards, so the next mismatch of this kind costs two seconds rather than a release.
-That failure also blocked `publish`, which is what prompted decoupling the APK from the desktop release above.
+`v0.1.2` and `v0.1.3` both failed in the Android job, for the same missing binary found at two different depths, and the pair is worth recording because the first fix was not wrong so much as incomplete.
+
+`v0.1.2` failed at the top: the job installed the CLI from npm, which provides a `tauri` binary, and then invoked `cargo tauri`, which is a separate cargo package that was never installed.
+`v0.1.3` failed one layer down, after the top-level invocation had been corrected: `cargo tauri` reappeared inside Gradle, in the task `:app:rustBuildArm64Release`.
+That task is Tauri's own generated plugin, and it hardcodes the executable — `val executable = """cargo"""` and `listOf("tauri", "android", "android-studio-script")`, at lines 19 and 51 of `gen/android/buildSrc/src/main/java/io/teachouse/desktop/kotlin/BuildTask.kt`.
+There is no property or environment variable to point it elsewhere, so which CLI the workflow itself invokes was never the whole question: `cargo-tauri` has to be on the runner either way.
+
+Both Android jobs therefore install the real cargo binary and invoke `cargo tauri`, matching the nix shell that produced the measured APKs, and the npm install is gone from them.
+The install uses `cargo binstall` against Tauri's own published binary rather than compiling the crate: `tauri-cli` 2.11.4 carries `[package.metadata.binstall]` with `pkg-url = "{ repo }/releases/download/tauri-cli-v{ version }/cargo-tauri-{ target }.{ archive-format }"`, and the `tauri-cli-v2.11.4` release publishes `cargo-tauri-x86_64-unknown-linux-gnu.tgz`, which that template resolves to and which answers with 8.3 MB.
+Read from `crates/tauri-cli/Cargo.toml` at `tauri-cli-v2.11.4` and the release's own asset list on 2026-09-03.
+`cargo tauri --version` runs immediately after, so a broken install costs seconds rather than the twenty minutes to the Gradle task that would have found it.
+The Windows job still installs from npm and invokes `tauri`, which is not an inconsistency to tidy away: it has green runs behind it, and it never enters Gradle.
+
+The `v0.1.2` failure also blocked `publish`, which is what prompted decoupling the APK from the desktop release above; by `v0.1.3` that decoupling held, and the desktop release published while the APK did not.
 
 `v0.1.0` is a spent tag rather than a release.
 It exists on the repository, no GitHub release was ever created for it, and a pushed tag cannot be moved without rewriting what others have already fetched, so the next release is `v0.1.1` and it will be the first published one.
