@@ -9,6 +9,7 @@ import {
 	NO_FILTERS,
 	onSellerDevice,
 	rowFor,
+	runsFor,
 	stripFor,
 	type WorkItem
 } from './inventory';
@@ -409,5 +410,41 @@ describe('the tally and the bulk target', () => {
 			mappings: [],
 			skipped: 2
 		});
+	});
+});
+
+describe('the runs that touched one listing', () => {
+	const mappings = [
+		mapping({ id: 'm-Tpt', inventory: 'Tpt' }),
+		mapping({ id: 'm-TesNz', inventory: 'TesNz' })
+	];
+
+	it('is newest first and one row per run', () => {
+		const rows = runsFor(
+			mappings,
+			newestWork([
+				work({ mapping: 'm-Tpt', created_at: 3, state: 'settled', outcome: 'succeeded' }, 'j1'),
+				work({ mapping: 'm-TesNz', created_at: 7, state: 'running' }, 'j2')
+			])
+		);
+		expect(rows.map((row) => row.job)).toEqual(['j2', 'j1']);
+		expect(rows[0].inventory).toBe('TesNz');
+		expect(rows[1].outcome).toBe('succeeded');
+	});
+
+	it('collapses two mappings that travelled in one run to a single row', () => {
+		const rows = runsFor(
+			mappings,
+			new Map([
+				['m-Tpt', work({ mapping: 'm-Tpt', created_at: 1 }, 'j1')],
+				['m-TesNz', work({ mapping: 'm-TesNz', created_at: 4 }, 'j1')]
+			])
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].inventory).toBe('TesNz');
+	});
+
+	it('is empty where no run in the window touched this listing', () => {
+		expect(runsFor(mappings, newestWork([work({ mapping: 'other' })]))).toEqual([]);
 	});
 });

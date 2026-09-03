@@ -534,3 +534,47 @@ export function bulkTarget(
 	}
 	return { inventory, mappings, skipped };
 }
+
+export interface RunRow {
+	job: string;
+	inventory: InventoryId;
+	/** This listing's own part in that run, as the item recorded it. */
+	state: ItemView['state'];
+	outcome: ItemView['outcome'];
+	created_at: number;
+}
+
+/**
+ * The runs among those read that touched this listing, newest first.
+ *
+ * The item screen links each one into `/sync/{job}`, which already renders the
+ * run's items, gates and events off the ledger; rebuilding that timeline here
+ * would be a second reading of the same rows that could disagree with it.
+ * Bounded by the same window the chips are, so a listing whose last send is
+ * older than the window shows none rather than a partial history, and the sync
+ * pages hold the whole record.
+ */
+export function runsFor(
+	mappings: readonly MappingHead[],
+	work: ReadonlyMap<string, WorkItem>
+): RunRow[] {
+	const rows = new Map<string, RunRow>();
+	for (const mapping of mappings) {
+		const entry = work.get(mapping.id);
+		if (entry === undefined) {
+			continue;
+		}
+		const held = rows.get(entry.job);
+		if (held !== undefined && held.created_at >= entry.item.created_at) {
+			continue;
+		}
+		rows.set(entry.job, {
+			job: entry.job,
+			inventory: mapping.inventory,
+			state: entry.item.state,
+			outcome: entry.item.outcome,
+			created_at: entry.item.created_at
+		});
+	}
+	return [...rows.values()].sort((left, right) => right.created_at - left.created_at);
+}
