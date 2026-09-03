@@ -11,12 +11,14 @@
 //! It is not the only path that authors an edge: the reconciliation queue's
 //! resolution writes one from the API, and runs the same check on it there.
 //!
-//! Usage: tam-taxonomy-seed <db-url> <gb.json> <nz.json> <tpt-vocab.json> <tes-vocab.json>
+//! Usage: tam-taxonomy-seed <db-url> <gb.json> <nz.json> <tpt-vocab.json>
+//! <tes-vocab.json> <subject-pairs.json>
 //!
-//! The last two arguments are optional. Without them the run seeds the
-//! subject and topic crosswalk alone, which is what it did before the grade
-//! axis existed; with them it also seeds the grade relation and the Tes
-//! licence vocabulary.
+//! Every argument is required. The TPT vocabulary and the authored pairing
+//! were optional while the canonical subject and topic axes were minted from
+//! Tes alone; they are not optional now that TPT is the base, because a run
+//! without them would seed a relation in which no TPT facet resolves, which
+//! is a half-seeded hub rather than a smaller one.
 
 #![forbid(unsafe_code)]
 
@@ -26,7 +28,8 @@ use tam_storage::TaxonomyRepo;
 use tam_taxonomy::grades::derive_grade_crosswalk;
 use tam_taxonomy::licences::derive_licence_crosswalk;
 use tam_taxonomy::provenance::check_native_ids;
-use tam_taxonomy::tes::{derive_crosswalk, parse_tree};
+use tam_taxonomy::subjects::derive_subject_crosswalk;
+use tam_taxonomy::tes::parse_tree;
 use tam_types::Timestamp;
 
 fn read_file(path: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -53,16 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_url = arguments.first().ok_or("missing db url")?;
     let gb_path = arguments.get(1).ok_or("missing GB capture path")?;
     let nz_path = arguments.get(2).ok_or("missing NZ capture path")?;
-    let vocabularies = match (arguments.get(3), arguments.get(4)) {
-        (Some(tpt), Some(tes)) => Some((read_file(tpt)?, read_file(tes)?)),
-        (None, None) => None,
-        _ => return Err("both vocabulary paths are needed, or neither".into()),
-    };
+    let tpt_json = read_file(arguments.get(3).ok_or("missing TPT vocabulary path")?)?;
+    let tes_json = read_file(arguments.get(4).ok_or("missing Tes vocabulary path")?)?;
+    let pairs_json = read_file(arguments.get(5).ok_or("missing subject pairing path")?)?;
 
     let gb = parse_tree(&read_file(gb_path)?)?;
     let nz = parse_tree(&read_file(nz_path)?)?;
     let at = wall_now()?;
-    let crosswalk = derive_crosswalk(&gb, &nz, at)?;
+    let crosswalk = derive_subject_crosswalk(&gb, &nz, &tpt_json, &pairs_json, at)?;
     check_native_ids(&crosswalk.edges)?;
 
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -71,54 +72,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let repo = TaxonomyRepo::new(pool);
     let report = repo.seed(&crosswalk.terms, &crosswalk.edges).await?;
+    let absences = repo
+        .seed_no_counterparts(&crosswalk.no_counterparts)
+        .await?;
 
     eprintln!(
-        "subjects and topics: {} terms inserted, {} existing; {} edges inserted, {} existing",
-        report.terms_inserted, report.terms_existing, report.edges_inserted, report.edges_existing,
+        "subjects and topics: {} terms inserted, {} existing; {} edges inserted, {} existing; \
+         {} absences inserted, {} existing",
+        report.terms_inserted,
+        report.terms_existing,
+        report.edges_inserted,
+        report.edges_existing,
+        absences.inserted,
+        absences.existing,
     );
     eprintln!(
-        "residue: {} GB-only, {} NZ-only, {} mismatched",
-        crosswalk.residue.gb_only.len(),
-        crosswalk.residue.nz_only.len(),
+        "residue (Tes markets): {} GB-only, {} NZ-only, {} mismatched",
+        crosswalk.tes_residue.gb_only.len(),
+        crosswalk.tes_residue.nz_only.len(),
+        crosswalk.tes_residue.mismatched.len(),
+    );
+    eprintln!(
+        "residue (TPT base): {} facets reach no Tes node, {} Tes nodes reach no facet, \
+         {} withdrawn or contested, {} hidden facets seeded neither way",
+        crosswalk.residue.tpt_only.len(),
+        crosswalk.residue.tes_only.len(),
         crosswalk.residue.mismatched.len(),
+        crosswalk.residue.skipped_hidden.len(),
     );
-
-    let mut ambiguous = report.ambiguous_terms;
-    if let Some((tpt_json, tes_json)) = vocabularies {
-        let grades = derive_grade_crosswalk(&tpt_json, &tes_json, at)?;
-        check_native_ids(&grades.edges)?;
-        let seeded = repo.seed(&grades.terms, &grades.edges).await?;
-        let absences = repo.seed_no_counterparts(&grades.no_counterparts).await?;
+    // The pairing table is authored and awaiting founder confirmation, so the
+    // rows it forced are printed rather than counted: each is a claim one row
+    // made that another row overrode.
+    for mismatch in &crosswalk.residue.mismatched {
         eprintln!(
-            "grades: {} terms inserted, {} existing; {} edges inserted, {} existing; \
-             {} absences inserted, {} existing",
-            seeded.terms_inserted,
-            seeded.terms_existing,
-            seeded.edges_inserted,
-            seeded.edges_existing,
-            absences.inserted,
-            absences.existing,
-        );
-        for row in &grades.uncovered {
-            eprintln!(
-                "grades: year group {} ({}) declares ages {:?} that no Tes GB band covers; \
-                 recorded as having no counterpart rather than snapped to the nearest band",
-                row.year_group, row.label, row.human_ages,
-            );
-        }
-
-        let licences = derive_licence_crosswalk(&tes_json, at)?;
-        check_native_ids(&licences.edges)?;
-        let seeded = repo.seed(&licences.terms, &licences.edges).await?;
-        ambiguous = seeded.ambiguous_terms;
-        eprintln!(
-            "licences: {} terms inserted, {} existing; {} edges inserted, {} existing",
-            seeded.terms_inserted,
-            seeded.terms_existing,
-            seeded.edges_inserted,
-            seeded.edges_existing,
+            "pairing: Tes {} ({}) {}{}",
+            mismatch.node.native_id,
+            mismatch.node.description,
+            mismatch.reason,
+            mismatch
+                .counterpart
+                .as_ref()
+                .map_or_else(String::new, |counterpart| format!(
+                    ", against TPT {}",
+                    counterpart.native_id
+                )),
         );
     }
+
+    let grades = derive_grade_crosswalk(&tpt_json, &tes_json, at)?;
+    check_native_ids(&grades.edges)?;
+    let seeded = repo.seed(&grades.terms, &grades.edges).await?;
+    let absences = repo.seed_no_counterparts(&grades.no_counterparts).await?;
+    eprintln!(
+        "grades: {} terms inserted, {} existing; {} edges inserted, {} existing; \
+         {} absences inserted, {} existing",
+        seeded.terms_inserted,
+        seeded.terms_existing,
+        seeded.edges_inserted,
+        seeded.edges_existing,
+        absences.inserted,
+        absences.existing,
+    );
+    for row in &grades.uncovered {
+        eprintln!(
+            "grades: year group {} ({}) declares ages {:?} that no Tes GB band covers; \
+             recorded as having no counterpart rather than snapped to the nearest band",
+            row.year_group, row.label, row.human_ages,
+        );
+    }
+
+    let licences = derive_licence_crosswalk(&tes_json, at)?;
+    check_native_ids(&licences.edges)?;
+    let seeded = repo.seed(&licences.terms, &licences.edges).await?;
+    let ambiguous = seeded.ambiguous_terms;
+    eprintln!(
+        "licences: {} terms inserted, {} existing; {} edges inserted, {} existing",
+        seeded.terms_inserted, seeded.terms_existing, seeded.edges_inserted, seeded.edges_existing,
+    );
 
     // A defect figure rather than an outcome: a term the relation projects two
     // ways is a question no product can answer, and the kill gate reads it as

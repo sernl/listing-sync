@@ -178,3 +178,22 @@ The figures the derivation seeds, all pinned in `the_derivation_seeds_the_pinned
 
 The kill gate passes and did so without ever being close, because consuming `derive_crosswalk` rather than replacing it makes the property structural: every edge the Tes-to-Tes derivation holds is present, on the same term, at the same path, as `Exact`.
 `no_edge_the_tes_derivation_holds_is_lost_by_the_inversion` therefore earns its place as a regression guard rather than as a discovery, and it is joined by `every_existing_canonical_id_survives_unchanged`, which pins every base term's id, kind and parent.
+
+## Step 2: the seeder, and what the database confirmed independently
+
+The seeder now derives the subject and topic axes through `derive_subject_crosswalk` rather than `derive_crosswalk`, which it no longer calls directly.
+That makes the TPT vocabulary and the authored pairing required arguments where they were optional, so the usage becomes `tam-taxonomy-seed <db-url> <gb.json> <nz.json> <tpt-vocab.json> <tes-vocab.json> <subject-pairs.json>`.
+The optional form existed for a run that seeded the subject and topic crosswalk alone, and it is gone deliberately: with TPT as the base, such a run seeds a relation in which no TPT facet resolves, which is a half-seeded hub rather than a smaller one.
+The market-to-market residue the seeder printed before is not lost, because `derive_subject_crosswalk` returns it unchanged on `tes_residue`, and both residues now print side by side.
+
+Idempotency holds, against a database created fresh for the purpose rather than by resetting the shared dev volume.
+The first run inserted 601 terms, 1,146 edges and 443 absences with nothing existing; the second inserted nothing and reported every one of them as existing, which is the property that fails if an id moved.
+The grade and licence halves behave the same way: 40 terms, 180 edges and 30 absences, then 7 terms and 21 edges, all existing on the second pass.
+
+Three properties the database checked that no pure test can.
+Every edge was accepted, so the `projection_edge_exact_reverse` index and the `projection_edge_single_valued` index both admitted the whole seed rather than rejecting it at insert.
+`check_native_ids` passed over the new edge set, so no TPT path carries an identifier that marketplace did not issue.
+And the seeder's own ambiguity count, which is a `GROUP BY` over the stored relation rather than a fold over the derivation, reported zero, agreeing with `the_seeded_subject_relation_holds_no_ambiguity`.
+
+The eight withdrawal rows print individually rather than only as a count, because the pairing table is authored and awaiting founder confirmation, and each row is a claim one row made that another overrode.
+They are the evidence to send with the table: Drama and Music withdrawn from `performing-arts`, Geography, Economics and Psychology from `social-studies`, and Biology, Chemistry and Physics from `science`.
