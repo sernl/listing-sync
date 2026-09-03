@@ -82,6 +82,7 @@ describe('the breadcrumb', () => {
 		expect(breadcrumbFor('/inventory')).toBe('Inventory');
 		expect(breadcrumbFor('/reconciliation')).toBe('Reconciliation');
 		expect(breadcrumbFor('/settings')).toBe('Account Settings');
+		expect(breadcrumbFor('/marketplaces')).toBe('Marketplaces');
 	});
 
 	it('names the parent of a detail page rather than the dashboard', () => {
@@ -117,6 +118,7 @@ describe('the redirects from the old paths', () => {
 		expect(legacyDestination('/connections')).toBe('/marketplaces');
 		expect(legacyDestination('/queue')).toBe('/reconciliation');
 		expect(legacyDestination('/library')).toBe('/resources');
+		expect(legacyDestination('/settings/devices')).toBe('/marketplaces');
 	});
 
 	it('carry an item identifier through the inventory rename', () => {

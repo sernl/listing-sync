@@ -6,10 +6,13 @@ import {
 	deviceRows,
 	deviceStanding,
 	deviceSummary,
+	marketplaceRows,
+	needingAttention,
 	needingDeviceSignIn,
 	QUIET_AFTER_MS,
 	schedulesRunning,
 	signInStates,
+	type MarketplaceRow,
 	type MarketplaceSignIn
 } from './devices-view';
 import { present } from './connection-status';
@@ -340,5 +343,125 @@ describe('the footnote under the marketplace rows', () => {
 				])
 			)
 		).toContain('may still hold the marketplace logins');
+	});
+});
+
+
+/** Looked up rather than destructured by position, for the same reason `of`
+ *  is: the screen's order is a ranked map. */
+function rowOf(rows: readonly MarketplaceRow[], marketplace: Marketplace): MarketplaceRow {
+	const found = rows.find((entry) => entry.marketplace === marketplace);
+	if (found === undefined) {
+		throw new Error(`no row for ${marketplace}`);
+	}
+	return found;
+}
+
+describe('the merged marketplace rows', () => {
+	it('give one row per marketplace even where nothing is linked and no device exists', () => {
+		const rows = marketplaceRows([], [], NOW);
+		expect(rows.map((row) => row.marketplace)).toEqual(['Tpt', 'Tes', 'Etsy']);
+	});
+
+	it('name the branch each marketplace runs on', () => {
+		const rows = marketplaceRows([], [], NOW);
+		expect(rowOf(rows, 'Tpt').transport).toBe('SellerDevice');
+		expect(rowOf(rows, 'Tes').transport).toBe('SellerDevice');
+		expect(rowOf(rows, 'Etsy').transport).toBe('OfficialApi');
+	});
+
+	it('carry the connection record only on the branch that can have one', () => {
+		const rows = marketplaceRows(
+			[device({ sessions: [session('Tpt')] })],
+			[connection('Etsy')],
+			NOW
+		);
+		expect(rowOf(rows, 'Etsy').connection?.id).toBe('c-Etsy');
+		expect(rowOf(rows, 'Tpt').connection).toBeNull();
+	});
+
+	it('report a login held on a machine that has gone quiet', () => {
+		const quiet = device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tes')] });
+		const rows = marketplaceRows([quiet], [], NOW);
+		expect(rowOf(rows, 'Tes').quiet).toBe(true);
+		expect(rowOf(rows, 'Tpt').quiet).toBe(false);
+	});
+
+	it('does not call a login quiet while its machine is checking in', () => {
+		const rows = marketplaceRows([device({ sessions: [session('Tes')] })], [], NOW);
+		expect(rowOf(rows, 'Tes').quiet).toBe(false);
+	});
+
+	it('name the machines a signed-out login may still be sitting on', () => {
+		const stale = device({
+			id: 'd2',
+			name: 'old-desktop',
+			revoked_at: NOW - 5_000,
+			wipe_outstanding: true,
+			sessions: [session('Tpt')]
+		});
+		const rows = marketplaceRows([stale], [], NOW);
+		expect(rowOf(rows, 'Tpt').wipeOutstandingOn.map((entry) => entry.name)).toEqual([
+			'old-desktop'
+		]);
+		expect(rowOf(rows, 'Tes').wipeOutstandingOn).toEqual([]);
+	});
+
+	it('leaves a machine that was signed out and has since checked in off that list', () => {
+		const wiped = device({
+			revoked_at: NOW - 5_000,
+			wipe_outstanding: false,
+			sessions: [session('Tpt')]
+		});
+		expect(rowOf(marketplaceRows([wiped], [], NOW), 'Tpt').wipeOutstandingOn).toEqual([]);
+	});
+});
+
+describe('the marketplaces the screen puts at the top', () => {
+	it('name a device-branch marketplace no machine holds', () => {
+		const rows = marketplaceRows([device({ sessions: [session('Tpt')] })], [], NOW);
+		expect(needingAttention(rows).map((row) => row.marketplace)).toEqual(['Tes']);
+	});
+
+	it('name a dropped connection on the branch we serve ourselves', () => {
+		const rows = marketplaceRows(
+			[device({ sessions: [session('Tpt'), session('Tes')] })],
+			[connection('Etsy', 'disconnected')],
+			NOW
+		);
+		expect(needingAttention(rows).map((row) => row.marketplace)).toEqual(['Etsy']);
+	});
+
+	it('name a connection that is verifying and failing, but not one merely unverified', () => {
+		const held = [device({ sessions: [session('Tpt'), session('Tes')] })];
+		expect(
+			needingAttention(marketplaceRows(held, [connection('Etsy', 'unstable')], NOW))
+		).toHaveLength(1);
+		expect(
+			needingAttention(marketplaceRows(held, [connection('Etsy', 'checking')], NOW))
+		).toEqual([]);
+	});
+
+	it('name a login whose machine has gone quiet, because its schedule is not running', () => {
+		const quiet = device({
+			last_seen_at: NOW - QUIET_AFTER_MS - 1,
+			sessions: [session('Tpt'), session('Tes')]
+		});
+		expect(needingAttention(marketplaceRows([quiet], [], NOW)).map((row) => row.marketplace)).toEqual(
+			['Tpt', 'Tes']
+		);
+	});
+
+	it('says nothing about a marketplace never linked or a seller with no machine', () => {
+		expect(needingAttention(marketplaceRows([], [], NOW))).toEqual([]);
+	});
+
+	it('is empty where every marketplace is held and connected', () => {
+		const rows = marketplaceRows(
+			[device({ sessions: [session('Tpt'), session('Tes')] })],
+			[connection('Etsy')],
+			NOW
+		);
+		expect(needingAttention(rows)).toEqual([]);
 	});
 });

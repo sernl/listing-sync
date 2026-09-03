@@ -62,7 +62,7 @@
 	description="TPT and Tes have no official API, so their work runs on your own machine under your own session. Your login never leaves that device."
 >
 	{#snippet more()}
-		<a class="link" href="/settings/devices">Manage devices</a>
+		<a class="link" href="/marketplaces">Open Marketplaces</a>
 	{/snippet}
 
 	{#if pending}
@@ -81,7 +81,7 @@
 			<div class="attn {notice.tone === 'warn' ? 'warn' : ''}">
 				<div class="t">{notice.headline}</div>
 				<p>{notice.body}</p>
-				<a class="act" href="/settings/devices">Open your devices</a>
+				<a class="act" href="/marketplaces">Open Marketplaces</a>
 			</div>
 		{:else if waiting.length > 0}
 			<div class="attn warn">

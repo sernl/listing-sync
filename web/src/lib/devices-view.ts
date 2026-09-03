@@ -11,7 +11,7 @@
 import type { ConnectionView, DeviceSessionView, DeviceView } from '$lib/api';
 import { present } from '$lib/connection-status';
 import { TRANSPORT_OF } from '$lib/inventory';
-import type { ConnectionStatus, Marketplace } from '$lib/generated/vocab';
+import type { ConnectionStatus, Marketplace, TransportClass } from '$lib/generated/vocab';
 
 /** How often the desktop client checks in, matching
  *  `Scheduler::DEFAULT_CADENCE` in `apps/desktop`. */
@@ -257,6 +257,105 @@ export function signInStates(
 			tone: 'bad' as const
 		};
 	});
+}
+
+/** One marketplace's whole row on the Marketplaces screen.
+ *
+ * The two branches of D1 answer the seller's one question — can this
+ * marketplace be written to right now — from different places, so the row
+ * carries both answers and the branch that decides which is authoritative.
+ * `connection` is null on the device branch because no server has ever held a
+ * session for one, and `signIn.device` is null on the API branch because no
+ * device has ever held a token for one. */
+export interface MarketplaceRow {
+	marketplace: Marketplace;
+	transport: TransportClass;
+	signIn: MarketplaceSignIn;
+	/** The stored connection record, where the branch has one. */
+	connection: ConnectionView | null;
+	/** The machine holding this login has not checked in inside the window, so
+	 *  scheduled work for this marketplace is not running. */
+	quiet: boolean;
+	/** Machines signed out that have not been heard from since and still report
+	 *  holding this marketplace's login, so it may remain on them. */
+	wipeOutstandingOn: DeviceView[];
+}
+
+/**
+ * Every marketplace, once, with whichever branch's facts apply to it.
+ *
+ * Built over the same ranked order the band uses, so the two surfaces never
+ * list the same pair differently, and over the generated `Marketplace` union
+ * rather than over the rows the API happened to return: a marketplace with no
+ * connection and no device is a row that says so, not a row that is missing.
+ */
+export function marketplaceRows(
+	devices: readonly DeviceView[],
+	connections: readonly ConnectionView[],
+	now: number
+): MarketplaceRow[] {
+	const rows = deviceRows(devices, now);
+	const states = signInStates(devices, connections, now);
+	return states.map((signIn) => {
+		const transport = TRANSPORT_OF[signIn.marketplace];
+		const holder = rows.find((row) => row.device.id === signIn.device?.id);
+		return {
+			marketplace: signIn.marketplace,
+			transport,
+			signIn,
+			connection:
+				transport === 'OfficialApi'
+					? (connections.find((entry) => entry.marketplace === signIn.marketplace) ?? null)
+					: null,
+			quiet: holder?.standing === 'quiet',
+			wipeOutstandingOn: rows
+				.filter(
+					(row) =>
+						row.standing === 'signed_out' &&
+						row.wipeOutstanding &&
+						row.holding.includes(signIn.marketplace)
+				)
+				.map((row) => row.device)
+		};
+	});
+}
+
+/** Which sign-in states are the seller being asked to do something.
+ *
+ * A total map over the union, so a state added above is classified here rather
+ * than falling silently out of the attention list. `no_account` and
+ * `no_device` are excluded deliberately: a marketplace never linked and a
+ * seller with no machine registered are both setup this seller has not done
+ * yet, not something that broke. */
+const ATTENTION_STATE: Record<SignInState, boolean> = {
+	signed_in: false,
+	needs_signin: true,
+	unverified: false,
+	no_account: false,
+	no_device: false,
+	all_signed_out: true,
+	served_here: false
+};
+
+/** The marketplaces the screen puts at the top because the seller has to act.
+ *
+ * Both branches, unlike `needingDeviceSignIn`: on the merged screen the remedy
+ * for a dropped Etsy connection and the remedy for an unheld TPT login are two
+ * rows apart rather than two screens apart, so naming both here no longer
+ * sends the seller somewhere that cannot help.
+ *
+ * Two facts join the state map. A connection that is `unstable` is verifying
+ * and failing, which `unverified` alone does not distinguish from the ordinary
+ * `checking`; and a login held on a machine that has gone quiet is a schedule
+ * that is not running, which the state cannot say because the sign-in itself
+ * is intact. */
+export function needingAttention(rows: readonly MarketplaceRow[]): MarketplaceRow[] {
+	return rows.filter(
+		(row) =>
+			ATTENTION_STATE[row.signIn.state] ||
+			row.connection?.status === 'unstable' ||
+			row.quiet
+	);
 }
 
 /** The marketplaces waiting on the seller signing in on one of their own

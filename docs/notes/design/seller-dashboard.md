@@ -139,3 +139,13 @@ G8. Removing a listing from one marketplace without deleting the resource.
 `DELETE /{version}/products/{id}` with `remove_from` deletes the product and removes it from the marketplaces named, and `ItemOperation::Remove` is enqueued only by the migrate drain, so a teacher retiring a resource from Tes while keeping it on TPT has no path.
 The research asks for exactly this verb and asks that it not be called a refresh.
 Shape needed: a per-mapping removal, either its own endpoint or an intent on `POST /{version}/jobs`.
+
+G9. Linking a marketplace connection.
+`GET /{version}/connections` and `POST /{version}/connections/{connection}/revoke` are the whole surface (`crates/tam-api/src/lib.rs:222`, `crates/tam-api/src/openapi.rs:204` and `:209`); no endpoint establishes a connection, so the Marketplaces screen renders Link and Re-link disabled with that stated.
+Only the official-API branch needs it: a marketplace on the seller-device branch is signed into on the machine itself, which is the only place its session can exist.
+Shape needed: whatever the broker's link handshake requires, reached from `POST /{version}/connections` taking `{ marketplace }`.
+
+G10. A last-sync time per marketplace.
+The cross-reference asks the Marketplaces screen to show when each marketplace was last synced, against Vendoo's own "Last sync" label.
+`ConnectionView.updated_at` and `DeviceSessionView.last_used_at` are the nearest served facts and neither is a sync time, so the screen shows neither rather than mislabelling one.
+Shape needed: the time of the last completed run per marketplace, on the connection view and on the device session.

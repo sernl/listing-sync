@@ -44,9 +44,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 	},
 	{
 		label: 'Crosslist',
+		items: [{ href: '/templates', label: 'Templates', icon: '❏', soon: true }]
+	},
+	// Last, so it renders at the foot of the sidebar beside the account card:
+	// Vendoo keeps its status page in the profile menu and its help centre in a
+	// help menu, and none of these four is a crosslisting tool.
+	{
+		label: 'Help',
 		items: [
 			{ href: '/resources', label: 'Resources', icon: '≣', soon: true },
-			{ href: '/templates', label: 'Templates', icon: '❏', soon: true },
 			{ href: '/notifications', label: 'Notifications', icon: '◷', soon: true },
 			{ href: '/status', label: 'Status', icon: '◉' },
 			{ href: '/help', label: 'Help', icon: '?', soon: true }
@@ -122,6 +128,7 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
 	{ from: '/jobs', to: '/sync' },
 	{ from: '/listings', to: '/inventory' },
 	{ from: '/connections', to: '/marketplaces' },
+	{ from: '/settings/devices', to: '/marketplaces' },
 	{ from: '/queue', to: '/reconciliation' },
 	{ from: '/library', to: '/resources' }
 ];

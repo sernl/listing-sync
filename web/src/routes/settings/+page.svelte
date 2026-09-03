@@ -379,7 +379,7 @@
 				</span>
 			</span>
 			<span class="grow"></span>
-			<a class="btn small" href="/settings/devices">Open</a>
+			<a class="btn small" href="/marketplaces">Open</a>
 		</div>
 	</Panel>
 
