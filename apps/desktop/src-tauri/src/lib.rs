@@ -29,6 +29,7 @@ pub mod payload;
 pub mod run;
 pub mod scheduler;
 pub mod session;
+pub mod startup;
 pub mod state;
 pub mod webview_session;
 pub mod work;
@@ -49,22 +50,20 @@ use crate::work::{DeviceWork, LiveMarketplaces};
 
 /// Starts the application.
 ///
-/// # Panics
-///
-/// If the Tauri context or the application data directory is unusable, which
-/// is a broken installation rather than a runtime condition.
-#[expect(
-    clippy::expect_used,
-    reason = "a client that cannot resolve its own data directory has no correct degraded mode: \
-              it would generate a new device identity on every launch and re-register forever"
-)]
+/// A failure to configure the application or to run its event loop is
+/// reported through [`startup`] and exits non-zero, rather than panicking into
+/// a stderr the release build has no console to show. There is no correct
+/// degraded mode to fall back to: a client that cannot resolve its own data
+/// directory would generate a new device identity on every launch and
+/// re-register forever.
 #[expect(
     clippy::exit,
     reason = "tauri::generate_context! expands to a process exit on a malformed bundle; the call \
               site is the macro, not this crate"
 )]
 pub fn run() {
-    tauri::Builder::default()
+    startup::catch_panics();
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -110,8 +109,26 @@ pub fn run() {
             commands::device_check_in,
             commands::device_activity,
         ])
-        .run(tauri::generate_context!())
-        .expect("the Teachouse desktop client starts");
+        .build(tauri::generate_context!());
+
+    // `build` and `run` rather than `Builder::run`, which is exactly the two
+    // in sequence (tauri 2.11.5, `src/app.rs:2449`). Splitting them is what
+    // puts the opening line in the log before the window is created rather
+    // than after: Tauri builds the window declared in `tauri.conf.json` first
+    // and calls the `setup` closure above second, in one function whose
+    // failure it raises as a panic (`src/app.rs:1424`, `src/app.rs:2524`). A
+    // missing WebView2 runtime therefore fails ahead of anything this crate
+    // runs, and writing the opening line only from `setup` would leave that —
+    // the likeliest Windows cause — with no log at all.
+    let app = match built {
+        Ok(app) => app,
+        Err(why) => startup::fatal(&why),
+    };
+    match app.path().app_data_dir() {
+        Ok(data_dir) => startup::opening(&data_dir),
+        Err(why) => startup::fatal(&why),
+    }
+    app.run(|_, _| {});
 }
 
 /// The local timer, running for the life of the process.

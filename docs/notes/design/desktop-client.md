@@ -141,6 +141,61 @@ This is not incidental.
 `tauri::generate_context!` panics outright when `frontendDist` does not exist, and it looks for it whenever the `custom-protocol` feature is on, which is what `just check`'s `--all-features` does; the console's build output is a gitignored npm artefact, so without this a clone that had not yet run `just web-check` could not run the gated lane at all.
 An empty directory embeds nothing and satisfies the check, and the bundle recipes build the console before they bundle anything.
 
+## Startup diagnostics
+
+The release binary sets `windows_subsystem = "windows"` (`src/main.rs`), so on Windows it has no console and everything it writes to stderr is discarded.
+A failure before the window appears would therefore show as an application that opens and closes with nothing to read, on a platform no one here can attach a debugger to.
+`src/startup.rs` gives that failure a file: `startup.log`, in the application data directory, truncated to one `starting <version> <os> <arch>` line on every launch and appended to by the two failure paths.
+Nothing has yet failed this way; the section exists so that the first time something does, the evidence is already on disk rather than a Windows build away.
+
+Where the log is, by platform:
+
+| Platform | Path |
+|---|---|
+| Windows | `%APPDATA%\io.teachouse.desktop\startup.log` |
+| Linux | `$XDG_DATA_HOME/io.teachouse.desktop/startup.log`, or `~/.local/share/io.teachouse.desktop/startup.log` |
+| macOS | `~/Library/Application Support/io.teachouse.desktop/startup.log` |
+
+That mapping is `PathResolver::app_data_dir`, which is `dirs::data_dir()` joined with the `identifier` field of `tauri.conf.json` — `io.teachouse.desktop` (tauri 2.11.5, `src/path/desktop.rs:247`).
+`dirs` 6.0.0 resolves `data_dir` to `FOLDERID_RoamingAppData` on Windows (`src/win.rs:10`), to `$XDG_DATA_HOME` or `$HOME/.local/share` on Linux (`src/lin.rs:11`), and to `$HOME/Library/Application Support` on macOS (`src/mac.rs:12`).
+Windows reads the known folder rather than the `%APPDATA%` environment variable; the two agree unless someone has overridden the variable, and the log records the directory it actually used.
+
+Three outcomes, and each says something different.
+A log holding the opening line and a failure block names the cause outright.
+A log holding only the opening line means the process died after the application was built without reaching either failure path, which is a crash rather than an error — a faulting native library rather than a Rust panic.
+A missing or empty log means it died before the data directory resolved: either the executable never started, or `app_data_dir` itself failed.
+
+To capture stderr and the exit code from PowerShell, redirect through `cmd`, because PowerShell's own operators give a GUI-subsystem process nothing to inherit:
+
+```powershell
+cmd /c "Teachouse.exe 2> err.txt"
+echo $LASTEXITCODE
+```
+
+Run it from the directory the installer wrote (the Start-menu shortcut's target names it), and set `$env:RUST_BACKTRACE = "1"` first so the report carries a backtrace.
+Exit code 101 is a Rust panic; the failure block in the log is then the same text the discarded stderr would have carried.
+
+The likely causes, in the order to check them:
+
+The WebView2 runtime is absent or broken.
+It is the one Windows dependency with no Linux analogue, and Tauri builds the window declared in `tauri.conf.json` before it calls this crate's `setup` closure, in the same function whose failure it raises as a panic (`src/app.rs:2524` and `src/app.rs:1424`).
+This is why the opening line is written between `build` and `run` rather than inside `setup`: written from `setup` it would come too late to record this cause at all.
+The NSIS bundle installs the runtime through the default `downloadBootstrapper`, which needs network access at install time and silently leaves an installation without it.
+
+A missing Visual C++ runtime DLL.
+The Windows binary is cross-compiled from NixOS through `cargo-xwin`, and `ring` reaches it as C compiled by `clang-cl` against the MSVC runtime; a machine without the redistributable fails in the loader, before `main`.
+The signature is the empty case above — no log at all — plus a Windows loader dialog.
+
+`device.json` unreadable or unparseable, in the same directory as the log.
+A truncated write from an earlier crash, or a roaming profile mid-sync, makes `device::load_or_create` fail, and the failure block names the file.
+Deleting it costs the device its identity and forces a re-registration, which is why the client never does so itself.
+
+`app_data_dir` unresolvable, which is the missing-log case with the executable confirmed to have started.
+
+Two things that look like candidates and are not.
+The updater's placeholder public key is never parsed at startup: the plugin deserialises `endpoints` and `pubkey` and checks only that the endpoints are `https` (tauri-plugin-updater 2.11.0, `src/config.rs`), and the key is read when a check runs, which nothing does yet.
+A bundle built without `npm run build` opens a blank window rather than closing, because `build.rs` creates an empty `web/build` and `generate_context!` embeds it.
+
 ## What is stubbed
 
 No marketplace request is made anywhere in this slice, on any path.
