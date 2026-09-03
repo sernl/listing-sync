@@ -426,6 +426,102 @@ async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
     assert_eq!(open.len(), 1, "the founder sees the gap the worker hit");
 }
 
+/// A seller's own override answers the gap the global relation cannot, for
+/// that seller and for nobody else.
+///
+/// The fixture is `a_gap_parks_the_item_behind_the_queue_it_just_raised`: no
+/// NZ subject edge, so the projection blocks and raises one item. The three
+/// phases are the whole property. Blocked with no override at all is the
+/// premise, without which the rest proves nothing. Still blocked while a
+/// second organisation holds an override for the very same term is the
+/// tenancy: `for_org` reads one seller's decisions and a projection must never
+/// publish under another's. Ready once this organisation holds it is the
+/// effect — and before this wiring it stayed blocked here too, re-raising a
+/// question the seller had already answered.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
+    const OTHER_ORG: OrgId = OrgId(Uuid([0xAB; 16]));
+    provision(&pool, false, tam_domain::Binding::Unbound).await;
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-b', now())")
+        .bind(uuid::Uuid::from_bytes(OTHER_ORG.0 .0))
+        .execute(&pool)
+        .await
+        .expect("the second org seeds");
+    assert!(
+        matches!(
+            prepare_item(&pool, &lease(), NOW)
+                .await
+                .expect("the preparation runs"),
+            ItemPreparation::Blocked { .. }
+        ),
+        "the premise: with no override at all the relation cannot reach TesNz and the item \
+         blocks"
+    );
+
+    let overrides = tam_storage::OverrideRepo::new(pool.clone());
+    overrides
+        .upsert(&nz_subject_override(OTHER_ORG))
+        .await
+        .expect("the other org's override writes");
+    assert!(
+        matches!(
+            prepare_item(&pool, &lease(), NOW)
+                .await
+                .expect("the preparation runs"),
+            ItemPreparation::Blocked { .. }
+        ),
+        "another organisation deciding the same term changes nothing here: an override is \
+         one seller's decision about their own listings, not an edge in the relation \
+         everyone shares"
+    );
+
+    overrides
+        .upsert(&nz_subject_override(ORG))
+        .await
+        .expect("this org's override writes");
+    let outcome = prepare_item(&pool, &lease(), NOW)
+        .await
+        .expect("the preparation runs");
+    let ItemPreparation::Ready {
+        projected: Some(_), ..
+    } = outcome
+    else {
+        panic!(
+            "its own override answers the gap, so the item seeds rather than parking behind \
+             a question this seller has already answered"
+        );
+    };
+}
+
+/// One organisation's decision to route the fixture's subject into TesNz,
+/// which is the edge `provision(.., false, ..)` withholds.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn nz_subject_override(org: OrgId) -> tam_domain::equivalence::ProjectionOverride {
+    tam_domain::equivalence::ProjectionOverride::new(
+        tam_domain::equivalence::NewProjectionOverride {
+            org,
+            inventory: InventoryId::TesNz,
+            axis: TermKind::Subject,
+            from: SUBJECT,
+            to: VocabularyPath {
+                vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Subject),
+                segments: vec!["Maths for early years".to_owned()],
+                native_id: Some("7000454".to_owned()),
+            },
+            kind: tam_domain::equivalence::OverrideKind::Exact,
+            decided_by: Decider::Human {
+                user: tam_types::UserId(Uuid([0xC1; 16])),
+                org,
+            },
+            decided_at: NOW,
+        },
+    )
+    .expect("the override is well formed")
+}
+
 /// The whole safety property of a migrate. The source listing does not go
 /// until the target listing exists and the driver's own verification read saw
 /// it, so the unsafe direction -- source gone, target absent -- is

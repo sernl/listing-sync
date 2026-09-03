@@ -23,10 +23,12 @@ use tam_marketplace::{
     ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
 };
 use tam_storage::{
-    ElectionRepo, ItemVerdict, LeaseRepo, LeasedItem, LossScope, MappingRepo, ProductRepo,
-    RaiseReport, RaiseScope, StorageError, TaxonomyRepo, ELECTION,
+    ElectionRepo, ItemVerdict, LeaseRepo, LeasedItem, LossScope, MappingRepo, OverrideRepo,
+    ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo, ELECTION,
 };
-use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
+use tam_taxonomy::listing::{
+    project_listing_with_overrides, projection_vocabularies, ListingContext,
+};
 use tam_types::{AttemptId, FailureCode, FailureDetail, InventoryId, OrgId, Timestamp, Uuid};
 
 use tam_engine_driver::driver::{EngineError, VerifyPolicy};
@@ -428,7 +430,17 @@ pub async fn prepare_item(
         .await
         .map_err(|error| crate::ledger::to_wire_error(&error))?;
 
-    let projection = match project_listing(
+    // The seller's own mapping decisions, consulted ahead of the global
+    // relation. Without them this projection re-raises questions the seller
+    // has already answered, and worse, publishes under the relation's answer
+    // rather than theirs — so the decision surface would show a choice that
+    // never reached the listing.
+    let overrides = OverrideRepo::new(pool.clone())
+        .for_org(lease.org)
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
+
+    let projection = match project_listing_with_overrides(
         &product,
         &ListingContext {
             org: lease.org,
@@ -441,6 +453,7 @@ pub async fn prepare_item(
             rules: &rules,
             settled: &settled,
         },
+        &overrides,
     ) {
         Ok(projection) => {
             record_losses(pool, lease, &projection.loss, now).await?;
