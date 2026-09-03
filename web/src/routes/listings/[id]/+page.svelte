@@ -17,7 +17,7 @@
 		licenceOptions,
 		type EditSeed
 	} from '$lib/authoring';
-	import { platformTitle } from '$lib/platforms';
+	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import { createLedger, type Ledger } from '$lib/ledger';
@@ -167,6 +167,16 @@
 			...known.map((row) => ({ job: row.job, inventory: row.inventory, state: row.state }))
 		];
 	});
+
+	// The marketplaces this console authors for that this resource is not mapped
+	// onto. Rendered as a disabled control rather than omitted, so the one thing
+	// a seller most wants to do next is visible and the reason it cannot be done
+	// is stated where they look for it.
+	const unmapped = $derived(
+		AUTHORABLE_PLATFORMS.filter(
+			(inventory: InventoryId) => !inventories.includes(inventory)
+		)
+	);
 
 	const needing = $derived([...chips.values()].filter((chip) => chip.action !== null && chip.tone === 'bad'));
 
@@ -345,10 +355,30 @@
 			{:else}
 				<p class="quiet">This listing carries no marketplace mapping.</p>
 			{/each}
+			{#each unmapped as inventory (inventory)}
+				<div class="row">
+					<span class="what">
+						<span class="t">{platformTitle(inventory)}</span>
+						<span class="s">Not listed here, and this resource has no mapping onto it.</span>
+					</span>
+					<span class="grow"></span>
+					<span class="pill mut">Not listed</span>
+					<button
+						class="btn small"
+						type="button"
+						disabled
+						title="No endpoint maps an existing resource onto a new marketplace yet."
+					>
+						Cross-list here
+					</button>
+				</div>
+			{/each}
 			<p class="foot-note">
-				A marketplace this resource is not on cannot be added from here: there is no endpoint that
-				maps an existing resource onto a new marketplace, so cross-listing somewhere new means
-				authoring the draft with that marketplace chosen.
+				Cross-listing somewhere new is disabled because nothing on the server does it yet: there is
+				no endpoint that maps an existing resource onto a marketplace it was not created with. Until
+				there is, reaching one of the marketplaces above means authoring the draft with that
+				marketplace chosen. Etsy is not among them and is not listed here, because this console has
+				no create path for it at all.
 			</p>
 		</Panel>
 
