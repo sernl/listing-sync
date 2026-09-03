@@ -539,6 +539,15 @@ pub async fn prepare_item(
             }),
             files: projection.files,
             body_format: projection.body_format,
+            // Deliberately none rather than read from the tpt_base sidecar,
+            // which holds the seller's answer. The sidecar cannot say "not
+            // stated": its column is `NOT NULL DEFAULT false`, so a row that
+            // predates the column and a seller's deliberate "no" are the same
+            // value, and stating either here suppresses the read-back the
+            // adapter's edit relies on to avoid clearing a box ticked on TPT.
+            // Stating nothing keeps that protection, and the sidecar feeds
+            // this the moment the column can express absence.
+            appropriate_for_country: None,
             // The lowering beside the two that already exist: a resolved axis
             // the seam names no field for travels as the target vocabulary's
             // own term, labelled by the axis it answers.

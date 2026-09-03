@@ -1119,6 +1119,7 @@ mod tests {
                     ages: None,
                     files: vec![],
                     natives: vec![],
+                    appropriate_for_country: None,
                 }),
                 form: FormId(uuid(9)),
                 strategy: CreateStrategy::HaltOnAmbiguity,

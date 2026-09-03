@@ -108,6 +108,7 @@ fn sample_field_set(file: FileId) -> FieldSet {
         ],
         files: vec![file],
         body_format: Some(CopyFormat::Markdown),
+        appropriate_for_country: None,
     }
 }
 
@@ -379,6 +380,7 @@ fn projected(price: PriceIntent) -> ProjectedListing {
                 segments: vec!["Licence".to_owned()],
             },
         }],
+        appropriate_for_country: None,
     }
 }
 
@@ -564,6 +566,7 @@ fn a_field_set_declaring_html_submits_the_draft_under_the_html_type() {
         ],
         files: vec![],
         body_format: Some(CopyFormat::Html),
+        appropriate_for_country: None,
     };
     futures::executor::block_on(adapter.submit(
         tam_marketplace::IdempotencyKey(Uuid([4; 16])),
@@ -807,6 +810,7 @@ fn a_paid_field_set_parses_back_into_the_priced_draft_the_projection_named() {
         ],
         files: vec![],
         body_format: Some(CopyFormat::Markdown),
+        appropriate_for_country: None,
     };
     futures::executor::block_on(adapter.submit(
         tam_marketplace::IdempotencyKey(Uuid([2; 16])),
@@ -840,6 +844,7 @@ fn a_paid_token_without_a_usable_amount_is_refused_rather_than_freed() {
             ],
             files: vec![],
             body_format: Some(CopyFormat::Markdown),
+            appropriate_for_country: None,
         };
         let refused = futures::executor::block_on(adapter.submit(
             tam_marketplace::IdempotencyKey(Uuid([3; 16])),

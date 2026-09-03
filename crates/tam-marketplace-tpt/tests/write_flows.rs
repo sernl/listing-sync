@@ -156,6 +156,7 @@ fn projected() -> ProjectedListing {
         files: vec![FileId(Uuid([1; 16]))],
         body_format: CopyFormat::Html,
         natives: Vec::new(),
+        appropriate_for_country: None,
     }
 }
 

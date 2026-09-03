@@ -1778,6 +1778,7 @@ mod machine_tests {
             entries: vec![(FieldKey::Title, "a resource".to_owned())],
             files: vec![],
             body_format: None,
+            appropriate_for_country: None,
         }
     }
 

@@ -160,6 +160,7 @@ fn projection(title: String, body: String, price: PriceIntent) -> ProjectedListi
         files: vec![FILE],
         body_format: CopyFormat::Html,
         natives: Vec::new(),
+        appropriate_for_country: None,
     }
 }
 

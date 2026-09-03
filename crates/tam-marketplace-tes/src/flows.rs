@@ -578,6 +578,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 ),
             ],
             files: listing.files.clone(),
+            appropriate_for_country: None,
         })
     }
 

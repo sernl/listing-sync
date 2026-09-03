@@ -413,6 +413,18 @@ pub struct FieldSet {
     /// was given, and sniffing one format's bytes under the other's
     /// declaration is how a listing acquires escaped markup nobody asked for.
     pub body_format: Option<CopyFormat>,
+    /// The seller's localisation declaration, carried beside the entries for
+    /// the same reason `body_format` is: it is a typed value rather than one
+    /// of the closed managed fields, and encoding a boolean into one of those
+    /// entries would put a localisation flag inside a field that answers a
+    /// different question.
+    ///
+    /// It rides here rather than nowhere because this set is the recorded
+    /// intent: a field diff can only say the box was part of what we asked for
+    /// if the box was part of what we recorded. `None` is a projection
+    /// carrying no value, which is what lets a create post the box unticked
+    /// while an edit leaves a ticked one alone.
+    pub appropriate_for_country: Option<bool>,
 }
 
 /// One projected vocabulary term as the seam carries it: the marketplace's
@@ -459,6 +471,16 @@ pub struct ProjectedListing {
     /// target binds no such axis, which is why the fields above do not move
     /// and why the TPT adapter reads nothing new.
     pub natives: Vec<NativeAxis>,
+    /// Whether the seller has declared this resource appropriate for the
+    /// marketplace's own country, where they have declared anything.
+    ///
+    /// `None` is the projection carrying no value rather than a value of
+    /// false, and the distinction is the whole of why this is an `Option`: a
+    /// create with none posts the box unticked, while an edit with none
+    /// reposts what the listing already had, because an edit is a full replace
+    /// and posting a constant would clear a box the seller ticked. Only TPT
+    /// binds it today; every other inventory projects `None`.
+    pub appropriate_for_country: Option<bool>,
 }
 
 /// One axis's resolved value as the seam carries it: which equivalence axis it

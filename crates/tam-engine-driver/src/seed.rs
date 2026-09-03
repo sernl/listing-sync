@@ -72,8 +72,9 @@ pub fn seed_for_removal(preparation: &ItemPreparation) -> MachineSeed {
         entries: vec![],
         files: vec![],
         // A removal renders no listing, so there are no body bytes for a
-        // format to describe.
+        // format to describe and no declaration to carry.
         body_format: None,
+        appropriate_for_country: None,
     };
     let intent_hash = content_hash(
         intent_as_json(&preparation.operation, &fields)

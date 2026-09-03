@@ -904,6 +904,7 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
             (FieldKey::Grades, json!({ "tags": grades }).to_string()),
         ],
         files: listing.files.clone(),
+        appropriate_for_country: listing.appropriate_for_country,
     })
 }
 
@@ -984,9 +985,10 @@ pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterEr
         // Absent on the captured create, and a created product therefore
         // carries none for the publishing edit to preserve.
         tax_code: None,
-        // The seam carries no field for this yet, so the projection states
-        // nothing and the edit defers to the product's own read-back.
-        appropriate_for_country: None,
+        // Whatever the projection stated, which is `None` for a seller who has
+        // declared nothing: a create then posts the box unticked and an edit
+        // defers to the product's own read-back rather than clearing it.
+        appropriate_for_country: fields.appropriate_for_country,
     })
 }
 
@@ -1041,6 +1043,47 @@ mod tests {
             thumbs_collection_key: "COLLECTIONKEY",
             authorship: &authorship,
         })
+    }
+
+    /// A declaration the seller has stored reaches the field TPT posts, and
+    /// the whole seam is exercised rather than the last hop of it.
+    ///
+    /// The value starts on a `ProjectedListing`, crosses into the `FieldSet`
+    /// the ledger records as the intent, comes back out through
+    /// `listing_from_field_set` and ends as `country_id_flag`. Every hop of
+    /// that chain dropped it before this change: `project_fields` had nowhere
+    /// to put it and `listing_from_field_set` hard-coded `None`, so a create
+    /// posted the box unticked however the seller had answered.
+    #[test]
+    fn a_stored_declaration_reaches_the_posted_country_flag_on_create() {
+        for (declared, posted) in [(Some(true), "1"), (Some(false), "0"), (None, "0")] {
+            let mut projection = projected(PriceIntent::Free);
+            projection.appropriate_for_country = declared;
+            let fields = project_fields(&projection).expect("the projection renders");
+            assert_eq!(
+                fields.appropriate_for_country, declared,
+                "the recorded intent carries the declaration, so a field diff can say we \
+                 asked for it"
+            );
+            let listing = listing_from_field_set(&fields).expect("the field set reads back");
+            let tokens = tokens();
+            let authorship = attested();
+            let handle = ProcessedHandle::new("PROCESSEDKEY".to_owned());
+            let body = create_fields(&CreateSubmission {
+                tokens: &tokens,
+                listing: &listing,
+                product: &handle,
+                thumbs_collection_key: "COLLECTIONKEY",
+                authorship: &authorship,
+            });
+            assert_eq!(
+                value_of(&body, "data[ItemsLocalization][country_id_flag]"),
+                Some(posted),
+                "a declaration of {declared:?} posts {posted:?}; stating nothing posts the \
+                 box unticked, which is the only safe default on a create because there is \
+                 no existing listing to defer to"
+            );
+        }
     }
 
     fn value_of<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -1437,6 +1480,7 @@ mod tests {
             files: vec![FileId(Uuid([1; 16]))],
             body_format: CopyFormat::Html,
             natives: Vec::new(),
+            appropriate_for_country: None,
         }
     }
 

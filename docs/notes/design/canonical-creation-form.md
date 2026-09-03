@@ -232,6 +232,18 @@ Four gaps this phase does not close, each stated rather than resolved.
 The country behind the localisation label is still unmeasured, and the label is served as null for every seller with a generic sentence rendered in its place.
 Closing it means observing the country on the adapter's own read, which already fetches `localization { countryId countryIdFlag country { name } }`, and storing it on the connection, which needs the adapter crate and a device-to-server report; that is a separate design rather than a step here.
 
+The seam now carries the flag and the sidecar still does not feed it, which is a smaller gap than the one below but a different one.
+`FieldSet` gained a typed `appropriate_for_country: Option<bool>` beside `body_format`, `ProjectedListing` gained the same, `project_fields` puts a stated value in and `listing_from_field_set` takes it back out, so a value that reaches the projection reaches the posted `country_id_flag` and the recorded intent carries it too.
+What does not happen is `crates/tam-engine/src/seed.rs` reading the sidecar, and it was built and then deliberately removed rather than never attempted.
+The cause is that the sidecar cannot say "not stated": migration 0049 added the column `NOT NULL DEFAULT false` and `CategoryGroup` carries a plain `bool`, so a row that predates the column and a seller's deliberate "no" are the same value.
+Only one of those should suppress the adapter's read-back, and `post_edit` suppresses it on any stated value at all — `if listing.appropriate_for_country.is_none()` is the whole guard — so feeding `Some(false)` from a backfilled row would post `0` over a box the seller has ticked on TPT, which is precisely the silent clear step five fixed, arriving through the sidecar instead of through a constant.
+The fix is a nullable column and an `Option<bool>` on the domain field, after which `seed.rs` reads the sidecar and the three-phase engine test that proves it comes back; that is a form-stream change because the model and the migration are theirs.
+
+Building the whole TPT-base record from the upload-page read on import is queued separately, and it is worth doing for a reason that is not the obvious one.
+The obvious reason does not hold: a box ticked on TPT before adoption already survives the first edit, because `post_edit` reads the current flag back whenever the projection states nothing.
+The real reason is the opposite direction. Once a product has a sidecar row our value wins on edit, so a seller who ticks the box on TPT after creating the item here sees our stored choice reposted over it, and the only way that stored choice is right is if we adopted what TPT held at import.
+It costs no extra request: `fetch_for_import` already issues `upload_page_product_request` and `parse_upload_page_product` already returns the flag, and `ImportedListing` simply does not carry it.
+
 The seam does not carry the flag from the sidecar to the adapter, and closing that is queued to the engine stream.
 `ProjectedListing` has no field for it and `crates/tam-engine/src/seed.rs` does not read the sidecar at all, so the create still posts an unticked box whatever the seller chose on our form; `ProjectedListing.natives` is not the vehicle, because it carries values labelled by the equivalence axis they answer and this is a TPT-native boolean rather than an axis.
 The queued item is a field on `ProjectedListing` in `tam-marketplace`, `seed.rs` reading the sidecar, and every `ProjectedListing` literal updated, since the struct has no `Default`.
