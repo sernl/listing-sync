@@ -19,6 +19,8 @@
 		type StandingFilter,
 		type WorkItem
 	} from '$lib/inventory';
+	import { BULK_ACTIONS, unavailable, type BulkVerb } from '$lib/bulk-verbs';
+	import BulkDeleteDialog from '$lib/BulkDeleteDialog.svelte';
 	import { formatPrice, metricsByProduct } from '$lib/listings-view';
 	import MarketplaceChips from '$lib/MarketplaceChips.svelte';
 	import PageHead from '$lib/PageHead.svelte';
@@ -99,6 +101,27 @@
 	let marketplace = $state<InventoryId | 'all'>('all');
 	let standing = $state<StandingFilter>('all');
 	let crossListing = $state(false);
+	let deleting = $state(false);
+
+	/** Only the two built verbs open anything; the other three are disabled at
+	 *  the control, so this is exhaustive over what can actually be clicked. */
+	function start(verb: BulkVerb) {
+		if (verb === 'cross_list') {
+			crossListing = true;
+		} else if (verb === 'delete') {
+			deleting = true;
+		}
+	}
+
+	async function deleted(count: number) {
+		deleting = false;
+		selected = new Set();
+		toast('info', `${count} ${count === 1 ? 'item' : 'items'} deleted.`);
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
+			queryClient.invalidateQueries({ queryKey: queryKeys.mappings })
+		]);
+	}
 
 	const products = $derived(catalogue.data ?? []);
 	const query = $derived(page.url.searchParams.get('q')?.trim() ?? '');
@@ -226,14 +249,21 @@
 					{rows.length} of {tally.total}
 				{/if}
 			</span>
-			<button
-				class="btn bulk-only"
-				type="button"
-				disabled={selected.size === 0}
-				onclick={() => (crossListing = true)}
-			>
-				{selected.size === 0 ? 'Cross-list…' : `Cross-list ${selected.size}…`}
-			</button>
+			<span class="row-actions bulk-only">
+				{#each BULK_ACTIONS as action (action.verb)}
+					<button
+						class="btn {action.verb === 'delete' ? 'danger' : ''}"
+						type="button"
+						disabled={action.missing !== null || selected.size === 0}
+						title={action.missing ?? undefined}
+						onclick={() => start(action.verb)}
+					>
+						{action.label}{selected.size === 0 || action.missing !== null
+							? ''
+							: ` ${selected.size}`}…
+					</button>
+				{/each}
+			</span>
 			<a class="cta" href="/inventory/new">New item</a>
 		{/snippet}
 	</PageHead>
@@ -401,6 +431,11 @@
 				</table>
 			</div>
 			<p class="foot-note">
+				{#each unavailable() as action (action.verb)}
+					<span class="block">{action.label} in bulk is not built. {action.missing}</span>
+				{/each}
+			</p>
+			<p class="foot-note">
 				Views and sales come from the analytics capture and carry its age, not a live check.
 				{#if captured.isError}
 					The capture could not be read just now, so both columns are blank rather than zero.
@@ -419,4 +454,11 @@
 	rows={chosen}
 	onClose={() => (crossListing = false)}
 	onStarted={started}
+/>
+
+<BulkDeleteDialog
+	open={deleting}
+	rows={chosen}
+	onClose={() => (deleting = false)}
+	onDeleted={deleted}
 />

@@ -1,21 +1,23 @@
 # The seller dashboard
 
-What a teacher-seller sees: one catalogue of their own resources, the standing of each on every marketplace they sell through, and the actions those standings admit.
+What a teacher-seller sees: one catalogue of their own items, the standing of each on every marketplace they sell through, and the actions those standings admit.
 
 - date: 2026-09-03
-- status: plan; the screens below are being built against the endpoints this tree already serves
+- status: built; the screens below are what the console renders today, and the gap list at the foot is what the API stream still owes them
+- naming: the seller-facing noun is item, the board is Inventory, and the console's screens carry Vendoo's own words where Vendoo has one (founder question Q1, and `docs/research/rethink/vendoo-console-cross-reference.md` under "Rename map")
 - decisions it implements: D1 (the two-branch automation rule, shown to the seller as the device-driven reality rather than hidden), D3 (a phone starts work for a no-API marketplace but never schedules it), D14 and D30 (where a marketplace login lives, and the words for it)
-- sources: `docs/research/rethink/vendoo-workflows-and-ux.md` sections 1, 3, 10 and 11; `docs/research/rethink/vendoo-architecture-and-market.md` sections 5 and 8; `docs/notes/design/creation-flow.md`; `docs/notes/design/device-registry.md`
+- sources: `docs/research/rethink/vendoo-console-cross-reference.md`, which is the map this console was aligned to; `docs/research/rethink/vendoo-workflows-and-ux.md` sections 1, 3, 9, 10 and 11; `docs/research/rethink/vendoo-architecture-and-market.md` sections 5 and 8; `docs/notes/design/creation-flow.md`; `docs/notes/design/device-registry.md`
 
 ## What this adopts from Vendoo, and what it drops
 
 One item that fans out to many marketplaces, and every screen a view over that fan-out, is the whole product shape and it transfers intact.
 The per-marketplace glyph strip on an inventory row transfers, with its state set widened, and it is the single densest thing on the screen.
 Advanced filtering, search over the title, and the split editor with a destination rail transfer.
-The connections page shape transfers: one row per marketplace carrying its state and the control that changes it.
+The connections page shape transfers: one row per marketplace carrying its state and the control that changes it, merged here with the device registry so one screen answers whether a marketplace can be written to right now.
+Vendoo's 2026 sidebar grouping transfers as far as it has counterparts: a Crosslist group, an Automations group, and a Help group at the foot for the destinations Vendoo keeps in its profile and help menus.
 
 Three things Vendoo does are deliberately not built.
-Sold is not an inventory column, because selling never removes a digital resource from sale.
+Sold is not an inventory column, because selling never removes a digital item from sale.
 Delist-and-relist is not offered as a refresh, because it discards the reviews, ratings, sales history and URL that are the seller's accumulated asset; the reconciliation verb is revise-in-place.
 Auto-delist does not exist at all, and neither does the sold-but-still-listed warning that only means something for one physical unit.
 
@@ -26,11 +28,15 @@ That is the argument for stating the device-driven reality on the dashboard rath
 
 `/` is the workspace overview: the figures the catalogue supports, the attention list, the recent strip, and a band saying whether the seller's own machine is on and which marketplaces need a sign-in there.
 
-`/listings` is the inventory, and it is the centre of the product.
-One row per resource, carrying its title, price, the per-marketplace chip strip, its captured views and sales, and when it was last touched.
-Search over the title, filter by marketplace and by standing, and a bulk cross-list action over the selected rows.
+`/inventory` is the board, and it is the centre of the product.
+One row per item, carrying its title, price, the per-marketplace chip strip, its captured views and sales, and when it was last touched.
+Search over the title, filter by marketplace and by standing, and five bulk verbs over the selected rows.
+Two of the five run: cross-list, and delete.
+Three are rendered disabled with the reason on the control and again under the table: bulk edit, which needs a screen rather than an endpoint; bulk labels, which needs G6; and bulk mark-as-listed, which needs G3 and a bind verb on top of it.
+Bulk delete asks which way the listings already on a marketplace should go and defaults to neither, because removing everywhere fires one write per listing from one click and leaving them standing abandons listings nothing here tracks; that is the seller's decision at the moment they take it, not one the console makes for them.
+There is no bulk delist-and-relist under any name, and a test refuses one.
 
-`/listings/{id}` is one resource: its canonical fields, one row per marketplace with that marketplace's standing and the action it admits, the runs this listing has started, and the destructive actions behind their own dialogs.
+`/inventory/{id}` is one item: its canonical fields, one row per marketplace with that marketplace's standing and the action it admits, the runs this listing has started, and the destructive actions behind their own dialogs.
 The run timeline is not rebuilt here; a run links to `/sync/{job}`, which already renders items, gates and per-item events off the ledger.
 
 `/marketplaces` is one row per marketplace, carrying the branch its automation runs on, the sign-in or connection standing that branch decides, the machine holding a device-branch login, and the machines list itself below the rows.
@@ -56,7 +62,7 @@ The state set is derived from what the API serves and from nothing else.
 Vendoo's three glyph states widen to five in the research; the five below are those, plus the three this tree's own data model distinguishes and a seller acts on differently.
 
 Not listed: no mapping for that marketplace, or a mapping whose binding is `unbound` or `severed`.
-The resource exists here and the marketplace has never seen it.
+The item exists here and the marketplace has never seen it.
 
 Draft: bound, lifecycle `draft`.
 The marketplace holds the listing and is not showing it to buyers, which is a real state on both TPT and Tes and a different action from not listed.
@@ -143,8 +149,8 @@ G7. Transport class is not served.
 `TransportClass` is generated into the client's vocabulary but appears on no view, so the console mirrors the Rust mapping rather than reading it.
 Serving it on `VocabularyView` would remove the mirror.
 
-G8. Removing a listing from one marketplace without deleting the resource.
-`DELETE /{version}/products/{id}` with `remove_from` deletes the product and removes it from the marketplaces named, and `ItemOperation::Remove` is enqueued only by the migrate drain, so a teacher retiring a resource from Tes while keeping it on TPT has no path.
+G8. Removing a listing from one marketplace without deleting the item.
+`DELETE /{version}/products/{id}` with `remove_from` deletes the product and removes it from the marketplaces named, and `ItemOperation::Remove` is enqueued only by the migrate drain, so a teacher retiring an item from Tes while keeping it on TPT has no path.
 The research asks for exactly this verb and asks that it not be called a refresh.
 Shape needed: a per-mapping removal, either its own endpoint or an intent on `POST /{version}/jobs`.
 
@@ -162,3 +168,8 @@ G11. A thumbnail on the product list.
 `ProductHead` carries id, title, price and the two timestamps, and no image; the cover and previews are reachable only through the single-product endpoint.
 The phone card therefore carries four of the five fields the cross-reference names for an inventory card, and renders no placeholder tile for an image that is not served.
 Shape needed: a cover image URL on `ProductHead`.
+
+G12. Binding a listing the console did not create.
+Vendoo's "Mark as Listed" takes a pasted listing URL and binds an existing marketplace listing to the item, which is how an imported or pre-existing catalogue is adopted; nothing here binds a mapping to a listing the engine did not create, so the verb is disabled on the item screen and in bulk.
+It sits on top of G3 rather than beside it: G3 serves the URL a bound mapping already has, and this one accepts a URL for a mapping that has none.
+Shape needed: `POST /{version}/mappings/{mapping}/bind` taking `{ listing_url }`, refusing a mapping that is already bound.

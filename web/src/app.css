@@ -867,6 +867,17 @@ th.num {
 	display: none;
 }
 
+/* One reason per line inside a footnote, for the bulk verbs that are not
+   built: run together as prose they read as one excuse rather than as a list
+   of what the API stream still owes. */
+.foot-note .block {
+	display: block;
+}
+
+.foot-note .block + .block {
+	margin-top: 4px;
+}
+
 .scroll-tbl {
 	max-height: 70vh;
 	overflow: auto;
