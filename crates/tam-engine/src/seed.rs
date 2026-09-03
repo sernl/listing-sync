@@ -24,12 +24,14 @@ use tam_marketplace::{
 };
 use tam_storage::{
     ElectionRepo, ItemVerdict, LeaseRepo, LeasedItem, LossScope, MappingRepo, OverrideRepo,
-    ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo, ELECTION,
+    ProductRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo, TptBaseRepo, ELECTION,
 };
 use tam_taxonomy::listing::{
     project_listing_with_overrides, projection_vocabularies, ListingContext,
 };
-use tam_types::{AttemptId, FailureCode, FailureDetail, InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{
+    AttemptId, FailureCode, FailureDetail, InventoryId, Marketplace, OrgId, Timestamp, Uuid,
+};
 
 use tam_engine_driver::driver::{EngineError, VerifyPolicy};
 use tam_engine_driver::vocabulary::ItemPreparation as WirePreparation;
@@ -525,6 +527,28 @@ pub async fn prepare_item(
         }
     };
 
+    // The seller's own localisation declaration, out of the sidecar that holds
+    // what the canonical model has no field for.
+    //
+    // `and_then` rather than `map`, and the distinction is the whole reason
+    // this waited for a nullable column: no row and a row stating nothing are
+    // both "not stated", and only a row that states a value may answer here.
+    // Stating a value suppresses the read-back the adapter's edit relies on,
+    // so answering `Some(false)` for a row that never said so would repost `0`
+    // over a box the seller ticked on TPT — the silent clear the form work
+    // fixed, arriving through the sidecar instead of through a constant.
+    //
+    // Read only where an inventory binds it, so a Tes item costs no query.
+    let appropriate_for_country = if lease.inventory.marketplace() == Marketplace::Tpt {
+        TptBaseRepo::new(pool.clone())
+            .get(lease.org, mapping.mapping.product)
+            .await
+            .map_err(|error| crate::ledger::to_wire_error(&error))?
+            .and_then(|record| record.categories.appropriate_for_country)
+    } else {
+        None
+    };
+
     Ok(ItemPreparation::Ready {
         operation,
         projected: Some(ProjectedListing {
@@ -539,15 +563,7 @@ pub async fn prepare_item(
             }),
             files: projection.files,
             body_format: projection.body_format,
-            // Deliberately none rather than read from the tpt_base sidecar,
-            // which holds the seller's answer. The sidecar cannot say "not
-            // stated": its column is `NOT NULL DEFAULT false`, so a row that
-            // predates the column and a seller's deliberate "no" are the same
-            // value, and stating either here suppresses the read-back the
-            // adapter's edit relies on to avoid clearing a box ticked on TPT.
-            // Stating nothing keeps that protection, and the sidecar feeds
-            // this the moment the column can express absence.
-            appropriate_for_country: None,
+            appropriate_for_country,
             // The lowering beside the two that already exist: a resolved axis
             // the seam names no field for travels as the target vocabulary's
             // own term, labelled by the axis it answers.

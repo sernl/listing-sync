@@ -235,27 +235,23 @@ TPT renders the control after the standards it nests inside Categories, and this
 `docs/notes/design/creation-flow.md` was corrected on the route it names and on the losses it describes as absent.
 It stated one further staleness this note predicted — the Vendoo rename described as pending — that no sentence in it actually makes; the stale route path was the whole of that defect.
 
-Four gaps this phase does not close, each stated rather than resolved.
+Four gaps this phase did not close, each stated rather than resolved. One has since been closed and is kept here with its reason, because the reason is the part worth having.
 
 The country behind the localisation label is still unmeasured, and the label is served as null for every seller with a generic sentence rendered in its place.
 Closing it means observing the country on the adapter's own read, which already fetches `localization { countryId countryIdFlag country { name } }`, and storing it on the connection, which needs the adapter crate and a device-to-server report; that is a separate design rather than a step here.
 
-The seam carries the flag, the sidecar can now say "not stated", and nothing yet reads the one into the other.
+Closed. The seam carries the flag, the sidecar can say "not stated", and `seed.rs` now reads the one into the other.
 `FieldSet` gained a typed `appropriate_for_country: Option<bool>` beside `body_format`, `ProjectedListing` gained the same, `project_fields` puts a stated value in and `listing_from_field_set` takes it back out, so a value that reaches the projection reaches the posted `country_id_flag` and the recorded intent carries it too.
 What does not happen is `crates/tam-engine/src/seed.rs` reading the sidecar, and it was built and then deliberately removed rather than never attempted.
 The cause was that the sidecar could not say "not stated", and step six removed it: the column is nullable, the domain field is an `Option<bool>`, and a row written before either reads back as `None` rather than as a seller's deliberate "no".
 That distinction is the one `post_edit` turns on — `if listing.appropriate_for_country.is_none()` is the whole guard on the protective read-back — so a `None` fed from the sidecar defers to what TPT itself holds and only a value the seller stated overrides it.
-What remains is `seed.rs` reading the sidecar and the three-phase engine test that proves the value comes back, which is an engine-stream change because the seed and the test are theirs.
+`seed.rs` reads the sidecar at the one production site, gated on the inventory being TPT so a Tes item costs no query, and the read is `and_then` rather than `map` for exactly the reason above: no row and a row stating nothing are both "not stated", and only a row that states a value may answer.
+The engine test asserts four cases — no row, a stored `true`, a row stating nothing, and a Tes item reading none with a row present — and the third is the one the whole detour was about.
 
 Building the whole TPT-base record from the upload-page read on import is queued separately, and it is worth doing for a reason that is not the obvious one.
 The obvious reason does not hold: a box ticked on TPT before adoption already survives the first edit, because `post_edit` reads the current flag back whenever the projection states nothing.
 The real reason is the opposite direction. Once a product has a sidecar row our value wins on edit, so a seller who ticks the box on TPT after creating the item here sees our stored choice reposted over it, and the only way that stored choice is right is if we adopted what TPT held at import.
 It costs no extra request: `fetch_for_import` already issues `upload_page_product_request` and `parse_upload_page_product` already returns the flag, and `ImportedListing` simply does not carry it.
-
-The seam does not carry the flag from the sidecar to the adapter, and closing that is queued to the engine stream.
-`ProjectedListing` has no field for it and `crates/tam-engine/src/seed.rs` does not read the sidecar at all, so the create still posts an unticked box whatever the seller chose on our form; `ProjectedListing.natives` is not the vehicle, because it carries values labelled by the equivalence axis they answer and this is a TPT-native boolean rather than an axis.
-The queued item is a field on `ProjectedListing` in `tam-marketplace`, `seed.rs` reading the sidecar, and every `ProjectedListing` literal updated, since the struct has no `Default`.
-It carries a caveat that is easy to miss and expensive to get wrong: when the sidecar starts feeding this, the importer must populate it from the same read-back on import, or a box a seller ticked on TPT before adopting the app reads back as the sidecar's `false` and the first edit clears it again.
 
 The DOM snapshot states at `docs/research/rethink/tpt-create-form-dom.md:149` that `ItemsProperty.audience` is "unlocked but unreachable", and the decoded 48-path list does not contain that path at all.
 The list is the stronger evidence, being a verbatim decode confirmed identical across two captures four days apart, so the snapshot's wording overstates it; nothing in this design depends on the difference and the field table omits the path because it is not one of the 48.

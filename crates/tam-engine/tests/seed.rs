@@ -522,6 +522,165 @@ fn nz_subject_override(org: OrgId) -> tam_domain::equivalence::ProjectionOverrid
     .expect("the override is well formed")
 }
 
+/// The seller's stored localisation declaration reaches the projection, only
+/// where an inventory binds it, and only when the row actually states one.
+///
+/// Four phases, and the third is the one this waited for. No sidecar row is
+/// not a declaration. A stored `true` arrives as `Some(true)`, which is the
+/// hop that carries the seller's answer to the field a create posts. A row
+/// that states nothing is also not a declaration, and answering `Some(false)`
+/// for it would suppress the read-back the adapter's edit relies on and repost
+/// `0` over a box ticked on TPT — the silent clear, arriving through the
+/// sidecar. And a Tes item reads nothing even with a row present, because the
+/// sidecar is TPT's.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_stored_localisation_declaration_reaches_the_projection_on_tpt_only(pool: PgPool) {
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
+    // `provision` seeds the Tes side only, so a TPT projection would block on
+    // two taxonomy gaps before reaching the field this body is about. These
+    // are the counterparts that let it project at all.
+    TaxonomyRepo::new(pool.clone())
+        .seed(
+            &[],
+            &[
+                edge(InventoryId::Tpt, "tpt-maths"),
+                phase_edge(InventoryId::Tpt, "tpt-kindergarten"),
+            ],
+        )
+        .await
+        .expect("the TPT counterparts seed");
+    let product = ProductId(Uuid([0x03; 16]));
+    ProductRepo::new(pool.clone())
+        .insert(ORG, &canonical_product(product, 0x25), NOW)
+        .await
+        .expect("the TPT product inserts");
+    let mapping = MappingId(Uuid([0x33; 16]));
+    MappingRepo::new(pool.clone())
+        .insert(
+            ORG,
+            &tam_domain::Mapping {
+                inventory: InventoryId::Tpt,
+                ..mapping_of(
+                    mapping,
+                    product,
+                    tam_domain::Binding::Unbound,
+                    tam_marketplace::RemoteLifecycle::Absent,
+                )
+            },
+            0,
+            NOW,
+        )
+        .await
+        .expect("the TPT mapping inserts");
+    let mut tpt_lease = lease();
+    tpt_lease.item = tam_domain::JobItemId(Uuid([0x44; 16]));
+    tpt_lease.mapping = mapping;
+    tpt_lease.inventory = InventoryId::Tpt;
+
+    assert_eq!(
+        declared(&pool, &tpt_lease).await,
+        None,
+        "no sidecar row is no declaration, not a declaration of false"
+    );
+
+    let sidecar = tam_storage::TptBaseRepo::new(pool.clone());
+    sidecar
+        .upsert(ORG, product, &declaring(Some(true)), NOW)
+        .await
+        .expect("the sidecar row writes");
+    assert_eq!(
+        declared(&pool, &tpt_lease).await,
+        Some(true),
+        "the stored declaration reaches the projection, which is the hop that carries it to \
+         the field a create posts"
+    );
+
+    sidecar
+        .upsert(ORG, product, &declaring(None), NOW)
+        .await
+        .expect("the row states nothing");
+    assert_eq!(
+        declared(&pool, &tpt_lease).await,
+        None,
+        "and a row that states nothing is not a declaration either: answering false here \
+         would suppress the adapter's read-back and clear a box ticked on TPT, which is the \
+         defect this whole field exists inside"
+    );
+
+    sidecar
+        .upsert(ORG, PRODUCT, &declaring(Some(true)), NOW)
+        .await
+        .expect("a row for the Tes-mapped product writes too");
+    assert_eq!(
+        declared(&pool, &lease()).await,
+        None,
+        "and a Tes item reads none even with a row sitting there, because the sidecar is \
+         TPT's and this inventory binds no such axis"
+    );
+}
+
+/// What a preparation projected for the localisation declaration.
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn declared(pool: &PgPool, leased: &LeasedItem) -> Option<bool> {
+    // Named rather than lumped into one `else`, because which non-projecting
+    // answer came back is the whole diagnosis when this fixture stops
+    // projecting.
+    match prepare_item(pool, leased, NOW)
+        .await
+        .expect("the preparation runs")
+    {
+        ItemPreparation::Ready {
+            projected: Some(projected),
+            ..
+        } => projected.appropriate_for_country,
+        ItemPreparation::Ready {
+            projected: None, ..
+        } => {
+            panic!("ready, but describing nothing: this fixture is a create and creates project")
+        }
+        ItemPreparation::Blocked { gate, raised } => {
+            panic!("blocked on {gate}, having raised {raised:?}")
+        }
+        ItemPreparation::CounterpartLost { counterpart } => {
+            panic!("waiting on {counterpart:?}, which this fixture has no counterpart for")
+        }
+    }
+}
+
+/// A sidecar record stating one declaration and nothing else the seller has
+/// not made: every optional field absent, because inventing a tax code or a
+/// copyright attestation is the seller's to make and not a fixture's.
+fn declaring(appropriate_for_country: Option<bool>) -> tam_storage::TptBaseRecord {
+    tam_storage::TptBaseRecord {
+        thumbnail_mode: tam_domain::product::ThumbnailMode::UploadLater,
+        thumbnails: vec![],
+        video_preview: None,
+        additional_licence_minor_units: None,
+        bundle_discount_minor_units: None,
+        tax_code: None,
+        categories: tam_domain::product::CategoryGroup {
+            grades: vec![],
+            subject_areas: vec![],
+            tags: vec![],
+            formats: vec![],
+            custom_categories: vec![],
+            appropriate_for_country,
+        },
+        standards: vec![],
+        details: tam_domain::product::DetailGroup {
+            teaching_duration: None,
+            pages_or_slides: None,
+            answer_key: None,
+        },
+        copyright: None,
+        status: tam_domain::product::ListingStatus::Draft,
+    }
+}
+
 /// The whole safety property of a migrate. The source listing does not go
 /// until the target listing exists and the driver's own verification read saw
 /// it, so the unsafe direction -- source gone, target absent -- is
