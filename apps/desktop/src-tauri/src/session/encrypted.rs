@@ -386,14 +386,75 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The lowercase hex spelling of some bytes.
+    fn hex(bytes: &[u8]) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        bytes
+            .iter()
+            .flat_map(|&byte| [byte >> 4, byte & 0x0F])
+            .map(|nibble| char::from(DIGITS[usize::from(nibble)]))
+            .collect()
+    }
+
+    /// The standard-alphabet base64 spelling of some bytes, padded.
+    ///
+    /// Hand-rolled because adding a dependency is a founder decision, and this
+    /// is one encoding of one array in one test.
+    fn base64(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut spelled = String::new();
+        for chunk in bytes.chunks(3) {
+            let mut block = [0_u8; 3];
+            block
+                .iter_mut()
+                .zip(chunk)
+                .for_each(|(slot, byte)| *slot = *byte);
+            let packed = (usize::from(block[0]) << 16)
+                | (usize::from(block[1]) << 8)
+                | usize::from(block[2]);
+            for slot in 0..4 {
+                if slot <= chunk.len() {
+                    spelled.push(char::from(ALPHABET[(packed >> (18 - 6 * slot)) & 0x3F]));
+                } else {
+                    spelled.push('=');
+                }
+            }
+        }
+        spelled
+    }
+
+    /// What is searched for has to be something the scratch path cannot
+    /// contain. `a_dir` names the directory with a version-4 UUID in hex, so a
+    /// short hex-alphabet needle occurs there by chance: searching for `ab` and
+    /// `171`, as this test once did, failed on about one run in eight. Every
+    /// needle below is a full-length encoding of the whole key, and the base64
+    /// one is not even in the hex alphabet.
     #[test]
     fn debug_carries_nothing_about_the_key() {
+        const KEY_BYTE: u8 = 0xAB;
+
+        let key = [KEY_BYTE; 32];
         let dir = a_dir();
-        let printed = format!("{:?}", a_store(&dir, 0xAB));
+        let printed = format!("{:?}", a_store(&dir, KEY_BYTE));
+
         assert!(
-            !printed.contains("171") && !printed.to_lowercase().contains("ab"),
-            "the key reached a formatter: {printed}"
+            printed.ends_with(", .. }"),
+            "the marker standing for the withheld fields is gone, so nothing says a field \
+             was withheld: {printed}"
         );
+        let as_hex = hex(&key);
+        for spelling in [
+            format!("{key:?}"),
+            as_hex.to_uppercase(),
+            base64(&key),
+            as_hex,
+        ] {
+            assert!(
+                !printed.contains(&spelling),
+                "the key reached a formatter as `{spelling}`: {printed}"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
