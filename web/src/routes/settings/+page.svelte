@@ -2,6 +2,11 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { ApiFailure, api, type OrgView } from '$lib/api';
 	import {
+		currentSessionToken,
+		listBrowserSessions,
+		revokeBrowserSession
+	} from '$lib/browser-sessions';
+	import {
 		ALREADY_REGISTERED,
 		AuthFailure,
 		CEREMONY_ABORTED,
@@ -14,6 +19,8 @@
 		type Identity,
 		type PasskeyRecord
 	} from '$lib/auth-client';
+	import { type BrowserSession, merge, sessionLabel } from '$lib/device-merge';
+	import { agoLabel } from '$lib/elapsed';
 	import { NAME_MAX_CHARS, checkOrgName } from '$lib/org-name';
 	import { PADDLE_CONFIG, openCheckout, subscriptionTone } from '$lib/paddle';
 	import PageHead from '$lib/PageHead.svelte';
@@ -189,6 +196,54 @@
 			return;
 		}
 		removing.mutate(passkey.id);
+	}
+
+	// ------------------------------------------------- browser sign-ins
+
+	// The device registry is read here only to subtract: a sign-in already shown
+	// against a machine on Marketplaces is not repeated on this panel, and the
+	// join that decides which those are needs both halves. The key is the shared
+	// one, so this costs no second request when either screen has already read
+	// it.
+	const registry = createQuery(() => ({
+		queryKey: queryKeys.devices,
+		queryFn: () => api.devices()
+	}));
+
+	const signIns = createQuery(() => ({
+		queryKey: queryKeys.browserSessions,
+		queryFn: () => listBrowserSessions()
+	}));
+
+	const current = createQuery(() => ({
+		queryKey: queryKeys.currentSessionToken,
+		queryFn: () => currentSessionToken()
+	}));
+
+	const joined = $derived(
+		merge(registry.data?.devices ?? [], signIns.data ?? [], current.data ?? null)
+	);
+
+	const endingSignIn = createMutation(() => ({
+		mutationFn: (token: string) => revokeBrowserSession(token),
+		onSuccess: async () => {
+			toast('info', 'That browser sign-in was ended.');
+			await queryClient.invalidateQueries({ queryKey: queryKeys.browserSessions });
+		},
+		onError: () => {
+			toast('error', 'That sign-in was not ended.');
+		}
+	}));
+
+	function endSignIn(session: BrowserSession, isCurrent: boolean) {
+		const sure = confirm(
+			isCurrent
+				? 'End this sign-in? You are using it right now, so you will be signed out of this browser.'
+				: 'End this browser sign-in? That browser will have to sign in again.'
+		);
+		if (sure) {
+			endingSignIn.mutate(session.token);
+		}
 	}
 
 	// -------------------------------------------------------------- billing
@@ -367,20 +422,61 @@
 	</Panel>
 
 	<Panel
-		title="Your devices"
-		description="The machines signed in to this account, the marketplace logins each one holds, and a sign-out for each. Your marketplace logins live on the machine that captured them, never on our servers."
+		title="Browser sign-ins"
+		description="Where this account is signed in to the console. These are sign-ins to us, not to any marketplace; the identity service records only the address and the browser each was made from, which is why some cannot be pinned to a machine."
 	>
 		<div class="row">
 			<span class="what">
-				<span class="t">Machines and browser sign-ins</span>
+				<span class="t">Machines</span>
 				<span class="s">
-					Sign out a machine you no longer use, or end a browser sign-in you do not
-					recognise.
+					A machine you no longer use is signed out on Marketplaces, beside the logins it
+					holds.
 				</span>
 			</span>
 			<span class="grow"></span>
 			<a class="btn small" href="/marketplaces">Open</a>
 		</div>
+
+		{#if signIns.isPending}
+			<p class="quiet">Loading…</p>
+		{:else if signIns.isError}
+			<p class="quiet">Your browser sign-ins could not be listed.</p>
+		{:else if joined.orphans.length === 0}
+			<p class="quiet">
+				Every browser sign-in on this account is shown against a machine on Marketplaces.
+			</p>
+		{:else}
+			{#each joined.orphans as orphan (orphan.session.token)}
+				<div class="row">
+					<span class="what">
+						<span class="t">
+							{sessionLabel(orphan.session)}
+							{#if orphan.isCurrent}<span class="pill ok">this browser</span>{/if}
+						</span>
+						{#if orphan.session.createdAt}
+							<span class="s">
+								Signed in {agoLabel(new Date(orphan.session.createdAt).getTime(), Date.now())}
+							</span>
+						{/if}
+					</span>
+					<span class="grow"></span>
+					<button
+						type="button"
+						class="btn small danger"
+						disabled={endingSignIn.isPending && endingSignIn.variables === orphan.session.token}
+						onclick={() => endSignIn(orphan.session, orphan.isCurrent)}
+					>
+						{endingSignIn.isPending && endingSignIn.variables === orphan.session.token
+							? 'Ending…'
+							: 'End sign-in'}
+					</button>
+				</div>
+			{/each}
+		{/if}
+		<p class="foot-note">
+			Ending a sign-in takes effect on the next request that browser makes; the session cache
+			that would otherwise delay it is switched off for this account.
+		</p>
 	</Panel>
 
 	<Panel

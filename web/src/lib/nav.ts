@@ -89,11 +89,45 @@ const ALL_ITEMS: readonly NavItem[] = [
 	SETTINGS_ITEM
 ];
 
+/** The bottom bar the console shows below the phone breakpoint, and the one
+ *  navigation on that viewport: the sidebar's fourteen destinations do not fit
+ *  on a phone, so five carry it and the rest are reached from the screens that
+ *  link to them.
+ *
+ *  Derived, not sourced. No public Vendoo page names its app's tab bar,
+ *  because its help centre teaches mobile navigation in screenshots rather
+ *  than prose (`docs/research/rethink/vendoo-console-cross-reference.md:161`
+ *  and `:195`). The set below is chosen from what that section does source:
+ *  the verb split, which keeps one item's work on the phone and drops
+ *  importing and the many-item bulk verbs, and the app's one attested path,
+ *  "Settings > Marketplaces". Replace it against the founder's own reading of
+ *  the app.
+ *
+ *  Each tab's destination and glyph are looked up rather than written again,
+ *  so a renamed route renames its tab or stops the lane. The label is the
+ *  tab's own, because a tab is about sixty pixels wide and "Account Settings"
+ *  is not. */
+const TAB_LABELS: readonly { href: string; label: string }[] = [
+	{ href: '/inventory', label: 'Inventory' },
+	{ href: '/marketplaces', label: 'Marketplaces' },
+	{ href: '/sync', label: 'Sync' },
+	{ href: '/analytics', label: 'Analytics' },
+	{ href: '/settings', label: 'Account' }
+];
+
 /** Destinations matched exactly rather than by prefix, because each one has
  *  sibling destinations of its own beneath it in the same sidebar: every path
  *  is under `/`, and every operator page is under `/admin`. A prefix match on
  *  either would light two entries at once. */
 const EXACT_ONLY: readonly string[] = ['/', '/admin'];
+
+export const MOBILE_TABS: readonly NavItem[] = TAB_LABELS.map(({ href, label }) => {
+	const destination = ALL_ITEMS.find((item) => item.href === href);
+	if (destination === undefined) {
+		throw new Error(`the ${label} tab points at ${href}, which the sidebar does not hold`);
+	}
+	return { ...destination, label };
+});
 
 /** Whether a nav destination is the one the browser is on.
  *

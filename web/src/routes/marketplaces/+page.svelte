@@ -2,6 +2,12 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { api, type ConnectionView, type DeviceSessionView, type DeviceView } from '$lib/api';
 	import {
+		currentSessionToken,
+		listBrowserSessions,
+		revokeBrowserSession
+	} from '$lib/browser-sessions';
+	import { type BrowserSession, matchNote, merge } from '$lib/device-merge';
+	import {
 		SIGN_IN_LABEL,
 		deviceFootnote,
 		deviceRows,
@@ -16,17 +22,6 @@
 	import { MARKETPLACE_NAME } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
-	import { type BrowserSession, matchNote, merge, sessionLabel } from './merge';
-	import { currentSessionToken, listBrowserSessions, revokeBrowserSession } from './sessions';
-
-	// The two reads that decide a marketplace row are keyed in `$lib/query`
-	// because the dashboard's band and its attention panel read the same rows:
-	// a revoke here has to move them too. The two identity-plane reads are
-	// keyed locally, because nothing outside this page invalidates them.
-	const KEYS = {
-		browserSessions: ['browser-sessions'] as const,
-		currentToken: ['current-session-token'] as const
-	};
 
 	const queryClient = useQueryClient();
 
@@ -41,12 +36,12 @@
 	}));
 
 	const signIns = createQuery(() => ({
-		queryKey: KEYS.browserSessions,
+		queryKey: queryKeys.browserSessions,
 		queryFn: () => listBrowserSessions()
 	}));
 
 	const current = createQuery(() => ({
-		queryKey: KEYS.currentToken,
+		queryKey: queryKeys.currentSessionToken,
 		queryFn: () => currentSessionToken()
 	}));
 
@@ -154,22 +149,11 @@
 			}
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
-				queryClient.invalidateQueries({ queryKey: KEYS.browserSessions })
+				queryClient.invalidateQueries({ queryKey: queryKeys.browserSessions })
 			]);
 		},
 		onError: () => {
 			toast('error', 'The machine was not signed out.');
-		}
-	}));
-
-	const endingSignIn = createMutation(() => ({
-		mutationFn: (token: string) => revokeBrowserSession(token),
-		onSuccess: async () => {
-			toast('info', 'That browser sign-in was ended.');
-			await queryClient.invalidateQueries({ queryKey: KEYS.browserSessions });
-		},
-		onError: () => {
-			toast('error', 'That sign-in was not ended.');
 		}
 	}));
 
@@ -186,16 +170,6 @@
 		}
 	}
 
-	function endSignIn(session: BrowserSession, isCurrent: boolean) {
-		const sure = confirm(
-			isCurrent
-				? 'End this sign-in? You are using it right now, so you will be signed out of this browser.'
-				: 'End this browser sign-in? That browser will have to sign in again.'
-		);
-		if (sure) {
-			endingSignIn.mutate(session.token);
-		}
-	}
 </script>
 
 <div class="page">
@@ -369,50 +343,6 @@
 		{/if}
 		</Panel>
 	</div>
-
-	<Panel
-		title="Browser sign-ins"
-		description="Where this account is signed in to the console. These are sign-ins to us, not to any marketplace; the identity service records only the address and the browser each was made from, which is why some cannot be pinned to a machine above."
-	>
-		{#if signIns.isPending}
-			<p class="quiet">Loading…</p>
-		{:else if signIns.isError}
-			<p class="quiet">Your browser sign-ins could not be listed.</p>
-		{:else if joined.orphans.length === 0}
-			<p class="quiet">Every browser sign-in on this account is shown against a machine above.</p>
-		{:else}
-			{#each joined.orphans as orphan (orphan.session.token)}
-				<div class="row">
-					<span class="what">
-						<span class="t">
-							{sessionLabel(orphan.session)}
-							{#if orphan.isCurrent}<span class="pill ok">this browser</span>{/if}
-						</span>
-						{#if orphan.session.createdAt}
-							<span class="s">
-								Signed in {agoLabel(new Date(orphan.session.createdAt).getTime(), now)}
-							</span>
-						{/if}
-					</span>
-					<span class="grow"></span>
-					<button
-						type="button"
-						class="btn small danger"
-						disabled={endingSignIn.isPending && endingSignIn.variables === orphan.session.token}
-						onclick={() => endSignIn(orphan.session, orphan.isCurrent)}
-					>
-						{endingSignIn.isPending && endingSignIn.variables === orphan.session.token
-							? 'Ending…'
-							: 'End sign-in'}
-					</button>
-				</div>
-			{/each}
-		{/if}
-		<p class="foot-note">
-			Ending a sign-in takes effect on the next request that browser makes; the session cache
-			that would otherwise delay it is switched off for this account.
-		</p>
-	</Panel>
 </div>
 
 <style>

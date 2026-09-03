@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	ADMIN_GROUP,
 	LEGACY_REDIRECTS,
+	MOBILE_TABS,
 	NAV_GROUPS,
 	SETTINGS_ITEM,
 	breadcrumbFor,
@@ -30,6 +31,46 @@ describe('the sidebar', () => {
 
 	it('never marks a destination both counted and unbuilt', () => {
 		expect(EVERY_ITEM.filter((item) => item.soon && item.count !== undefined)).toEqual([]);
+	});
+});
+
+describe('the phone tab bar', () => {
+	it('carries the five destinations the small viewport navigates by', () => {
+		expect(MOBILE_TABS.map((tab) => tab.href)).toEqual([
+			'/inventory',
+			'/marketplaces',
+			'/sync',
+			'/analytics',
+			'/settings'
+		]);
+	});
+
+	it('names each tab in a word that fits a tab', () => {
+		expect(MOBILE_TABS.map((tab) => tab.label)).toEqual([
+			'Inventory',
+			'Marketplaces',
+			'Sync',
+			'Analytics',
+			'Account'
+		]);
+	});
+
+	it('points every tab at a destination the sidebar holds', () => {
+		const destinations = new Set(EVERY_ITEM.map((item) => item.href));
+		for (const tab of MOBILE_TABS) {
+			expect(destinations.has(tab.href)).toBe(true);
+		}
+	});
+
+	it('takes each glyph from that destination rather than a second copy', () => {
+		for (const tab of MOBILE_TABS) {
+			const destination = EVERY_ITEM.find((item) => item.href === tab.href);
+			expect(tab.icon).toBe(destination?.icon);
+		}
+	});
+
+	it('offers no tab to a destination that is not built', () => {
+		expect(MOBILE_TABS.filter((tab) => tab.soon)).toEqual([]);
 	});
 });
 

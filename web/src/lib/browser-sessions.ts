@@ -1,17 +1,18 @@
-// The identity service's half of "Your devices", reached through its own
-// client SDK.
+// The identity service's half of the two device surfaces, reached through its
+// own client SDK.
 //
-// These live beside the page rather than in `$lib/auth-client` because they
-// are the only consumer: the browser session list is a device-page concern,
-// and the identity boundary module stays the place where the two planes meet
-// rather than a drawer for every endpoint better-auth exposes.
+// Separate from `$lib/auth-client` rather than folded into it: the identity
+// boundary module stays the place where the two planes meet rather than a
+// drawer for every endpoint better-auth exposes. Two screens read these now,
+// the machines list on Marketplaces and the browser sign-ins on Account
+// Settings, which is why they are shared rather than route-local.
 //
 // `listSessions` and `revokeSession` are better-auth 1.7.2's own endpoints
 // (`/list-sessions`, `/revoke-session`). `revokeSession` takes the session's
 // `token`, not its `id`.
 
 import { authClient } from '$lib/auth-client';
-import type { BrowserSession } from './merge';
+import type { BrowserSession } from '$lib/device-merge';
 
 export class SessionFailure extends Error {}
 

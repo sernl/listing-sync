@@ -11,6 +11,7 @@
 	import { normaliseQuery } from '$lib/listings-view';
 	import {
 		ADMIN_GROUP,
+		MOBILE_TABS,
 		NAV_GROUPS,
 		SETTINGS_ITEM,
 		breadcrumbFor,
@@ -225,6 +226,9 @@
 
 	<main class="main">
 		<div class="top">
+			<a class="top-mark" href="/" aria-label="Dashboard">
+				<span class="leaf" aria-hidden="true">T</span>
+			</a>
 			<span class="crumb">Console / <b>{crumb}</b></span>
 			<span class="grow"></span>
 			<span class="conn">
@@ -254,4 +258,17 @@
 
 		{@render children()}
 	</main>
+
+	<nav class="tabbar" aria-label="Sections">
+		{#each MOBILE_TABS as tab (tab.href)}
+			<a
+				class="tab"
+				href={tab.href}
+				aria-current={isCurrent(pathname, tab.href) ? 'page' : undefined}
+			>
+				<i class="ico" aria-hidden="true">{tab.icon}</i>
+				<span>{tab.label}</span>
+			</a>
+		{/each}
+	</nav>
 </div>

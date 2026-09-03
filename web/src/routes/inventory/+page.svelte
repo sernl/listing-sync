@@ -30,6 +30,15 @@
 	import type { InventoryId } from '$lib/generated/vocab';
 
 	const ROW_HEIGHT = 60;
+	/** One card is taller than one table row, and the windowing is told which
+	 *  it is measuring: `visibleWindow` derives every scroll spacer from the
+	 *  row height it is given, so a card rendered at one height and counted at
+	 *  another drifts the scrollbar by the difference on every row. Matched to
+	 *  `.card-tbl tr` in `app.css`. */
+	const PHONE_ROW_HEIGHT = 124;
+	/** The one breakpoint the phone layout uses, written here as well because
+	 *  a media query is the only way JavaScript can read it. */
+	const PHONE_QUERY = '(max-width: 620px)';
 	const COLUMNS = 8;
 
 	const queryClient = useQueryClient();
@@ -75,6 +84,17 @@
 
 	let scrollTop = $state(0);
 	let viewport = $state(600);
+	// Safe to read at init: the layout is `ssr = false`, so this component
+	// never renders without a window.
+	const phoneQuery = window.matchMedia(PHONE_QUERY);
+	let onPhone = $state(phoneQuery.matches);
+	$effect(() => {
+		const watch = (event: MediaQueryListEvent) => {
+			onPhone = event.matches;
+		};
+		phoneQuery.addEventListener('change', watch);
+		return () => phoneQuery.removeEventListener('change', watch);
+	});
 	let selected = $state<Set<string>>(new Set());
 	let marketplace = $state<InventoryId | 'all'>('all');
 	let standing = $state<StandingFilter>('all');
@@ -125,7 +145,8 @@
 		});
 	});
 
-	const win = $derived(visibleWindow(shown.length, ROW_HEIGHT, scrollTop, viewport));
+	const rowHeight = $derived(onPhone ? PHONE_ROW_HEIGHT : ROW_HEIGHT);
+	const win = $derived(visibleWindow(shown.length, rowHeight, scrollTop, viewport));
 
 	const chosen = $derived(allRows.filter((row) => selected.has(row.product.id)));
 	const allShownSelected = $derived(
@@ -206,7 +227,7 @@
 				{/if}
 			</span>
 			<button
-				class="btn"
+				class="btn bulk-only"
 				type="button"
 				disabled={selected.size === 0}
 				onclick={() => (crossListing = true)}
@@ -312,7 +333,7 @@
 					viewport = event.currentTarget.clientHeight;
 				}}
 			>
-				<table>
+				<table class="card-tbl">
 					<thead>
 						<tr>
 							<th>
@@ -334,11 +355,11 @@
 					</thead>
 					<tbody>
 						{#if win.padTop > 0}
-							<tr style="height: {win.padTop}px"><td colspan={COLUMNS}></td></tr>
+							<tr class="spacer" style="height: {win.padTop}px"><td colspan={COLUMNS}></td></tr>
 						{/if}
 						{#each shown.slice(win.start, win.end) as entry (entry.row.product.id)}
 							{@const problem = firstProblem(entry.row)}
-							<tr style="height: {ROW_HEIGHT}px">
+							<tr style="height: {rowHeight}px">
 								<td>
 									<input
 										type="checkbox"
@@ -355,6 +376,7 @@
 									>
 										{entry.row.product.title}
 									</a>
+									<span class="card-price">{entry.price}</span>
 								</td>
 								<td><MarketplaceChips chips={entry.row.chips} /></td>
 								<td>
@@ -373,7 +395,7 @@
 							</tr>
 						{/each}
 						{#if win.padBottom > 0}
-							<tr style="height: {win.padBottom}px"><td colspan={COLUMNS}></td></tr>
+							<tr class="spacer" style="height: {win.padBottom}px"><td colspan={COLUMNS}></td></tr>
 						{/if}
 					</tbody>
 				</table>

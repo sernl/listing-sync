@@ -50,9 +50,17 @@ export const queryKeys = {
 	 *  key under two shapes is a cache collision. */
 	inventoryWork: ['inventory-work'] as const,
 	/** The seller's own machines. Shared by the dashboard's device band and by
-	 *  the devices page, which is the one place a machine is signed out, so a
-	 *  revoke there moves the band on the next read. */
+	 *  the Marketplaces screen, which is the one place a machine is signed out,
+	 *  so a revoke there moves the band on the next read. */
 	devices: ['devices'] as const,
+	/** The identity plane's browser sign-ins. Shared because the two screens
+	 *  that read them can each end one: Account Settings lists them, and the
+	 *  Marketplaces screen ends the matched sign-in when it signs a machine
+	 *  out. */
+	browserSessions: ['browser-sessions'] as const,
+	/** The token of the sign-in this browser is using, so a row whose sign-out
+	 *  would end the session being read can say so. */
+	currentSessionToken: ['current-session-token'] as const,
 	mappings: ['mappings'] as const,
 	status: ['status'] as const,
 	org: ['org'] as const,

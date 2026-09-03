@@ -33,14 +33,22 @@ Search over the title, filter by marketplace and by standing, and a bulk cross-l
 `/listings/{id}` is one resource: its canonical fields, one row per marketplace with that marketplace's standing and the action it admits, the runs this listing has started, and the destructive actions behind their own dialogs.
 The run timeline is not rebuilt here; a run links to `/sync/{job}`, which already renders items, gates and per-item events off the ledger.
 
-`/settings/devices` already renders the registry in full and stays the place a machine is signed out.
-The dashboard band and the item screen link into it rather than duplicating it.
+`/marketplaces` is one row per marketplace, carrying the branch its automation runs on, the sign-in or connection standing that branch decides, the machine holding a device-branch login, and the machines list itself below the rows.
+It is the one place a machine is signed out, and the dashboard band and the item screen link into it rather than duplicating it.
+Browser sign-ins are sign-ins to us rather than to any marketplace and sit on `/settings` beside the account.
 
 The dashboard band answers three questions in the order a seller asks them.
 Is anything scheduled running at all, which is true only where a machine is checking in and holds at least one marketplace login.
 Where does each marketplace's login live, which the transport branch decides: for TPT and Tes the device registry is the only place one can be, because no server has ever held one, and for Etsy the connection record is, because no device does.
 Which machines exist, when each was last heard from, and whether a machine signed out still has a wipe outstanding.
 A device checks in hourly, so the band calls a machine current within two cadences and quiet after that: one missed check-in is a laptop that slept, and two is the first silence that carries information.
+
+## The small viewport
+
+The console is one SvelteKit app on the web, the Windows desktop and Android, so the Android instruction is this app below 620px rather than a second route tree.
+The sidebar is replaced there by a bottom bar of five tabs, Inventory, Marketplaces, Sync, Analytics and Account; that set is derived rather than sourced, because no public Vendoo page names its app's tab bar, and it will be corrected against the founder's own view of the app when they supply it.
+The inventory board becomes one block per item carrying its title, price, marketplace chip strip and the line saying what it needs, and importing and the many-item bulk verbs are hidden rather than disabled, because Vendoo's own availability article puts them on the desktop only.
+The desktop layout above the breakpoint is unchanged.
 
 ## The states, and the words for them
 
@@ -85,9 +93,9 @@ Open the live listing is not offered, because no endpoint serves the listing's U
 
 In flight: watch the run, which links to `/sync/{job}`.
 
-Blocked: see why, which states the gate in the seller's words and links to `/queue` for a reconciliation or election gate and to the run for every other.
+Blocked: see why, which states the gate in the seller's words and links to `/reconciliation` for a reconciliation or election gate and to the run for every other.
 
-Needs sign-in: sign in, which links to `/connections` for the marketplace and to `/settings/devices` for the machine that would hold the session.
+Needs sign-in: sign in, which links to `/marketplaces`, where the marketplace's own row and the machine that would hold the session are on one screen.
 
 Stranded: the same sign-in action, with the held write named so the seller knows a retry is waiting rather than lost.
 
@@ -149,3 +157,8 @@ G10. A last-sync time per marketplace.
 The cross-reference asks the Marketplaces screen to show when each marketplace was last synced, against Vendoo's own "Last sync" label.
 `ConnectionView.updated_at` and `DeviceSessionView.last_used_at` are the nearest served facts and neither is a sync time, so the screen shows neither rather than mislabelling one.
 Shape needed: the time of the last completed run per marketplace, on the connection view and on the device session.
+
+G11. A thumbnail on the product list.
+`ProductHead` carries id, title, price and the two timestamps, and no image; the cover and previews are reachable only through the single-product endpoint.
+The phone card therefore carries four of the five fields the cross-reference names for an inventory card, and renders no placeholder tile for an image that is not served.
+Shape needed: a cover image URL on `ProductHead`.

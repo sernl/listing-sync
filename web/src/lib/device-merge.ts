@@ -1,6 +1,7 @@
-// Joining the two halves of "Your devices", and being honest about the join.
+// Joining a machine in our device registry to the browser sign-in it was
+// made from, and being honest about the join.
 //
-// Half the page is ours: the device registry, which knows a machine's name,
+// Half is ours: the device registry, which knows a machine's name,
 // operating system and the marketplaces it holds. Half is better-auth's: the
 // browser login sessions, which know only `ipAddress` and `userAgent` and
 // carry no device-name concept at all (decision D14). There is no shared key
