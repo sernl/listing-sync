@@ -5092,6 +5092,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-extension"
+version = "0.1.0"
+dependencies = [
+ "futures-channel",
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "tam-import"
 version = "0.0.0"
 dependencies = [

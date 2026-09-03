@@ -234,6 +234,27 @@ web-wasm:
 # Re-record what the native path decides for each fixture draft. The vitest
 # suite and a Rust test both compare against the recorded file, so run this
 # only when a rule changed on purpose; the diff is the record of that change.
+# The hand-written half of the extension, listed rather than globbed so the
+# package's contents are decided here and not by the shell's expansion order.
+extension_static := "manifest.json background.js popup.html popup.js"
+
+# The extension shell's wasm, built exactly as `web-wasm` builds the core: the
+# same pinned wasm-bindgen, a second cdylib, and nothing else structural.
+extension-wasm:
+    cargo build --target wasm32-unknown-unknown --release --lib -p tam-extension
+    wasm-bindgen --target web --out-name extension \
+        --out-dir apps/extension/dist \
+        "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/tam_extension.wasm"
+
+# The unpacked extension, loadable from disk with "Load unpacked"
+extension-dev: extension-wasm
+    #!/usr/bin/env sh
+    set -eu
+    for file in {{extension_static}}; do
+        cp "apps/extension/static/$file" "apps/extension/dist/$file"
+    done
+    echo "extension: apps/extension/dist is loadable unpacked"
+
 web-wasm-fixtures:
     cargo run -q -p tam-core-wasm --bin verdict-fixtures > crates/tam-core-wasm/fixtures/verdicts.json
 

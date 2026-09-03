@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Teachouse listing sync",
+  "version": "0.1.0",
+  "description": "Runs a seller's own scheduled listing work on their own device, under their own marketplace session.",
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Teachouse listing sync"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "permissions": ["alarms", "storage"],
+  "host_permissions": [
+    "https://www.teacherspayteachers.com/*",
+    "https://www.tes.com/*",
+    "https://api.teachouse.io/*"
+  ]
+}

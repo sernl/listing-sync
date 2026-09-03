@@ -1,0 +1,3 @@
+# wasm-bindgen output and the assembled unpacked extension, both rebuilt by
+# `just extension-dev` from sources that are tracked
+/dist/
