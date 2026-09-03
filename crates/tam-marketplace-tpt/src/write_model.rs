@@ -334,9 +334,17 @@ pub const DURATION_UNSET: WireCode = WireCode("0");
 /// where the read side named it `INCLUDED`.
 pub const ANSWER_KEY_ABSENT: WireCode = WireCode("0");
 
-/// `data[ItemsLocalization][country_id_flag]`. `0` on the create and `1` on
-/// the edit; the country id itself is never posted by either.
-pub const COUNTRY_FLAG_OFF: WireCode = WireCode("0");
+/// `data[ItemsLocalization][country_id_flag]`, which takes `1` or `0`.
+///
+/// The country id beside it is posted by neither the create nor the edit, so
+/// the boolean is the whole field and there is nothing else to send.
+const fn country_flag(appropriate: bool) -> &'static str {
+    if appropriate {
+        "1"
+    } else {
+        "0"
+    }
+}
 
 /// `thumbs`. Sent verbatim as the create posted it. Whether it counts manual
 /// thumbnails, selects between generated and manual, or means something else
@@ -371,6 +379,15 @@ pub struct TptListing {
     /// Absent on the captured create and present on the captured edit. A
     /// projection that names none posts none.
     pub tax_code: Option<TaxCode>,
+    /// `data[ItemsLocalization][country_id_flag]` as the projection states it.
+    ///
+    /// `None` is a projection that carries no value, which is every projection
+    /// today, and is deliberately not the same as `Some(false)`. Only `None`
+    /// defers to what the product already has: a create with no value posts
+    /// the box unticked, and an edit with no value reposts what the read-back
+    /// found, because an edit is a full replace and posting a constant would
+    /// clear a box the seller ticked.
+    pub appropriate_for_country: Option<bool>,
 }
 
 /// The wire field names, in one place, because several of them are the only
@@ -515,7 +532,10 @@ pub fn create_fields(submission: &CreateSubmission<'_>) -> Vec<(String, String)>
         fields.push(field(names::CATEGORY, category));
     }
     fields.push(field(names::COMMON_CORE_ID, ""));
-    fields.push(field(names::COUNTRY_ID_FLAG, COUNTRY_FLAG_OFF.as_str()));
+    fields.push(field(
+        names::COUNTRY_ID_FLAG,
+        country_flag(listing.appropriate_for_country.unwrap_or(false)),
+    ));
     fields.push(field(names::DURATION, DURATION_UNSET.as_str()));
     fields.push(field(names::ANSWER_KEY, ANSWER_KEY_ABSENT.as_str()));
     fields.push(field(names::IS_POST, ""));
@@ -532,6 +552,10 @@ pub struct EditSubmission<'a> {
     pub thumbs: &'a [ThumbHandle],
     pub status: StatusUser,
     pub authorship: &'a AuthorshipDeclaration,
+    /// `localization.countryIdFlag` as the product's own read-back returned
+    /// it, used only where the listing states no value of its own. `None` is
+    /// a read that carried none, and posts the box unticked.
+    pub observed_appropriate_for_country: Option<bool>,
 }
 
 /// The edit body: the fields the captured `POST /itemsDigital/editNext/{id}`
@@ -553,6 +577,7 @@ pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
         thumbs,
         status,
         authorship,
+        observed_appropriate_for_country,
     } = *submission;
     let mut fields = vec![
         field(names::METHOD, "POST"),
@@ -605,7 +630,15 @@ pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
         fields.push(field(names::CATEGORY, category));
     }
     fields.push(field(names::COMMON_CORE_ID, ""));
-    fields.push(field(names::COUNTRY_ID_FLAG, COUNTRY_FLAG_OFF.as_str()));
+    fields.push(field(
+        names::COUNTRY_ID_FLAG,
+        country_flag(
+            listing
+                .appropriate_for_country
+                .or(observed_appropriate_for_country)
+                .unwrap_or(false),
+        ),
+    ));
     fields.push(field(names::DURATION, DURATION_UNSET.as_str()));
     fields.push(field(names::ANSWER_KEY, ANSWER_KEY_ABSENT.as_str()));
     fields.push(field(
@@ -951,6 +984,9 @@ pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterEr
         // Absent on the captured create, and a created product therefore
         // carries none for the publishing edit to preserve.
         tax_code: None,
+        // The seam carries no field for this yet, so the projection states
+        // nothing and the edit defers to the product's own read-back.
+        appropriate_for_country: None,
     })
 }
 
@@ -985,6 +1021,7 @@ mod tests {
             category_ids: vec!["1361944".to_owned()],
             price: ListingPrice::Free,
             tax_code: None,
+            appropriate_for_country: None,
         }
     }
 
@@ -1139,6 +1176,84 @@ mod tests {
         );
     }
 
+    /// The localisation flag on the create: what the projection states, and
+    /// nothing else.
+    #[test]
+    fn a_create_posts_the_localisation_flag_the_listing_carries() {
+        let tokens = tokens();
+        let authorship = attested();
+        let handle = ProcessedHandle::new("PROCESSEDKEY".to_owned());
+        let posted = |appropriate: Option<bool>| {
+            let listing = TptListing {
+                appropriate_for_country: appropriate,
+                ..listing()
+            };
+            let fields = create_fields(&CreateSubmission {
+                tokens: &tokens,
+                listing: &listing,
+                product: &handle,
+                thumbs_collection_key: "COLLECTIONKEY",
+                authorship: &authorship,
+            });
+            value_of(&fields, "data[ItemsLocalization][country_id_flag]")
+                .map(str::to_owned)
+                .expect("the create posts the field")
+        };
+        assert_eq!(posted(Some(true)), "1");
+        assert_eq!(posted(Some(false)), "0");
+        assert_eq!(
+            posted(None),
+            "0",
+            "a projection carrying no value creates the product with the box unticked, which \
+             is what an untouched checkbox posts"
+        );
+    }
+
+    /// The property the whole step exists for: an edit is a full replace, so
+    /// a value it does not repost is a value it clears.
+    #[test]
+    fn an_edit_reposts_the_localisation_flag_the_product_already_had() {
+        let tokens = tokens();
+        let authorship = attested();
+        let posted = |carried: Option<bool>, observed: Option<bool>| {
+            let listing = TptListing {
+                appropriate_for_country: carried,
+                ..listing()
+            };
+            let fields = edit_fields(&EditSubmission {
+                tokens: &tokens,
+                listing: &listing,
+                thumbs: &[],
+                status: StatusUser::Live,
+                authorship: &authorship,
+                observed_appropriate_for_country: observed,
+            });
+            value_of(&fields, "data[ItemsLocalization][country_id_flag]")
+                .map(str::to_owned)
+                .expect("the edit posts the field")
+        };
+        assert_eq!(
+            posted(None, Some(true)),
+            "1",
+            "no projection carries this yet, so an edit that did not repost the read-back \
+             would untick a box the seller ticked on every revise"
+        );
+        assert_eq!(posted(None, Some(false)), "0");
+        assert_eq!(
+            posted(None, None),
+            "0",
+            "a read that carried no localisation object is a measured absence, not a reason \
+             to refuse the write"
+        );
+        assert_eq!(
+            posted(Some(true), Some(false)),
+            "1",
+            "a projection that states a value states it; the read-back is the fallback and \
+             never the override"
+        );
+        assert_eq!(posted(Some(false), Some(true)), "0");
+    }
+
     #[test]
     fn an_edit_says_the_assets_are_unchanged_rather_than_clearing_them() {
         let tokens = tokens();
@@ -1150,6 +1265,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Live,
             authorship: &authorship,
+            observed_appropriate_for_country: None,
         });
         assert_eq!(
             (
@@ -1187,6 +1303,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Draft,
             authorship: &authorship,
+            observed_appropriate_for_country: None,
         });
         let money: Vec<&str> = fields
             .iter()
@@ -1222,6 +1339,7 @@ mod tests {
             thumbs: page.thumbs(),
             status: StatusUser::Live,
             authorship: &authorship,
+            observed_appropriate_for_country: None,
         });
         for slot in 1..=4_u8 {
             assert_eq!(
@@ -1254,6 +1372,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Live,
             authorship: &authorship,
+            observed_appropriate_for_country: None,
         });
         assert_eq!(
             value_of(&fields, "data[ItemTaxCode][tax_code_id]"),
@@ -1516,6 +1635,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Live,
             authorship: &authorship,
+            observed_appropriate_for_country: None,
         });
         assert_eq!(
             (

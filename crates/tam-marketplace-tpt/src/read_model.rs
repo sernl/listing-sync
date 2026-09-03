@@ -315,6 +315,17 @@ pub struct UploadPageProduct {
     pub categories: Vec<TptCategory>,
     pub item_type: Option<String>,
     pub copyright_declaration: Option<String>,
+    /// `localization.countryIdFlag`, the state of TPT's own "Appropriate for
+    /// {country}" checkbox.
+    ///
+    /// Read back because an edit is a full replace: posting a constant here
+    /// clears a box the seller ticked, and this is the only place the current
+    /// state can be learned. The country beside it is not read; the flag is
+    /// the whole field on the wire and the country only labels it.
+    ///
+    /// `None` is a response that carried no `localization` object, which the
+    /// older captures do, and is not the same as a measured false.
+    pub appropriate_for_country: Option<bool>,
 }
 
 /// Parses the edit form's own product read. The id is not in the response —
@@ -346,6 +357,9 @@ pub fn parse_upload_page_product(
         categories: categories(row),
         item_type: optional_str(row, "itemType"),
         copyright_declaration: optional_str(row, "copyrightDeclaration"),
+        appropriate_for_country: row
+            .pointer("/localization/countryIdFlag")
+            .and_then(Value::as_bool),
     })
 }
 

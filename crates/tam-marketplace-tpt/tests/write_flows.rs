@@ -205,6 +205,35 @@ fn edit_render() -> Interaction {
     form_page(include_str!("cassettes/edit_form_page.json"))
 }
 
+/// The product's own read, which every edit now makes because no projection
+/// carries the localisation flag yet.
+///
+/// The committed recording of `UploadPageProductQuery`, reused rather than
+/// hand-authored: its product has the box ticked, `countryIdFlag: true`, which
+/// is the case the edit exists to preserve.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+fn upload_page_read() -> Interaction {
+    let cassette: Cassette =
+        serde_json::from_str(include_str!("cassettes/upload_page_product.json"))
+            .expect("the committed UploadPageProductQuery fixture parses");
+    let recorded = cassette
+        .interactions
+        .into_iter()
+        .next()
+        .expect("the fixture records one interaction");
+    Interaction {
+        // The recording addresses the product it was captured from and these
+        // flows edit another, so the request is re-addressed to this one and
+        // only the response is reused. The response is the real one, and its
+        // countryIdFlag is the true this test needs.
+        request: endpoints::upload_page_product_request(ProductId(PRODUCT_ID)),
+        response: recorded.response,
+    }
+}
+
 /// TPT's clock as each signed call reads it. The reads advance, which is the
 /// whole point of reading per call: one instant minted at the initiate is
 /// already skewed by the time a long upload reaches its last part, and AWS
@@ -750,6 +779,9 @@ fn the_publish_edit_moves_the_status_selector_and_echoes_the_existing_thumbnails
         thumbs: page.thumbs(),
         status: write_model::StatusUser::Live,
         authorship: &authorship,
+        // What the read-back returns for this product, which the flow reads
+        // and posts because the projection carries nothing.
+        observed_appropriate_for_country: Some(true),
     });
     let value = |name: &str| {
         body.iter()
@@ -770,6 +802,7 @@ fn the_publish_edit_moves_the_status_selector_and_echoes_the_existing_thumbnails
     let cassette = Cassette {
         interactions: vec![
             render,
+            upload_page_read(),
             Interaction {
                 request: endpoints::submit_form_request(target, body),
                 response: with_header(
@@ -810,10 +843,14 @@ fn a_publish_that_redirects_to_another_product_is_an_ambiguity() {
         thumbs: page.thumbs(),
         status: write_model::StatusUser::Live,
         authorship: &authorship,
+        // What the read-back returns for this product, which the flow reads
+        // and posts because the projection carries nothing.
+        observed_appropriate_for_country: Some(true),
     });
     let cassette = Cassette {
         interactions: vec![
             render,
+            upload_page_read(),
             Interaction {
                 request: endpoints::submit_form_request(target, body),
                 response: with_header(302, "", ResponseHeader::Location, "/Product/other-9"),
@@ -1254,8 +1291,12 @@ fn revise_moves_the_status_selector_and_echoes_the_existing_thumbnails() {
         let cassette = Cassette {
             interactions: vec![
                 edit_render(),
+                upload_page_read(),
                 Interaction {
-                    request: endpoints::submit_form_request(target, edit_body(&fields(), status)),
+                    request: endpoints::submit_form_request(
+                        target,
+                        edit_body_observing(&fields(), status, Some(true)),
+                    ),
                     response: with_header(
                         302,
                         "",
@@ -1283,15 +1324,21 @@ fn revise_moves_the_status_selector_and_echoes_the_existing_thumbnails() {
         assert_eq!(
             adapter.transport().remaining(),
             0,
-            "{label}: the render and the submit, and no read-back inside the call"
+            "{label}: the render, the localisation read-back and the submit, and nothing else"
         );
     }
 }
 
-/// The six fields a TPT edit blanks. A created product carries none of them,
+/// The five fields a TPT edit blanks. A created product carries none of them,
 /// so the blanking is a no-op on every listing Phase 3 can revise; this fails
 /// the day either side starts carrying a value, which is the day adopting a
 /// listing this system did not create makes the blanking live.
+///
+/// `COUNTRY_ID_FLAG` is not one of the five and is asserted on its own below.
+/// It is the seller's value rather than the create's, so the edit reposts what
+/// the product's own read-back returned instead of blanking it, and holding it
+/// to the same property as the other five would pin the clear this system
+/// stopped doing.
 #[test]
 fn an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry() {
     let page = tam_marketplace_tpt::form::scrape_form_page(&create_render().response.text())
@@ -1315,7 +1362,6 @@ fn an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry(
     for name in [
         "data[ItemsProperty][pages]",
         "data[ItemsLocalization][common_core_id]",
-        "data[ItemsLocalization][country_id_flag]",
         "data[ItemsProperty][duration]",
         "data[ItemsProperty][answer_key]",
     ] {
@@ -1326,6 +1372,24 @@ fn an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry(
              product this system created loses nothing"
         );
     }
+    // The localisation flag is no longer one of those, and the difference is
+    // the point rather than an exception. The other four have one value for
+    // this product and the create is where it comes from; this one is the
+    // seller's own and TPT is where it comes from, so the create posts the
+    // untouched box and the edit reposts what the product already had. The
+    // captured edit posted 1, because that seller has it ticked.
+    let observed = edit_body_observing(&fields(), write_model::StatusUser::Draft, Some(true));
+    assert_eq!(
+        value(&created, "data[ItemsLocalization][country_id_flag]").as_deref(),
+        Some("0"),
+        "nothing upstream carries this yet, so a create posts the box as the form renders it"
+    );
+    assert_eq!(
+        value(&observed, "data[ItemsLocalization][country_id_flag]").as_deref(),
+        Some("1"),
+        "an edit reposts the value the product's own read-back returned, which is the \
+         captured 1; posting a constant here clears a box the seller ticked"
+    );
     assert_eq!(
         value(&created, "data[ItemTaxCode][tax_code_id]"),
         None,
@@ -1465,11 +1529,21 @@ fn described(body: &str) -> FieldSet {
 }
 
 /// The edit body one field set produces against the committed edit render.
+fn edit_body(fields: &FieldSet, status: write_model::StatusUser) -> Vec<(String, String)> {
+    edit_body_observing(fields, status, None)
+}
+
+/// [`edit_body`] with the product's own read-back stated, which is what the
+/// flow supplies whenever the projection carries no value of its own.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-fn edit_body(fields: &FieldSet, status: write_model::StatusUser) -> Vec<(String, String)> {
+fn edit_body_observing(
+    fields: &FieldSet,
+    status: write_model::StatusUser,
+    observed_appropriate_for_country: Option<bool>,
+) -> Vec<(String, String)> {
     let page = tam_marketplace_tpt::form::scrape_form_page(&edit_render().response.text())
         .expect("the committed edit render parses");
     let listing = write_model::listing_from_field_set(fields).expect("the projection parses back");
@@ -1479,13 +1553,14 @@ fn edit_body(fields: &FieldSet, status: write_model::StatusUser) -> Vec<(String,
         thumbs: page.thumbs(),
         status,
         authorship: &attested(),
+        observed_appropriate_for_country,
     })
 }
 
 #[test]
 fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
     let rewritten = described("<p>a second draft</p>");
-    let body = edit_body(&rewritten, write_model::StatusUser::Draft);
+    let body = edit_body_observing(&rewritten, write_model::StatusUser::Draft, Some(true));
     let value = |name: &str| {
         body.iter()
             .find(|(field, _)| field == name)
@@ -1506,7 +1581,7 @@ fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
         Some("1"),
         "a free listing's edit posts the flag; the live form refuses the body without it"
     );
-    let unchanged = edit_body(&fields(), write_model::StatusUser::Draft);
+    let unchanged = edit_body_observing(&fields(), write_model::StatusUser::Draft, Some(true));
     let moved: Vec<&str> = body
         .iter()
         .zip(unchanged.iter())
@@ -1522,6 +1597,7 @@ fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
     let adapter = adapter(Cassette {
         interactions: vec![
             edit_render(),
+            upload_page_read(),
             Interaction {
                 request: endpoints::submit_form_request(target, body),
                 response: with_header(
@@ -1557,11 +1633,12 @@ fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
 #[test]
 fn an_edit_bounced_back_to_its_own_form_is_not_reported_as_a_landing() {
     let rewritten = described("<p>a second draft</p>");
-    let body = edit_body(&rewritten, write_model::StatusUser::Draft);
+    let body = edit_body_observing(&rewritten, write_model::StatusUser::Draft, Some(true));
     let target = FormTarget::EditDigital(ProductId(PRODUCT_ID));
     let adapter = adapter(Cassette {
         interactions: vec![
             edit_render(),
+            upload_page_read(),
             Interaction {
                 request: endpoints::submit_form_request(target, body),
                 response: with_header(

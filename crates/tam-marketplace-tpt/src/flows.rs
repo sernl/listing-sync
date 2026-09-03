@@ -721,12 +721,18 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         let listing = write_model::listing_from_field_set(fields)?;
         let target = FormTarget::EditDigital(product);
         let page = self.form_page(target).await?;
+        let observed = if listing.appropriate_for_country.is_none() {
+            self.observed_localisation(product).await?
+        } else {
+            None
+        };
         let body = write_model::edit_fields(&EditSubmission {
             tokens: page.tokens(),
             listing: &listing,
             thumbs: page.thumbs(),
             status,
             authorship,
+            observed_appropriate_for_country: observed,
         });
         let response = self
             .send_ambiguous_on_loss(endpoints::submit_form_request(target, body))
@@ -739,6 +745,36 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             // different one is not something this flow can reconcile.
             Err(AdapterError::Ambiguous(AmbiguityCause::NoDurableIdentifier))
         }
+    }
+
+    /// The product's own localisation flag, read back so an edit does not
+    /// clear a box the seller ticked.
+    ///
+    /// An edit is a full replace, and the form render states this control in
+    /// JavaScript rather than in its markup, so the product read is the only
+    /// place its current value can be learned. A failed read propagates
+    /// rather than defaulting: not knowing the current state and posting `0`
+    /// anyway is precisely the silent clear this read exists to stop, and a
+    /// caller that retries loses nothing. `None` from a read that succeeded
+    /// is different — the response carried no localisation object, which is
+    /// measured absence and posts the box unticked.
+    ///
+    /// Skipped entirely once a projection carries a value of its own, which
+    /// is what makes this cost temporary rather than permanent.
+    async fn observed_localisation(
+        &self,
+        product: ProductId,
+    ) -> Result<Option<bool>, AdapterError> {
+        let response = self
+            .send(endpoints::upload_page_product_request(product))
+            .await?;
+        let body = classify_graphql_read(&response)?;
+        read_model::parse_upload_page_product(&body, product)
+            .map(|read| read.appropriate_for_country)
+            .map_err(|error| AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(error.to_string()),
+            })
     }
 
     /// Publishing is [`Self::update`] with the status selector moved to live.
@@ -1141,15 +1177,21 @@ impl<T: Transport, F: FileSource, P: Pause> MarketplaceAdapter for TptAdapter<T,
     /// anything. `now` is unused because the edit body carries no instant.
     ///
     /// The edit is a full replace and does not preserve `PAGES`,
-    /// `COMMON_CORE_ID`, `COUNTRY_ID_FLAG`, `DURATION`, `ANSWER_KEY` or
-    /// `TAX_CODE_ID`: `edit_fields` posts each of them empty or absent and
+    /// `COMMON_CORE_ID`, `DURATION`, `ANSWER_KEY` or `TAX_CODE_ID`:
+    /// `edit_fields` posts each of them empty or absent and
     /// `listing_from_field_set` hardcodes `tax_code: None`. That is safe only
     /// while every bound mapping was bound by this system's own create, which
-    /// posts none of the six either — so the blanking is a no-op on every
+    /// posts none of the five either — so the blanking is a no-op on every
     /// listing that can reach here today, pinned by
     /// `an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry`.
     /// Adopting a listing this system did not create makes the blanking live
     /// and is Phase 4's to answer.
+    ///
+    /// `COUNTRY_ID_FLAG` was a sixth and is one no longer. It is the seller's
+    /// own value rather than the create's, so [`Self::post_edit`] reads it
+    /// back off the product and reposts it. Deleting that read does not
+    /// restore a no-op: it puts this field back in the list above and clears
+    /// a box the seller ticked, on every revise.
     async fn revise(
         &self,
         plan: RevisePlan,
