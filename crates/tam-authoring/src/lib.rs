@@ -138,10 +138,12 @@ pub struct DraftInput {
     #[serde(default)]
     pub custom_categories: Vec<String>,
     /// `data[ItemsLocalization][country_id_flag]`, the Categories group's last
-    /// control. Absent reads as false, which is what an unticked checkbox
-    /// posts and what TPT's own form sends when the seller leaves it alone.
+    /// control. Absent is a draft that states nothing about it, which is not
+    /// the same as a seller who left the checkbox unticked: a form that
+    /// rendered the control sends the box's own state either way, so `false`
+    /// arrives only as an answer.
     #[serde(default)]
-    pub appropriate_for_country: bool,
+    pub appropriate_for_country: Option<bool>,
     #[serde(default)]
     pub standards: Vec<StandardInput>,
     #[serde(default)]
@@ -441,10 +443,12 @@ pub struct TptBaseInput {
     #[serde(default)]
     pub custom_categories: Vec<String>,
     /// `data[ItemsLocalization][country_id_flag]`, the Categories group's last
-    /// control. Absent reads as false, which is what an unticked checkbox
-    /// posts and what TPT's own form sends when the seller leaves it alone.
+    /// control. Absent is a draft that states nothing about it, which is not
+    /// the same as a seller who left the checkbox unticked: a form that
+    /// rendered the control sends the box's own state either way, so `false`
+    /// arrives only as an answer.
     #[serde(default)]
-    pub appropriate_for_country: bool,
+    pub appropriate_for_country: Option<bool>,
     #[serde(default)]
     pub standards: Vec<StandardInput>,
     #[serde(default)]

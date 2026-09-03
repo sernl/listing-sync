@@ -215,6 +215,14 @@ The read-back costs one extra request per edit and is skipped the moment a proje
 A failed read propagates rather than defaulting, because not knowing the current state and posting `0` anyway is the same silent clear; a read that succeeds and carries no localisation object is a measured absence and posts unticked.
 The form render was not scraped for this instead, though it would have cost no request: `tpt-create-form-dom.md:132` records that this control's wire integers are produced by JavaScript rather than by the markup, and a wrong guess here is exactly the clear being fixed.
 
+Step six made the sidecar able to say "not stated", which is the one thing standing between the stored flag and the projection.
+Migration 0050 drops the column's `NOT NULL` and its default and sets every existing row to `NULL`, and its comment records why nothing is lost by that: 0049 backfilled `false` into every row that predated it, so no value the column has ever held was a seller's answer.
+The `UPDATE` runs with the tenant fence lifted for that one statement and restored three lines later, because `product_tpt_base` carries `FORCE ROW LEVEL SECURITY`, a migration connects as `tam_app` with no `app.current_org` set, and the statement would otherwise match no row, report nothing, and leave the whole backfill in place.
+`CategoryGroup.appropriate_for_country` is an `Option<bool>` whose `None` means the seller has not answered, and `TptBaseInput` and `DraftInput` carry the same option with absent reading as `None` rather than as `false`.
+The console keeps a plain boolean and the two agree: the wire's absent case is a product nobody asked, a seller looking at the control has been asked, so a saved form states the checkbox's own answer whichever way it is ticked.
+The round trip at `crates/tam-storage/tests/tpt_base.rs` now walks the flag through `Some(true)`, `Some(false)` and `None` inside the whole-record assertion, which is what fails if a `None` comes back as `false`, and a vitest case asserts both answers are stated on save.
+One statement above is superseded by this step: the validation section's "takes `false` as its stated default" is now true of the console's control alone and not of the model, which defaults to stating nothing.
+
 Three corrections to this design, found while building it.
 
 Step two's stated verification was not severe for the change it verifies.
@@ -232,12 +240,12 @@ Four gaps this phase does not close, each stated rather than resolved.
 The country behind the localisation label is still unmeasured, and the label is served as null for every seller with a generic sentence rendered in its place.
 Closing it means observing the country on the adapter's own read, which already fetches `localization { countryId countryIdFlag country { name } }`, and storing it on the connection, which needs the adapter crate and a device-to-server report; that is a separate design rather than a step here.
 
-The seam now carries the flag and the sidecar still does not feed it, which is a smaller gap than the one below but a different one.
+The seam carries the flag, the sidecar can now say "not stated", and nothing yet reads the one into the other.
 `FieldSet` gained a typed `appropriate_for_country: Option<bool>` beside `body_format`, `ProjectedListing` gained the same, `project_fields` puts a stated value in and `listing_from_field_set` takes it back out, so a value that reaches the projection reaches the posted `country_id_flag` and the recorded intent carries it too.
 What does not happen is `crates/tam-engine/src/seed.rs` reading the sidecar, and it was built and then deliberately removed rather than never attempted.
-The cause is that the sidecar cannot say "not stated": migration 0049 added the column `NOT NULL DEFAULT false` and `CategoryGroup` carries a plain `bool`, so a row that predates the column and a seller's deliberate "no" are the same value.
-Only one of those should suppress the adapter's read-back, and `post_edit` suppresses it on any stated value at all — `if listing.appropriate_for_country.is_none()` is the whole guard — so feeding `Some(false)` from a backfilled row would post `0` over a box the seller has ticked on TPT, which is precisely the silent clear step five fixed, arriving through the sidecar instead of through a constant.
-The fix is a nullable column and an `Option<bool>` on the domain field, after which `seed.rs` reads the sidecar and the three-phase engine test that proves it comes back; that is a form-stream change because the model and the migration are theirs.
+The cause was that the sidecar could not say "not stated", and step six removed it: the column is nullable, the domain field is an `Option<bool>`, and a row written before either reads back as `None` rather than as a seller's deliberate "no".
+That distinction is the one `post_edit` turns on — `if listing.appropriate_for_country.is_none()` is the whole guard on the protective read-back — so a `None` fed from the sidecar defers to what TPT itself holds and only a value the seller stated overrides it.
+What remains is `seed.rs` reading the sidecar and the three-phase engine test that proves the value comes back, which is an engine-stream change because the seed and the test are theirs.
 
 Building the whole TPT-base record from the upload-page read on import is queued separately, and it is worth doing for a reason that is not the obvious one.
 The obvious reason does not hold: a box ticked on TPT before adoption already survives the first edit, because `post_edit` reads the current flag back whenever the projection states nothing.

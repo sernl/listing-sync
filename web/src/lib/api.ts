@@ -573,8 +573,10 @@ export interface TptBaseInput {
 	tags?: string[];
 	formats?: string[];
 	custom_categories?: string[];
-	/** `data[ItemsLocalization][country_id_flag]`. Absent reads as false, which is
-	 *  what an unticked checkbox posts. */
+	/** `data[ItemsLocalization][country_id_flag]`. Absent states nothing about
+	 *  the control rather than answering it: the sidecar holds three states and
+	 *  a form that rendered the checkbox sends the box's own state either way,
+	 *  so false arrives only as an answer. */
 	appropriate_for_country?: boolean;
 	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
 	teaching_duration_id?: number | null;
@@ -913,8 +915,10 @@ export interface DraftInput {
 	tags?: string[];
 	formats?: string[];
 	custom_categories?: string[];
-	/** `data[ItemsLocalization][country_id_flag]`. Absent reads as false, which is
-	 *  what an unticked checkbox posts. */
+	/** `data[ItemsLocalization][country_id_flag]`. Absent states nothing about
+	 *  the control rather than answering it: the sidecar holds three states and
+	 *  a form that rendered the checkbox sends the box's own state either way,
+	 *  so false arrives only as an answer. */
 	appropriate_for_country?: boolean;
 	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
 	teaching_duration_id?: number | null;

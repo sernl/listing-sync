@@ -244,9 +244,16 @@ pub struct CategoryGroup {
     /// beside it is never posted by either the create or the edit, and no
     /// country list appears in the DOM or in the page bootstrap, so which
     /// country the seller is asserting for is presentation a caller supplies
-    /// rather than a value this model holds. `false` is what an unticked
-    /// checkbox posts, and TPT requires nothing here.
-    pub appropriate_for_country: bool,
+    /// rather than a value this model holds.
+    ///
+    /// `None` is a product whose seller has not answered, and is deliberately
+    /// not the same as `Some(false)`. TPT requires nothing here, so a form
+    /// that was never shown the control states nothing; a form that was shows
+    /// the checkbox's own state, which is `Some(false)` when unticked. The
+    /// adapter's edit is a full replace and reads the product's current flag
+    /// back only where the projection states nothing, so feeding a `false`
+    /// nobody chose would clear a box the seller ticked on TPT.
+    pub appropriate_for_country: Option<bool>,
 }
 
 /// One alignment the seller claimed.

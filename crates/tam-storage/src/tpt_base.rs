@@ -3,7 +3,7 @@
 //! `product` already stores the name, the description with its declared
 //! format, the price, the payload files and the verbatim grade declaration.
 //! Everything else TPT's create form asks for lands here, in the sidecar
-//! migrations 0040 and 0049 declare, keyed on the product's own key.
+//! migrations 0040, 0049 and 0050 declare, keyed on the product's own key.
 //!
 //! One row per product, and a product with no row is one authored before this
 //! table existed or through a path that does not carry these fields. Every

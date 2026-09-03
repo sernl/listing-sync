@@ -382,9 +382,16 @@ describe('the request bodies', () => {
 		);
 	});
 
-	it('sends the flag unticked on a blank draft, which is what TPT’s own checkbox posts', () => {
+	it('states the flag on save whichever way the box is ticked', () => {
+		// The wire's absent case means a product nobody asked, which is what a
+		// row predating the column is. A seller looking at the control has been
+		// asked, so both answers are stated and neither arrives as absence.
 		expect(emptyTptDraft().appropriateForCountry).toBe(false);
-		expect(tptBaseOf(complete()).appropriate_for_country).toBe(false);
+		for (const ticked of [true, false]) {
+			const draft = { ...complete(), appropriateForCountry: ticked };
+			expect(tptBaseOf(draft).appropriate_for_country).toBe(ticked);
+			expect(draftInputOf(draft).appropriate_for_country).toBe(ticked);
+		}
 	});
 
 	it('sends no tax code or licence price on a free listing', () => {

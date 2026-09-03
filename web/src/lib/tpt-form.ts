@@ -94,7 +94,12 @@ export interface TptDraft {
 	customCategories: string[];
 	/** `data[ItemsLocalization][country_id_flag]`. The label beside it names a
 	 *  country and is served, never written here, so a seller outside the one
-	 *  country we have measured does not read another country's name. */
+	 *  country we have measured does not read another country's name.
+	 *
+	 *  A boolean rather than the sidecar's three-state option, and the two
+	 *  agree: the wire's absent case is a product nobody asked, and a seller
+	 *  looking at this control has been asked, so a saved form states the
+	 *  checkbox's own answer whichever way it is ticked. */
 	appropriateForCountry: boolean;
 	standards: StandardPick[];
 	teachingDuration: string | null;

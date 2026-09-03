@@ -111,11 +111,11 @@ fn full() -> TptBaseRecord {
             tags: slugs(&["centers"]),
             formats: slugs(&["easel"]),
             custom_categories: vec!["Autumn unit".to_owned()],
-            // True rather than false on purpose: the column defaults to
-            // false, so a write path that dropped it would read back equal
-            // to a false fixture and the round trip would pass on a value
-            // that never reached the row.
-            appropriate_for_country: true,
+            // Stated true on purpose: `None` is both the domain default and
+            // what a dropped write leaves in the column, so a fixture holding
+            // either of the other two states would read back equal to a write
+            // path that never carried it.
+            appropriate_for_country: Some(true),
         },
         standards: vec![StandardAlignment {
             framework: StandardsFramework::CommonCore,
@@ -134,19 +134,31 @@ fn full() -> TptBaseRecord {
     }
 }
 
+/// The record, over each state of the one field that has three.
+///
+/// The localisation flag is walked rather than fixed because 0050 is what made
+/// its absence expressible, and the write that feeds the projection depends on
+/// the absence surviving: the adapter's edit reads TPT's own flag back only
+/// where the projection states nothing, so a `None` that read back as `false`
+/// would repost a no the seller never gave.
 #[sqlx::test(migrations = "./migrations")]
 async fn every_field_the_form_collects_survives_the_round_trip(pool: PgPool) {
     provision(&pool).await;
     let repo = TptBaseRepo::new(pool);
-    let written = full();
-    repo.upsert(ORG_A, PRODUCT_A, &written, AT)
-        .await
-        .expect("the sidecar writes");
-    assert_eq!(
-        repo.get(ORG_A, PRODUCT_A).await.expect("the sidecar reads"),
-        Some(written),
-        "every group the create form collects comes back as it went in"
-    );
+    for stated in [Some(true), Some(false), None] {
+        let mut written = full();
+        written.categories.appropriate_for_country = stated;
+        repo.upsert(ORG_A, PRODUCT_A, &written, AT)
+            .await
+            .expect("the sidecar writes");
+        assert_eq!(
+            repo.get(ORG_A, PRODUCT_A).await.expect("the sidecar reads"),
+            Some(written),
+            "every group the create form collects comes back as it went in, and a \
+             localisation flag of {stated:?} keeps the three states apart: a seller who \
+             answered nothing must not read back as a seller who answered no"
+        );
+    }
 }
 
 /// The mis-map this vocabulary has a history of, closed at the column.
