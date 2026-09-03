@@ -30,9 +30,10 @@ That is the argument for stating the device-driven reality on the dashboard rath
 
 `/inventory` is the board, and it is the centre of the product.
 One row per item, carrying its title, price, the per-marketplace chip strip, its captured views and sales, and when it was last touched.
-Search over the title, filter by marketplace and by standing, and five bulk verbs over the selected rows.
-Three of the five run: cross-list, mark-as-listed, and delete.
-Two are rendered disabled with the reason on the control and again under the table: bulk edit, which needs a screen rather than an endpoint, and bulk labels, which needs G6.
+Search over the title, filter by marketplace, by standing and by label, and five bulk verbs over the selected rows.
+Four of the five run: cross-list, mark-as-listed, labels, and delete.
+One is rendered disabled with the reason on the control and again under the table: bulk edit, whose gap is a screen choosing which fields change across a selection rather than an endpoint, because the per-item edit is already served.
+The label filter narrows the catalogue's own page query rather than the rows already loaded, so paging a filtered catalogue is the same walk as paging the whole one.
 Bulk delete asks which way the listings already on a marketplace should go and defaults to neither, because removing everywhere fires one write per listing from one click and leaving them standing abandons listings nothing here tracks; that is the seller's decision at the moment they take it, not one the console makes for them.
 There is no bulk delist-and-relist under any name, and a test refuses one.
 
@@ -147,9 +148,16 @@ G5. File versions.
 The research names file versions as the central new entity, driving the out-of-date state and the update-everywhere action, and no endpoint records that a payload changed after a publish.
 Shape needed: a version on the product and the version last published on each mapping, so the two can be compared.
 
-G6. Custom labels.
-Coloured seller-defined labels transfer from Vendoo as-is and are the dimension a teacher would filter units, seasons and sale participation by, and no endpoint holds them.
-Filtering is therefore title search, marketplace and standing only.
+G6. Custom labels. Served.
+`GET` and `PUT /{version}/products/{product}/labels` hold one item's labels, `GET /{version}/labels` is the organisation's whole vocabulary, and `label` on `GET /{version}/products` narrows the page.
+Labels are named rather than identified: a seller types a word, and the same word is the same label across the catalogue, which is what makes filtering by it mean anything.
+`label_one_per_name` folds case, so "autumn term" after "Autumn term" is the label they already have rather than a rival spelling that would split a filter in half.
+A `PUT` replaces the whole set rather than merging, because a merge would leave removing the last label with no spelling; the bulk dialog therefore reads each item's set and adds to it, so relabelling twelve items does not flatten them all to one set.
+A label nothing carries any more is deleted with the write that abandons it, so the filter never offers a word no item can be found by, and deleting an item clears its attachments in the same transaction for the same reason.
+The sweep is narrowed to the labels that write abandoned rather than run across the organisation, because an organisation-wide sweep can strip a label another request attached between that request's insert and this delete.
+A residual race remains and is accepted: two writes abandoning and re-attaching one label at the same instant can leave it deleted with a carrier, whose attachment the foreign key then cascades away.
+The cost is a label the seller retypes; the cost of preventing it is every label write serialising behind every other.
+The colour is derived from the name rather than chosen, from the closed set in migration 0046: seller-chosen colour would need a label-management surface this gap does not include, and a derived colour still gives the visual scanning coloured labels exist for while staying stable everywhere the label appears.
 
 G7. Transport class is not served.
 `TransportClass` is generated into the client's vocabulary but appears on no view, so the console mirrors the Rust mapping rather than reading it.
@@ -183,3 +191,8 @@ A Tes paste is stored as the canonical `/api/v2/resources/{id}` identity rather 
 The binding starts `Verification::Stale` at the bind instant, which is the state migration 0004 gives a bound mapping nothing has read back, and the engine's read-back is what confirms it; nothing on this path contacts a marketplace, so a seller can attach a listing that is gone or is not theirs and the read-back is what catches it.
 Four refusals are named rather than collapsed: a link for another marketplace, a link that is not a listing page, a mapping that already binds one or has a create out, and a listing another of the seller's own items already claims.
 Re-binding a `severed` mapping is deliberately not offered here: it carries a sever generation and the content keys hanging off it, which is reconciliation's path rather than a paste.
+
+G13. Seller-chosen label colour.
+G6 serves labels with a colour derived from the name, from the closed set in migration 0046, which gives the visual scanning coloured labels exist for and is stable everywhere a label appears.
+What it does not give is the seller's own choice, and choosing one needs more than a colour field: a label is shared across the catalogue, so recolouring means a surface that renames, recolours and deletes a label everywhere at once, and deleting one has to say what happens to the items carrying it.
+Shape needed: a label-management screen and the endpoints under it, at which point the colour stops being derived and becomes a stored choice.

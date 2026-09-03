@@ -17,7 +17,7 @@ use tam_api::vocabulary::{
 use tam_api::{APIErrorCode, APIErrorKind};
 use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_domain::product::FormGroup;
-use tam_storage::{DeviceSessionStatus, ItemStateKind, ALL_GATES};
+use tam_storage::{Colour, DeviceSessionStatus, ItemStateKind, ALL_GATES};
 use tam_types::{
     ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,
     JobEventPayload, LengthUnit, Marketplace, TermKind, TransportClass,
@@ -46,6 +46,13 @@ fn main() {
     out.push_str(&union("Marketplace", &Marketplace::ALL, serde_name));
     out.push('\n');
     out.push_str(&union("TransportClass", &TransportClass::ALL, serde_name));
+    out.push('\n');
+    // The label palette, so the console's colour map is total: a colour added
+    // in Rust fails the web lane rather than rendering as an unstyled chip,
+    // which is what migration 0046 says the closed set buys.
+    out.push_str(&union("LabelColour", &Colour::ALL, |colour| {
+        format!("{:?}", colour.as_str())
+    }));
     out.push('\n');
     out.push_str(&union(
         "ConnectionStatus",

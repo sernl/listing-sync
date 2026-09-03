@@ -259,6 +259,41 @@ describe('the authoring endpoints', () => {
 		expect((failure as ApiFailure).code()).toBe('listing_url_unusable');
 	});
 
+	it('narrows the catalogue by label without disturbing the cursor walk', async () => {
+		const seen: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) => {
+				seen.push(url);
+				return jsonResponse(200, { products: [], next_cursor: null });
+			})
+		);
+		await api.products(null, 'Autumn term');
+		await api.products('cur-1', 'Autumn term');
+		await api.products();
+		expect(seen).toEqual([
+			'/v1/products?label=Autumn+term',
+			'/v1/products?cursor=cur-1&label=Autumn+term',
+			'/v1/products'
+		]);
+	});
+
+	it('replaces an item\'s labels with the whole set, not a delta', async () => {
+		const seen: Array<{ url: string; method?: string; body: unknown }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+				return jsonResponse(200, { labels: [{ name: 'Bundle', colour: 'teal' }] });
+			})
+		);
+		const view = await api.setProductLabels('p1', ['Bundle']);
+		expect(seen[0].method).toBe('PUT');
+		expect(seen[0].url).toBe('/v1/products/p1/labels');
+		expect(seen[0].body).toEqual({ labels: ['Bundle'] });
+		expect(view.labels[0].colour).toBe('teal');
+	});
+
 	it('reads one marketplace vocabulary per inventory', async () => {
 		const seen: string[] = [];
 		vi.stubGlobal(

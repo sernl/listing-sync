@@ -189,6 +189,11 @@ pub fn router(state: AppState) -> Router {
             post(catalogue::add_mapping),
         )
         .route(
+            "/{version}/products/{product}/labels",
+            get(resources::product_labels).put(resources::set_product_labels),
+        )
+        .route("/{version}/labels", get(resources::list_labels))
+        .route(
             "/{version}/vocabulary/{inventory}",
             get(vocabulary::vocabulary_view),
         )

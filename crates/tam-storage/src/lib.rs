@@ -19,6 +19,7 @@ pub mod connections;
 pub mod device;
 pub mod job_reads;
 pub mod jobs;
+pub mod labels;
 pub mod lowering;
 mod mapping;
 pub mod operators;
@@ -59,6 +60,7 @@ pub use jobs::{
     OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, Revived, WriteAttemptRepo, ALL_GATES,
     AWAITING_COUNTERPART, AWAITING_SELLER_SIGNIN, ELECTION, REAUTH_REQUIRED, REVIVABLE_GATES,
 };
+pub use labels::{Colour, LabelRecord, LabelRepo};
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };

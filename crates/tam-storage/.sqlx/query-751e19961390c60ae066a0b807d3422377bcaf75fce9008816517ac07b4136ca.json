@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO label (org_id, id, name, colour, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (org_id, lower(name)) DO UPDATE SET name = label.name RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "751e19961390c60ae066a0b807d3422377bcaf75fce9008816517ac07b4136ca"
+}

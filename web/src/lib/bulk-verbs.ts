@@ -26,8 +26,7 @@ const MISSING: Record<BulkVerb, string | null> = {
 	cross_list: null,
 	delete: null,
 	edit: 'No screen chooses which fields change across a selection. The per-item edit is served, at PATCH /v1/products/{id}; the screen is what does not exist.',
-	labels:
-		'No endpoint holds labels, so there is nothing to set. Labels are gap G6, and filtering stays title, marketplace and standing until they land.',
+	labels: null,
 	mark_listed: null
 };
 
@@ -44,9 +43,9 @@ const LABEL: Record<BulkVerb, string> = {
 export const BULK_VERBS: readonly BulkVerb[] = [
 	'cross_list',
 	'mark_listed',
+	'labels',
 	'delete',
-	'edit',
-	'labels'
+	'edit'
 ];
 
 export const BULK_ACTIONS: readonly BulkAction[] = BULK_VERBS.map((verb) => ({

@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 35] = [
+const TENANT_TABLES: [&str; 37] = [
     "billing_subscription",
     "binding_candidate",
     "blob",
@@ -28,6 +28,7 @@ const TENANT_TABLES: [&str; 35] = [
     "job",
     "job_event",
     "job_item",
+    "label",
     "listing_metric_snapshot",
     "mapping",
     "mapping_loss",
@@ -38,6 +39,7 @@ const TENANT_TABLES: [&str; 35] = [
     "outbox_message",
     "product",
     "product_file",
+    "product_label",
     "product_term",
     "product_tpt_base",
     "projection_override",

@@ -87,6 +87,14 @@ function post<T>(path: string, body: unknown, headers?: Record<string, string>):
 	});
 }
 
+function put<T>(path: string, body: unknown): Promise<T> {
+	return request<T>(path, {
+		method: 'PUT',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+}
+
 function patch<T>(path: string, body: unknown): Promise<T> {
 	return request<T>(path, {
 		method: 'PATCH',
@@ -153,6 +161,17 @@ export interface ProductHead {
 export interface ProductsPage {
 	products: ProductHead[];
 	next_cursor: string | null;
+}
+
+/** One seller-defined label. The colour is the server's, derived from the
+ *  name, so one label looks the same everywhere it appears. */
+export interface LabelView {
+	name: string;
+	colour: string;
+}
+
+export interface LabelsView {
+	labels: LabelView[];
 }
 
 export interface MappingHead {
@@ -958,10 +977,33 @@ export const api = {
 	org: () => request<OrgView>('/v1/org'),
 	renameOrg: (name: string) => patch<OrgView>('/v1/org', { name }),
 
-	products: (cursor?: string | null) =>
-		request<ProductsPage>(`/v1/products${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
+	/** One keyset page of the catalogue, optionally narrowed to the items
+	 *  carrying one label. The label narrows the query rather than the page, so
+	 *  paging a filtered catalogue is the same walk as paging the whole one. */
+	products: (cursor?: string | null, label?: string | null) => {
+		const query = new URLSearchParams();
+		if (cursor) {
+			query.set('cursor', cursor);
+		}
+		if (label) {
+			query.set('label', label);
+		}
+		const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+		return request<ProductsPage>(`/v1/products${suffix}`);
+	},
 	product: (id: string) => request<ProductView>(`/v1/products/${id}`),
 	mappings: () => request<{ mappings: MappingHead[] }>('/v1/mappings'),
+	/** Every label this organisation uses, which is what the board's filter
+	 *  lists. A label nothing carries is not in the set: it left the
+	 *  vocabulary when the last item stopped carrying it. */
+	labels: () => request<LabelsView>('/v1/labels'),
+	/** The labels on one item. */
+	productLabels: (product: string) =>
+		request<LabelsView>(`/v1/products/${product}/labels`),
+	/** Replace the labels on one item. The whole set, not a delta: a delta
+	 *  would leave removing the last label with no spelling. */
+	setProductLabels: (product: string, labels: string[]) =>
+		put<LabelsView>(`/v1/products/${product}/labels`, { labels }),
 	/** Add a marketplace to an item that already exists. The mapping comes
 	 *  back unbound, exactly as a create's own does, so a send afterwards is
 	 *  the ordinary job path; nothing here contacts the marketplace. An item

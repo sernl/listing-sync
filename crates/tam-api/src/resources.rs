@@ -16,8 +16,8 @@ use tam_domain::registry::listing_url::{listing_url, parse_listing_url, UrlRefus
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
-    ConnectionRepo, DrainStats, ElectionRepo, LedgerCursor, MappingRepo, NewAnswer, OpenElection,
-    PastedBind, ProductRepo, StorageError, TaxonomyRepo,
+    ConnectionRepo, DrainStats, ElectionRepo, LabelRepo, LedgerCursor, MappingRepo, NewAnswer,
+    OpenElection, PastedBind, ProductRepo, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
@@ -27,7 +27,7 @@ use tam_types::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
-use crate::jobs::{decode_cursor, encode_cursor, PageParams};
+use crate::jobs::{decode_cursor, encode_cursor};
 use crate::{AppState, OrgContext};
 
 fn storage_fault(state: &AppState, error: &tam_storage::StorageError) -> APIError {
@@ -76,10 +76,26 @@ pub struct ProductHead {
     pub updated_at: Timestamp,
 }
 
+/// The catalogue page, and the one narrowing it admits.
+///
+/// `label` is the seller's own vocabulary rather than ours, so it is matched
+/// as text; an unknown label is an empty page rather than a refusal, because a
+/// label the seller has just removed from every item stops existing and a
+/// bookmarked filter naming it should say "nothing here", not "you are wrong".
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CataloguePageParams {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
 pub(crate) async fn list_products(
     State(state): State<AppState>,
     context: OrgContext,
-    Query(params): Query<PageParams>,
+    Query(params): Query<CataloguePageParams>,
 ) -> Result<Json<ProductsPage>, APIError> {
     let cursor = match params.cursor.as_deref() {
         None => None,
@@ -93,7 +109,16 @@ pub(crate) async fn list_products(
         .unwrap_or(PAGE_LIMIT_DEFAULT)
         .clamp(1, PAGE_LIMIT_MAX);
     let rows = ProductRepo::new(state.pool.clone())
-        .list_page(context.org, cursor, limit)
+        .list_page(
+            context.org,
+            cursor,
+            limit,
+            params
+                .label
+                .as_deref()
+                .map(str::trim)
+                .filter(|label| !label.is_empty()),
+        )
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     let next_cursor = (i64::try_from(rows.len()).unwrap_or(i64::MAX) == limit)
@@ -710,6 +735,136 @@ pub(crate) async fn list_mappings(
     Ok(Json(MappingsView {
         mappings: rows.into_iter().map(MappingHeadView::of).collect(),
     }))
+}
+
+// -------------------------------------------------------------- labels
+
+/// One label as the console renders it. The colour is the server's, derived
+/// from the name rather than chosen, so one label looks the same everywhere it
+/// appears without a seller having to manage a palette.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelView {
+    pub name: String,
+    pub colour: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelsView {
+    pub labels: Vec<LabelView>,
+}
+
+/// The whole set an item carries after this write.
+///
+/// Whole rather than a delta: the console renders the set and sends it back,
+/// and a delta would leave removing the last label with no spelling.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetLabelsBody {
+    pub labels: Vec<String>,
+}
+
+/// The bound on how many labels one item may carry.
+///
+/// A filing dimension rather than a tagging free-for-all: a seller who needs
+/// forty labels on one item is describing something the label is the wrong
+/// tool for, and an unbounded list is a row this server writes on a stranger's
+/// say-so.
+const LABELS_PER_PRODUCT_MAX: usize = 20;
+
+fn labels_view(records: Vec<tam_storage::LabelRecord>) -> Json<LabelsView> {
+    Json(LabelsView {
+        labels: records
+            .into_iter()
+            .map(|record| LabelView {
+                name: record.name,
+                colour: record.colour.as_str().to_owned(),
+            })
+            .collect(),
+    })
+}
+
+pub(crate) async fn product_labels(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product)): Path<(String, String)>,
+) -> Result<Json<LabelsView>, APIError> {
+    let product = ProductId(parse_id(&product)?);
+    product_or_missing(&state, context.org, product).await?;
+    let records = LabelRepo::new(state.pool.clone())
+        .for_product(context.org, product)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(labels_view(records))
+}
+
+pub(crate) async fn set_product_labels(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product)): Path<(String, String)>,
+    Json(body): Json<SetLabelsBody>,
+) -> Result<Json<LabelsView>, APIError> {
+    let product = ProductId(parse_id(&product)?);
+    product_or_missing(&state, context.org, product).await?;
+
+    // The cap is checked against what arrived, before anything walks the list:
+    // the deduplication below is quadratic, so checking the bound afterwards
+    // would let an unbounded array do unbounded work to earn its refusal.
+    if body.labels.len() > LABELS_PER_PRODUCT_MAX {
+        return Err(validation(
+            "an item carries at most twenty labels; labels file a catalogue rather than describe one item",
+        ));
+    }
+
+    // Trimmed, emptied and deduplicated here rather than in the repository,
+    // because what a seller may type is an API question: the storage layer
+    // stores what it is given.
+    let mut names: Vec<String> = Vec::with_capacity(body.labels.len());
+    for raw in &body.labels {
+        let name = tam_storage::labels::normalise(raw);
+        if name.is_empty() {
+            return Err(validation("a label needs a word in it"));
+        }
+        if name.chars().count() > 60 {
+            return Err(validation("a label is at most sixty characters"));
+        }
+        if !names
+            .iter()
+            .any(|held: &String| held.eq_ignore_ascii_case(&name))
+        {
+            names.push(name);
+        }
+    }
+    let records = LabelRepo::new(state.pool.clone())
+        .set_for_product(context.org, product, &names, (state.wall)())
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(labels_view(records))
+}
+
+/// Every label this organisation uses, which is what the board's filter lists.
+pub(crate) async fn list_labels(
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<LabelsView>, APIError> {
+    let records = LabelRepo::new(state.pool.clone())
+        .list(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(labels_view(records))
+}
+
+/// Refuses with the same not-found another organisation's product gets, so a
+/// label write is never an oracle for which product identifiers exist.
+async fn product_or_missing(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+) -> Result<(), APIError> {
+    ProductRepo::new(state.pool.clone())
+        .get(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such product"))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- bind

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, id, title, price_kind, price_minor_units, price_currency, created_at, updated_at FROM product WHERE org_id = $1 AND deleted_at IS NULL AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) ORDER BY created_at, id LIMIT $4",
+  "query": "SELECT org_id, id, title, price_kind, price_minor_units, price_currency, created_at, updated_at FROM product WHERE org_id = $1 AND deleted_at IS NULL AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) AND ($5::text IS NULL OR EXISTS ( SELECT 1 FROM product_label pl JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id WHERE pl.org_id = product.org_id AND pl.product_id = product.id AND lower(l.name) = lower($5))) ORDER BY created_at, id LIMIT $4",
   "describe": {
     "columns": [
       {
@@ -49,7 +49,8 @@
         "Uuid",
         "Timestamptz",
         "Uuid",
-        "Int8"
+        "Int8",
+        "Text"
       ]
     },
     "nullable": [
@@ -63,5 +64,5 @@
       false
     ]
   },
-  "hash": "1a9cc5c3d838b62a1b77b8a59522d887809c68e505c9c48637b953baab80eabf"
+  "hash": "14ef3a0cc518a3f5e5402f5767e9fc85a9d7549f190d3fd0bd1c0766b4d041de"
 }

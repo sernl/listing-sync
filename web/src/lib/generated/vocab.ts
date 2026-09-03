@@ -64,6 +64,16 @@ export type TransportClass =
   | "OfficialApi"
   | "SellerDevice";
 
+export type LabelColour =
+  | "slate"
+  | "red"
+  | "amber"
+  | "green"
+  | "teal"
+  | "blue"
+  | "violet"
+  | "pink";
+
 export type ConnectionStatus =
   | "connected"
   | "checking"

@@ -6,6 +6,7 @@
 	import { formatMetric } from '$lib/analytics-view';
 	import CrossListDialog from '$lib/CrossListDialog.svelte';
 	import MarkListedDialog from '$lib/MarkListedDialog.svelte';
+	import LabelsDialog from '$lib/LabelsDialog.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import {
 		STATE_LABEL,
@@ -47,8 +48,12 @@
 	const queryClient = useQueryClient();
 
 	const catalogue = createQuery(() => ({
-		queryKey: queryKeys.products,
-		queryFn: () => allPages(api.products, (view) => view.products)
+		queryKey: queryKeys.catalogue(label === 'all' ? null : label),
+		queryFn: () =>
+			allPages(
+				(cursor) => api.products(cursor, label === 'all' ? null : label),
+				(view) => view.products
+			)
 	}));
 	const mappings = createQuery(() => ({
 		queryKey: queryKeys.mappings,
@@ -101,9 +106,14 @@
 	let selected = $state<Set<string>>(new Set());
 	let marketplace = $state<InventoryId | 'all'>('all');
 	let standing = $state<StandingFilter>('all');
+	// The label narrows what the server sends rather than what this page shows,
+	// because it is a clause in the catalogue's own page query; the other two
+	// filters read fields already loaded.
+	let label = $state<string | 'all'>('all');
 	let crossListing = $state(false);
 	let deleting = $state(false);
 	let markingListed = $state(false);
+	let labelling = $state(false);
 
 	/** Only the three built verbs open anything; the other two are disabled at
 	 *  the control, so this is exhaustive over what can actually be clicked. */
@@ -112,9 +122,31 @@
 			crossListing = true;
 		} else if (verb === 'mark_listed') {
 			markingListed = true;
+		} else if (verb === 'labels') {
+			labelling = true;
 		} else if (verb === 'delete') {
 			deleting = true;
 		}
+	}
+
+	async function labelled(count: number) {
+		labelling = false;
+		selected = new Set();
+		toast('info', `${count} ${count === 1 ? 'item' : 'items'} relabelled.`);
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
+			queryClient.invalidateQueries({ queryKey: queryKeys.labels })
+		]);
+	}
+
+	/** Some items were relabelled before one failed. The writes that landed are
+	 *  real, so the board refreshes; the dialog stays open with the refusal on
+	 *  it, and nothing here claims the selection succeeded. */
+	async function partlyLabelled(_count: number) {
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
+			queryClient.invalidateQueries({ queryKey: queryKeys.labels })
+		]);
 	}
 
 	async function markedListed(bound: number) {
@@ -137,6 +169,13 @@
 	const products = $derived(catalogue.data ?? []);
 	const query = $derived(page.url.searchParams.get('q')?.trim() ?? '');
 	const filters = $derived<Filters>({ query, marketplace, standing });
+
+	// Every label the organisation uses. A label nothing carries any more is
+	// absent, so the list never offers a filter that can only answer nothing.
+	const labels = createQuery(() => ({
+		queryKey: queryKeys.labels,
+		queryFn: () => api.labels().then((view) => view.labels)
+	}));
 
 	const byProduct = $derived.by(() => {
 		const index = new Map<string, MappingHead[]>();
@@ -317,13 +356,24 @@
 					<option value={option.value}>{option.label}</option>
 				{/each}
 			</select>
-			{#if marketplace !== 'all' || standing !== 'all'}
+			<select
+				aria-label="Filter by label"
+				value={label}
+				onchange={(event) => (label = event.currentTarget.value)}
+			>
+				<option value="all">Any label</option>
+				{#each labels.data ?? [] as one (one.name)}
+					<option value={one.name}>{one.name}</option>
+				{/each}
+			</select>
+			{#if marketplace !== 'all' || standing !== 'all' || label !== 'all'}
 				<button
 					class="btn small"
 					type="button"
 					onclick={() => {
 						marketplace = 'all';
 						standing = 'all';
+						label = 'all';
 					}}
 				>
 					Clear filters
@@ -340,6 +390,20 @@
 			<p class="quiet">Loading the catalogue…</p>
 		{:else if catalogue.isError || mappings.isError}
 			<p class="quiet">The catalogue could not be read.</p>
+		{:else if products.length === 0 && label !== 'all'}
+			<div class="placeholder">
+				<span class="big" aria-hidden="true">▤</span>
+				<b>Nothing matches “{label}”</b>
+				<p>
+					No item carries that label. Your catalogue is not empty; this filter is what is hiding
+					it.
+				</p>
+				<div class="actions" style="justify-content: center; margin-top: 14px">
+					<button class="cta" type="button" onclick={() => (label = 'all')}>
+						Show every item
+					</button>
+				</div>
+			</div>
 		{:else if products.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">▤</span>
@@ -465,6 +529,15 @@
 	rows={chosen}
 	onClose={() => (crossListing = false)}
 	onStarted={started}
+/>
+
+<LabelsDialog
+	open={labelling}
+	rows={chosen}
+	known={labels.data ?? []}
+	onClose={() => (labelling = false)}
+	onLabelled={labelled}
+	onPartial={partlyLabelled}
 />
 
 <MarkListedDialog

@@ -30,6 +30,11 @@ export const queryKeys = {
 	connections: ['connections'] as const,
 	analytics: ['analytics'] as const,
 	products: ['products'] as const,
+	/** The catalogue narrowed to one label. Its own key, because the label is
+	 *  part of what the server was asked for rather than a view over one
+	 *  answer. */
+	catalogue: (label: string | null) => ['products', label] as const,
+	labels: ['labels'] as const,
 	/** One product's aggregate, keyed by its identifier. */
 	product: (id: string) => ['product', id] as const,
 	/** One marketplace's authoring vocabulary, keyed by inventory: the create

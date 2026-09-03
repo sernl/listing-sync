@@ -14,7 +14,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use sqlx::PgPool;
-use tam_api::resources::{MappingHeadView, MappingsView};
+use tam_api::resources::{LabelsView, MappingHeadView, MappingsView};
 use tam_api::{router, APIError, APIErrorCode, AppState, Config, SESSION_COOKIE};
 use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, Verification};
 use tam_marketplace::{RemoteLifecycle, RemoteListingId};
@@ -32,6 +32,7 @@ const USER_B: UserId = UserId(Uuid([0x0B; 16]));
 const TOKEN_A: SessionToken = SessionToken([0x41; 32]);
 const TOKEN_B: SessionToken = SessionToken([0x42; 32]);
 const PRODUCT_A: ProductId = ProductId(Uuid([0x01; 16]));
+const PRODUCT_B: ProductId = ProductId(Uuid([0x02; 16]));
 const NOW: Timestamp = Timestamp(5_000);
 
 fn state(pool: PgPool) -> AppState {
@@ -85,7 +86,11 @@ async fn seed_product(pool: &PgPool, org: OrgId, product: ProductId) {
                 },
                 payload: PayloadSet::new(
                     ProductFile {
-                        id: FileId(Uuid([0x21; 16])),
+                        // Derived from the product rather than fixed:
+                        // `product_file` is keyed `(org_id, id)`, so two
+                        // products seeded into one tenant cannot share a file
+                        // identifier.
+                        id: FileId(Uuid(product.0 .0)),
                         role: FileRole::Payload,
                         kind: FileKind::Pdf,
                         hash: ContentHash([0x51; 32]),
@@ -633,4 +638,169 @@ async fn a_bind_without_a_session_is_refused(pool: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+fn labels_path(product: ProductId) -> String {
+    format!("/v1/products/{}/labels", product.0.to_hyphenated())
+}
+
+/// The write answers the set it left behind, and the catalogue narrows to it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn labels_are_written_read_back_and_filtered_on(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+
+    let (status, body) = call(
+        pool.clone(),
+        Some(&TOKEN_A),
+        Method::PUT,
+        &labels_path(PRODUCT_A),
+        Some(serde_json::json!({ "labels": ["Autumn term", "Bundle"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: LabelsView = parse(&body);
+    assert_eq!(
+        view.labels
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Autumn term", "Bundle"]
+    );
+    assert!(
+        view.labels.iter().all(|l| !l.colour.is_empty()),
+        "every label carries the colour its name earned"
+    );
+
+    let (status, body) = call(
+        pool.clone(),
+        Some(&TOKEN_A),
+        Method::GET,
+        &labels_path(PRODUCT_A),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let read: LabelsView = parse(&body);
+    assert_eq!(read.labels.len(), 2);
+
+    // A second item carrying no label, so the filter is proven to exclude as
+    // well as include: with one product in the catalogue the assertion below
+    // would pass against a predicate that matched everything.
+    seed_product(&pool, ORG_A, PRODUCT_B).await;
+
+    let (status, body) = call(
+        pool.clone(),
+        Some(&TOKEN_A),
+        Method::GET,
+        "/v1/products?label=autumn%20TERM",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let page: tam_api::resources::ProductsPage = parse(&body);
+    assert_eq!(
+        page.products.iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![PRODUCT_A],
+        "the filter folds case, and it excludes the unlabelled item rather than matching everything"
+    );
+
+    let (_status, body) = call(
+        pool.clone(),
+        Some(&TOKEN_A),
+        Method::GET,
+        "/v1/products",
+        None,
+    )
+    .await;
+    let whole: tam_api::resources::ProductsPage = parse(&body);
+    assert_eq!(
+        whole.products.len(),
+        2,
+        "both items are in the catalogue, so the filtered page is a narrowing rather than the whole of it"
+    );
+
+    let (_status, body) = call(
+        pool,
+        Some(&TOKEN_A),
+        Method::GET,
+        "/v1/products?label=nothing%20carries%20this",
+        None,
+    )
+    .await;
+    let empty: tam_api::resources::ProductsPage = parse(&body);
+    assert!(
+        empty.products.is_empty(),
+        "an unknown label is an empty page rather than a refusal"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_blank_or_overlong_label_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+
+    for labels in [
+        serde_json::json!({ "labels": ["   "] }),
+        serde_json::json!({ "labels": ["x".repeat(61)] }),
+    ] {
+        let (status, _body) = call(
+            pool.clone(),
+            Some(&TOKEN_A),
+            Method::PUT,
+            &labels_path(PRODUCT_A),
+            Some(labels),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    let (status, _body) = call(
+        pool,
+        Some(&TOKEN_A),
+        Method::PUT,
+        &labels_path(PRODUCT_A),
+        Some(serde_json::json!({
+            "labels": (0..21).map(|n| format!("label {n}")).collect::<Vec<_>>()
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "an item carries at most twenty labels"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn another_tenants_product_cannot_be_labelled(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+
+    let (status, body) = call(
+        pool.clone(),
+        Some(&TOKEN_B),
+        Method::PUT,
+        &labels_path(PRODUCT_A),
+        Some(serde_json::json!({ "labels": ["Theirs"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let error: APIError = parse(&body);
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::ResourceMissing));
+
+    let (_status, body) = call(
+        pool,
+        Some(&TOKEN_A),
+        Method::GET,
+        &labels_path(PRODUCT_A),
+        None,
+    )
+    .await;
+    let view: LabelsView = parse(&body);
+    assert!(
+        view.labels.is_empty(),
+        "the refused write left the owning tenant's item unlabelled"
+    );
 }

@@ -461,6 +461,24 @@ impl ProductRepo {
         .execute(&mut *tx)
         .await?
         .rows_affected();
+
+        // A deleted item carries no labels, because the catalogue no longer
+        // shows it: leaving the attachments would keep a label alive that no
+        // visible item carries, and the board's filter would offer a word
+        // whose page is always empty. Cleared in this transaction rather than
+        // a later sweep, so the two facts never disagree.
+        if deleted == 1 {
+            let abandoned = sqlx::query_scalar!(
+                "DELETE FROM product_label WHERE org_id = $1 AND product_id = $2 \
+                 RETURNING label_id",
+                uuid_to_db(org.0),
+                uuid_to_db(id.0),
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            crate::labels::sweep_abandoned(&mut tx, org, &abandoned).await?;
+        }
+
         tx.commit().await?;
         Ok(deleted == 1)
     }
@@ -925,11 +943,20 @@ fn decode_grades(row: &GradeRow, paths: Vec<PathRow>) -> Result<GradeDeclaration
 impl ProductRepo {
     /// The catalogue page: keyset on `(created_at, id)` strictly above the
     /// cursor, oldest first, matching the unpaginated listing's order.
+    /// One keyset page of the catalogue, optionally narrowed to the items
+    /// carrying one label.
+    ///
+    /// The label is a clause in the page query rather than a filter over the
+    /// page it returns: filtering afterwards would shorten pages below the
+    /// limit and leave the cursor pointing past items the caller never saw.
+    /// Compared case-insensitively, matching `label_one_per_name`, so a filter
+    /// finds the label whatever capitalisation reaches it.
     pub async fn list_page(
         &self,
         org: OrgId,
         cursor: Option<crate::job_reads::LedgerCursor>,
         limit: i64,
+        label: Option<&str>,
     ) -> Result<Vec<ProductSummary>, StorageError> {
         let org_db = uuid_to_db(org.0);
         let (cursor_at, cursor_id) = match cursor {
@@ -948,11 +975,17 @@ impl ProductRepo {
              FROM product \
              WHERE org_id = $1 AND deleted_at IS NULL \
                AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) \
+               AND ($5::text IS NULL OR EXISTS ( \
+                     SELECT 1 FROM product_label pl \
+                     JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id \
+                     WHERE pl.org_id = product.org_id AND pl.product_id = product.id \
+                       AND lower(l.name) = lower($5))) \
              ORDER BY created_at, id LIMIT $4",
             org_db,
             cursor_at,
             cursor_id,
             limit,
+            label,
         )
         .fetch_all(&mut *tx)
         .await?;
