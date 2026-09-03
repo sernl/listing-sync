@@ -183,7 +183,9 @@ The query plans were checked too: a folded-code prefix query is an index scan, a
 Two pieces of wiring are outstanding and were deliberately not done here, because both fall outside this change's file scope.
 `crates/tam-storage/src/lib.rs` needs one line declaring a `standards` module for a repository to exist, and a repository using the `sqlx::query!` macros needs `cargo sqlx prepare` run against a live database to regenerate the committed offline metadata.
 The repository itself is small: an upsert keyed on `(framework, source_guid)` that sets `retired_at` on rows the new snapshot no longer names, and reads for prefix, grade, subject, keyword and children.
-No API is wired.
+The search route exists but is not connected to this data.
+`crates/tam-api/src/product/standards.rs:105` answers `not_ingested` for every framework unconditionally, on the ground that no standard matched and no standard exists here yet are different answers to a seller.
+Connecting that handler to the committed files is the one API change the remaining work needs, and it is a handler body rather than a new route.
 
 `tam-standards` is pure by construction — its only dependencies are `serde`, `serde_json` and the workspace's pinned `sha2`, and it performs no I/O — and the justfile's `purity` recipe now names it alongside `tam-types`, `tam-marketplace`, `tam-domain` and `tam-taxonomy`.
 So a `cargo add` of tokio, reqwest or sqlx into it fails the lane rather than resting on review.
@@ -203,3 +205,102 @@ A deterministic gzip codec — a pinned header and level, a manifest byte cap on
 2. Whether to ingest Texas career-and-technical education, 190 sets that TPT sellers do sell into and that the research note's scope excluded.
 3. Whether the picker's canonical row for a duplicated code is chosen by rule or shown as several. The data says several exist; the product has to say which one a seller sees.
 4. Whether Virginia should be diffed against the Satchel Rosetta Exchange as a second opinion, as the research note suggested. Both are third-party transcriptions of PDFs, and diffing them is the only available fidelity check.
+
+## Filling the node-id table: who runs the crawl
+
+Nothing posts to TPT until the table above is filled, and filling it means enumerating four jurisdiction subtrees rather than reading a published list.
+Two operations on `/graph/graphql` do it: `EducationStandardsJurisdictionsQuery` returns the roots, and `EducationStandardsQuery($id: ID!, $depth: Int)` expands one node at a time, which is how TPT's own picker works — 58 calls in the capture, `depth: 1` for a jurisdiction's top level and no depth argument below it (`docs/research/rethink/tpt-product-model.md:340`).
+The four subtrees are 3054 Common Core, 3055 NGSS, 3326 TEKS and 5785 VA SOL, out of 166 roots that exist (same file:360).
+Each node carries `id`, `name`, `notation`, `grades`, `parentIds`, `type` and `descriptionText`, where `name` is the published code and `id` is the value the wire field takes (same file:341, :351).
+TPT exposes no public enumeration of any of this; the jurisdictions query is the enumeration (same file:365).
+
+TPT is a no-API marketplace, so under D1 the server may not issue one of these requests, and the crawl has exactly two lawful homes: a job on a seller's device, or a founder-run capture on the founder's own machine under the founder's own session.
+
+The recommendation is the founder-run capture.
+The table is TPT-global reference data rather than a tenant's: every seller who tags `8.F.B.5` posts the same node id, so a device crawl would repeat one global enumeration once per seller and return nothing seller-specific for the traffic it spends.
+Bulk enumeration is also the behaviour most likely to draw the response the marketplace-terms memo names as the pivot, and a founder capture concentrates that exposure on a single account the founder controls rather than spreading it across every customer's session.
+The cadence agrees with the choice: the table moves when TPT reindexes, not when a seller publishes.
+
+Device-side work remains, but it is verification rather than enumeration, and that asymmetry is the point.
+`EducationStandardsByIds($ids: [ID]!)` resolves a saved set back to names, and it is the call TPT's own edit form makes to re-render an existing product's selections (`docs/research/rethink/tpt-product-model.md:346`).
+A device about to post standards asks that one question about exactly the ids it is about to post, which is indistinguishable from ordinary use of the form, costs one request, and refuses an id the marketplace no longer agrees with.
+So enumeration stays off every seller's device and the freshness check stays on it.
+
+The crawl is not performed here.
+Its binary belongs beside `tam-standards-fetch` and reuses that crate's existing `reqwest` and `tokio` dependencies, so no new dependency edge is opened for it (`crates/tam-standards-fetch/Cargo.toml:8`), and it never ships in the server image.
+
+## The kill gate: node ids that move
+
+`sphinxId` names a search index, and search indexes get rebuilt (`docs/research/rethink/tpt-product-model.md:353`).
+If the ids move, a stored binding posts a silently wrong tag, which is worse than posting nothing at all.
+The gate is therefore whether storing an id and posting it later is a viable design, and it is settled by measurement rather than by argument.
+
+The protocol is a second capture taken at least thirty days after the first and diffed against it by `source_guid`, with two checks that must not be conflated.
+The identity check asks whether node id N still returns a `name` equal to the bound `code`; a changed `name` means the id now denotes a different standard, and that is the failure this gate is about.
+The drift check asks whether `statement_sha256` still matches; a changed statement under an unchanged `name` means TPT reworded its prose, which is a reconciliation item and a refreshed hash rather than a failure.
+Both fields already exist on `TptBinding` for exactly this (`crates/tam-standards/src/tpt.rs:62`, `:64`).
+
+The decision rule reads the identity check across the whole re-crawl.
+No moved ids means store and post, with the per-post verification above as the standing check.
+Fewer than one per cent moved means the same, with the capture cadence tightened to quarterly.
+One per cent or more kills stored ids, and the fallback is to resolve the id at post time on the device by expanding the subtree from the code, which costs a handful of requests for one product's standards against the picker's own 58.
+That fallback is a degradation rather than a project kill, and naming it now is what makes the gate safe to fail.
+
+A binding outside the current crawl window is not posted under any branch.
+The caller omits the standards field and emits the loss record the projection already carries, so the seller reads "these standards are not carried to this marketplace" in the field diff before publish rather than discovering a wrong tag afterwards (`docs/notes/design/vendoo-for-teachers-rethink.md:217`).
+
+## Founder decisions
+
+Seven, each with a recommended answer.
+The first four are the open questions above, restated with an answer rather than repeated.
+
+1. The Texas coverage gap against TEA's own feed.
+   Accept it, and do not pull TEA.
+   D19 holds that a written question to Texas becomes necessary the moment we pull TEA's feed directly, so even a verification-only diff spends the thing D19 bought; revisit only if a Texas seller reports a code the catalogue lacks.
+
+2. Texas career-and-technical education, the 190 sets the ingest excludes.
+   Not now.
+   The selection lists are constants in `crates/tam-standards-fetch/src/main.rs`, so deferring costs a re-run rather than a redesign, and CTE sellers are not the launch cohort.
+
+3. The canonical row for a duplicated code.
+   Show several rather than choose by rule.
+   The data says several exist and 331 of the Texas collisions carry different statements, so a rule would silently pick one of them; `candidates_for_code` already returns a list for this reason (`crates/tam-standards/src/tpt.rs:97`).
+
+4. Virginia against the Satchel Rosetta Exchange.
+   Yes, once, as a one-off fidelity check rather than a standing job.
+   Both are third-party transcriptions of the same PDFs, so a single diff either finds transcription errors or retires the question permanently.
+
+5. Who runs the node-id crawl.
+   The founder-run capture, with device-side per-post verification, for the reasons in the section above.
+   The alternative ships a bulk enumerator to every customer's session and buys nothing per seller.
+
+6. What the console does while the table is empty.
+   Let a seller tag standards and store them, and let publish to TPT omit the field with a visible loss record.
+   The tag is worth carrying in our own catalogue before it can post, and the loss record is the machinery that makes the omission honest rather than silent.
+
+7. When the second capture runs.
+   Before the standards feature is enabled for any seller.
+   The gate exists to decide whether stored ids are postable at all, and running it after sellers depend on the answer converts a design decision into an incident.
+
+## Build order and path ownership
+
+Five steps.
+None touches `crates/tam-engine`, `crates/tam-engine-driver` or `crates/tam-storage`, and one touches `crates/tam-api` at a handler body rather than a route.
+
+1. Connect the search route to the ingested catalogue: `crates/tam-api/src/product/standards.rs`.
+   Reading through `tam_standards::search` over the committed files keeps `crates/tam-storage` out of this stream entirely, and migration 0041 stays where it is for the day the corpus outgrows a file read.
+
+2. The crawl's request shaping and response parsing: a new `crates/tam-marketplace-tpt/src/standards.rs` and one module line in that crate's `lib.rs`.
+   It stays pure — it builds the two operations' bodies and parses their nodes — and the GraphQL error classification it needs already exists (`crates/tam-marketplace-tpt/src/classify.rs:89`).
+
+3. The diff and the gate arithmetic: a new `crates/tam-standards/src/crawl.rs` and one module line in `crates/tam-standards/src/lib.rs:24`.
+   Pure, so the identity check, the drift check and the decision rule are all testable against fixtures without a session, which is what lets the gate be exercised before the capture exists.
+
+4. The founder capture binary: a new `crates/tam-standards-crawl/`, added to the workspace members at `Cargo.toml:10`.
+   It reuses `tam-standards-fetch`'s dependency set, writes `docs/design/data/standards/tpt-node-ids.jsonl`, and must not be named by the `purity` recipe, since it is the one crate in this stream that holds a transport (`justfile:38`).
+
+5. The console surfaces: `web/src/lib/StandardsPicker.svelte` and `web/src/lib/tpt-form.ts`.
+   The picker shows subject and grade beside every Texas and Virginia code and never a bare one, renders whatever `required_notices` returns for the frameworks on screen (`crates/tam-standards/src/notices.rs`), and the publish path shows the unbound-standards loss record before publish.
+
+Steps 2, 3 and 4 share no files with step 1 or with each other and can run in parallel; step 5 depends on step 1.
+Step 4 is a new crate rather than a new dependency, which is the distinction that keeps it inside the enforcement rule rather than against it.
