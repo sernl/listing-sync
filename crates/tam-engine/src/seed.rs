@@ -15,18 +15,19 @@
 
 use sqlx::PgPool;
 use tam_domain::{
-    Binding, ItemOperation, ProjectionBlocked, StepBudget, VocabularyId, VocabularyPath,
+    Binding, ItemOperation, ItemOutcome, ProjectionBlocked, StepBudget, VocabularyId,
+    VocabularyPath, PARK_TTL_MS,
 };
 use tam_marketplace::{
     AgeSpan, CreateStrategy, FormId, LifecycleTransition, ListingState, NativeAxis, NativeTerm,
     ProjectedListing, RemoteLifecycle, RemoteLifecycleKind,
 };
 use tam_storage::{
-    ElectionRepo, LeasedItem, LossScope, MappingRepo, ProductRepo, RaiseReport, RaiseScope,
-    StorageError, TaxonomyRepo, ELECTION,
+    ElectionRepo, ItemVerdict, LeaseRepo, LeasedItem, LossScope, MappingRepo, ProductRepo,
+    RaiseReport, RaiseScope, StorageError, TaxonomyRepo, ELECTION,
 };
 use tam_taxonomy::listing::{project_listing, projection_vocabularies, ListingContext};
-use tam_types::{AttemptId, InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{AttemptId, FailureCode, FailureDetail, InventoryId, OrgId, Timestamp, Uuid};
 
 use tam_engine_driver::driver::{EngineError, VerifyPolicy};
 use tam_engine_driver::vocabulary::ItemPreparation as WirePreparation;
@@ -97,6 +98,75 @@ pub enum ItemPreparation {
     /// leaves the seller with a listing on both platforms and no statement
     /// that the migration ended.
     CounterpartLost { counterpart: InventoryId },
+}
+
+/// One item prepared, with the answers that are not "run it" already applied.
+///
+/// Both hosts prepare the same way and must dispose the same way, which is why
+/// this exists rather than each writing its own arm. An item the preparation
+/// refuses is parked or settled here and never handed back to the queue: the
+/// claim orders by `created_at` and a release advances nothing, so a host that
+/// released a permanently blocked item would be served the same item on its
+/// next poll for ever, and would starve every sibling on that marketplace
+/// behind the per-connection mutex while doing it.
+pub enum Disposed {
+    Ready {
+        operation: ItemOperation,
+        projected: Option<ProjectedListing>,
+    },
+    Parked {
+        gate: &'static str,
+        raised: RaiseReport,
+    },
+    Skipped {
+        counterpart: InventoryId,
+    },
+}
+
+/// Prepares the item and applies the disposition its answer calls for.
+///
+/// The park states a duration rather than an instant, because the reaper reads
+/// the expiry against the database's clock.
+pub async fn prepare_and_dispose(
+    pool: &PgPool,
+    leases: &LeaseRepo,
+    item: &LeasedItem,
+    now: Timestamp,
+) -> Result<Disposed, EngineError> {
+    match prepare_item(pool, item, now).await? {
+        ItemPreparation::Ready {
+            operation,
+            projected,
+        } => Ok(Disposed::Ready {
+            operation,
+            projected,
+        }),
+        ItemPreparation::Blocked { gate, raised } => {
+            leases
+                .park(&item.lease_ref(), gate, PARK_TTL_MS.div_euclid(1_000))
+                .await
+                .map_err(|error| crate::ledger::to_wire_error(&error))?;
+            Ok(Disposed::Parked { gate, raised })
+        }
+        // Waiting is over rather than merely unsatisfied. The listing is
+        // safely on both platforms, which is what the gate is for; what the
+        // seller needs now is to be told the migration ended and why.
+        ItemPreparation::CounterpartLost { counterpart } => {
+            let verdict = ItemVerdict {
+                outcome: ItemOutcome::Skipped,
+                failure_code: Some(FailureCode::Other),
+                failure_detail: Some(FailureDetail(format!(
+                    "the listing on {counterpart:?} never bound, so this item's counterpart \
+                     will not arrive; the source listing was left in place"
+                ))),
+            };
+            leases
+                .settle(&item.lease_ref(), &verdict, now)
+                .await
+                .map_err(|error| crate::ledger::to_wire_error(&error))?;
+            Ok(Disposed::Skipped { counterpart })
+        }
+    }
 }
 
 /// The gate's own park reason, which reaches the ledger and the job report.
@@ -545,58 +615,77 @@ pub fn preparation(
 #[cfg(test)]
 mod lease_budget_tests {
     use super::verify_policy;
+    use tam_domain::LEASE_TTL_SECS;
     use tam_types::InventoryId;
 
-    /// The lease TTL the worker leases with. Mirrored rather than imported:
-    /// `tam-worker` is a binary crate with no library target, so there is
-    /// nothing to depend on, and the inequality is asserted here because
-    /// `verify_policy` is what supplies the poll window. The mirror is
-    /// checked against the worker's own source below rather than trusted,
-    /// because a guard that cannot see one of the two values it names is not
-    /// a guard.
-    const LEASE_TTL_SECS: i64 = 300;
-
-    /// The worker's source, which is the only thing this crate can reach of
-    /// it.
-    const WORKER_SOURCE: &str = include_str!("../../tam-worker/src/main.rs");
-
-    /// The lease TTL the worker actually declares, read out of that source.
-    /// `None` where the declaration moved or changed shape, which fails the
-    /// assertion below as loudly as a changed value does — the mirror has to
-    /// break when it stops mirroring, whatever the reason.
-    fn declared_lease_ttl_secs() -> Option<i64> {
-        WORKER_SOURCE.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("const LEASE_TTL_SECS: i64 = ")?
-                .strip_suffix(';')?
-                .parse()
-                .ok()
-        })
-    }
-
-    #[test]
-    fn the_mirrored_lease_ttl_is_the_one_the_worker_leases_with() {
-        assert_eq!(
-            declared_lease_ttl_secs(),
-            Some(LEASE_TTL_SECS),
-            "the inequality below is only worth asserting against the lease the worker \
-             really takes: lowering LEASE_TTL_SECS there and leaving this copy behind \
-             leaves the test green while the poll has stopped fitting"
-        );
+    /// The one lease TTL, in milliseconds. Imported rather than mirrored: the
+    /// value lives in `tam-domain`, which the API, the worker and this crate
+    /// all depend on, so there is nothing left to drift.
+    fn lease_ms() -> u64 {
+        u64::try_from(i64::from(LEASE_TTL_SECS) * 1_000).unwrap_or(u64::MAX)
     }
 
     /// The slowest Tpt create actually measured, recorded as "nearly three
-    /// minutes" at `crates/tam-marketplace-tpt/src/flows.rs`. The theoretical
-    /// worst case is larger — two queue-job polls at `QUEUE_POLL_MAX` can
-    /// spend 360s inside `submit` alone — and exceeds the lease before any
-    /// poll is added. That is a pre-existing hazard recorded for the founder,
-    /// not one this poll creates and not one Phase 3 hides by raising a
-    /// limit.
+    /// minutes" at `crates/tam-marketplace-tpt/src/flows.rs`.
     const MEASURED_SUBMIT_WORST_CASE_MS: u64 = 180_000;
+
+    /// Tpt's theoretical worst case for the same submit: two queue-job polls
+    /// at `QUEUE_POLL_MAX` × `QUEUE_POLL_INTERVAL_MS` (150 × 1,200ms each)
+    /// inside one `submit`, with no renew between them because the renew sits
+    /// before the effect rather than inside the adapter.
+    const THEORETICAL_SUBMIT_WORST_CASE_MS: u64 = 360_000;
+
+    /// What the heartbeat actually buys, stated as the measured case.
+    ///
+    /// The interpreter renews immediately before every network-bearing effect
+    /// and before every verification try, so a submit starts with a full TTL
+    /// in hand and the stretch that must fit is one effect plus one try's
+    /// interval, not the whole run.
+    #[test]
+    fn the_measured_stretch_between_two_heartbeats_fits_inside_the_lease() {
+        let lease_ms = lease_ms();
+        for inventory in [
+            InventoryId::TesGb,
+            InventoryId::TesUs,
+            InventoryId::TesNz,
+            InventoryId::Etsy,
+            InventoryId::Tpt,
+        ] {
+            let between =
+                MEASURED_SUBMIT_WORST_CASE_MS + u64::from(verify_policy(inventory).interval_ms);
+            assert!(
+                between < lease_ms,
+                "{inventory:?}: the longest stretch between two heartbeats is \
+                 {between}ms against a {lease_ms}ms lease; a stretch longer than the \
+                 lease is a working device losing its item to the reaper, which is \
+                 exactly what the heartbeat exists to prevent"
+            );
+        }
+    }
+
+    /// And what it does not buy, asserted rather than left in a comment.
+    ///
+    /// Tpt's theoretical worst-case submit is one uninterrupted stretch longer
+    /// than the lease it starts with, because the renew sits before the effect
+    /// and the two queue polls happen inside it. The heartbeat narrows this
+    /// hazard — the submit begins with a full TTL rather than with whatever
+    /// was left of the claim — and does not close it. Recorded as an open
+    /// defect in `docs/notes/design/engine-driver-split.md` under step 11,
+    /// with the two remedies named there; asserted here so that raising the
+    /// TTL or shortening the poll has to come past this test.
+    #[test]
+    fn tpts_theoretical_worst_case_submit_still_outlives_the_lease() {
+        assert!(
+            THEORETICAL_SUBMIT_WORST_CASE_MS > lease_ms(),
+            "this assertion is the record of a defect, not of a guarantee: if the worst-case \
+             submit now fits inside the lease, the residual is closed and the note under \
+             step 11 should say so"
+        );
+    }
 
     #[test]
     fn the_verification_poll_fits_inside_the_lease() {
-        let lease_ms = u64::try_from(LEASE_TTL_SECS * 1_000).unwrap_or(u64::MAX);
+        let lease_ms = lease_ms();
         for inventory in [
             InventoryId::TesGb,
             InventoryId::TesUs,

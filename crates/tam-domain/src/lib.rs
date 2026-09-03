@@ -27,6 +27,16 @@ use tam_types::{
     Uuid,
 };
 
+/// How long a claim on a job item stands before the reaper may steal it.
+///
+/// One value, here, because three processes have to agree on it and two of
+/// them now run on hardware we do not operate: the API mints the claim and
+/// every renewed expiry from it, the worker leases with it, and the poll
+/// budget in `tam-engine` asserts against it. A copy that drifted would not
+/// fail anything — it would quietly move the moment a working device loses
+/// its item to the reaper.
+pub const LEASE_TTL_SECS: i32 = 300;
+
 /// The axis vocabulary lives in `tam-types` because the adapter seam names it
 /// too: `ImportedTerm` crosses in `tam-marketplace`, which this crate depends
 /// on rather than the other way round. Re-exported here because the taxonomy
@@ -730,7 +740,7 @@ enum Capture {
 
 /// A park waits on the seller rather than on us, and a day is the window
 /// `ItemState::ParkedLive` is dimensioned for.
-const PARK_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+pub const PARK_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncMachine {

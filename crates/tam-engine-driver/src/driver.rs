@@ -35,19 +35,21 @@ pub trait NowSource: Send + Sync {
 /// made. Held here rather than in the machine, which is pure and holds no
 /// clock, and produced per inventory by the seed.
 ///
-/// The budget has to fit inside the lease, or the item is stolen mid-run and
-/// the epoch-fenced attempt settle fails *after* a listing has landed:
+/// The heartbeat renews the lease before every network-bearing effect and
+/// before every verification try, so the requirement is not that the whole run
+/// fits inside one lease but that no single uninterrupted stretch between two
+/// renews outlives it:
 ///
 /// ```text
-/// submit_worst_case + tries * interval_ms < LEASE_TTL_SECS
+/// slowest_single_effect + interval_ms < LEASE_TTL_SECS
 /// ```
 ///
-/// On today's numbers that holds for the measured Tpt create — roughly 180s
-/// against a 300s lease, with 22s of poll on top — and fails at that
-/// platform's theoretical worst case, where two queue-job polls alone can
-/// spend 360s. That is a pre-existing hazard the poll narrows the margin on
-/// rather than one it creates, and Phase 3 asserts the inequality rather than
-/// raising a limit to hide it.
+/// That holds for the measured Tpt create — roughly 180s against a 300s
+/// lease, with 22s of poll on top — and does not hold at Tpt's theoretical
+/// worst case, where two queue-job polls inside one submit can spend 360s with
+/// no renew between them. The heartbeat narrows that hazard without closing
+/// it; `lease_budget_tests` in `tam-engine` asserts both facts rather than the
+/// comfortable one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VerifyPolicy {
     pub tries: u32,
@@ -387,6 +389,9 @@ async fn verify_with_backoff<
         if ctx.cancel.is_cancelled() || now.0 >= request.deadline {
             return Ok(VerifyOutcome::Stopped(VerifyStop::Cut));
         }
+        // One read-back can expand into eleven marketplace reads, which is the
+        // longest stretch under one lease, so each try extends it.
+        ctx.ledger.renew(&lease.lease_ref()).await?;
         let grant = ctx
             .ledger
             .request_grant(
@@ -558,6 +563,11 @@ pub async fn run_item<
             let now = ctx.clock.now();
             match effect {
                 Effect::AssertFormSchema { form } => {
+                    // The form scrape is the first marketplace request a
+                    // create makes, so it is the first place a lease stolen
+                    // while the device was idle can be found — before the
+                    // request rather than after it.
+                    ctx.ledger.renew(&lease_ref).await?;
                     let asserted = ctx.adapter.assert_form_schema(form).await;
                     pending = Some(match asserted {
                         Ok(fingerprint) => {
@@ -623,6 +633,7 @@ pub async fn run_item<
                         )
                         .await;
                     }
+                    ctx.ledger.renew(&lease_ref).await?;
                     record_action(ctx, lease, sequence, "submit", now).await?;
                     let submitted = ctx.adapter.submit(key, fields, now).await;
                     pending = Some(Input::SubmitResult(submitted));
@@ -647,6 +658,7 @@ pub async fn run_item<
                         )
                         .await;
                     }
+                    ctx.ledger.renew(&lease_ref).await?;
                     record_action(ctx, lease, sequence, "revise", now).await?;
                     let revised = ctx
                         .adapter
@@ -680,6 +692,7 @@ pub async fn run_item<
                         )
                         .await;
                     }
+                    ctx.ledger.renew(&lease_ref).await?;
                     record_action(ctx, lease, sequence, "remove", now).await?;
                     let removed = ctx
                         .adapter
@@ -695,6 +708,7 @@ pub async fn run_item<
                     pending = Some(Input::SubmitResult(removed));
                 }
                 Effect::ReadBack { locator, reason } => {
+                    ctx.ledger.renew(&lease_ref).await?;
                     // One action for the whole poll: a poll is one logical
                     // read of the marketplace, and recording each try would
                     // multiply the item's event stream by the try budget.
@@ -781,15 +795,12 @@ pub async fn run_item<
                     challenge,
                     expires,
                 } => {
-                    // The machine states the instant it wants; what crosses
-                    // the boundary is how long from now, because the server is
-                    // the only clock the reaper reads back against. Rounded up,
-                    // so a sub-second park is still a park rather than an
-                    // expiry already in the past.
-                    let park_for = (expires.0 - now.0).max(0).div_euclid(1_000)
-                        + i64::from((expires.0 - now.0).max(0).rem_euclid(1_000) > 0);
+                    // The machine's `expires` is recorded in the event below
+                    // as what it asked for; the park's own expiry is the
+                    // server's, minted from its own constant, because the
+                    // reaper is the only clock that reads it back.
                     ctx.ledger
-                        .park(&lease_ref, &format!("{challenge:?}"), park_for)
+                        .park(&lease_ref, &format!("{challenge:?}"))
                         .await?;
                     record_event(
                         ctx,

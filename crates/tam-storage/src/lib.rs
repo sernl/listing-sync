@@ -55,8 +55,8 @@ pub use jobs::{
     ClaimPolicy, CreatedJob, DeviceClaim, DeviceRef, EventScope, HaltCause, HaltRepo,
     InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef,
     LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
-    OutboxMessage, OutboxRepo, RateBudgetRepo, WriteAttemptRepo, AWAITING_COUNTERPART, ELECTION,
-    REAUTH_REQUIRED, REVIVABLE_GATES,
+    OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, WriteAttemptRepo,
+    AWAITING_COUNTERPART, ELECTION, REAUTH_REQUIRED, REVIVABLE_GATES,
 };
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
@@ -112,9 +112,31 @@ pub enum StorageError {
     ListingAlreadyBound,
 }
 
-/// Declares the tenant for the rest of this transaction. `set_config` with
-/// `is_local = true` resets at transaction end, so a pooled connection never
-/// leaks one tenant's pin into the next request.
+/// The tenant pin, for a caller assembling its own transaction across this
+/// crate's boundary.
+///
+/// Public because `tam-engine`'s ledger opens transactions of its own and
+/// serves them under `tam_app` for a device, where forced row-level security
+/// is the tenancy: an unpinned transaction there writes nothing and reads
+/// nothing, which is a fence that refuses everyone including the holder.
+pub async fn pin_tenant(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+) -> Result<(), StorageError> {
+    pin_org(tx, org).await
+}
+
+/// Declares the tenant for the rest of this transaction.
+///
+/// `set_config` with `is_local = true` resets at transaction end, so a pooled
+/// connection never leaks one tenant's pin into the next request.
+///
+/// Every write and read this crate serves under `tam_app` passes through here,
+/// because `job_item` and its neighbours carry forced row-level security: an
+/// unpinned statement matches no rows, so it writes nothing and answers as
+/// though a fence had refused it. Under the engine role, which bypasses
+/// row-level security, the same statement is fine — which is what makes the
+/// omission survive every test that drives it through the worker.
 pub(crate) async fn pin_org(
     tx: &mut Transaction<'_, Postgres>,
     org: OrgId,

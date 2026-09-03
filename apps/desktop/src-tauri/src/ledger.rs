@@ -20,12 +20,13 @@ use tam_domain::SellerEvent;
 use tam_engine_driver::ports::ItemLedger;
 use tam_engine_driver::vocabulary::{
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind, ItemVerdict, LeaseRef,
-    LedgerAnswer, LedgerCall, LedgerError, NewAttempt, PreflightStreak, SettleEnvelope,
+    LedgerAnswer, LedgerCall, LedgerError, NewAttempt, PreflightStreak, Renewed, SettleEnvelope,
 };
 use tam_types::{ConnectionId, InventoryId, JobEventPayload, Timestamp};
 
 use crate::device::DeviceId;
 use crate::heartbeat::PlaneFuture;
+use crate::run::LeaseDeadline;
 
 /// Where a ledger call goes. One path for the whole trait rather than twelve,
 /// because the call is a tagged value and a path per variant would be the same
@@ -63,6 +64,13 @@ pub struct HttpLedger<T: LedgerTransport> {
     /// to act on is the gate it parked on. Read once after the run, so the
     /// console can say why rather than only that.
     parked_on: tokio::sync::Mutex<Option<String>>,
+    /// Where a successful renew moves the run's deadline.
+    ///
+    /// Absent in the tests that exercise the protocol alone. A run that has
+    /// one gets its lease extended by the server's own numbers; a run that has
+    /// none still renews, and still stops on a refusal, because the fence is
+    /// the server's answer rather than this handle.
+    deadline: Option<LeaseDeadline>,
 }
 
 impl<T: LedgerTransport> core::fmt::Debug for HttpLedger<T> {
@@ -90,7 +98,15 @@ impl<T: LedgerTransport> HttpLedger<T> {
             device,
             transport,
             parked_on: tokio::sync::Mutex::new(None),
+            deadline: None,
         }
+    }
+
+    /// Binds this ledger to the run whose deadline a renew should move.
+    #[must_use]
+    pub fn moving(mut self, deadline: LeaseDeadline) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
 
     /// What the run parked on, if it parked.
@@ -112,7 +128,8 @@ impl<T: LedgerTransport> HttpLedger<T> {
             | LedgerAnswer::Connection { .. }
             | LedgerAnswer::Streak { .. }
             | LedgerAnswer::Bound { .. }
-            | LedgerAnswer::Grant { .. }) => Ok(landed),
+            | LedgerAnswer::Grant { .. }
+            | LedgerAnswer::Renewed { .. }) => Ok(landed),
         }
     }
 
@@ -137,6 +154,7 @@ pub const fn call_name(call: &LedgerCall) -> &'static str {
         LedgerCall::GateConnection { .. } => "gate_connection",
         LedgerCall::HaltThisTenant { .. } => "halt_this_tenant",
         LedgerCall::RequestGrant { .. } => "request_grant",
+        LedgerCall::Renew { .. } => "renew",
         LedgerCall::RecordEvent { .. } => "record_event",
         LedgerCall::Notify { .. } => "notify",
     }
@@ -164,6 +182,7 @@ trait ReadAnswer {
     fn streak(self, call: &'static str) -> Result<PreflightStreak, LedgerError>;
     fn disposition(self, call: &'static str) -> Result<BindDisposition, LedgerError>;
     fn grant(self, call: &'static str) -> Result<BudgetGrant, LedgerError>;
+    fn renewed(self, call: &'static str) -> Result<Renewed, LedgerError>;
 }
 
 impl ReadAnswer for LedgerAnswer {
@@ -174,6 +193,7 @@ impl ReadAnswer for LedgerAnswer {
             | Self::Streak { .. }
             | Self::Bound { .. }
             | Self::Grant { .. }
+            | Self::Renewed { .. }
             | Self::Refused { .. } => Err(unexpected(call)),
         }
     }
@@ -185,6 +205,7 @@ impl ReadAnswer for LedgerAnswer {
             | Self::Streak { .. }
             | Self::Bound { .. }
             | Self::Grant { .. }
+            | Self::Renewed { .. }
             | Self::Refused { .. } => Err(unexpected(call)),
         }
     }
@@ -196,6 +217,7 @@ impl ReadAnswer for LedgerAnswer {
             | Self::Connection { .. }
             | Self::Bound { .. }
             | Self::Grant { .. }
+            | Self::Renewed { .. }
             | Self::Refused { .. } => Err(unexpected(call)),
         }
     }
@@ -206,6 +228,19 @@ impl ReadAnswer for LedgerAnswer {
             Self::Done
             | Self::Connection { .. }
             | Self::Streak { .. }
+            | Self::Grant { .. }
+            | Self::Renewed { .. }
+            | Self::Refused { .. } => Err(unexpected(call)),
+        }
+    }
+
+    fn renewed(self, call: &'static str) -> Result<Renewed, LedgerError> {
+        match self {
+            Self::Renewed { renewed } => Ok(renewed),
+            Self::Done
+            | Self::Connection { .. }
+            | Self::Streak { .. }
+            | Self::Bound { .. }
             | Self::Grant { .. }
             | Self::Refused { .. } => Err(unexpected(call)),
         }
@@ -218,6 +253,7 @@ impl ReadAnswer for LedgerAnswer {
             | Self::Connection { .. }
             | Self::Streak { .. }
             | Self::Bound { .. }
+            | Self::Renewed { .. }
             | Self::Refused { .. } => Err(unexpected(call)),
         }
     }
@@ -253,17 +289,11 @@ impl<T: LedgerTransport> ItemLedger for HttpLedger<T> {
         self.call(&call).await?.streak(call_name(&call))
     }
 
-    async fn park(
-        &self,
-        lease: &LeaseRef,
-        blocked_on: &str,
-        park_for_seconds: i64,
-    ) -> Result<(), LedgerError> {
+    async fn park(&self, lease: &LeaseRef, blocked_on: &str) -> Result<(), LedgerError> {
         *self.parked_on.lock().await = Some(blocked_on.to_owned());
         self.write(&LedgerCall::Park {
             lease: *lease,
             blocked_on: blocked_on.to_owned(),
-            park_for_seconds,
         })
         .await
     }
@@ -371,6 +401,23 @@ impl<T: LedgerTransport> ItemLedger for HttpLedger<T> {
             at_ms: at.0,
         };
         self.call(&call).await?.grant(call_name(&call))
+    }
+
+    /// The heartbeat.
+    ///
+    /// On success the run's deadline moves to what the server now says the
+    /// lease runs to — its numbers, not ours. On a refusal the answer is a
+    /// `StaleLease`, which the interpreter turns into an abandoned run at the
+    /// next loop top: a lease we no longer hold is one we must not write
+    /// under, and the heartbeat sits before every request precisely so that is
+    /// discovered before one goes out.
+    async fn renew(&self, lease: &LeaseRef) -> Result<Renewed, LedgerError> {
+        let call = LedgerCall::Renew { lease: *lease };
+        let renewed = self.call(&call).await?.renewed(call_name(&call))?;
+        if let Some(deadline) = self.deadline.as_ref() {
+            deadline.extend(renewed);
+        }
+        Ok(renewed)
     }
 
     async fn record_event(
@@ -769,10 +816,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_park_states_a_duration_and_leaves_the_instant_to_the_server() {
+    async fn a_park_names_the_gate_and_leaves_both_the_span_and_the_instant_to_the_server() {
         let parking = ledger(&LedgerAnswer::Done);
         parking
-            .park(&lease(), "reauth_required", 3_600)
+            .park(&lease(), "reauth_required")
             .await
             .expect("the park lands");
         assert_eq!(
@@ -780,10 +827,60 @@ mod tests {
             LedgerCall::Park {
                 lease: lease(),
                 blocked_on: "reauth_required".to_owned(),
-                park_for_seconds: 3_600,
             },
-            "the reaper reads park_expires_at against the server's clock, so the device says how \
-             long and the server says when"
+            "a device that could name its own park span could hold its tenant's queue for as \
+             long as it liked, so the wire carries the gate and nothing else"
+        );
+    }
+
+    /// A renew the server honours moves the run's deadline by its numbers.
+    #[tokio::test(start_paused = true)]
+    async fn a_renewal_moves_the_gate_by_the_servers_own_numbers() {
+        use tam_engine_driver::ports::Cancellation as _;
+        use tam_engine_driver::vocabulary::Renewed;
+        let gate = crate::run::RunGate::from_envelope(0, 60_000);
+        let ledger = HttpLedger::new(
+            DeviceId::from_raw(DEVICE),
+            FakeLedger::answering(&LedgerAnswer::Renewed {
+                renewed: Renewed {
+                    server_now_ms: 5_000_000_000_000,
+                    server_deadline_ms: 5_000_000_300_000,
+                },
+            }),
+        )
+        .moving(gate.deadline());
+
+        let renewed = ledger.renew(&lease()).await.expect("the heartbeat lands");
+        assert_eq!(
+            renewed.server_deadline_ms - renewed.server_now_ms,
+            300_000,
+            "the remaining lease is a subtraction of the server's own two instants"
+        );
+        tokio::time::advance(core::time::Duration::from_mins(2)).await;
+        assert!(
+            ItemLedger::renew(&ledger, &lease()).await.is_ok(),
+            "the second heartbeat still lands"
+        );
+        assert!(
+            !gate.is_cancelled(),
+            "past the original sixty seconds the run continues, because the renew moved the \
+             deadline the gate reads"
+        );
+    }
+
+    /// A refused renew stops the run at its next loop top, before the next
+    /// request rather than after it.
+    #[tokio::test]
+    async fn a_refused_renewal_stops_the_run_before_the_next_request() {
+        let ledger = ledger(&LedgerAnswer::Refused {
+            error: LedgerError::StaleLease,
+        });
+        let refused = ledger.renew(&lease()).await;
+        assert_eq!(
+            refused,
+            Err(LedgerError::StaleLease),
+            "a lease we no longer hold comes back as the answer the interpreter branches on, \
+             not as a transport fault it would retry"
         );
     }
 }

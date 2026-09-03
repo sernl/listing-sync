@@ -12,7 +12,7 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
-use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent};
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent, LEASE_TTL_SECS};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
     Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, Marketplace,
@@ -56,6 +56,13 @@ pub struct NewJob {
     /// struct: a job has one author, and carrying it here rather than beside
     /// it keeps a caller from describing one job and attributing another.
     pub stamp: Stamp,
+}
+
+/// A renewed lease, in the server's own two instants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenewedLease {
+    pub server_now: Timestamp,
+    pub expires_at: Timestamp,
 }
 
 /// Which organisation, item and epoch a fenced write speaks for.
@@ -1208,6 +1215,125 @@ impl LeaseRepo {
         }))
     }
 
+    /// Extends a live lease, fenced on its epoch.
+    ///
+    /// The caller states no duration. The TTL is [`LEASE_TTL_SECS`] and the
+    /// expiry is recomputed by the database, for the same reason the claim
+    /// computes it there: the reaper reads it against the server's clock, and
+    /// a caller naming its own duration would be the holder of a lease
+    /// deciding how long it holds it.
+    ///
+    /// Both instants come back out of the one statement, so the remaining
+    /// lease a device computes from them is a subtraction with no term of its
+    /// own and no second clock in it.
+    ///
+    /// A zero-row update is the fence holding — the item was stolen, settled
+    /// or parked while the holder was working — and answers `StaleLease`, so
+    /// the caller learns it no longer holds the item rather than believing it
+    /// bought more time.
+    pub async fn renew(&self, lease: &LeaseRef) -> Result<RenewedLease, StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let updated = sqlx::query!(
+            r#"UPDATE job_item
+             SET lease_expires_at = now() + make_interval(secs => $4)
+             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3
+               AND state IN ('leased', 'running', 'verifying')
+             RETURNING (extract(epoch FROM now()) * 1000)::bigint AS "now!",
+                       (extract(epoch FROM lease_expires_at) * 1000)::bigint AS "expires!""#,
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+            f64::from(LEASE_TTL_SECS),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        // The new expiry is answered rather than assumed, because the caller
+        // that most needs it is a device whose own clock has no standing here:
+        // it moves its run's deadline by this number and never by arithmetic
+        // of its own.
+        updated.map_or(Err(StorageError::StaleLease), |row| {
+            Ok(RenewedLease {
+                server_now: Timestamp(row.now),
+                expires_at: Timestamp(row.expires),
+            })
+        })
+    }
+
+    /// Who holds this item right now, if anyone.
+    ///
+    /// Org-pinned, which is the whole reason it exists as a repository method
+    /// rather than a bare query at the call site: `job_item` is under forced
+    /// row-level security, so an unpinned read sees no rows at all and a fence
+    /// built on one refuses everything, including the holder.
+    pub async fn holder(
+        &self,
+        org: OrgId,
+        item: JobItemId,
+    ) -> Result<Option<String>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let holder = sqlx::query_scalar!(
+            "SELECT lease_owner FROM job_item \
+             WHERE org_id = $1 AND id = $2 \
+               AND state IN ('leased', 'running', 'verifying')",
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
+        tx.commit().await?;
+        Ok(holder)
+    }
+
+    /// Returns a claimed item to the queue, fenced on its epoch.
+    ///
+    /// A claimant that finds it cannot use what it claimed hands it back
+    /// rather than holding it to expiry: the per-connection mutex means one
+    /// held item blocks every sibling on that marketplace, so a lease nobody
+    /// is working is a queue nobody can drain.
+    ///
+    /// The epoch is not bumped. This is a claimant declining work, not a
+    /// reaper stealing it, and charging an attempt for a decision the item had
+    /// no part in would burn its budget for free.
+    ///
+    /// A zero-row update answers `StaleLease` for the same reason every other
+    /// fenced write here does: the item was stolen, settled or parked while
+    /// this claimant held it, and a caller told `Ok` would believe it had
+    /// handed back something it no longer had.
+    pub async fn release(&self, lease: &LeaseRef) -> Result<(), StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let released = sqlx::query!(
+            "UPDATE job_item \
+             SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL \
+             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
+               AND state IN ('leased', 'running', 'verifying')",
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        if released.rows_affected() == 0 {
+            return Err(StorageError::StaleLease);
+        }
+        Ok(())
+    }
+
     /// Every fenced write shares this shape: the epoch must still match, and
     /// a zero-row update is the stale worker finding out, not racing.
     ///
@@ -1231,6 +1357,7 @@ impl LeaseRepo {
             failure_detail,
         } = verdict;
         let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         let settled = sqlx::query!(
             "UPDATE job_item \
              SET state = 'settled', outcome = $4, failure_code = $5, failure_detail = $6, \
@@ -1271,6 +1398,8 @@ impl LeaseRepo {
             item,
             lease_epoch,
         } = *lease;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         let updated = sqlx::query!(
             "UPDATE job_item \
              SET state = 'parked_live', blocked_on = $4, \
@@ -1284,11 +1413,12 @@ impl LeaseRepo {
             blocked_on,
             f64::from(i32::try_from(park_for_seconds).unwrap_or(i32::MAX)),
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if updated.rows_affected() == 0 {
             return Err(StorageError::StaleLease);
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1311,6 +1441,8 @@ impl LeaseRepo {
             item,
             lease_epoch,
         } = *lease;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
             r#"UPDATE job_item
                SET preflight_failures = preflight_failures + 1,
@@ -1324,9 +1456,10 @@ impl LeaseRepo {
             lease_epoch,
             edge_class,
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or(StorageError::StaleLease)?;
+        tx.commit().await?;
         Ok(PreflightStreak {
             failures: count_u32(i64::from(row.failures))?,
             edge_only: row.edge_only,
@@ -1346,6 +1479,8 @@ impl LeaseRepo {
             item,
             lease_epoch,
         } = *lease;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         sqlx::query!(
             "UPDATE job_item \
              SET preflight_failures = 0, preflight_challenge_only = true \
@@ -1356,8 +1491,9 @@ impl LeaseRepo {
             uuid_to_db(item.0),
             lease_epoch,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1611,6 +1747,7 @@ impl LeaseRepo {
         at: Timestamp,
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         // RETURNING rather than a separate read: the audit must record the
         // connection this statement actually gated, and a row that was
         // already gated matches nothing and is not recorded twice.
@@ -1667,6 +1804,8 @@ impl HaltRepo {
             reason,
             at,
         } = cause;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         sqlx::query!(
             "INSERT INTO org_inventory_halt \
              (org_id, inventory, marketplace, raised_by, reason, raised_at) \
@@ -1679,8 +1818,9 @@ impl HaltRepo {
             reason,
             timestamp_to_db(*at)?,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1845,6 +1985,8 @@ impl WriteAttemptRepo {
         } = *new;
         let Stamp { at, actor } = stamp;
         let AttemptIntent { body, hash } = intent;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, lease.org).await?;
         let inserted = sqlx::query!(
             "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id, asserted_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10, $11)              ON CONFLICT (org_id, id) DO NOTHING",
             uuid_to_db(lease.org.0),
@@ -1859,11 +2001,12 @@ impl WriteAttemptRepo {
             actor.id(),
             asserted.map(timestamp_to_db).transpose()?,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await;
         map_unique(inserted, "write_attempt_one_in_flight", || {
             StorageError::AttemptInFlight
         })?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1902,6 +2045,7 @@ impl WriteAttemptRepo {
         let org_db = uuid_to_db(lease.org.0);
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, lease.org).await?;
         let updated = sqlx::query!(
             "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6,                  remote_id_kind = $7, remote_url = $8, remote_numeric_id = $9              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
             org_db,
@@ -2484,6 +2628,8 @@ impl RateBudgetRepo {
         window_start: Timestamp,
         ceiling: i32,
     ) -> Result<BudgetGrant, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         let used = sqlx::query_scalar!(
             r#"INSERT INTO rate_budget (org_id, connection_id, window_start, actions_used)
              VALUES ($1, $2, $3, 1)
@@ -2496,8 +2642,9 @@ impl RateBudgetRepo {
             timestamp_to_db(window_start)?,
             ceiling,
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(match used {
             Some(used) => BudgetGrant::Granted { used },
             None => BudgetGrant::Exhausted,

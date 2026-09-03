@@ -30,7 +30,7 @@ use crate::ports::{
 };
 use crate::vocabulary::{
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind, ItemVerdict,
-    LandingEffect, LeaseRef, LedgerError, NewAttempt, PreflightStreak,
+    LandingEffect, LeaseRef, LedgerError, NewAttempt, PreflightStreak, Renewed,
 };
 
 #[derive(Debug, Clone)]
@@ -78,6 +78,13 @@ struct State {
     grants: HashMap<ConnectionId, i32>,
     ceiling: i32,
 }
+
+/// What this fixture answers a renew with, in milliseconds of lease.
+///
+/// Deliberately not the server's own TTL: the fixture keeps no clock, and a
+/// number equal to the real one would let a test pass while the device was
+/// computing the deadline itself rather than reading the server's answer.
+const FIXTURE_RENEW_MS: i64 = 120_000;
 
 /// A ledger held entirely in memory, seeded by the test that drives it.
 #[expect(
@@ -227,12 +234,7 @@ impl ItemLedger for InMemoryLedger {
         })
     }
 
-    async fn park(
-        &self,
-        lease: &LeaseRef,
-        blocked_on: &str,
-        _park_for_seconds: i64,
-    ) -> Result<(), LedgerError> {
+    async fn park(&self, lease: &LeaseRef, blocked_on: &str) -> Result<(), LedgerError> {
         self.with(|state| {
             Self::fenced(state, lease)?;
             if let Some(item) = state.items.get_mut(&lease.item) {
@@ -403,6 +405,14 @@ impl ItemLedger for InMemoryLedger {
             *used += 1;
             BudgetGrant::Granted { used: *used }
         }))
+    }
+
+    async fn renew(&self, lease: &LeaseRef) -> Result<Renewed, LedgerError> {
+        self.with(|state| Self::fenced(state, lease))?;
+        Ok(Renewed {
+            server_now_ms: 0,
+            server_deadline_ms: FIXTURE_RENEW_MS,
+        })
     }
 
     async fn record_event(

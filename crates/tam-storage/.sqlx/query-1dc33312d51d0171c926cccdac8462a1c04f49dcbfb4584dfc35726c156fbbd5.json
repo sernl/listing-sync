@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item\n             SET lease_expires_at = now() + make_interval(secs => $4)\n             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3\n               AND state IN ('leased', 'running', 'verifying')\n             RETURNING (extract(epoch FROM now()) * 1000)::bigint AS \"now!\",\n                       (extract(epoch FROM lease_expires_at) * 1000)::bigint AS \"expires!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "now!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "expires!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "1dc33312d51d0171c926cccdac8462a1c04f49dcbfb4584dfc35726c156fbbd5"
+}

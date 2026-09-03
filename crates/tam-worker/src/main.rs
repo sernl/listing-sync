@@ -52,11 +52,11 @@
 use std::io::Read as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tam_domain::{ItemOperation, ItemOutcome};
+use tam_domain::{ItemOperation, LEASE_TTL_SECS};
 use tam_engine::breaker::run_breaker;
 use tam_engine::broker_client::{claim_account, request_lease, ClaimError, LeasePurpose};
 use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
-use tam_engine::seed::{preparation, prepare_item, ItemPreparation};
+use tam_engine::seed::{preparation, prepare_and_dispose, Disposed};
 use tam_engine_driver::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
 use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
 use tam_marketplace::transport::{Transport, TransportError};
@@ -71,25 +71,13 @@ use tam_marketplace_tpt::{
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    BlobRepo, ConnectionFactsRepo, ElectionRepo, HaltRepo, ItemVerdict, JobRepo, LeaseRepo,
-    LeasedItem, PipelineFileSource,
+    BlobRepo, ConnectionFactsRepo, ElectionRepo, HaltRepo, JobRepo, LeaseRepo, LeasedItem,
+    PipelineFileSource,
 };
-use tam_types::{
-    ConnectionId, FailureCode, FailureDetail, InventoryId, Marketplace, OrgId, Timestamp, Uuid,
-};
+use tam_types::{ConnectionId, InventoryId, Marketplace, OrgId, Timestamp, Uuid};
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_POLL_MS: u64 = 5_000;
-const LEASE_TTL_SECS: i64 = 300;
-/// A projection-blocked item parks for a day. The seller's answer un-parks it
-/// immediately through the revive the answering transaction runs; this is the
-/// backstop for an answer that never comes, and the maintenance pass requeues
-/// it into a clean retry once it expires.
-/// How long a blocked item waits before the unparker looks at it again.
-/// Stated in seconds because that is what the park takes: the database
-/// resolves it against its own clock.
-const BLOCKED_PARK_SECS: i64 = 24 * 60 * 60;
-
 /// The real wait the driver's verification poll takes between reads. The
 /// engine holds no timer by design, so the sleep enters here, at the process
 /// boundary, exactly as the wall clock does.
@@ -207,54 +195,34 @@ impl Pump {
     /// the lease to expire into the stealer, which is the stall bias.
     async fn pump_item(&self, worker: &str, item: &LeasedItem) {
         let now = WallClock.now();
-        let (operation, projected) = match prepare_item(&self.pool, item, now).await {
-            Ok(ItemPreparation::Ready {
+        let (operation, projected) = match prepare_and_dispose(&self.pool, &self.leases, item, now)
+            .await
+        {
+            Ok(Disposed::Ready {
                 operation,
                 projected,
             }) => (operation, projected),
-            Ok(ItemPreparation::Blocked { gate, raised }) => {
-                // How long, not until when: the reaper reads the expiry
-                // against the database's clock, so the database mints it.
-                match self
-                    .leases
-                    .park(&item.lease_ref(), gate, BLOCKED_PARK_SECS)
-                    .await
-                {
-                    Ok(()) => {
-                        eprintln!(
-                            "tam-worker {worker}: item {:?} parked on {gate} \
-                             ({} item(s) raised, {} already open)",
-                            item.item, raised.new, raised.already_open
-                        );
-                        // Only an election park, and only when the raise
-                        // minted something: a projection blocking on a
-                        // question already answered raises nothing, and
-                        // requeueing on that would spin.
-                        if gate == tam_storage::ELECTION && raised.new > 0 {
-                            self.revive_if_answered_meanwhile(worker, item, now).await;
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("tam-worker {worker}: park failed: {error}");
-                    }
+            Ok(Disposed::Parked { gate, raised }) => {
+                eprintln!(
+                    "tam-worker {worker}: item {:?} parked on {gate} \
+                         ({} item(s) raised, {} already open)",
+                    item.item, raised.new, raised.already_open
+                );
+                // Only an election park, and only when the raise minted
+                // something: a projection blocking on a question already
+                // answered raises nothing, and requeueing on that would
+                // spin.
+                if gate == tam_storage::ELECTION && raised.new > 0 {
+                    self.revive_if_answered_meanwhile(worker, item, now).await;
                 }
                 return;
             }
-            // Waiting is over rather than merely unsatisfied. The listing is
-            // safely on both platforms, which is what the gate is for; what
-            // the seller needs now is to be told the migration ended and why.
-            Ok(ItemPreparation::CounterpartLost { counterpart }) => {
-                let verdict = ItemVerdict {
-                    outcome: ItemOutcome::Skipped,
-                    failure_code: Some(FailureCode::Other),
-                    failure_detail: Some(FailureDetail(format!(
-                        "the listing on {counterpart:?} never bound, so this item's counterpart \
-                         will not arrive; the source listing was left in place"
-                    ))),
-                };
-                if let Err(error) = self.leases.settle(&item.lease_ref(), &verdict, now).await {
-                    eprintln!("tam-worker {worker}: settling a lost counterpart failed: {error}");
-                }
+            Ok(Disposed::Skipped { counterpart }) => {
+                eprintln!(
+                    "tam-worker {worker}: item {:?} settled skipped; its counterpart on \
+                         {counterpart:?} will never bind",
+                    item.item
+                );
                 return;
             }
             Err(error) => {
@@ -918,7 +886,7 @@ async fn run_pump(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
             if cancel.is_cancelled() {
                 break;
             }
-            match leases.acquire(worker_name, LEASE_TTL_SECS).await {
+            match leases.acquire(worker_name, i64::from(LEASE_TTL_SECS)).await {
                 Ok(Some(item)) => pump.pump_item(worker_name, &item).await,
                 Ok(None) => break,
                 Err(error) => {

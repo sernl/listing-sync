@@ -153,6 +153,12 @@ struct FakeTes {
 }
 
 impl FakeTes {
+    /// Whether the fake still holds a resource, which is how a test asserts
+    /// that no removal reached it.
+    async fn still_holds(&self, id: i64) -> bool {
+        self.state.lock().await.drafts.contains_key(&id)
+    }
+
     fn new(reject_create_after: Option<usize>) -> Self {
         Self {
             state: Mutex::new(FakeState {
@@ -1226,27 +1232,37 @@ async fn a_removal_never_projects(pool: PgPool) {
     );
 }
 
-/// The exposure the sever's authorisation does not cover, made visible.
+/// A stolen lease is discovered at the heartbeat, before any request goes out.
 ///
-/// `write_attempt.lease_epoch` is written and compared from the same
-/// `LeaseRef`, so a stalled worker whose lease `expire_and_steal` already
-/// stole — settling its item `failed` and bumping `job_item.lease_epoch` —
-/// still settles its attempt and severs the mapping. Only the item settle is
-/// fenced against the bumped epoch, and it runs after the sever has already
-/// landed. Phase 3 records the divergence rather than fencing it; real
-/// fencing changes the create path too and is founder-gated.
+/// This test used to record a divergence: `write_attempt.lease_epoch` is
+/// written and compared from the same `LeaseRef`, so a stalled worker whose
+/// lease `expire_and_steal` had already stolen still settled its attempt and
+/// severed the mapping, with only the item settle fenced against the bumped
+/// epoch and running after the sever had landed.
+///
+/// The heartbeat narrows that. The interpreter renews the lease immediately
+/// before every network-bearing effect, so a run whose lease was stolen before
+/// it reached one now stops there — no request is issued and the mapping is
+/// untouched. That is the stall bias applied to a hazard the design had
+/// recorded rather than fenced.
+///
+/// It is narrowed rather than closed, and the difference is worth stating: a
+/// steal landing between the last heartbeat and the settle still reaches the
+/// old path, and `SeveredAfterSteal` still exists for it. What has gone is the
+/// wide window in which a run could discover the steal only after writing to a
+/// marketplace.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_sever_after_the_lease_was_stolen_records_the_anomaly(pool: PgPool) {
+async fn a_stolen_lease_is_caught_at_the_heartbeat_before_any_request(pool: PgPool) {
     provision_with(&pool, Fixture::removal(true)).await;
     let fake = FakeTes::holding(REMOVAL_ID);
     let (verdict, _) = pump(&pool, &fake, Lease::Stolen).await;
     assert!(
         verdict.is_err(),
-        "the item settle is fenced by the bumped epoch, so the run cannot report a verdict"
+        "the run cannot report a verdict on an item it no longer holds"
     );
 
     let engine = engine_pool(&pool).await;
-    let severed: String =
+    let binding: String =
         sqlx::query_scalar("SELECT binding_state FROM mapping WHERE org_id = $1 AND id = $2")
             .bind(uuid::Uuid::from_bytes(ORG.0 .0))
             .bind(uuid::Uuid::from_bytes(MAPPING.0 .0))
@@ -1254,22 +1270,52 @@ async fn a_sever_after_the_lease_was_stolen_records_the_anomaly(pool: PgPool) {
             .await
             .expect("the mapping row reads");
     assert_eq!(
-        severed, "severed",
-        "the sever reached the mapping despite the steal, which is the divergence"
+        binding, "bound",
+        "the heartbeat refused before the removal went out, so the mapping is untouched \
+         rather than severed by a run that no longer held the item"
+    );
+    assert!(
+        fake.still_holds(REMOVAL_ID).await,
+        "and the listing is still there: nothing reached the marketplace, which is the \
+         whole point of renewing before the slow part rather than after it"
+    );
+}
+
+/// The same fence on the create path, where the first marketplace request is
+/// the form scrape rather than the write.
+///
+/// `AssertFormSchema` is write-bearing on Tes: it creates a probe draft on the
+/// seller's own account. It is also the first effect of every create, so a run
+/// whose lease was stolen while the device was idle would otherwise post to the
+/// marketplace under a lease it no longer held, and find out only at the
+/// attempt it opened afterwards.
+///
+/// `creates_seen` is the discriminator, not `drafts`: the adapter deletes its
+/// probe, so the draft map comes back empty whether or not the scrape ran,
+/// while the counter only ever increments.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_stolen_lease_on_a_create_is_caught_before_the_form_scrape(pool: PgPool) {
+    provision(&pool).await;
+    let fake = FakeTes::new(None);
+    let (verdict, _) = pump(&pool, &fake, Lease::Stolen).await;
+    assert!(
+        verdict.is_err(),
+        "the run cannot report a verdict on an item it no longer holds"
     );
 
-    let anomaly: Option<Value> = sqlx::query_scalar(
-        "SELECT payload FROM job_event \
-         WHERE org_id = $1 AND kind = 'ItemBindAnomaly' ORDER BY org_seq DESC LIMIT 1",
-    )
-    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
-    .fetch_optional(&engine)
-    .await
-    .expect("the event rows read");
-    let anomaly = anomaly.expect("a sever after a steal records a bind anomaly");
-    assert!(
-        anomaly.pointer("/anomaly/SeveredAfterSteal").is_some(),
-        "the event names the divergence it records, not a generic refusal: {anomaly}"
+    let (drafts, creates) = {
+        let state = fake.state.lock().await;
+        (state.drafts.len(), state.creates_seen)
+    };
+    assert_eq!(
+        creates, 0,
+        "the heartbeat refused before the form scrape, so nothing was posted to the \
+         seller's account under a lease the run had already lost"
+    );
+    assert_eq!(
+        drafts, 0,
+        "and nothing was left behind either, which the probe's own delete would also \
+         achieve — this is the weaker of the two assertions, kept because it is free"
     );
 }
 

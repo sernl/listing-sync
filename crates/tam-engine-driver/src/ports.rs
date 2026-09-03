@@ -21,7 +21,7 @@ use tam_types::{ConnectionId, InventoryId, JobEventPayload, MappingId, OrgId, Ti
 
 use crate::vocabulary::{
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind, ItemVerdict, LeaseRef,
-    LedgerError, NewAttempt, PreflightStreak,
+    LedgerError, NewAttempt, PreflightStreak, Renewed,
 };
 
 /// Whether the run has been asked to stop. A capability rather than a
@@ -62,15 +62,14 @@ pub trait ItemLedger: Send + Sync {
         edge_class: bool,
     ) -> impl core::future::Future<Output = Result<PreflightStreak, LedgerError>> + Send;
 
-    /// A duration rather than an instant: the reaper reads `park_expires_at`
-    /// against the server's clock, so a park stated as an absolute instant is
-    /// two clocks being compared. The device says how long, the server says
-    /// when.
+    /// Neither an instant nor a duration: the reaper reads `park_expires_at`
+    /// against the server's clock, so an instant would be two clocks compared
+    /// and a duration would be the parked party setting the length of its own
+    /// park. The caller names the gate; the server mints the when.
     fn park(
         &self,
         lease: &LeaseRef,
         blocked_on: &str,
-        park_for_seconds: i64,
     ) -> impl core::future::Future<Output = Result<(), LedgerError>> + Send;
 
     fn settle_item(
@@ -124,6 +123,31 @@ pub trait ItemLedger: Send + Sync {
         kind: GrantKind,
         at: Timestamp,
     ) -> impl core::future::Future<Output = Result<BudgetGrant, LedgerError>> + Send;
+
+    /// Extends this lease, fenced on its epoch.
+    ///
+    /// The reaper reclaims a lease whose expiry has passed, and before this
+    /// existed that expiry was a fixed TTL: a device still working lost its
+    /// item to a reaper that could not tell slow from gone. With a renew the
+    /// two are distinguishable — a lease that stopped being extended is one
+    /// whose holder stopped, which on a laptop that closed its lid is the
+    /// common case rather than the exception.
+    ///
+    /// The caller states no duration. The reaper reads the new expiry against
+    /// the server's clock, so the server mints it from its own constant; a
+    /// duration the caller supplied would be a device setting the length of
+    /// the lease it holds.
+    ///
+    /// The caller states no instant either: a renew writes no `job_event` and
+    /// no `write_attempt` row, so there is nothing for an asserted instant to
+    /// be recorded beside.
+    ///
+    /// Answers both of the server's own instants, so a device moves its run
+    /// deadline by their difference and never by arithmetic of its own.
+    fn renew(
+        &self,
+        lease: &LeaseRef,
+    ) -> impl core::future::Future<Output = Result<Renewed, LedgerError>> + Send;
 
     fn record_event(
         &self,

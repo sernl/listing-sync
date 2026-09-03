@@ -10,7 +10,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{
     Binding, FieldPolicies, FieldPolicy, ItemOperation, ItemOutcome, JobItemId, Mapping,
-    PublishMode,
+    PublishMode, LEASE_TTL_SECS,
 };
 use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
@@ -2376,5 +2376,154 @@ async fn a_filtered_claim_returns_only_the_marketplace_it_asked_for(app: PgPool)
         other.inventory,
         InventoryId::TesGb,
         "and what it claims is the marketplace it asked for"
+    );
+}
+
+/// A renewed lease outlives the reaper; an unrenewed one does not.
+///
+/// This is the whole point of the heartbeat: before it, the reaper could only
+/// tell that a fixed TTL had elapsed, so a device still working lost its item
+/// to one that could not distinguish slow from gone. After it, a lease that
+/// stopped being extended is one whose holder stopped.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_reaper_reclaims_a_lease_that_stopped_heartbeating_and_not_one_that_did_not(
+    app: PgPool,
+) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xA4, true).await;
+    enqueue_one(&engine, &tenant, 0xA5, 0xA6).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let held = claim(&app, tenant.org, "beating-device", 60)
+        .await
+        .expect("the item leases");
+
+    // The lease ages, as it would while the device was working.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the lease ages");
+    // The heartbeat, which is what the interpreter sends before every
+    // network-bearing call.
+    leases
+        .renew(&held.lease_ref())
+        .await
+        .expect("a live lease renews");
+    assert_eq!(
+        leases
+            .expire_and_steal(T0, ATTEMPTS_MAX)
+            .await
+            .expect("the reaper runs"),
+        0,
+        "the device is still beating, so the reaper leaves its item alone"
+    );
+
+    // And now it stops.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the lease ages again");
+    assert_eq!(
+        leases
+            .expire_and_steal(T0, ATTEMPTS_MAX)
+            .await
+            .expect("the reaper runs"),
+        1,
+        "a lease that stopped being extended is one whose holder stopped, and that is \
+         the item the reaper is for"
+    );
+}
+
+/// A renew from a run that no longer holds the item is refused.
+///
+/// The fence is what makes the heartbeat safe to put before a marketplace
+/// request: a run whose lease was stolen learns it there, and stops, rather
+/// than issuing a write under a lease it does not hold.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_renew_against_a_bumped_epoch_is_refused(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xA8, true).await;
+    enqueue_one(&engine, &tenant, 0xA9, 0xAA).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let held = claim(&app, tenant.org, "losing-device", 60)
+        .await
+        .expect("the item leases");
+    let stale = held.lease_ref();
+
+    sqlx::query(
+        "UPDATE job_item SET lease_epoch = lease_epoch + 1, lease_owner = 'another-device'",
+    )
+    .execute(&engine)
+    .await
+    .expect("another device takes the item");
+
+    assert!(
+        matches!(leases.renew(&stale).await, Err(StorageError::StaleLease)),
+        "the epoch moved, so the heartbeat tells the old holder it no longer holds the \
+         item rather than quietly buying it time it has no right to"
+    );
+}
+
+/// The renewed expiry is the server's own TTL, not a number a caller named.
+///
+/// The claim here takes a deliberately short lease and the renew answers a
+/// full one: the caller states no duration at all, so there is no value it
+/// could saturate, and a device asking for a lease measured in decades gets
+/// exactly what every other renew gets. Both instants come out of the one
+/// statement, so the difference is exact rather than a comparison of two
+/// clocks.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_renew_mints_the_expiry_from_the_servers_own_ttl(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xB4, true).await;
+    enqueue_one(&engine, &tenant, 0xB5, 0xB6).await;
+    let held = claim(&app, tenant.org, "asking-device", 5)
+        .await
+        .expect("the item leases");
+
+    let renewed = LeaseRepo::new(engine)
+        .renew(&held.lease_ref())
+        .await
+        .expect("a live lease renews");
+
+    assert_eq!(
+        renewed.expires_at.0 - renewed.server_now.0,
+        i64::from(LEASE_TTL_SECS) * 1_000,
+        "the lease the server hands back is the one it minted from its own constant, and \
+         the five seconds the claim asked for had no part in it"
+    );
+}
+
+/// A release from a run that no longer holds the item is refused.
+///
+/// The same fence every other epoch-keyed write here has. Before it, a release
+/// answered `Ok` whether or not it had released anything, so a claimant that
+/// had already lost the item was told it had handed back something it did not
+/// have.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_release_from_a_run_that_no_longer_holds_the_item_is_refused(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xB7, true).await;
+    enqueue_one(&engine, &tenant, 0xB8, 0xB9).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let held = claim(&app, tenant.org, "declining-device", 60)
+        .await
+        .expect("the item leases");
+    let stale = held.lease_ref();
+
+    leases.release(&stale).await.expect("the holder releases");
+    let state: String = sqlx::query_scalar("SELECT state FROM job_item")
+        .fetch_one(&engine)
+        .await
+        .expect("the item reads");
+    assert_eq!(
+        state, "queued",
+        "a claimant that declines the work it claimed puts it back on the queue rather \
+         than holding it to expiry"
+    );
+
+    assert!(
+        matches!(leases.release(&stale).await, Err(StorageError::StaleLease)),
+        "and a second release has nothing to release, which is the fence answering rather \
+         than a write silently doing nothing"
     );
 }

@@ -714,3 +714,701 @@ async fn the_work_route_accepts_a_marketplace_filter_and_serves_without_one(pool
         );
     }
 }
+
+/// One queued Tes create, claimed through the endpoint, so the ledger routes
+/// can be driven against a lease that really exists.
+///
+/// It costs a catalogue seed, and the cost is worth paying: the held-scope
+/// defect this suite's sibling found showed up only because a test drove real
+/// data through the real path. A fence asserted against a lease nobody holds
+/// asserts nothing.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn engine_pool(app: &PgPool) -> PgPool {
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(app)
+        .await
+        .expect("the database name is readable");
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&format!(
+            "postgres://tam_engine:tam_engine_dev@127.0.0.1:5433/{database}"
+        ))
+        .await
+        .expect("the engine role connects")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_claimable(app: &PgPool) {
+    use tam_types::Uuid as Id;
+    let product = tam_types::ProductId(Id([0x01; 16]));
+    let mapping = tam_types::MappingId(Id([0x02; 16]));
+    tam_storage::ProductRepo::new(app.clone())
+        .insert(
+            ORG_A,
+            &tam_domain::CanonicalProduct {
+                id: product,
+                org: ORG_A,
+                title: tam_types::Title("Fixture".to_owned()),
+                body: tam_types::ListingCopy {
+                    body: "Fixture".to_owned(),
+                    format: tam_types::CopyFormat::Markdown,
+                },
+                payload: tam_types::PayloadSet::new(
+                    tam_types::ProductFile {
+                        id: tam_types::FileId(Id([0x03; 16])),
+                        role: tam_types::FileRole::Payload,
+                        kind: tam_types::FileKind::Pdf,
+                        hash: tam_types::ContentHash([0x04; 32]),
+                        byte_len: 4,
+                        scan: tam_types::ScanOutcome::Pending,
+                    },
+                    vec![],
+                ),
+                cover: None,
+                previews: vec![],
+                subjects: vec![],
+                grades: tam_domain::GradeDeclaration {
+                    source: tam_domain::DeclarationSource::Seller,
+                    raw: vec![],
+                    derived: None,
+                },
+                price: tam_types::PriceIntent::Free,
+                rights: tam_domain::RightsDeclaration::Unstated,
+                native_residue: vec![],
+            },
+            NOW,
+        )
+        .await
+        .expect("the product inserts");
+    tam_storage::MappingRepo::new(app.clone())
+        .insert(
+            ORG_A,
+            &tam_domain::Mapping {
+                id: mapping,
+                org: ORG_A,
+                product,
+                inventory: tam_types::InventoryId::TesGb,
+                binding: tam_domain::Binding::Unbound,
+                policies: tam_domain::FieldPolicies {
+                    title: tam_domain::FieldPolicy::Managed,
+                    description: tam_domain::FieldPolicy::Managed,
+                    price: tam_domain::FieldPolicy::Managed,
+                    taxonomy: tam_domain::FieldPolicy::Managed,
+                    grades: tam_domain::FieldPolicy::Managed,
+                    files: tam_domain::FieldPolicy::Managed,
+                },
+                price_rule: tam_types::PriceRule::Explicit(tam_types::PriceIntent::Free),
+                publish: tam_domain::PublishMode::DryRun,
+                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+            },
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+         VALUES ($1, $2, 'tes', 'linked', now(), now())",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes([0x05; 16]))
+    .execute(&mut *tx)
+    .await
+    .expect("the connection inserts");
+    tx.commit().await.expect("the fixture commits");
+
+    let engine = engine_pool(app).await;
+    tam_storage::JobRepo::new(engine)
+        .enqueue(
+            ORG_A,
+            &tam_storage::NewJob {
+                job: tam_types::JobId(Id([0x06; 16])),
+                inventory: tam_types::InventoryId::TesGb,
+                stamp: tam_types::Stamp {
+                    at: NOW,
+                    actor: tam_types::Actor::System(tam_types::SystemComponent::Engine),
+                },
+            },
+            &[tam_storage::NewJobItem {
+                item: tam_domain::JobItemId(Id([0x07; 16])),
+                mapping,
+                idempotency_key: tam_marketplace::IdempotencyKey(Id([0x08; 16])),
+                operation: tam_domain::ItemOperation::Create,
+                requires_bound_on: None,
+            }],
+        )
+        .await
+        .expect("the job enqueues");
+}
+
+/// Seeds, registers and claims, answering the lease the device now holds.
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn claimed(pool: &PgPool) -> serde_json::Value {
+    provision(pool).await;
+    seed_claimable(pool).await;
+    register(pool, &TOKEN_A, LAPTOP, "laptop").await;
+    // The lease is taken through the same claim `/work` uses, rather than
+    // through `/work` itself. These three tests are about the ledger endpoint,
+    // and routing them through the work order would make them depend on the
+    // fixture's product projecting cleanly — a second thing to go wrong that
+    // has nothing to do with what they assert. `/work` has its own tests.
+    let claimed = tam_storage::LeaseRepo::new(pool.clone())
+        .claim_for_device(
+            &tam_storage::DeviceRef {
+                org: ORG_A,
+                device: LAPTOP,
+            },
+            &tam_storage::ClaimPolicy {
+                ttl_seconds: 300,
+                grace_hours: 24,
+                marketplace: None,
+            },
+            NOW,
+        )
+        .await
+        .expect("the claim runs");
+    let tam_storage::DeviceClaim::Leased(item) = claimed else {
+        panic!("the fixture must actually lease, or every assertion built on it is vacuous: {claimed:?}");
+    };
+    let lease = serde_json::json!({
+        "org": ORG_A,
+        "item": item.item,
+        "lease_epoch": item.lease_epoch,
+    });
+    // The fixture proves its own premise: the row it just claimed is the row
+    // the endpoint's fence will look up, held by this device at this epoch.
+    // Read through the repository, which pins the tenant: `job_item` is under
+    // forced row-level security, so a bare read here would see nothing and the
+    // premise would look false when it is true.
+    let holder = tam_storage::LeaseRepo::new(pool.clone())
+        .holder(ORG_A, item.item)
+        .await
+        .expect("the claimed row reads");
+    assert_eq!(
+        holder.as_deref(),
+        Some(LAPTOP),
+        "the fixture's lease must be the one the fence will find: {lease}"
+    );
+    lease
+}
+
+/// A ledger call from the device that holds the lease, over the wire.
+async fn ledger_call(pool: &PgPool, body: serde_json::Value) -> Answer {
+    call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/ledger"),
+            token: &TOKEN_A,
+            body: Some(body),
+            wall: t1,
+        },
+    )
+    .await
+}
+
+/// `open_attempt` is idempotent on the caller's id, and a different id while
+/// one is in flight is refused — over the wire, against a lease the device
+/// really holds.
+///
+/// The recovery this buys is the point: a device whose response was lost
+/// re-offers the same id and finds the row it already opened, instead of
+/// minting a second attempt and burning the item's budget. A second create,
+/// which is a different id, still hits the fence.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn open_attempt_is_idempotent_on_the_id_and_refuses_a_second(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    let open = |attempt: &str| {
+        serde_json::json!({
+            "call": "open_attempt",
+            "lease": lease,
+            "new": {
+                "attempt": attempt,
+                "mapping": "02020202-0202-0202-0202-020202020202",
+                "intent": { "body": {}, "hash": [1] },
+            },
+            "at_ms": 1_756_000_010_000_i64,
+        })
+    };
+
+    let first = ledger_call(&pool, open("7b7b7b7b-7b7b-7b7b-7b7b-7b7b7b7b7b7b")).await;
+    assert_eq!(
+        first.status,
+        StatusCode::OK,
+        "the first open succeeds: {}",
+        String::from_utf8_lossy(&first.body)
+    );
+    let replayed = ledger_call(&pool, open("7b7b7b7b-7b7b-7b7b-7b7b-7b7b7b7b7b7b")).await;
+    let answer: serde_json::Value =
+        serde_json::from_slice(&replayed.body).expect("the answer parses");
+    assert_eq!(
+        answer["answer"], "done",
+        "re-offering the id already standing is the lost-response recovery, so it \
+         answers done rather than refusing: {answer}"
+    );
+
+    let second = ledger_call(&pool, open("7c7c7c7c-7c7c-7c7c-7c7c-7c7c7c7c7c7c")).await;
+    let answer: serde_json::Value =
+        serde_json::from_slice(&second.body).expect("the answer parses");
+    assert_eq!(
+        answer["answer"], "refused",
+        "a different id while one is in flight is a second create, and the fence refuses \
+         it: {answer}"
+    );
+    assert_eq!(
+        answer["error"], "attempt_in_flight",
+        "and it arrives as an answer the device can branch on rather than as a fault: \
+         {answer}"
+    );
+}
+
+/// The rate grant's window and ceiling are the server's, over the wire.
+///
+/// The call carries neither, by the shape of `LedgerCall::RequestGrant`, so
+/// the assertion is behavioural: grants exhaust at a limit the device never
+/// named.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn request_grant_exhausts_at_a_ceiling_the_device_never_named(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    let connection = "05050505-0505-0505-0505-050505050505";
+    let ceiling = tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX.get();
+    let mut granted = 0_u32;
+    for _ in 0..ceiling + 2 {
+        let answer = ledger_call(
+            &pool,
+            serde_json::json!({
+                "call": "request_grant",
+                "lease": lease,
+                "connection": connection,
+                "kind": "write",
+                "at_ms": 1_756_000_020_000_i64,
+            }),
+        )
+        .await;
+        assert_eq!(
+            answer.status,
+            StatusCode::OK,
+            "the grant call is served: {}",
+            String::from_utf8_lossy(&answer.body)
+        );
+        let answer: serde_json::Value =
+            serde_json::from_slice(&answer.body).expect("the answer parses");
+        // `Granted` carries a count; `Exhausted` is a bare variant. Matching on
+        // the shape rather than on absence, so an unexpected answer breaks the
+        // loop instead of being counted as a grant.
+        if answer["grant"].get("granted").is_some() {
+            granted += 1;
+        } else {
+            assert_eq!(
+                answer["grant"], "exhausted",
+                "the only other answer this call has is exhaustion: {answer}"
+            );
+            break;
+        }
+    }
+    assert_eq!(
+        u64::from(granted),
+        u64::from(ceiling),
+        "the window closed at the server's own per-minute limit, which the call has no \
+         field to carry"
+    );
+}
+
+/// A device's ledger write records both instants, distinctly, over the wire.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_device_ledger_write_records_both_instants(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    let asserted = 1_600_000_000_000_i64;
+    let answer = ledger_call(
+        &pool,
+        serde_json::json!({
+            "call": "record_event",
+            "lease": lease,
+            "payload": { "ItemLeased": { "worker": LAPTOP, "lease_epoch": 1 } },
+            "at_ms": asserted,
+        }),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "the event records: {}",
+        String::from_utf8_lossy(&answer.body)
+    );
+
+    let engine = engine_pool(&pool).await;
+    let (created, recorded): (i64, Option<i64>) = sqlx::query_as(
+        "SELECT (extract(epoch FROM created_at) * 1000)::bigint, \
+                (extract(epoch FROM asserted_at) * 1000)::bigint \
+         FROM job_event WHERE kind = 'ItemLeased' AND asserted_at IS NOT NULL \
+         ORDER BY org_seq DESC LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the event row reads");
+    assert_eq!(
+        recorded.expect("a device row records what the device asserted"),
+        asserted,
+        "the seller's own instant is preserved exactly, as their assertion"
+    );
+    assert_ne!(
+        created, asserted,
+        "and our receipt is our own clock rather than theirs"
+    );
+}
+
+/// The renewed lease is the server's own TTL, over the wire, under `tam_app`.
+///
+/// Two things at once, and both were unproven before. The renew reaches the
+/// database through the device's own endpoint, where forced row-level security
+/// is the tenancy, so a write that forgot to pin the tenant would be inert
+/// here and silently green everywhere else. And the answer's span is the
+/// server's constant: the call carries no duration at all, so there is nothing
+/// for a device to name and nothing to saturate.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_renew_over_the_wire_moves_the_expiry_by_the_servers_own_ttl(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    let answer = ledger_call(
+        &pool,
+        serde_json::json!({
+            "call": "renew",
+            "lease": lease,
+        }),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "the renew is served: {}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    let answer: serde_json::Value =
+        serde_json::from_slice(&answer.body).expect("the answer parses");
+    assert_eq!(
+        answer["answer"], "renewed",
+        "a live lease renews rather than being refused, which is what an unpinned write \
+         under forced row-level security would have produced: {answer}"
+    );
+    let now = answer["renewed"]["server_now_ms"]
+        .as_i64()
+        .expect("the server states its own now");
+    let deadline = answer["renewed"]["server_deadline_ms"]
+        .as_i64()
+        .expect("the server states the new deadline");
+    assert_eq!(
+        deadline - now,
+        i64::from(tam_domain::LEASE_TTL_SECS) * 1_000,
+        "the span is the server's constant, and the device's asserted instant had no part \
+         in it: {answer}"
+    );
+}
+
+/// A settle naming an epoch the item has moved past is refused.
+///
+/// The holder check alone is not the fence. A run whose lease was stolen and
+/// then handed back to the same device — a reaper steal followed by a re-claim
+/// — would pass a holder check while settling for a run that is over. The
+/// epoch is what distinguishes them, and it is read here rather than carried
+/// and ignored.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_settle_naming_an_epoch_the_item_has_moved_past_is_refused(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    let stale = lease["lease_epoch"]
+        .as_i64()
+        .expect("the fixture's lease states its epoch")
+        + 1;
+    let refused = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/settle"),
+            token: &TOKEN_A,
+            body: Some(serde_json::json!({
+                "lease": {
+                    "org": ORG_A,
+                    "item": lease["item"],
+                    "lease_epoch": stale,
+                },
+                "verdict": {
+                    "outcome": "succeeded",
+                    "failure_code": null,
+                    "failure_detail": null,
+                },
+                "at_ms": 1_756_000_042_000_i64,
+            })),
+            wall: t2,
+        },
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::CONFLICT,
+        "the device holds the item but not at this epoch, and the epoch is the run: {}",
+        String::from_utf8_lossy(&refused.body)
+    );
+}
+
+/// A work route that cannot serve what it claimed hands the lease back.
+///
+/// The claim takes the item before anything downstream can fail, so every exit
+/// that is not a work order has to give it back. A 500 that kept it would
+/// strand the item until the reaper and, through the per-connection mutex,
+/// strand every sibling item on that marketplace behind it — and the seller
+/// would see a queue that had simply stopped.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_work_route_that_cannot_prepare_hands_the_lease_back(pool: PgPool) {
+    provision(&pool).await;
+    seed_claimable(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    let engine = engine_pool(&pool).await;
+    // Preparation fails on a mapping that is no longer there, which is the
+    // failure reachable after the claim and before the work order. Every
+    // column on `mapping` is check-constrained into a valid shape, so the
+    // reference is broken rather than the row corrupted; the foreign key goes
+    // first, and this test owns its own database. What is under test is the
+    // route's exit, not this way of reaching it.
+    sqlx::query(
+        "DO $$ DECLARE c text; BEGIN \
+           FOR c IN SELECT conname FROM pg_constraint \
+                    WHERE conrelid = 'job_item'::regclass AND contype = 'f' \
+                      AND confrelid = 'mapping'::regclass \
+           LOOP EXECUTE format('ALTER TABLE job_item DROP CONSTRAINT %I', c); END LOOP; \
+         END $$",
+    )
+    .execute(&pool)
+    .await
+    .expect("the test database drops its own constraints");
+    sqlx::query("UPDATE job_item SET mapping_id = '00000000-0000-0000-0000-000000000009'")
+        .execute(&engine)
+        .await
+        .expect("the item is pointed at a mapping that does not exist");
+    let before: i32 = sqlx::query_scalar("SELECT attempt_count FROM job_item")
+        .fetch_one(&engine)
+        .await
+        .expect("the item reads");
+
+    let answer = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the caller is told the truth about the failure rather than being handed an idle \
+         queue: {}",
+        String::from_utf8_lossy(&answer.body)
+    );
+
+    let (state, attempts, owner): (String, i32, Option<String>) =
+        sqlx::query_as("SELECT state, attempt_count, lease_owner FROM job_item")
+            .fetch_one(&engine)
+            .await
+            .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), owner),
+        ("queued", None),
+        "the item is back on the queue with no holder, so the next poll can take it"
+    );
+    assert_eq!(
+        attempts, before,
+        "and it is not charged an attempt for a failure it had no part in"
+    );
+}
+
+/// Every write this endpoint serves lands, under the tenant pin.
+///
+/// The defect this exists for is silent: `job_item` and its neighbours are
+/// under forced row-level security, so a repository method that reaches them
+/// through `tam_app` without pinning the tenant sees no rows, writes nothing
+/// and answers as though the fence had refused. Under the engine role, which
+/// bypasses row-level security, the same method is fine — so every test that
+/// drove these through the worker was green while the device path was inert.
+///
+/// The calls run in one order deliberately: `park` moves the item out of the
+/// live states the others need, so it goes last.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn every_write_this_endpoint_serves_lands_under_the_tenant_pin(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    let calls = [
+        serde_json::json!({ "call": "preflight_failed", "lease": lease, "edge_class": true }),
+        serde_json::json!({ "call": "preflight_succeeded", "lease": lease }),
+        serde_json::json!({
+            "call": "gate_connection", "lease": lease,
+            "inventory": "TesGb", "at_ms": 1_756_000_030_000_i64,
+        }),
+        serde_json::json!({
+            "call": "halt_this_tenant", "lease": lease, "inventory": "TesGb",
+            "reason": "a device asked for it", "at_ms": 1_756_000_031_000_i64,
+        }),
+        serde_json::json!({ "call": "park", "lease": lease, "blocked_on": "reauth_required" }),
+    ];
+    for body in calls {
+        let name = body["call"].clone();
+        let answer = ledger_call(&pool, body.clone()).await;
+        assert_eq!(
+            answer.status,
+            StatusCode::OK,
+            "{name} is served: {}",
+            String::from_utf8_lossy(&answer.body)
+        );
+        let answer: serde_json::Value =
+            serde_json::from_slice(&answer.body).expect("the answer parses");
+        assert_ne!(
+            answer["answer"], "refused",
+            "{name} reached a row and changed it; a refusal here is the tenancy pin missing \
+             rather than the epoch fence holding, because this device holds this lease: \
+             {answer}"
+        );
+    }
+}
+
+/// A counterpart that will never bind is settled, not handed back.
+///
+/// The livelock this closes is quiet: `claim_for_device` orders by
+/// `created_at` and a release advances nothing, so an item released from this
+/// arm is the very item the next poll claims. It would be prepared, released
+/// and claimed again for ever, and every sibling on that marketplace would
+/// wait behind it at the per-connection mutex the whole time.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_lost_counterpart_settles_through_the_work_route_and_the_queue_moves_on(pool: PgPool) {
+    provision(&pool).await;
+    seed_claimable(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    let engine = engine_pool(&pool).await;
+    // `counterpart_binding` reads never-going-to-bind from one state only:
+    // an `ambiguous_create` binding on the mapping the item waits for. The
+    // item is pointed at its own inventory's mapping and that mapping put in
+    // that state, which is the shortest route to the arm under test; what is
+    // being tested is the route's disposition, not how the counterpart got
+    // there.
+    sqlx::query(
+        "UPDATE mapping SET binding_state = 'ambiguous_create', \
+             binding_attempt = '00000000-0000-0000-0000-0000000000a1', \
+             ambiguous_since = now()",
+    )
+    .execute(&engine)
+    .await
+    .expect("the counterpart is made unreachable");
+    sqlx::query("UPDATE job_item SET requires_bound_on = 'tes_gb'")
+        .execute(&engine)
+        .await
+        .expect("the item is made to wait on that mapping");
+
+    let answer = work(&pool, t0).await;
+    assert_eq!(
+        answer["state"], "idle",
+        "there is no work to hand out: {answer}"
+    );
+
+    let (state, outcome): (String, Option<String>) =
+        sqlx::query_as("SELECT state, outcome FROM job_item")
+            .fetch_one(&engine)
+            .await
+            .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), outcome.as_deref()),
+        ("settled", Some("skipped")),
+        "the item is settled where it stands rather than released, so the next poll is \
+         served whatever is behind it instead of this same item again"
+    );
+}
+
+/// A blocked item is parked with its gate, and the next poll does not see it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_blocked_item_is_parked_through_the_work_route_and_the_queue_moves_on(pool: PgPool) {
+    provision(&pool).await;
+    seed_claimable(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    let engine = engine_pool(&pool).await;
+    // A create against a bound mapping is what `admission` refuses, and the
+    // gate it names is `binding`. The bound shape is the one
+    // `mapping_binding_total` and `mapping_remote_id_shape` require of a Tes
+    // mapping: the marketplace's own id kind, a URL, and no numeric id.
+    sqlx::query(
+        "UPDATE mapping SET binding_state = 'bound', remote_id_kind = 'tes', \
+             remote_url = 'https://www.tes.com/teaching-resource/x-4242', \
+             remote_numeric_id = NULL, first_seen_at = now(), \
+             verify_stale_since = now()",
+    )
+    .execute(&engine)
+    .await
+    .expect("the mapping is bound");
+
+    let first = work(&pool, t0).await;
+    assert_eq!(
+        first["state"], "idle",
+        "a blocked item is not handed out: {first}"
+    );
+
+    let (state, blocked_on): (String, Option<String>) =
+        sqlx::query_as("SELECT state, blocked_on FROM job_item")
+            .fetch_one(&engine)
+            .await
+            .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), blocked_on.as_deref()),
+        ("parked_live", Some("binding")),
+        "the item is parked under the gate that refused it, with a park expiry the reaper \
+         reads, rather than released to be claimed again immediately"
+    );
+    let has_expiry: bool = sqlx::query_scalar("SELECT park_expires_at IS NOT NULL FROM job_item")
+        .fetch_one(&engine)
+        .await
+        .expect("the park expiry reads");
+    assert!(has_expiry, "a park with no expiry is a park nothing wakes");
+
+    let second = work(&pool, t1).await;
+    assert_eq!(
+        second["state"], "idle",
+        "and the next poll does not see it again, which is the livelock this closes: {second}"
+    );
+}
+
+/// The claim route, as the device calls it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn work(pool: &PgPool, wall: WallClock) -> serde_json::Value {
+    let answer = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall,
+        },
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "the claim is served: {}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    serde_json::from_slice(&answer.body).expect("the claim view parses")
+}

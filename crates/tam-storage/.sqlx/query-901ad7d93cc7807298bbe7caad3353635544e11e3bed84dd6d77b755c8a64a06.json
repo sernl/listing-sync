@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lease_owner FROM job_item WHERE org_id = $1 AND id = $2 AND state IN ('leased', 'running', 'verifying')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lease_owner",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "901ad7d93cc7807298bbe7caad3353635544e11e3bed84dd6d77b755c8a64a06"
+}

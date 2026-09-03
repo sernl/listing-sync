@@ -296,6 +296,47 @@ The second generalises: a negative test under forced RLS proves nothing until th
 The heartbeat narrows the stolen-lease anomaly rather than removing it.
 `a_stolen_lease_is_caught_at_the_heartbeat_before_any_request` in `crates/tam-engine/tests/gauntlet.rs` and `a_stale_worker_is_fenced_after_a_steal` in `crates/tam-storage/tests/leases.rs` pin what holds: a device whose lease was stolen learns it at its next renew and stops, and anything it had already issued is still fenced at the ledger, but the window between the steal and the next heartbeat is bounded by the heartbeat interval rather than closed.
 
+Step 11a, what a review of step 11 found.
+
+An independent review of step 11 raised twelve findings, one of them blocking, and this records their disposition.
+
+The blocking one: `LedgerCall::Renew` carried `ttl_seconds` from the device straight into `make_interval`, where an `i32` saturation turned `i64::MAX` into an expiry sixty-eight years out — a lease no reaper reclaims, holding its organisation's marketplace mutex for good.
+The duration leaves the wire entirely rather than being clamped: the server mints the expiry from `LEASE_TTL_SECS`, and `deny_unknown_fields` on `LedgerCall` refuses a body that still names one.
+`park_for_seconds` was unbounded in the same shape and takes the same fix, because the machine parks every gate for `PARK_TTL_MS` and the party naming the span was the party being parked.
+
+Five were correctness fixes to what step 11 landed.
+Every failure exit from `/work` after the claim now releases the lease it took, structured as one release so a new early return cannot forget.
+`LeaseRepo::release` raises `StaleLease` on a zero-row update, like every other fenced write there.
+The settle regained the epoch half of its fence, which it had been carrying and not reading.
+The renew moved ahead of `AssertFormSchema`, the create path's first marketplace request and one that creates a probe draft on the seller's own Tes account.
+And the run gate's elapsed term became observable rather than merely present.
+
+Three were consolidations.
+One `LEASE_TTL_SECS` in `tam-domain` replaces three copies of 300 and the source-scraping mirror that guarded one of them; both of a renew's instants come out of one statement rather than one from Postgres and one from the API process; and `LeaseRepo::held_by` is deleted for want of a caller.
+
+Proves that the fixture found what a fixture finds and a reading found the rest: the fixture caught three defects by driving the path, and five more were reachable only by a caller the tests did not have.
+Verification: `just pre-push` and `just check-portable`, with a test per fix that fails against the code as it stood — the storage renew asserting the minted span against a claim that asked for five seconds, a wire test refusing a renew that names a duration, `a_stolen_lease_on_a_create_is_caught_before_the_form_scrape` asserting no probe draft was left behind, `a_work_route_that_cannot_prepare_hands_the_lease_back`, `a_settle_naming_an_epoch_the_item_has_moved_past_is_refused`, and `every_write_this_endpoint_serves_lands_under_the_tenant_pin`, which is the general form of the pin defect step 11 found one instance of.
+Kill gate: a device-reachable write that cannot be proved to land under `tam_app` with the fixture the api tests already build.
+
+Step 11b, what verifying 11a found.
+
+Verification confirmed the twelve dispositions and raised one more severe defect, which is recorded because it was invisible for the same reason the step-11 pin defect was: it needed a caller the tests did not have.
+
+The claim route released a refused preparation back to the queue.
+`claim_for_device` orders by `created_at` and a release advances nothing, so an item the preparation would never admit — a create against a bound mapping, a counterpart that will never bind — was claimed on every poll, prepared, released and claimed again without bound, holding every sibling on that marketplace behind the per-connection mutex the whole time.
+The worker never had the defect, because it parks or settles such an item instead; the route had grown its own arm.
+The fix is one disposition both hosts call, `prepare_and_dispose` in `tam-engine`, so there is no second arm to diverge: a blocked item parks under its gate for `PARK_TTL_MS`, a lost counterpart settles skipped, and nothing reaches the queue from either.
+Five smaller items landed with it: the heartbeat's asserted instant was removed again, because a renew writes no dated row and the wire test states that a call carries an instant exactly when it writes one; the pin rationale that had been pasted eleven times moved to `pin_org` itself; `pin_tenant` and `pin_org` each got their own doc; and two overstated claims were corrected.
+
+Proves the arm both hosts share is one arm.
+Verification: `a_lost_counterpart_settles_through_the_work_route_and_the_queue_moves_on` and `a_blocked_item_is_parked_through_the_work_route_and_the_queue_moves_on`, each asserting the ledger state the disposition wrote and the second asserting the next poll is not served the same item again.
+Kill gate: a disposition either host needs that the other must not have.
+
+One residual is recorded rather than fixed.
+The interpreter renews before every network-bearing effect, so a submit begins with a full lease, and Tpt's theoretical worst case still outlives one: two queue-job polls at `QUEUE_POLL_MAX` inside a single `submit` can spend 360 seconds with no renew between them, against a 300-second lease.
+`tpts_theoretical_worst_case_submit_still_outlives_the_lease` asserts that this is so, so the fact cannot be lost to an edited comment the way it nearly was.
+The two remedies are a founder decision, put as question 7: raise the device lease TTL to 600 seconds, which is a founder-gated limit, or heartbeat from inside `submit` through a clock port the adapter can reach.
+
 Step 12, the three open defects.
 Widen the operator view to surface `state = 'in_flight'` past the lease TTL so a stranded in-flight create attempt reaches an operator instead of staying mapping-scoped and invisible (finding 4), and add the read-back reconciliation the code names for itself if it fits inside the step, otherwise land the view alone and record the reconciliation as still owed.
 Add the binding predicate to `open`'s statement for a create and return a distinct refusal the driver settles as skipped, so a resumed run and a stolen lease cannot both create (finding 22).
@@ -331,6 +372,8 @@ The broker deletion, the exclusivity-claim lift with its pepper re-sited off the
 4. Enable `blake3`'s `pure` feature so `tam-pipeline` cross-compiles, and state whether the interim arrangement is server-held bytes streamed at upload time or full client-side ingest. Recommended: enable it in Phase 1 rather than discovering it in Phase 2, and state client-side ingest as the target with server-held bytes as the interim.
 5. Decide whether the rate grant is issued in bulk at claim time and whether consumption moves into the transport seam. Recommended: bulk grant at claim time with reported consumption in the settle envelope, and move consumption into the seam, because the marketplace now sees the seller's own address.
 6. Decide whether `HaltScope::Org` and `HaltScope::FleetInventory` leave the effect vocabulary. Recommended: yes, narrow the enum in `tam-domain` so the driver's match cannot name a scope wider than its lease, leaving the breaker and the canary as the only fleet-halt writers.
+7. Close the TTL residual on Tpt's worst-case submit, where one uninterrupted stretch of 360s runs under a 300s lease.
+   Recommended: raise `LEASE_TTL_SECS` to 600, because it is one founder-gated number, against a clock port that would put a timer inside the adapter seam and hand every adapter a way to extend the lease it is running under; the heartbeat already distinguishes a working device from a gone one, so the cost of the longer TTL is only how late the reaper notices a device that really stopped.
 
 ## 9. Appendix: the findings
 

@@ -242,9 +242,13 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
         }
 
         let mut events = vec![WorkEvent::Started { item: item.clone() }];
-        let ledger = HttpLedger::new(self.device.clone(), &*self.plane);
         let gate = RunGate::from_envelope(order.server_now_ms, order.server_deadline_ms)
             .stopped_by(Arc::clone(&self.stopper));
+        // The ledger moves this run's deadline when the server extends the
+        // lease. Built after the gate for that reason: the heartbeat's whole
+        // purpose is that a run doing slow work keeps the item, and the gate
+        // is what would otherwise stop it at the original deadline.
+        let ledger = HttpLedger::new(self.device.clone(), &*self.plane).moving(gate.deadline());
         let payloads = DevicePayloads::for_item(
             self.device.clone(),
             &*self.plane,
@@ -355,7 +359,7 @@ mod tests {
     use tam_engine_driver::driver::VerifyPolicy;
     use tam_engine_driver::vocabulary::{
         BindDisposition, BudgetGrant, ClaimView, ItemPreparation, LeasedItem, LedgerAnswer,
-        LedgerCall, PreflightStreak, SettleEnvelope, WorkOrder,
+        LedgerCall, PreflightStreak, Renewed, SettleEnvelope, WorkOrder,
     };
     use tam_marketplace::{CreateStrategy, FormId, IdempotencyKey, ProjectedListing};
     use tam_types::{
@@ -502,6 +506,16 @@ mod tests {
                 },
                 LedgerCall::SettleAttempt { .. } => LedgerAnswer::Bound {
                     disposition: BindDisposition::Bound,
+                },
+                // A heartbeat the server honours, in its own numbers. The
+                // pair is deliberately not the real TTL: a fake echoing the
+                // server's own constant would let a device computing its
+                // deadline itself pass this test.
+                LedgerCall::Renew { .. } => LedgerAnswer::Renewed {
+                    renewed: Renewed {
+                        server_now_ms: 0,
+                        server_deadline_ms: 120_000,
+                    },
                 },
                 LedgerCall::PreflightSucceeded { .. }
                 | LedgerCall::Park { .. }

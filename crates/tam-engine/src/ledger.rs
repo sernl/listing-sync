@@ -11,6 +11,7 @@
 //! client contract cannot drift with the schema.
 
 use sqlx::PgPool;
+use tam_domain::PARK_TTL_MS;
 use tam_engine_driver::ports::ItemLedger;
 use tam_engine_driver::vocabulary as wire;
 use tam_storage::{
@@ -36,7 +37,14 @@ const fn seller_event_topic(event: tam_domain::SellerEvent) -> &'static str {
     }
 }
 
-fn to_storage_lease(lease: &wire::LeaseRef) -> tam_storage::LeaseRef {
+/// One lease reference, crossing from the wire vocabulary to storage's.
+///
+/// Public because the API's own handlers hold a wire lease and sometimes need
+/// a storage one — releasing a claim they cannot use, for instance — and a
+/// second conversion written at the call site is the drift this crate exists
+/// to prevent.
+#[must_use]
+pub fn to_storage_lease(lease: &wire::LeaseRef) -> tam_storage::LeaseRef {
     tam_storage::LeaseRef {
         org: lease.org,
         item: lease.item,
@@ -207,6 +215,7 @@ impl PgLedger {
         asserted: Option<Timestamp>,
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
+        tam_storage::pin_tenant(&mut tx, scope.org).await?;
         append_event_asserted(&mut tx, scope, payload, stamp, asserted).await?;
         tx.commit().await?;
         Ok(())
@@ -214,6 +223,7 @@ impl PgLedger {
 
     async fn append_outbox(&self, message: &NewOutboxMessage) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
+        tam_storage::pin_tenant(&mut tx, message.org).await?;
         OutboxRepo::append(&mut tx, message).await?;
         tx.commit().await?;
         Ok(())
@@ -254,14 +264,20 @@ impl ItemLedger for PgLedger {
             .map_err(|error| to_wire_error(&error))
     }
 
+    /// The span is [`PARK_TTL_MS`], the machine's own park window, supplied
+    /// here rather than by the caller: on the device branch the caller is the
+    /// party being parked.
     async fn park(
         &self,
         lease: &wire::LeaseRef,
         blocked_on: &str,
-        park_for_seconds: i64,
     ) -> Result<(), wire::LedgerError> {
         self.leases
-            .park(&to_storage_lease(lease), blocked_on, park_for_seconds)
+            .park(
+                &to_storage_lease(lease),
+                blocked_on,
+                PARK_TTL_MS.div_euclid(1_000),
+            )
             .await
             .map_err(|error| to_wire_error(&error))
     }
@@ -394,6 +410,21 @@ impl ItemLedger for PgLedger {
             .await
             .map(to_wire_grant)
             .map_err(|error| to_wire_error(&error))
+    }
+
+    async fn renew(&self, lease: &wire::LeaseRef) -> Result<wire::Renewed, wire::LedgerError> {
+        let renewed = self
+            .leases
+            .renew(&to_storage_lease(lease))
+            .await
+            .map_err(|error| to_wire_error(&error))?;
+        // Both instants come out of the one statement, so the device's
+        // remaining lease is a subtraction between two readings of the same
+        // clock rather than across this process's and the database's.
+        Ok(wire::Renewed {
+            server_now_ms: renewed.server_now.0,
+            server_deadline_ms: renewed.expires_at.0,
+        })
     }
 
     async fn record_event(

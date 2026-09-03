@@ -1017,3 +1017,131 @@ async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::Leas
         tam_storage::DeviceClaim::Empty | tam_storage::DeviceClaim::HeldByAnotherDevice => None,
     }
 }
+
+/// A device's ledger write records two instants, and they are distinct.
+///
+/// The seller's clock is evidence of what their machine believed; ours is the
+/// record of when we heard it. Collapsing them would let a device's clock date
+/// our ledger, and `org_seq` — not either column — is what orders events, so
+/// keeping both costs nothing and losing one loses the audit trail's honesty.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_device_write_records_both_the_asserted_instant_and_our_receipt(app: PgPool) {
+    use tam_engine_driver::ports::ItemLedger;
+
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let lease = claim(&app, DEVICE, LEASE_SECONDS)
+        .await
+        .expect("the item leases");
+    // An instant the seller's machine asserts, deliberately far from now.
+    let asserted = Timestamp(1_600_000_000_000);
+    let ledger = PgLedger::for_device(engine.clone(), lease.job, DEVICE.to_owned());
+    ledger
+        .record_event(
+            &to_wire_item(&lease).lease_ref(),
+            &tam_types::JobEventPayload::ItemLeased {
+                worker: DEVICE.to_owned(),
+                lease_epoch: lease.lease_epoch,
+            },
+            asserted,
+        )
+        .await
+        .expect("the device records its event");
+
+    // Read as epoch milliseconds so the assertion compares the two instants
+    // rather than a timestamp library's rendering of them.
+    let (created, recorded): (i64, Option<i64>) = sqlx::query_as(
+        "SELECT (extract(epoch FROM created_at) * 1000)::bigint, \
+                (extract(epoch FROM asserted_at) * 1000)::bigint \
+         FROM job_event WHERE kind = 'ItemLeased' ORDER BY org_seq DESC LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the event row reads");
+    let recorded = recorded.expect("a device-written row records what the device asserted");
+    assert_eq!(
+        recorded, asserted.0,
+        "the seller's own instant is preserved exactly, as their assertion"
+    );
+    assert_ne!(
+        created, asserted.0,
+        "and our receipt is our own clock rather than theirs, which is the whole point \
+         of recording two"
+    );
+
+    let actor: (String, String) = sqlx::query_as(
+        "SELECT actor_kind, actor_id FROM job_event \
+         WHERE kind = 'ItemLeased' ORDER BY org_seq DESC LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the actor reads");
+    assert_eq!(
+        (actor.0.as_str(), actor.1.as_str()),
+        ("system", "device"),
+        "and the row is attributed to the device rather than to our own engine"
+    );
+}
+
+/// The rate grant's window and ceiling are the server's, whatever the device
+/// says.
+///
+/// The port takes no window and no ceiling by construction, so the only way to
+/// assert the server derives them is behaviourally: grants issued against one
+/// connection exhaust at the server's own limit, and the instant the device
+/// supplies moves the window rather than the allowance.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_rate_window_and_ceiling_are_the_servers_however_the_device_asks(app: PgPool) {
+    use tam_engine_driver::ports::ItemLedger;
+    use tam_engine_driver::vocabulary::{BudgetGrant, GrantKind};
+
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let lease = claim(&app, DEVICE, LEASE_SECONDS)
+        .await
+        .expect("the item leases");
+    let wire = to_wire_item(&lease);
+    let ledger = PgLedger::for_device(engine.clone(), lease.job, DEVICE.to_owned());
+    let connection = ledger
+        .connection_for(&wire.lease_ref(), lease.inventory)
+        .await
+        .expect("the connection reads")
+        .expect("the fixture links one");
+
+    // Every grant names the same instant, so they all fall in one window. The
+    // ceiling is the server's copy of the per-minute limit, and the device
+    // named neither it nor the window.
+    let ceiling = tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX.get();
+    let mut granted = 0_u32;
+    for _ in 0..ceiling + 2 {
+        match ledger
+            .request_grant(&wire.lease_ref(), connection, GrantKind::Write, T0)
+            .await
+            .expect("the grant runs")
+        {
+            BudgetGrant::Granted { .. } => granted += 1,
+            BudgetGrant::Exhausted => break,
+        }
+    }
+    assert_eq!(
+        u64::from(granted),
+        u64::from(ceiling),
+        "the window closed at the server's own ceiling, which the device never named: \
+         a governed party that supplied either would be setting its own rate limit"
+    );
+
+    // A later instant is a later window, so the allowance refreshes without
+    // the device having asked for more.
+    let next_window = Timestamp(T0.0 + 60_000);
+    assert!(
+        matches!(
+            ledger
+                .request_grant(&wire.lease_ref(), connection, GrantKind::Write, next_window)
+                .await
+                .expect("the grant runs"),
+            BudgetGrant::Granted { .. }
+        ),
+        "the window is derived from the instant rather than carried by the caller, so \
+         the next minute grants again"
+    );
+}

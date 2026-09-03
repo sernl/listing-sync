@@ -15,11 +15,14 @@
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::Json;
-use tam_engine::ledger::{to_wire_item, PgLedger};
-use tam_engine::seed::{preparation as preparation_for, prepare_item, ItemPreparation};
+use tam_domain::LEASE_TTL_SECS;
+use tam_engine::ledger::{to_storage_lease, to_wire_item, PgLedger};
+use tam_engine::seed::{
+    preparation as preparation_for, prepare_and_dispose, prepare_item, Disposed, ItemPreparation,
+};
 use tam_engine_driver::vocabulary::{
-    ClaimView, LeaseRef, LedgerAnswer, LedgerCall, LedgerError, PayloadManifest, SettleEnvelope,
-    WorkFilter, WorkOrder,
+    ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall, LedgerError, PayloadManifest,
+    SettleEnvelope, WorkFilter, WorkOrder,
 };
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{describe_files, BlobRepo, ClaimPolicy, DeviceClaim, DeviceRef, LeaseRepo};
@@ -27,9 +30,6 @@ use tam_types::Timestamp;
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
-
-/// How long a device's claim stands before the reaper may steal it.
-const CLAIM_TTL_SECS: i64 = 300;
 
 /// How long a lapsed plan keeps working. D11's grace, stated once.
 const ENTITLEMENT_GRACE_HOURS: i64 = 24;
@@ -64,7 +64,7 @@ pub(crate) async fn claim(
                 device: &device,
             },
             &ClaimPolicy {
-                ttl_seconds: CLAIM_TTL_SECS,
+                ttl_seconds: i64::from(LEASE_TTL_SECS),
                 grace_hours: ENTITLEMENT_GRACE_HOURS,
                 marketplace: filter.marketplace,
             },
@@ -85,36 +85,70 @@ pub(crate) async fn claim(
         }
         DeviceClaim::Leased(item) => *item,
     };
+    // The claim has taken the item, so nothing below may end while still
+    // holding it. A refused preparation is parked or settled by the
+    // disposition itself; a failure is handed back to the queue here, which
+    // is the only exit that releases.
+    let driven = to_wire_item(&leased);
+    let lease = to_storage_lease(&driven.lease_ref());
+    match work_order(&state, context.org, &leased, driven, now).await {
+        Ok(Some(order)) => Ok(Json(ClaimView::Work(Box::new(order)))),
+        // Parked or settled by the disposition rather than released: the lease
+        // ends with the item, and handing it back to the queue is what would
+        // serve it again on the next poll.
+        Ok(None) => Ok(Json(ClaimView::Idle {
+            next_poll_ms: next_poll_ms(false),
+        })),
+        Err(error) => {
+            // The caller is told about the failure it asked about; a release
+            // that fails on top of it must not replace it.
+            drop(release(&state, &lease).await);
+            Err(error)
+        }
+    }
+}
+
+/// Hands back a claim this request is not going to serve.
+async fn release(state: &AppState, lease: &tam_storage::LeaseRef) -> Result<(), APIError> {
+    LeaseRepo::new(state.pool.clone())
+        .release(lease)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))
+}
+
+/// What the device is to do, or `None` where the item turned out not to be the
+/// device's to run.
+async fn work_order(
+    state: &AppState,
+    org: tam_types::OrgId,
+    leased: &tam_storage::LeasedItem,
+    driven: LeasedItem,
+    now: Timestamp,
+) -> Result<Option<WorkOrder>, APIError> {
     // The whole taxonomy stays here: `prepare_item` writes the seller's
     // decision surface and answers a projected listing, so D1's declarative
     // intent is literally the return value of one server-side call.
-    // The storage row crosses into the interpreter's vocabulary once, here,
-    // through the same conversion the worker uses.
-    let driven = to_wire_item(&leased);
-    let prepared = prepare_item(&state.pool, &leased, now)
+    let ledger = LeaseRepo::new(state.pool.clone());
+    let disposed = prepare_and_dispose(&state.pool, &ledger, leased, now)
         .await
         .map_err(|error| state.internal(&format!("{error:?}")))?;
-    let (operation, projected) = match prepared {
-        ItemPreparation::Ready {
+    let (operation, projected) = match disposed {
+        Disposed::Ready {
             operation,
             projected,
         } => (operation, projected),
         // A blocked item, or one whose counterpart can never bind, is not the
-        // device's to run. Both are already recorded server-side, so the
-        // device is told the queue is idle rather than handed work it would
-        // only park again.
-        ItemPreparation::Blocked { .. } | ItemPreparation::CounterpartLost { .. } => {
-            return Ok(Json(ClaimView::Idle {
-                next_poll_ms: next_poll_ms(false),
-            }))
-        }
+        // device's to run. The disposition has already parked or settled it —
+        // the same one the worker applies — so the device is told the queue is
+        // idle rather than handed work it would only refuse again.
+        Disposed::Parked { .. } | Disposed::Skipped { .. } => return Ok(None),
     };
     // The server commits to the bytes before they move: the device fetches
     // them separately and checks what arrived against these hashes and
     // lengths, so a truncated transfer is caught on the device.
-    let preparation = preparation_for(&leased, operation, projected);
+    let preparation = preparation_for(leased, operation, projected);
     let payload = match preparation.projected.as_ref() {
-        Some(listing) => describe_files(&state.pool, context.org, &listing.files)
+        Some(listing) => describe_files(&state.pool, org, &listing.files)
             .await
             .map_err(|error| state.internal(&error.to_string()))?
             .into_iter()
@@ -128,50 +162,30 @@ pub(crate) async fn claim(
             .collect(),
         None => Vec::new(),
     };
-    Ok(Json(ClaimView::Work(Box::new(WorkOrder {
+    Ok(Some(WorkOrder {
         lease: driven,
         preparation,
         payload,
         server_now_ms: now.0,
-        server_deadline_ms: now.0 + CLAIM_TTL_SECS * 1_000,
+        server_deadline_ms: now.0 + i64::from(LEASE_TTL_SECS) * 1_000,
         next_poll_ms: next_poll_ms(false),
-    }))))
+    }))
 }
 
 /// The device settles what it claimed.
 ///
-/// The epoch is the fence and the device id is the holder: a settle from a
-/// device other than the one holding the lease is refused, because the write
-/// it is asking for belongs to a run it is not in.
+/// The epoch is the fence and the device id is the holder: a settle naming an
+/// epoch the item has moved past, or arriving from a device other than the one
+/// holding the lease, is refused, because the write it is asking for belongs
+/// to a run it is not in. Both halves come from [`held_by`], which is the one
+/// fence every device-reachable route here passes through.
 pub(crate) async fn settle(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, device)): Path<(String, String)>,
     Json(body): Json<SettleEnvelope>,
 ) -> Result<StatusCode, APIError> {
-    let holder: Option<String> = sqlx::query_scalar(
-        "SELECT lease_owner FROM job_item \
-         WHERE org_id = $1 AND lease_epoch = $2 AND state IN ('leased', 'running', 'verifying') \
-         LIMIT 1",
-    )
-    .bind(uuid::Uuid::from_bytes(context.org.0 .0))
-    .bind(body.lease.lease_epoch)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|error| state.internal(&error.to_string()))?
-    .flatten();
-    if holder.as_deref() != Some(device.as_str()) {
-        // 409 with the validation kind rather than a conflict kind: the kind
-        // vocabulary is a closed set that regenerates the client's `vocab.ts`,
-        // and widening it is not this change's to make.
-        return Err(APIError::new(
-            StatusCode::CONFLICT,
-            APIErrorEntry::new(
-                "that lease is held by another device, so this settle is not yours to make",
-            )
-            .kind(APIErrorKind::Validation),
-        ));
-    }
+    held_by(&state, context.org, &device, body.lease).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -333,14 +347,10 @@ async fn held_by(
         .await
         .map_err(|error| state.internal(&error.to_string()))?
         .ok_or_else(refusal)?;
-    let holder: Option<String> =
-        sqlx::query_scalar("SELECT lease_owner FROM job_item WHERE org_id = $1 AND id = $2")
-            .bind(uuid::Uuid::from_bytes(org.0 .0))
-            .bind(uuid::Uuid::from_bytes(lease.item.0 .0))
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?
-            .flatten();
+    let holder = LeaseRepo::new(state.pool.clone())
+        .holder(org, lease.item)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
     if holder.as_deref() != Some(device) || leased.lease_epoch != lease.lease_epoch {
         return Err(refusal());
     }
@@ -362,12 +372,8 @@ async fn dispatch(ledger: &PgLedger, call: LedgerCall) -> Result<LedgerAnswer, L
         LedgerCall::PreflightFailed { lease, edge_class } => LedgerAnswer::Streak {
             streak: ledger.preflight_failed(&lease, edge_class).await?,
         },
-        LedgerCall::Park {
-            lease,
-            blocked_on,
-            park_for_seconds,
-        } => {
-            ledger.park(&lease, &blocked_on, park_for_seconds).await?;
+        LedgerCall::Park { lease, blocked_on } => {
+            ledger.park(&lease, &blocked_on).await?;
             LedgerAnswer::Done
         }
         LedgerCall::OpenAttempt { lease, new, at_ms } => {
@@ -414,6 +420,9 @@ async fn dispatch(ledger: &PgLedger, call: LedgerCall) -> Result<LedgerAnswer, L
             grant: ledger
                 .request_grant(&lease, connection, kind, Timestamp(at_ms))
                 .await?,
+        },
+        LedgerCall::Renew { lease } => LedgerAnswer::Renewed {
+            renewed: ledger.renew(&lease).await?,
         },
         LedgerCall::RecordEvent {
             lease,

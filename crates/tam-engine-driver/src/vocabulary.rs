@@ -95,6 +95,7 @@ pub struct AttemptRef {
 /// these is what stops a committed removal binding the mapping to a listing
 /// that no longer exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LandingEffect {
     /// The verdict named no listing; there is nothing to record.
     None,
@@ -122,6 +123,7 @@ pub struct AttemptVerdict {
 /// What the settle did to the binding, as the server decided it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[must_use]
+#[serde(rename_all = "snake_case")]
 pub enum BindDisposition {
     NotLanded,
     Addressed,
@@ -156,6 +158,7 @@ pub struct PreflightStreak {
 /// absent by construction: a governed party that supplied either would be
 /// setting its own rate limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BudgetGrant {
     Granted { used: i32 },
     Exhausted,
@@ -164,6 +167,7 @@ pub enum BudgetGrant {
 /// Which allowance a grant is drawn against. The driver states what it is
 /// about to do; the server decides what that costs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GrantKind {
     /// A lifecycle write: a create, a revise or a removal.
     Write,
@@ -179,6 +183,7 @@ pub enum GrantKind {
 /// other server-side condition arrives opaque, because the interpreter's only
 /// answer to one is the stall bias.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LedgerError {
     /// The mapping already has an open attempt, which is the duplicate-create
     /// fence holding.
@@ -308,7 +313,7 @@ pub struct SettleEnvelope {
 /// assertion, never mistaken for our record: the server stamps its own receipt
 /// beside it, and `org_seq` keeps ordering server-authoritative regardless.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "call", rename_all = "snake_case")]
+#[serde(tag = "call", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LedgerCall {
     ConnectionFor {
         lease: LeaseRef,
@@ -321,12 +326,13 @@ pub enum LedgerCall {
         lease: LeaseRef,
         edge_class: bool,
     },
-    /// A duration rather than an instant: the reaper reads `park_expires_at`
-    /// against the server's clock, so the server mints the when.
+    /// No duration: the reaper reads `park_expires_at` against the server's
+    /// clock, and the machine parks every gate for the same span, so the
+    /// server mints the when from its own constant rather than taking a
+    /// number from the party the park is holding.
     Park {
         lease: LeaseRef,
         blocked_on: String,
-        park_for_seconds: i64,
     },
     OpenAttempt {
         lease: LeaseRef,
@@ -359,6 +365,13 @@ pub enum LedgerCall {
         kind: GrantKind,
         at_ms: i64,
     },
+    /// The heartbeat. No duration: the server mints the new expiry from its
+    /// own constant, so a device cannot buy itself a lease of any length by
+    /// naming one. No asserted instant either: it writes no dated row, and an
+    /// instant nothing records is a field that only looks like evidence.
+    Renew {
+        lease: LeaseRef,
+    },
     RecordEvent {
         lease: LeaseRef,
         payload: JobEventPayload,
@@ -388,6 +401,7 @@ impl LedgerCall {
             | Self::GateConnection { lease, .. }
             | Self::HaltThisTenant { lease, .. }
             | Self::RequestGrant { lease, .. }
+            | Self::Renew { lease, .. }
             | Self::RecordEvent { lease, .. }
             | Self::Notify { lease, .. } => lease,
         }
@@ -400,7 +414,8 @@ impl LedgerCall {
             Self::ConnectionFor { .. }
             | Self::PreflightSucceeded { .. }
             | Self::PreflightFailed { .. }
-            | Self::Park { .. } => None,
+            | Self::Park { .. }
+            | Self::Renew { .. } => None,
             Self::OpenAttempt { at_ms, .. }
             | Self::SettleAttempt { at_ms, .. }
             | Self::GateConnection { at_ms, .. }
@@ -410,6 +425,17 @@ impl LedgerCall {
             | Self::Notify { at_ms, .. } => Some(*at_ms),
         }
     }
+}
+
+/// A renewed lease, stated in the server's own numbers.
+///
+/// Both instants travel because the device needs a duration and has no clock
+/// we trust: `server_deadline_ms - server_now_ms` is the remaining lease, and
+/// every term in it is ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Renewed {
+    pub server_now_ms: i64,
+    pub server_deadline_ms: i64,
 }
 
 /// What the ledger answers.
@@ -432,6 +458,9 @@ pub enum LedgerAnswer {
     },
     Bound {
         disposition: BindDisposition,
+    },
+    Renewed {
+        renewed: Renewed,
     },
     Grant {
         grant: BudgetGrant,

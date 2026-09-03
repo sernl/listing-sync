@@ -293,7 +293,6 @@ fn every_ledger_call_and_answer_round_trips() {
         LedgerCall::Park {
             lease: lease(),
             blocked_on: "reauth_required".to_owned(),
-            park_for_seconds: 86_400,
         },
         LedgerCall::OpenAttempt {
             lease: lease(),
@@ -337,6 +336,7 @@ fn every_ledger_call_and_answer_round_trips() {
             kind: GrantKind::Write,
             at_ms: 1_756_000_005_000,
         },
+        LedgerCall::Renew { lease: lease() },
         LedgerCall::RecordEvent {
             lease: lease(),
             payload: tam_types::JobEventPayload::ItemLeased {
@@ -409,11 +409,53 @@ fn the_asserted_instant_travels_with_every_call_that_records_one() {
         Some(1_756_000_006_000),
         "a call that writes a dated row carries the seller's own instant"
     );
-    let without = LedgerCall::PreflightSucceeded { lease: lease() };
-    assert_eq!(
-        round_trip(&without).asserted_at_ms(),
-        None,
-        "and one that writes no dated row asserts nothing, rather than inventing an \
-         instant nobody will read"
+    for without in [
+        LedgerCall::PreflightSucceeded { lease: lease() },
+        // The heartbeat is the one that tempts: it is a device-originated
+        // call like the rest, but it writes no `job_event` and no
+        // `write_attempt`, so an instant on it would be recorded nowhere.
+        LedgerCall::Renew { lease: lease() },
+    ] {
+        assert_eq!(
+            round_trip(&without).asserted_at_ms(),
+            None,
+            "a call that writes no dated row asserts nothing, rather than carrying an \
+             instant nobody will read: {without:?}"
+        );
+    }
+}
+
+/// A renew carries the gate's own instant and nothing else, and a body that
+/// tries to name a duration is refused rather than ignored.
+///
+/// The refusal is the point. A renew whose `ttl_seconds` the server read
+/// verbatim let a device set the length of its own lease, and a device naming
+/// `i64::MAX` saturated the server's conversion into an expiry decades out —
+/// a lease no reaper reclaims and a marketplace mutex nothing releases.
+/// Dropping the field is what fixes it; refusing the field is what stops a
+/// client from believing the field still works.
+#[test]
+fn a_renew_cannot_name_a_duration() {
+    let accepted: LedgerCall = serde_json::from_value(serde_json::json!({
+        "call": "renew",
+        "lease": { "org": OrgId(Uuid([0x11; 16])), "item": JobItemId(Uuid([0x22; 16])),
+                   "lease_epoch": 3 },
+    }))
+    .expect("the shape the device sends is accepted");
+    assert!(
+        matches!(accepted, LedgerCall::Renew { .. }),
+        "and it is a renew: {accepted:?}"
+    );
+
+    let refused = serde_json::from_value::<LedgerCall>(serde_json::json!({
+        "call": "renew",
+        "lease": { "org": OrgId(Uuid([0x11; 16])), "item": JobItemId(Uuid([0x22; 16])),
+                   "lease_epoch": 3 },
+        "ttl_seconds": i64::MAX,
+    }));
+    assert!(
+        refused.is_err(),
+        "a duration on a renew is refused at the surface rather than silently dropped, so \
+         a client that still sends one is told: {refused:?}"
     );
 }
