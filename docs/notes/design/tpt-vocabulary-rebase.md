@@ -274,3 +274,30 @@ And end to end against the real binary: the committed TPT capture against itself
 What is deliberately not here is either half of the capture.
 Q4 defers the device-originated TPT and Tes re-capture to the Phase 2 desktop client.
 The Etsy-branch server capture is deferred too, for a reason Q4 did not anticipate: `crates/tam-domain/src/registry/etsy.rs:36-38` binds no equivalence axis and declares none absent, so there is no Etsy vocabulary to diff yet, and writing the fetch before the binding exists would be building against an unmeasured target.
+
+## Step 5, handed over: the route and the screen
+
+Step 5 is the only part of the build order this stream did not build, because the override endpoint lives in `crates/tam-api` and the Templates screen in `web/`, and both belong to the stream that owns them.
+Everything behind them is built, tested and landed, so what follows is the contract rather than a sketch.
+
+Read this first, because it is the fact most easily missed and it is outside step 5's stated scope: nothing calls the override layer yet.
+`crates/tam-engine/src/seed.rs` and `crates/tam-import/src/lib.rs` both call `project_listing`, which delegates with an empty override set, so a seller can record an override through the new route and it will change no projection until a caller switches to `project_listing_with_overrides` and passes that org's overrides, read with `OverrideRepo::for_org`.
+Until that happens the layer is durable, tenant-isolated, tested and inert.
+Wiring it is a change in the engine and the importer rather than in the API, and it is not step 5's, but shipping the route and the screen without it would give a seller a control that silently does nothing.
+
+The route is `POST /{version}/mappings/overrides`, registered beside `.route("/{version}/elections/rules", post(resources::upsert_rule))` at `crates/tam-api/src/lib.rs:256`, with `GET` on the same path listing the calling org's overrides and `DELETE` withdrawing one.
+The handler takes the shape `upsert_rule` takes at `crates/tam-api/src/resources.rs:1161`: `State(state): State<AppState>`, `context: OrgContext`, `Json(body)`, returning `Result<StatusCode, APIError>`.
+The body carries `inventory`, `axis`, `from_term`, `to: { segments, native_id }` and `kind`, which is `exact` or `broader`.
+
+Four things the handler must do, each for a stated reason.
+The organisation and the user come from `OrgContext` and never from the body, so `decided_by` is `Decider::Human { user: context.user, org: context.org }` exactly as the rule handler builds it.
+`ProjectionOverride::new` is the only way to construct the value, because it is the domain half of the licence refusal and the database CHECK is the other half; its two errors, `LicenceNeverOverridden` and `EmptyPath`, map to validation errors rather than to a five-hundred.
+`check_native_ids` runs before the write, over a one-element slice holding the `ProjectionEdge` the override would produce, which is the same check the reconciliation queue's resolution runs at `crates/tam-taxonomy/src/provenance.rs:11-16` and the reason a wrong tag never reaches a live listing.
+And the write is `OverrideRepo::upsert`, the read `OverrideRepo::for_org`, the withdrawal `OverrideRepo::remove`, all of which pin `app.current_org` themselves, so the handler passes `context.org` and does not open its own transaction.
+
+The screen is `web/src/routes/templates/+page.svelte`, today a thirteen-line placeholder whose own description already names the feature: "Reusable sync presets — licence choices, category mappings, pricing rules".
+It becomes a per-marketplace list of the seller's own overrides with add, edit and remove, reading the route through `web/src/lib/api.ts`.
+It is not the Reconciliation screen, and the distinction is worth keeping: that screen drains global gaps the founder answers once for everyone, and a seller override is neither global nor a gap.
+Two details the screen should carry: the axis selector must exclude licence, because the constructor and the database will both refuse it and a control that always errors is worse than no control; and an override's effect is visible in the field diff through `AxisOutcome.decided_by_seller`, which is what lets the diff say "you set this" rather than "the relation says this".
+
+Out of scope and deliberately so: the per-seller shelf mapping the rethink memo calls non-optional is a different table, because Etsy shop sections and TPT `sellerCustomCategories` are populated by reading the target, and `docs/design/data/tpt-vocabulary.json` records under `sellerCustomCategories` that no option set exists to seed.
