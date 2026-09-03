@@ -3,7 +3,7 @@
 How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
 
 - date: 2026-09-03
-- status: `v0.1.1` is published and the Cloud serves its manifest; the endpoint it shipped carried no release channel, which would have 404ed every update check the installed base made, and `0.1.2` carries the fix, the first written release notes, a GitHub release beside the Cloud one, and an Android APK when a signing key exists
+- status: `v0.1.1` is the newest published release; `v0.1.2` built but never published, failing in the Android job, and `0.1.3` carries what `0.1.2` was meant to — the channelled updater endpoint, the first written release notes, a GitHub release beside the Cloud one, and an Android APK
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 
@@ -170,7 +170,10 @@ It gets no download button and drives no updater, which costs nothing here becau
 An unsigned APK cannot be installed, so the job runs only when all three `ANDROID_KEY_*` secrets exist.
 The `verify` job answers that question — `secrets` is not a context an `if:` may read, but a job-level `env:` is, so the boolean is computed there once and travels as an output — and when the answer is no the run summary records that the APK was skipped for want of a signing key.
 Building one anyway would cost twenty minutes of every tag and produce nothing installable, so the skip is the whole saving.
-`publish` and `github-release` still name `android` in their `needs`, and their conditions spell out what they tolerate: Android skipped, never Android failed, and never a failed Windows build.
+The APK is additive to a release rather than a gate on it, which `v0.1.2` is the reason for stating explicitly.
+`publish` names only `windows` in its `needs`, so no Android outcome can hold back the desktop release at all.
+`github-release` still names `android`, because it has an APK to attach when there is one, but it runs on a successful Windows build whatever Android did and records in the run summary that the APK is absent and why.
+Both conditions use a status function, because a `needs` job that skips or fails would otherwise skip the job waiting on it, and then name the one result they actually require.
 Setting the three secrets is the only change needed to make the next tag carry an APK.
 The NDK version reaches both Android workflows through `.github/scripts/android-pins.sh`, which reads it from `flake.nix`, so the pin has one home rather than three.
 
@@ -285,6 +288,12 @@ The fix drops `--framework` from the upload and names each file: `--file`, the v
 The NSIS installer uploads as `--public-platform nsis-x86_64 --update-platform windows-x86_64` with its `.sig`, and the MSI as `--public-platform wix-x86_64` alone, because only one artefact can be the update for a platform and the NSIS installer is the one Tauri's Windows `installMode` drives without an elevation prompt.
 Naming the files also retires the hazard the CLI's own help warns of, that `--framework` "uploads all discovered artifacts to the release, so make sure there is no older bundles mixed in the framework's output directories" — a live risk with a cached target directory.
 `draft` and `publish` keep `--framework tauri`, because neither reads a bundle and it is what stops the Cloud's version and the tree's from disagreeing.
+
+`v0.1.2` is spent for a different reason, and a smaller one.
+Its Android job failed at the build step with `error: no such command: tauri`, because that job installed the CLI from npm, which provides a `tauri` binary, and then invoked `cargo tauri`, which is a separate cargo package that was never installed.
+The Windows job had always invoked the npm binary directly; the Android job did not, and `android-build.yml` carried the same mismatch unnoticed because it is dispatched by hand and had never been run on a runner.
+All three sites now install from npm and invoke `tauri`, and both Android install steps run `tauri --version` immediately afterwards, so the next mismatch of this kind costs two seconds rather than a release.
+That failure also blocked `publish`, which is what prompted decoupling the APK from the desktop release above.
 
 `v0.1.0` is a spent tag rather than a release.
 It exists on the repository, no GitHub release was ever created for it, and a pushed tag cannot be moved without rewriting what others have already fetched, so the next release is `v0.1.1` and it will be the first published one.

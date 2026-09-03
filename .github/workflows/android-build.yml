@@ -118,7 +118,13 @@ jobs:
       - name: install the Tauri CLI
         env:
           CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
-        run: npm install -g "@tauri-apps/cli@$CLI_VERSION"
+        run: |
+          set -euo pipefail
+          npm install -g "@tauri-apps/cli@$CLI_VERSION"
+          # The npm package provides `tauri`; `cargo tauri` is a different
+          # package that is not installed here. Proving the binary now costs
+          # two seconds and is what v0.1.2 spent twenty minutes discovering.
+          tauri --version
 
       - name: point the build at the pinned NDK
         env:
@@ -177,9 +183,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then
-            cargo tauri android build --apk --ci --target aarch64
+            tauri android build --apk --ci --target aarch64
           else
-            cargo tauri android build --apk --debug --ci --target aarch64
+            tauri android build --apk --debug --ci --target aarch64
           fi
 
       - name: collect the artefacts

@@ -213,7 +213,13 @@ jobs:
       - name: install the Tauri CLI
         env:
           CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
-        run: npm install -g "@tauri-apps/cli@$CLI_VERSION"
+        run: |
+          set -euo pipefail
+          npm install -g "@tauri-apps/cli@$CLI_VERSION"
+          # The npm package provides `tauri`; `cargo tauri` is a different
+          # package that is not installed here. Proving the binary now costs
+          # two seconds and is what v0.1.2 spent twenty minutes discovering.
+          tauri --version
 
       - name: point the build at the pinned NDK
         env:
@@ -252,7 +258,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           set -euo pipefail
-          cargo tauri android build --apk --ci --target aarch64
+          tauri android build --apk --ci --target aarch64
 
       # Gradle names an unsigned build `...-release-unsigned.apk`, so matching
       # `*-release.apk` alone is the check that signing actually happened: a
@@ -535,15 +541,15 @@ jobs:
   # checksums and the notes the Cloud was given. `latest.json` goes too,
   # because it is the hosting escape hatch the design note describes and the
   # workflow artefact it otherwise lives in expires after thirty days.
-  # A skipped `needs` skips the job that waits on it unless the condition uses
-  # a status function, so this spells out what it will tolerate: Android
-  # skipped, never Android failed, and never a failed Windows build.
+  # The APK is additive: this runs on a successful Windows build whatever
+  # Android did, and attaches the APK only if there is one. A skipped or failed
+  # `needs` would otherwise skip this job, which is why the condition uses a
+  # status function and then names the one result it actually requires.
   github-release:
     needs: [verify, windows, android]
     if: >-
       ${{ !cancelled() && !github.event.repository.fork
-      && needs.windows.result == 'success'
-      && (needs.android.result == 'success' || needs.android.result == 'skipped') }}
+      && needs.windows.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -560,6 +566,24 @@ jobs:
         with:
           name: android-arm64
           path: android-artifacts
+      - name: say whether the APK is in this release
+        env:
+          ANDROID_RESULT: ${{ needs.android.result }}
+        run: |
+          set -euo pipefail
+          case "$ANDROID_RESULT" in
+            success)
+              echo 'The Android APK is attached to this release.' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            skipped)
+              echo 'No Android APK in this release: the Android job was skipped because no signing key is configured. The desktop release is unaffected.' >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "No Android APK in this release: the Android job finished as $ANDROID_RESULT. The desktop release is unaffected." >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::no Android APK in this release: the android job finished as $ANDROID_RESULT"
+              ;;
+          esac
+
       - name: create the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -591,11 +615,10 @@ jobs:
   # the release real. A failed run leaves the draft unpublished on purpose;
   # `cn release purge` removes it.
   publish:
-    needs: [verify, windows, android]
+    needs: [verify, windows]
     if: >-
       ${{ !cancelled() && !github.event.repository.fork
-      && needs.windows.result == 'success'
-      && (needs.android.result == 'success' || needs.android.result == 'skipped') }}
+      && needs.windows.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
