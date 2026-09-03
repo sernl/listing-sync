@@ -21,6 +21,15 @@
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import { createLedger, type Ledger } from '$lib/ledger';
+	import {
+		WORK_RUNS,
+		chipFor,
+		newestWork,
+		runsFor,
+		type MarketplaceChip,
+		type RunRow,
+		type WorkItem
+	} from '$lib/inventory';
 	import { formatPrice, rowStatus } from '$lib/listings-view';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -49,6 +58,21 @@
 	const statuses = createQuery(() => ({
 		queryKey: queryKeys.status,
 		queryFn: () => api.status().then((view) => view.inventories)
+	}));
+	// What is happening to each of this listing's mappings, and which runs
+	// carried it. Shares the inventory board's cache entry, because it is the
+	// same bounded read of the newest runs' items.
+	const work = createQuery(() => ({
+		queryKey: queryKeys.inventoryWork,
+		queryFn: async () => {
+			const first = await api.jobs();
+			const heads = first.jobs.slice(0, WORK_RUNS);
+			const pages = await Promise.all(heads.map((head) => api.items(head.job)));
+			const items: WorkItem[] = heads.flatMap((head, index) =>
+				pages[index].items.map((item) => ({ job: head.job, item }))
+			);
+			return newestWork(items);
+		}
 	}));
 
 	const mappings = $derived(
@@ -98,7 +122,10 @@
 	let editRefusal = $state<string | null>(null);
 	let publishing = $state(false);
 	let deleting = $state(false);
-	let runs = $state<{ inventory: InventoryId; job: string }[]>([]);
+	// Runs started from this page in this session, kept only until the bounded
+	// read below carries them: a run the server has not listed yet would
+	// otherwise vanish between starting it and the refetch landing.
+	let justStarted = $state<{ inventory: InventoryId; job: string }[]>([]);
 
 	// Seeded once rather than mirrored: a refetch arriving while the seller is
 	// typing must not overwrite what they typed.
@@ -108,6 +135,40 @@
 			seed = editSeedOf(stored);
 		}
 	});
+
+	const chips = $derived.by(() => {
+		const found = new Map<InventoryId, MarketplaceChip>();
+		for (const mapping of mappings) {
+			found.set(
+				mapping.inventory,
+				chipFor({
+					product: id,
+					inventory: mapping.inventory,
+					mapping,
+					work: (work.data ?? new Map()).get(mapping.id),
+					connection: connectionFor(mapping.inventory, connections.data ?? []),
+					status: (statuses.data ?? []).find((one) => one.inventory === mapping.inventory)
+				})
+			);
+		}
+		return found;
+	});
+
+	// The runs the bounded read knows about, and any this page started since,
+	// newest first. A run appearing in both is one row: the read is the
+	// authority and the local note only fills the gap before it lands.
+	const runs = $derived.by(() => {
+		const known: RunRow[] = runsFor(mappings, work.data ?? new Map());
+		const seen = new Set(known.map((row) => row.job));
+		return [
+			...justStarted
+				.filter((run) => !seen.has(run.job))
+				.map((run) => ({ job: run.job, inventory: run.inventory, state: null })),
+			...known.map((row) => ({ job: row.job, inventory: row.inventory, state: row.state }))
+		];
+	});
+
+	const needing = $derived([...chips.values()].filter((chip) => chip.action !== null && chip.tone === 'bad'));
 
 	const blockedBy = $derived(editBlockedBy(mappings));
 	const licensing = $derived(
@@ -176,8 +237,9 @@
 
 	function published(started: { inventory: InventoryId; job: string }[]) {
 		publishing = false;
-		runs = [...started, ...runs];
+		justStarted = [...started, ...justStarted];
 		void queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
+		void queryClient.invalidateQueries({ queryKey: queryKeys.inventoryWork });
 		if (started.length === 1) {
 			toast('info', 'Send started.');
 			void goto(`/sync/${started[0].job}`);
@@ -223,11 +285,29 @@
 			{/snippet}
 		</PageHead>
 
+		{#if needing.length > 0}
+			<div class="attn">
+				<div class="t">
+					{needing.length}
+					{needing.length === 1 ? 'marketplace needs' : 'marketplaces need'} you
+				</div>
+				<p>
+					{needing.map((chip) => platformTitle(chip.inventory)).join(', ')}. Nothing is sent to
+					{needing.length === 1 ? 'it' : 'them'} until this is cleared, and the listing already
+					there stands where it stood.
+				</p>
+				{#if needing[0].action}
+					<a class="act" href={needing[0].action.href}>{needing[0].action.label}</a>
+				{/if}
+			</div>
+		{/if}
+
 		<Panel
 			title="Marketplaces"
-			description="Chosen when the draft was created. There is no way to add one afterwards, so this set is fixed."
+			description="Where this resource stands on each one, and what it is waiting on. Chosen when the draft was created; there is no way to add one afterwards, so this set is fixed."
 		>
 			{#each mappings as mapping (mapping.id)}
+				{@const chip = chips.get(mapping.inventory)}
 				{@const verdict = readinessOf({
 					inventory: mapping.inventory,
 					intent: 'draft',
@@ -241,27 +321,55 @@
 				<div class="row">
 					<span class="what">
 						<span class="t">{verdict.title}</span>
-						<span class="s">{mapping.binding_state} · {mapping.lifecycle_state}</span>
+						<span class="s">{chip?.detail ?? `${mapping.binding_state} · ${mapping.lifecycle_state}`}</span>
+						{#if chip?.paused}
+							<span class="s">Sending is paused here: {chip.paused}</span>
+						{/if}
+						<span class="s">
+							Next send: {verdict.line}.
+							{#if chip?.onDevice}
+								Work for this marketplace runs on your own device.
+							{/if}
+						</span>
 					</span>
 					<span class="grow"></span>
-					<span class="pill {verdict.tone}">{verdict.line}</span>
+					{#if chip}
+						<span class="pill {chip.tone}">{chip.label}</span>
+						{#if chip.action}
+							<a class="btn small" href={chip.action.href}>{chip.action.label}</a>
+						{/if}
+					{:else}
+						<span class="pill {verdict.tone}">{verdict.line}</span>
+					{/if}
 				</div>
 			{:else}
 				<p class="quiet">This listing carries no marketplace mapping.</p>
 			{/each}
+			<p class="foot-note">
+				A marketplace this resource is not on cannot be added from here: there is no endpoint that
+				maps an existing resource onto a new marketplace, so cross-listing somewhere new means
+				authoring the draft with that marketplace chosen.
+			</p>
 		</Panel>
 
 		{#if runs.length > 0}
-			<Panel title="Sends started here" description="Each run carries its own outcome and steps.">
+			<Panel
+				title="Sends"
+				description="Every run in the recent window that carried this resource. Each opens its own timeline, with the steps, gates and events it recorded."
+			>
 				{#each runs as run (run.job)}
 					<a class="job" href={`/sync/${run.job}`}>
 						<span class="what">
 							<span class="t">{platformTitle(run.inventory)}</span>
 							<span class="w mono">{run.job.slice(0, 8)}…</span>
 						</span>
-						<span class="when">open the run</span>
+						<span class="when">{run.state === null ? 'just started' : run.state}</span>
 					</a>
 				{/each}
+				<p class="foot-note">
+					Only the newest runs are read, so a send older than that window is not listed here.
+					Sync holds every run.
+				</p>
 			</Panel>
 		{/if}
 
