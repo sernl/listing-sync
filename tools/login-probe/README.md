@@ -38,6 +38,23 @@ The exit status is 0 whatever the verdict, because the report is the result and
 a challenge is a finding rather than a failure; the only non-zero status is 2,
 for a usage error, raised before any window opens.
 
+Flags may come before or after the url, in any order, and each takes either
+`--out tpt.json` or `--out=tpt.json`.
+Anything else is a usage error that names the offending argument: an unknown
+flag, a flag whose value is missing or is itself a flag, a second positional
+argument, or a url that still holds whitespace after its surrounding whitespace
+is trimmed.
+That last case is what a mispasted command looks like, and refusing it is
+deliberate.
+On 2026-09-03 a Windows run received `"\nhttps://...Login"` as its only
+argument, `--wait-secs 20 --out tpt.json` having been lost to the shell, and
+the tool silently fell back to its defaults; the reports and the diagnosis are
+in `docs/research/rethink/login-probe-windows.md`.
+The url is trimmed before use, every report records under `argv` the arguments
+the process actually received, and the line printed on stderr names the wait and
+the file it will write, so a mangled invocation is visible while it runs and
+recoverable from the report afterwards.
+
 The verdict is one of three words.
 CHALLENGE means at least one bot-protection marker was found, and the report
 names each one along with where it was seen.
@@ -45,11 +62,17 @@ CLEAR means no marker was found and the page carries a password input, which is
 what an ordinary login page looks like.
 UNKNOWN means neither, which on a login URL usually means the page had not
 finished loading, so re-run with a longer `--wait-secs`.
-On TPT the two markers that fire are Cloudflare's always-present bot-management
-script under `/cdn-cgi/challenge-platform` and the reCAPTCHA widget on the form
-itself, so CHALLENGE alongside a password input means a widget the human
-satisfies while logging in rather than a wall; a wall is CHALLENGE with no
-password input at all.
+CHALLENGE alongside a password input means a widget the human satisfies while
+logging in rather than a wall; a wall is CHALLENGE with no password input at
+all.
+A Linux run on TPT has seen Cloudflare's bot-management script under
+`/cdn-cgi/challenge-platform`; the Windows runs of 2026-09-03 saw neither that
+nor any reCAPTCHA, and the CHALLENGE they reported came from the bare needle
+`recaptcha` matching a feature-flag name in the page.
+The recaptcha markers are therefore the strings a rendered widget or its loader
+produces, `g-recaptcha`, `grecaptcha`, `data-sitekey`, `recaptcha/api.js` and
+`recaptcha/enterprise.js`, and no page has yet been observed to carry one
+(`docs/research/rethink/login-probe-windows.md`).
 
 The report also carries an `outcome`, which is separate from the verdict.
 `reported` means the page answered.
@@ -127,14 +150,26 @@ nothing needs installing for the probe to run.
 
 The executable cross-compiles from NixOS, which is D29's route for Windows
 bundles generally, and it is built and staged at `dist/login-probe.exe`:
-890368 bytes, SHA-256 `ebd2f7b175c03ff80a2f181b388ae8701841e6c8d5fba9d573eff1a3e384494e`.
+896000 bytes, SHA-256 `c3b8657279c644b4817c936dbf716923c3aa06a76281d1df71d0e979053705fb`,
+rebuilt 2026-09-03 with the argument handling and the recaptcha markers
+described above.
+The hash identifies that copy rather than the build: a PE header carries a
+timestamp, so an identical rebuild produces a different hash at the same size.
 Copy that one file to the Windows machine, open a terminal in the folder holding
 it, and run:
 
 ```
-.\login-probe.exe "https://www.teacherspayteachers.com/Login" --wait-secs 20 --out tpt.json
-.\login-probe.exe "https://www.tes.com/authn/sign-in?rtn=https%3A%2F%2Fwww.tes.com%2Fteaching-resources" --wait-secs 20 --out tes.json
+.\login-probe.exe --wait-secs 20 --out tpt.json "https://www.teacherspayteachers.com/Login"
+.\login-probe.exe --wait-secs 20 --out tes.json "https://www.tes.com/authn/sign-in?rtn=https%3A%2F%2Fwww.tes.com%2Fteaching-resources"
 ```
+
+Run one line at a time, and let each finish before pasting the next.
+The flags come before the url so that nothing follows the closing quote: a
+paste that breaks the line inside the quotes then loses nothing, which is the
+accident of 2026-09-03.
+Each run prints one line before the window opens, naming the wait and the file
+it will write; if that line does not say `waiting 20s` and the file you asked
+for, stop and check what the shell delivered rather than letting the run stand.
 
 Each run opens a window; leave it alone and let it close itself.
 Send back four files: `tpt.json`, `tpt.html`, `tes.json` and `tes.html`.

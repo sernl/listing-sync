@@ -18,8 +18,17 @@ const PROBE_JS: &str = include_str!("probe.js");
 const US: char = '\u{1f}';
 const IPC_GRACE: Duration = Duration::from_secs(20);
 
+const DEFAULT_WAIT_SECS: u64 = 15;
+
 const USAGE: &str = "\
 login-probe <url> [--wait-secs N] [--out report.json]
+
+Flags may appear before or after <url>, in any order, and each takes either
+`--flag value` or `--flag=value`. Anything else is a usage error: exit status
+2, raised before the window opens and naming the argument, so a flag that a
+shell mangled or dropped is never silently ignored. Quote the url by itself;
+a url carrying whitespace is refused for the same reason. The report records
+the argv it was given, so a mangled invocation stays visible afterwards.
 
 Opens <url> in the OS webview, waits N seconds (default 15) for redirects and
 challenges to settle, then reads the page and writes a JSON report plus the
@@ -33,6 +42,9 @@ struct Config {
     wait_secs: u64,
     report_path: PathBuf,
     html_path: PathBuf,
+    /// The arguments as received, before parsing, so that a report carries the
+    /// evidence of how the tool was actually invoked.
+    argv: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -108,8 +120,10 @@ fn run() -> Result<(), String> {
     });
 
     eprintln!(
-        "login-probe: {} — waiting {}s for the page to settle",
-        cfg.url, cfg.wait_secs
+        "login-probe: {} — waiting {}s for the page to settle, writing {}",
+        cfg.url,
+        cfg.wait_secs,
+        cfg.report_path.display()
     );
 
     let mut page: Option<Page> = None;
@@ -150,35 +164,92 @@ fn run() -> Result<(), String> {
     });
 }
 
-fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Option<Config>, String> {
-    let mut url: Option<String> = None;
-    let mut wait_secs: u64 = 15;
-    let mut out: Option<PathBuf> = None;
+fn usage_error(msg: impl std::fmt::Display) -> String {
+    format!("{msg}\n\n{USAGE}")
+}
 
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
+/// Splits `--flag=value` into its two halves. Only a token already shaped like
+/// a long flag is split, so a url whose query string carries `=` is untouched.
+fn split_inline(arg: &str) -> (&str, Option<&str>) {
+    match arg.split_once('=') {
+        Some((name, value)) if name.starts_with("--") => (name, Some(value)),
+        _ => (arg, None),
+    }
+}
+
+/// A flag's value, from `--flag=value` or from the following token. A missing
+/// value, an empty one, or a following token that is itself a flag is an error
+/// rather than a silently borrowed neighbour.
+fn flag_value<'a>(
+    name: &str,
+    inline: Option<&'a str>,
+    rest: &mut impl Iterator<Item = &'a str>,
+) -> Result<&'a str, String> {
+    match inline {
+        Some("") => Err(format!("{name} was given an empty value")),
+        Some(value) => Ok(value),
+        None => match rest.next() {
+            Some(value) if !value.starts_with('-') => Ok(value),
+            Some(value) => Err(format!("{name} needs a value, and {value:?} is a flag")),
+            None => Err(format!("{name} needs a value")),
+        },
+    }
+}
+
+fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Option<Config>, String> {
+    let argv: Vec<String> = args.into_iter().collect();
+    let mut url: Option<&str> = None;
+    let mut wait_secs: u64 = DEFAULT_WAIT_SECS;
+    let mut out: Option<PathBuf> = None;
+    let mut rest = argv.iter().map(String::as_str);
+
+    while let Some(arg) = rest.next() {
+        let (name, inline) = split_inline(arg);
+        match name {
             "-h" | "--help" => return Ok(None),
             "--wait-secs" => {
-                let v = args.next().ok_or("--wait-secs needs a value")?;
-                wait_secs = v
+                let value = flag_value(name, inline, &mut rest).map_err(usage_error)?;
+                wait_secs = value
                     .parse()
-                    .map_err(|_| format!("--wait-secs: {v} is not a number"))?;
+                    .map_err(|_| usage_error(format!("--wait-secs: {value:?} is not a number")))?;
             }
-            "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a value")?)),
-            other if other.starts_with('-') => return Err(format!("unknown flag: {other}")),
-            other if url.is_none() => url = Some(other.to_string()),
-            other => return Err(format!("unexpected argument: {other}")),
+            "--out" => {
+                out = Some(PathBuf::from(
+                    flag_value(name, inline, &mut rest).map_err(usage_error)?,
+                ));
+            }
+            _ if arg.starts_with('-') => {
+                return Err(usage_error(format!("unrecognised flag {arg:?}")))
+            }
+            _ if url.is_some() => {
+                return Err(usage_error(format!(
+                    "unexpected argument {arg:?}: the url is already {:?}",
+                    url.unwrap_or_default()
+                )))
+            }
+            _ => url = Some(arg),
         }
     }
 
-    let url = url.ok_or_else(|| format!("a url is required\n\n{USAGE}"))?;
+    let raw = url.ok_or_else(|| usage_error("a url is required"))?;
+    let trimmed = raw.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(usage_error(format!("the url argument {raw:?} is blank")));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(usage_error(format!(
+            "the url {trimmed:?} contains whitespace: quote the url by itself and pass each flag as its own argument"
+        )));
+    }
+
     let report_path = out.unwrap_or_else(|| PathBuf::from("report.json"));
     let html_path = report_path.with_extension("html");
     Ok(Some(Config {
-        url,
+        url: trimmed,
         wait_secs,
         report_path,
         html_path,
+        argv,
     }))
 }
 
@@ -267,20 +338,34 @@ fn write_report(
     if !html.is_empty() {
         write_beside(&cfg.html_path, html.as_bytes())?;
     }
+    write_beside(
+        &cfg.report_path,
+        render_report(cfg, outcome, page, html).as_bytes(),
+    )
+}
+
+fn render_report(cfg: &Config, outcome: &str, page: Option<&Page>, html: &str) -> String {
     let blank = Page::default();
     let p = page.unwrap_or(&blank);
+    let argv = cfg
+        .argv
+        .iter()
+        .map(|a| json_str(a))
+        .collect::<Vec<_>>()
+        .join(", ");
     let markers = p
         .markers
         .iter()
         .map(|m| json_str(m))
         .collect::<Vec<_>>()
         .join(", ");
-    let body = format!(
+    format!(
         concat!(
             "{{\n",
-            "  \"schema\": \"login-probe/1\",\n",
+            "  \"schema\": \"login-probe/2\",\n",
             "  \"timestamp_utc\": {},\n",
             "  \"os\": {},\n  \"arch\": {},\n  \"webview_stack\": {},\n",
+            "  \"argv\": [{}],\n",
             "  \"requested_url\": {},\n  \"wait_secs\": {},\n",
             "  \"verdict\": {},\n  \"outcome\": {},\n",
             "  \"final_url\": {},\n  \"title\": {},\n  \"user_agent\": {},\n",
@@ -294,6 +379,7 @@ fn write_report(
         json_str(std::env::consts::OS),
         json_str(std::env::consts::ARCH),
         json_str(WEBVIEW_STACK),
+        argv,
         json_str(&cfg.url),
         cfg.wait_secs,
         json_str(verdict(page)),
@@ -307,8 +393,7 @@ fn write_report(
         json_str(&p.body_text_head),
         html.len(),
         json_str(&cfg.html_path.display().to_string()),
-    );
-    write_beside(&cfg.report_path, body.as_bytes())
+    )
 }
 
 fn write_beside(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -393,6 +478,74 @@ mod tests {
         assert_eq!(iso8601_utc(1_709_164_800), "2024-02-29T00:00:00Z");
     }
 
+    /// The html needle table `probe.js` scans a page against, one row per line,
+    /// so that a test holds the same strings the page is matched on.
+    fn html_needles() -> Vec<(String, Vec<String>)> {
+        let table = PROBE_JS
+            .split_once("scan([")
+            .and_then(|(_, rest)| rest.split_once("], lowerHtml, 'html');"))
+            .expect("probe.js should carry an html marker table")
+            .0;
+        table
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("['"))
+            .filter_map(|row| row.split_once("', ["))
+            .map(|(label, needles)| {
+                let needles = needles
+                    .trim_end_matches([',', ']', ' '])
+                    .split(", ")
+                    .map(|n| n.trim_matches('\'').to_string())
+                    .collect();
+                (label.to_string(), needles)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_feature_flag_named_after_recaptcha_fires_no_marker() {
+        let table = html_needles();
+        assert!(
+            table.iter().any(|(label, _)| label == "recaptcha"),
+            "{table:?}"
+        );
+        for (label, needles) in &table {
+            for needle in needles {
+                assert_eq!(
+                    needle.to_lowercase(),
+                    *needle,
+                    "{label} needle {needle} can never match, because the html is lowercased first"
+                );
+            }
+        }
+
+        let flag = r#"{"taxonomytagsrc":true,"v-3-recaptcha-migration":true}"#;
+        for (label, needles) in &table {
+            for needle in needles {
+                assert!(
+                    !flag.contains(needle.as_str()),
+                    "{label} fires on {needle} in a feature-flag blob"
+                );
+            }
+        }
+
+        let recaptcha = table
+            .iter()
+            .find(|(label, _)| label == "recaptcha")
+            .map(|(_, needles)| needles.clone())
+            .unwrap_or_default();
+        for rendered in [
+            r#"<div class="g-recaptcha" data-sitekey="6le..."></div>"#,
+            r#"<script src="https://www.google.com/recaptcha/api.js"></script>"#,
+            r#"<script src="https://www.google.com/recaptcha/enterprise.js"></script>"#,
+            "grecaptcha.execute()",
+        ] {
+            assert!(
+                recaptcha.iter().any(|n| rendered.contains(n.as_str())),
+                "a rendered widget must still fire: {rendered}"
+            );
+        }
+    }
+
     #[test]
     fn json_escapes_quotes_controls_and_backslashes() {
         assert_eq!(json_str("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
@@ -461,33 +614,105 @@ mod tests {
         assert_eq!(verdict(None), "UNKNOWN");
     }
 
+    /// The Tes url, which carries `=` inside its query string and so is the
+    /// case that must never be mistaken for a `--flag=value` token.
+    const URL: &str =
+        "https://www.tes.com/authn/sign-in?rtn=https%3A%2F%2Fwww.tes.com%2Fteaching-resources";
+
+    fn parse(args: &[&str]) -> Result<Option<Config>, String> {
+        parse_args(args.iter().map(|a| (*a).to_string()))
+    }
+
+    fn parsed(args: &[&str]) -> Config {
+        parse(args)
+            .unwrap_or_else(|e| panic!("{args:?} should parse: {e}"))
+            .unwrap_or_else(|| panic!("{args:?} is not a help request"))
+    }
+
     #[test]
-    fn parse_args_defaults_and_overrides() {
-        let base = parse_args(["https://example.com".to_string()].into_iter())
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            (base.wait_secs, base.report_path.as_path()),
-            (15, Path::new("report.json"))
-        );
+    fn parse_args_defaults_to_fifteen_seconds_and_report_json() {
+        let base = parsed(&["https://example.com"]);
+        assert_eq!(base.wait_secs, DEFAULT_WAIT_SECS);
+        assert_eq!(base.report_path.as_path(), Path::new("report.json"));
         assert_eq!(base.html_path.as_path(), Path::new("report.html"));
+        assert_eq!(base.argv, vec!["https://example.com".to_string()]);
+    }
 
-        let tuned = parse_args(
-            [
-                "https://x/".into(),
-                "--wait-secs".into(),
-                "30".into(),
-                "--out".into(),
-                "a/b.json".into(),
-            ]
-            .into_iter(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(tuned.wait_secs, 30);
-        assert_eq!(tuned.html_path.as_path(), Path::new("a/b.html"));
+    #[test]
+    fn flags_are_accepted_before_or_after_the_url_in_either_form() {
+        let shapes: [&[&str]; 5] = [
+            &[URL, "--wait-secs", "20", "--out", "tpt.json"],
+            &["--wait-secs", "20", "--out", "tpt.json", URL],
+            &["--out", "tpt.json", URL, "--wait-secs", "20"],
+            &["--wait-secs=20", URL, "--out=tpt.json"],
+            &["--out=tpt.json", "--wait-secs", "20", URL],
+        ];
+        for shape in shapes {
+            let cfg = parsed(shape);
+            assert_eq!(cfg.url, URL, "{shape:?}");
+            assert_eq!(cfg.wait_secs, 20, "{shape:?}");
+            assert_eq!(
+                cfg.report_path.as_path(),
+                Path::new("tpt.json"),
+                "{shape:?}"
+            );
+            assert_eq!(cfg.html_path.as_path(), Path::new("tpt.html"), "{shape:?}");
+        }
+    }
 
-        assert!(parse_args(["--nope".to_string()].into_iter()).is_err());
-        assert!(parse_args(std::iter::empty()).is_err());
+    #[test]
+    fn a_url_pasted_with_a_leading_newline_is_trimmed_but_still_recorded() {
+        let pasted = "\nhttps://www.teacherspayteachers.com/Login";
+        let cfg = parsed(&[pasted]);
+        assert_eq!(cfg.url, "https://www.teacherspayteachers.com/Login");
+        assert_eq!(cfg.argv, vec![pasted.to_string()]);
+        assert_eq!(parsed(&[" \r\n https://x/ \t"]).url, "https://x/");
+    }
+
+    #[test]
+    fn an_argument_that_cannot_be_honoured_is_a_usage_error_naming_it() {
+        let cases: [(&[&str], &str); 12] = [
+            (&["https://x/", "--wait-secs"], "--wait-secs needs a value"),
+            (&["https://x/", "--out"], "--out needs a value"),
+            (&["https://x/", "--out", "--wait-secs", "20"], "is a flag"),
+            (&["https://x/", "--out="], "empty value"),
+            (&["https://x/", "--wait-secs", "soon"], "\"soon\""),
+            (&["https://x/", "--wait-sec", "20"], "\"--wait-sec\""),
+            (&["https://x/", "--nope=1"], "\"--nope=1\""),
+            (&["https://x/", "-w", "20"], "\"-w\""),
+            (&["https://x/", "https://y/"], "\"https://y/\""),
+            (&["https://x/ --wait-secs 20"], "contains whitespace"),
+            (&["  \n "], "is blank"),
+            (&[], "a url is required"),
+        ];
+        for (args, needle) in cases {
+            let err = parse(args).expect_err(&format!("{args:?} must be refused"));
+            assert!(err.contains(needle), "{args:?} produced {err}");
+            assert!(err.contains("login-probe <url>"), "{args:?} produced {err}");
+        }
+    }
+
+    #[test]
+    fn help_is_not_a_configuration() {
+        assert!(matches!(parse(&["-h"]), Ok(None)));
+        assert!(matches!(parse(&["https://x/", "--help"]), Ok(None)));
+    }
+
+    #[test]
+    fn the_report_records_the_argv_it_was_given() {
+        let cfg = Config {
+            url: "https://x/".into(),
+            wait_secs: 20,
+            report_path: PathBuf::from("tpt.json"),
+            html_path: PathBuf::from("tpt.html"),
+            argv: vec!["\nhttps://x/".into(), "--wait-secs".into(), "20".into()],
+        };
+        let body = render_report(&cfg, "reported", None, "");
+        assert!(
+            body.contains(r#""argv": ["\nhttps://x/", "--wait-secs", "20"]"#),
+            "{body}"
+        );
+        assert!(body.contains(r#""requested_url": "https://x/""#), "{body}");
+        assert!(body.contains(r#""wait_secs": 20"#), "{body}");
     }
 }

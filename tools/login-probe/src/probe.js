@@ -39,7 +39,7 @@
     ['cloudflare-interstitial', ['just a moment', 'cf-chl', '__cf_chl', 'cf_chl_opt', 'cdn-cgi/challenge-platform', 'cf-browser-verification', 'checking your browser']],
     ['cloudflare-turnstile', ['challenges.cloudflare.com', 'cf-turnstile']],
     ['hcaptcha', ['hcaptcha.com', 'h-captcha']],
-    ['recaptcha', ['recaptcha', 'g-recaptcha']],
+    ['recaptcha', ['g-recaptcha', 'grecaptcha', 'data-sitekey', 'recaptcha/api.js', 'recaptcha/enterprise.js']],
     ['datadome', ['captcha-delivery.com', 'datadome']],
     ['perimeterx', ['perimeterx', 'px-captcha', 'client.px-cloud.net']],
     ['akamai-bot-manager', ['_abck', 'bm_sz', 'ak_bmsc']],
