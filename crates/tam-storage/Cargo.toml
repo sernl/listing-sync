@@ -32,6 +32,12 @@ uuid = { version = "1", features = ["v4", "v5"] }
 proptest = "1"
 serde_json = "1"
 tam-taxonomy = { path = "../tam-taxonomy" }
+# Tests only, and only to run two transactions at once: a deadlock needs two,
+# and the lock order this crate documents cannot be proved with one. Same
+# version and features `tam-api` already uses for its own tests, so this is an
+# edge in the graph rather than a crate in it — sqlx already brings the runtime
+# these tests execute on.
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

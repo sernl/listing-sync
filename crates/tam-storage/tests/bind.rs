@@ -285,6 +285,72 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
     claim_lease(app).await
 }
 
+/// Puts the item back to a create, for a step that is genuinely one.
+///
+/// A create against a severed mapping is admitted, which is what makes the
+/// row reusable rather than orphaned, so the test that proves it needs the
+/// operation the production path would carry.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn make_it_a_create(engine: &PgPool) {
+    sqlx::query(
+        "UPDATE job_item SET operation = 'create', subject_kind = NULL, \
+             subject_url = NULL, subject_numeric_id = NULL, state_from = NULL, \
+             state_to = NULL",
+    )
+    .execute(engine)
+    .await
+    .expect("the item becomes a create again");
+}
+
+/// Makes the item a revise, which is what a landing on a mapping that is
+/// already bound belongs to when the listing is being changed rather than
+/// taken down.
+///
+/// Same reason as [`make_it_a_removal`]: `open` refuses a second create
+/// against a bound mapping. Which of the two a test wants is decided by what
+/// it is modelling, so the row matches the narrative rather than merely
+/// getting past the fence.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn make_it_a_revise(engine: &PgPool, url: &str) {
+    sqlx::query(
+        "UPDATE job_item SET operation = 'revise', subject_kind = 'tes', \
+             subject_url = $1, state_from = 'draft', state_to = 'live'",
+    )
+    .bind(url)
+    .execute(engine)
+    .await
+    .expect("the item becomes a revise");
+}
+
+/// Makes the item a removal, which is what a second landing on a bound
+/// mapping belongs to in production.
+///
+/// `WriteAttemptRepo::open` re-checks admission since 2026-09-03, so a create
+/// cannot open an attempt against a mapping that is already bound — that is
+/// the duplicate-listing fence. These tests are about what a landing does to
+/// the mapping rather than about admission, and the landings they model reach
+/// a bound mapping through a revise or a removal.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn make_it_a_removal(engine: &PgPool, url: &str) {
+    sqlx::query(
+        "UPDATE job_item SET operation = 'remove', subject_kind = 'tes', \
+             subject_url = $1, state_from = 'draft', state_to = NULL",
+    )
+    .bind(url)
+    .execute(engine)
+    .await
+    .expect("the item becomes a removal");
+}
+
 /// One whole write attempt: opened against the mapping, then settled
 /// committed with whatever the write did to the listing it addressed.
 async fn settle_attempt(
@@ -389,6 +455,7 @@ async fn re_landing_the_same_listing_preserves_first_seen(app: PgPool) {
         "the setup landing binds before the re-land under test runs"
     );
 
+    make_it_a_revise(&engine, LANDED).await;
     let again = land(&engine, &lease, MAPPING, Some(tes(LANDED)), RELANDED_AT)
         .await
         .expect("the second settle runs");
@@ -426,6 +493,7 @@ async fn a_divergent_landing_is_reported_never_written(app: PgPool) {
         "the setup landing binds before the divergent one under test runs"
     );
 
+    make_it_a_revise(&engine, LANDED).await;
     let divergent = land(&engine, &lease, MAPPING, Some(tes(ELSEWHERE)), RELANDED_AT)
         .await
         .expect("the second settle runs");
@@ -479,6 +547,7 @@ async fn a_relanding_records_the_lifecycle_the_read_observed(app: PgPool) {
         "the create binds the mapping as a draft before the publish under test runs"
     );
 
+    make_it_a_revise(&engine, LANDED).await;
     let published = settle_attempt(
         &engine,
         &lease,
@@ -718,6 +787,7 @@ async fn a_committed_removal_severs_and_releases_the_bound_claim(app: PgPool) {
         "the removal needs a binding to sever"
     );
 
+    make_it_a_removal(&engine, LANDED).await;
     let severed = settle_attempt(
         &engine,
         &lease,
@@ -795,6 +865,7 @@ async fn a_sever_of_a_mapping_rebound_elsewhere_is_refused_not_written(app: PgPo
         "the mapping holds a listing other than the one the removal took down"
     );
 
+    make_it_a_removal(&engine, LANDED).await;
     let refused = settle_attempt(
         &engine,
         &lease,
@@ -837,6 +908,7 @@ async fn a_severed_mapping_re_creates_through_the_same_row(app: PgPool) {
         BindDisposition::Bound,
         "the removal needs a binding to sever"
     );
+    make_it_a_removal(&engine, LANDED).await;
     assert_eq!(
         settle_attempt(
             &engine,
@@ -851,6 +923,10 @@ async fn a_severed_mapping_re_creates_through_the_same_row(app: PgPool) {
         "the re-create needs a severed row to reuse"
     );
 
+    // Back to a create for the step this test exists to prove: a create
+    // against a severed mapping is admitted, which is what makes the row
+    // reusable rather than orphaned.
+    make_it_a_create(&engine).await;
     let rebound = land(&engine, &lease, MAPPING, Some(tes(ELSEWHERE)), RELANDED_AT)
         .await
         .expect("the re-create settles");

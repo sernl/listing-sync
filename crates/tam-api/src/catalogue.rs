@@ -806,6 +806,7 @@ pub(crate) async fn create_product(
                 | StorageError::StaleLease
                 | StorageError::DuplicateIdempotencyKey { .. }
                 | StorageError::AttemptInFlight
+                | StorageError::MappingAlreadyBound
                 | StorageError::ListingAlreadyBound) => storage_fault(&state, &other),
             })?;
         recorded += usize::from(wrote);
@@ -838,6 +839,7 @@ fn create_fault(state: &AppState, error: &StorageError) -> APIError {
         | StorageError::StaleLease
         | StorageError::DuplicateIdempotencyKey { .. }
         | StorageError::AttemptInFlight
+        | StorageError::MappingAlreadyBound
         | StorageError::ListingAlreadyBound) => storage_fault(state, other),
     }
 }

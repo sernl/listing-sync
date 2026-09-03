@@ -81,6 +81,20 @@ export type DeviceSessionStatus =
   | "signed_out"
   | "wiped";
 
+export type BlockedGate =
+  | "reconciliation"
+  | "election"
+  | "currency_unknown"
+  | "cover_missing"
+  | "scan_incomplete"
+  | "awaiting_counterpart"
+  | "binding"
+  | "unbound"
+  | "subject_diverged"
+  | "lifecycle_diverged"
+  | "ReauthRequired"
+  | "awaiting_seller_signin";
+
 export type ItemState =
   | "queued"
   | "leased"
@@ -215,6 +229,7 @@ export type JobEventKind =
   | "ItemActionFinished"
   | "ItemBlocked"
   | "ItemParked"
+  | "ItemGateChanged"
   | "ItemResumed"
   | "ItemSettled"
   | "JobSettled"
@@ -231,6 +246,7 @@ export const JOB_EVENT_KINDS: readonly JobEventKind[] = [
   "ItemActionFinished",
   "ItemBlocked",
   "ItemParked",
+  "ItemGateChanged",
   "ItemResumed",
   "ItemSettled",
   "JobSettled",

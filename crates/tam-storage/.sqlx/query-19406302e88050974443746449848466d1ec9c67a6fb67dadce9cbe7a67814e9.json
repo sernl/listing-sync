@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT w.org_id, w.id, w.job_item_id, w.mapping_id, w.state, w.opened_at, w.settled_at, w.failure_code AS \"failure_code!\", w.ambiguity_cause, i.failure_code AS item_failure_code, i.failure_detail AS item_failure_detail FROM write_attempt w JOIN job_item i ON i.org_id = w.org_id AND i.id = w.job_item_id WHERE w.failure_code IS NOT NULL ORDER BY w.opened_at DESC, w.id DESC LIMIT $1",
+  "query": "SELECT w.org_id, w.id, w.job_item_id, w.mapping_id, w.state, w.opened_at, w.settled_at, w.failure_code, w.ambiguity_cause, i.failure_code AS item_failure_code, i.failure_detail AS item_failure_detail FROM write_attempt w JOIN job_item i ON i.org_id = w.org_id AND i.id = w.job_item_id WHERE w.failure_code IS NOT NULL OR (w.state = 'in_flight' AND (w.lease_epoch < i.lease_epoch OR i.state NOT IN ('leased', 'running', 'verifying'))) ORDER BY (w.state = 'in_flight' AND w.failure_code IS NULL) DESC, w.opened_at DESC, w.id DESC LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       },
       {
         "ordinal": 7,
-        "name": "failure_code!",
+        "name": "failure_code",
         "type_info": "Text"
       },
       {
@@ -78,5 +78,5 @@
       true
     ]
   },
-  "hash": "f897d910730345b7b135e533e92f6855cd80a000288259255119b6578de89b17"
+  "hash": "19406302e88050974443746449848466d1ec9c67a6fb67dadce9cbe7a67814e9"
 }

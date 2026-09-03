@@ -16,10 +16,11 @@ use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_storage::{
-    revive_by_gap, revive_on, settle_if_complete, AttemptIntent, BudgetGrant, Charged, ClaimPolicy,
-    ConnectionAudit, DeviceClaim, DeviceRef, HaltCause, HaltRepo, ItemVerdict, JobReadRepo,
-    JobRepo, LeaseRepo, LeasedItem, MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
-    OutboxRepo, ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, REAUTH_REQUIRED,
+    revive_by_gap, revive_on, settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict,
+    BudgetGrant, Charged, ClaimPolicy, ConnectionAudit, DeviceClaim, DeviceRef, HaltCause,
+    HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LandingEffect, LeaseRepo, LeasedItem, MappingRepo,
+    NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo,
+    StorageError, WriteAttemptRepo, AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -392,7 +393,8 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
         leases
             .revive_expired(Timestamp(T0.0 + 500), ATTEMPTS_MAX)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         0,
         "a park that has not expired is not the unparker's business"
     );
@@ -406,7 +408,8 @@ async fn an_expired_park_revives_on_a_gate_a_drained_queue_clears(app: PgPool) {
         leases
             .revive_expired(Timestamp(T0.0 + 2_000), ATTEMPTS_MAX)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         1,
         "an expired projection park requeues into a clean retry"
     );
@@ -461,7 +464,8 @@ async fn a_gate_that_never_clears_settles_into_a_row_the_item_page_can_still_rea
         leases
             .revive_expired(Timestamp(T0.0 + 2_000), 1)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         0,
         "the give-up arm settles rather than resumes, so nothing is counted as revived"
     );
@@ -511,7 +515,8 @@ async fn an_expired_challenge_park_is_left_where_the_driver_put_it(app: PgPool) 
         leases
             .revive_expired(Timestamp(T0.0 + 2_000), ATTEMPTS_MAX)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         0,
         "a challenge park still holds an in-flight write attempt, so reviving it would burn \
          the attempt budget and settle the item failed a day later with nothing to explain it"
@@ -1647,7 +1652,8 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
         leases
             .revive_expired(Timestamp(T0.0 + 2_000), ATTEMPTS_MAX)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         0,
         "the connection is still unusable, so the park stands however long the clock runs"
     );
@@ -1662,7 +1668,8 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
         leases
             .revive_expired(Timestamp(T0.0 + 3_000), ATTEMPTS_MAX)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         1,
         "the re-linked marketplace's item requeues, and only that one"
     );
@@ -1764,12 +1771,21 @@ async fn a_relinked_create_stays_parked_behind_its_own_duplicate_fence(app: PgPo
         .await
         .expect("the connection gates");
     relink(&engine, tenant.org, "tes").await;
+    // The park age is stated rather than left to elapse. The park-age arm
+    // moves an aged-out create to `awaiting_seller_signin`, and this test is
+    // about the re-link arm leaving a create alone, so a park that expired
+    // while the test ran would assert the wrong thing intermittently.
+    sqlx::query("UPDATE job_item SET park_expires_at = now() + interval '1 day'")
+        .execute(&engine)
+        .await
+        .expect("the park is held open for the duration of this test");
 
     assert_eq!(
         leases
             .revive_expired(Timestamp(T0.0 + 3_000), ATTEMPTS_MAX)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         0,
         "a create is excluded from the re-link arm, so the re-link revives nothing"
     );
@@ -1844,7 +1860,8 @@ async fn a_released_publish_names_no_listing(app: PgPool) {
         leases
             .revive_expired(Timestamp(T0.0 + 3_000), ATTEMPTS_MAX)
             .await
-            .expect("the unparker runs"),
+            .expect("the unparker runs")
+            .requeued,
         1,
         "a publish is not a create, so the re-link resumes it"
     );
@@ -2643,4 +2660,549 @@ async fn a_charge_from_a_run_that_no_longer_holds_the_item_is_refused(app: PgPoo
         "a run that lost the item cannot charge an attempt against it, or a steal would \
          cost the item two"
     );
+}
+
+/// A create whose mapping was bound while it ran is refused at `open`.
+///
+/// `prepare_item` already refuses a create against a bound mapping, so the
+/// only way to reach this is for the bind to land between that check and this
+/// write: a concurrent run, or a lease stolen and re-offered. The refusal is
+/// distinct from `AttemptInFlight` because it is permanent — the listing
+/// exists — and the interpreter settles rather than abandons on it.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_create_against_a_mapping_bound_since_admission_is_refused_at_open(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xD1, true).await;
+    enqueue_one(&engine, &tenant, 0xD2, 0xD3).await;
+    let held = claim(&app, tenant.org, "creating-device", 60)
+        .await
+        .expect("the item leases");
+
+    // The bind lands after this run was admitted, which is the whole window
+    // the re-check exists to close.
+    sqlx::query(
+        "UPDATE mapping SET binding_state = 'bound', remote_id_kind = 'tes', \
+             remote_url = 'https://www.tes.com/teaching-resource/x-1', \
+             first_seen_at = now(), verify_stale_since = now()",
+    )
+    .execute(&engine)
+    .await
+    .expect("another run binds the mapping");
+
+    let opened = WriteAttemptRepo::new(engine.clone())
+        .open(
+            &held.lease_ref(),
+            tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: held.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await;
+    assert!(
+        matches!(opened, Err(StorageError::MappingAlreadyBound)),
+        "the create is refused with the reason that names it, not with the in-flight \
+         fence and not by succeeding: {opened:?}"
+    );
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM write_attempt")
+        .fetch_one(&engine)
+        .await
+        .expect("the attempts read");
+    assert_eq!(
+        attempts, 0,
+        "and nothing was written, so the refusal is the whole of what happened"
+    );
+}
+
+/// A create parked on reauth leaves the park for a gate the seller can act
+/// on, and nothing else moves.
+///
+/// The fence is the point. The attempt stays in flight because releasing it
+/// is the only thing standing between this seller and a second live listing;
+/// the mapping stays bound to nothing; the item stays parked and is charged
+/// no attempt. What changes is the one thing that can change safely: what the
+/// seller is told.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_create_parked_on_reauth_leaves_the_park_for_a_gate_the_seller_can_act_on(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xE1, true).await;
+    enqueue_one(&engine, &tenant, 0xE2, 0xE3).await;
+    let held = claim(&app, tenant.org, "parking-device", 60)
+        .await
+        .expect("the item leases");
+    let leases = LeaseRepo::new(engine.clone());
+    leases
+        .park(&held.lease_ref(), REAUTH_REQUIRED, 1)
+        .await
+        .expect("the create parks on reauth");
+    // An attempt left standing, as the submit path leaves one.
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &held.lease_ref(),
+            tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: held.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the attempt opens");
+    sqlx::query("UPDATE job_item SET park_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the park ages out");
+
+    leases
+        .revive_expired(T0, ATTEMPTS_MAX)
+        .await
+        .expect("the revive pass runs");
+
+    let (state, gate, attempts, expires): (String, Option<String>, i32, bool) = sqlx::query_as(
+        "SELECT state, blocked_on, attempt_count, park_expires_at IS NOT NULL FROM job_item",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), gate.as_deref()),
+        ("parked_live", Some(AWAITING_SELLER_SIGNIN)),
+        "the item stays parked and now names the one thing that clears it"
+    );
+    assert!(
+        !expires,
+        "and it carries no expiry, because no clock opens this gate"
+    );
+    assert_eq!(
+        attempts, held.attempt_count,
+        "no attempt is charged: the seller not having signed in is not the item failing"
+    );
+    let in_flight: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM write_attempt WHERE state = 'in_flight'")
+            .fetch_one(&engine)
+            .await
+            .expect("the attempts read");
+    assert_eq!(
+        in_flight, 1,
+        "the attempt is still standing, which is the fence against a second live listing \
+         and the whole reason this is not a revive"
+    );
+}
+
+/// The park-age arm is for creates, and leaves everything else alone.
+///
+/// A revise or a removal parked on `ReauthRequired` has a resolution a create
+/// does not: it can simply be re-run once the seller signs in, because
+/// re-applying the same fields or re-deleting something already gone is safe.
+/// The re-link arm exists for exactly that, so moving one to
+/// `awaiting_seller_signin` would take it out of the arm that can actually
+/// clear it and strand work that was never stuck.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_park_age_arm_leaves_a_revise_for_the_re_link_arm(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xE7, true).await;
+    enqueue_operation(
+        &engine,
+        &tenant,
+        0xE8,
+        0xE9,
+        ItemOperation::Revise {
+            subject: RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/x-7".to_owned(),
+            },
+            transition: LifecycleTransition {
+                from: ListingState::Draft,
+                to: ListingState::Live,
+            },
+        },
+    )
+    .await;
+    let held = claim(&app, tenant.org, "revising-device", 60)
+        .await
+        .expect("the item leases");
+    let leases = LeaseRepo::new(engine.clone());
+    leases
+        .park(&held.lease_ref(), REAUTH_REQUIRED, 1)
+        .await
+        .expect("the revise parks on reauth");
+    sqlx::query("UPDATE job_item SET park_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the park ages out");
+    relink(&engine, tenant.org, "tes").await;
+
+    leases
+        .revive_expired(T0, ATTEMPTS_MAX)
+        .await
+        .expect("the revive pass runs");
+
+    let (state, gate): (String, Option<String>) =
+        sqlx::query_as("SELECT state, blocked_on FROM job_item")
+            .fetch_one(&engine)
+            .await
+            .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), gate),
+        ("queued", None),
+        "the revise is revived by the re-link arm rather than re-labelled by the \
+         park-age arm, which is what the operation predicate on that arm is for"
+    );
+}
+
+/// The lock order holds under a forced overlap.
+///
+/// How the overlap is forced, since a `join!` alone leaves it to the
+/// scheduler and would only sometimes overlap. A test-held transaction plays
+/// the settle's lock sequence: it takes the in-flight `write_attempt` row
+/// first, exactly as `settle` does, and then pauses. The real `open` runs
+/// against that. Only when `open` is observably waiting — read out of
+/// `pg_stat_activity` rather than slept for — does the held transaction reach
+/// for the mapping, which is `settle`'s second lock.
+///
+/// That is what makes it discriminate. With the order this crate documents,
+/// `open` inserts its row first and blocks there on the held attempt row,
+/// holding no mapping lock; the held transaction takes the mapping
+/// unopposed, commits, and `open` proceeds. With the order reversed, `open`
+/// would hold the mapping and wait for the attempt row while the held
+/// transaction waits for the mapping — a cycle, and Postgres kills one of
+/// them. There is no retry on this path, so the victim would be a create that
+/// may already have reached the marketplace and can no longer record that it
+/// did.
+///
+/// The reversed variant is not run: it is the code this prevents rather than
+/// a branch of it. Reverse the two statements in `open_asserted` and this
+/// test fails with a deadlock, every time.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_lock_order_holds_when_a_settle_and_an_open_overlap(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xF1, true).await;
+    enqueue_one(&engine, &tenant, 0xF2, 0xF3).await;
+    let held = claim(&app, tenant.org, "racing-device", 60)
+        .await
+        .expect("the item leases");
+    let first = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &held.lease_ref(),
+            first,
+            &NewAttempt {
+                mapping: held.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the first attempt opens");
+
+    let settling = engine_pool(&app).await;
+    let mut settle_like = settling
+        .begin()
+        .await
+        .expect("the settle-like transaction opens");
+    sqlx::query("SELECT id FROM write_attempt WHERE org_id = $1 AND id = $2 FOR UPDATE")
+        .bind(uuid::Uuid::from_bytes(tenant.org.0 .0))
+        .bind(uuid::Uuid::from_bytes(first.0))
+        .fetch_one(&mut *settle_like)
+        .await
+        .expect("it takes the attempt row, which is what settle takes first");
+
+    let opening = WriteAttemptRepo::new(engine.clone());
+    let lease = held.lease_ref();
+    let mapping = held.mapping;
+    let intent = intent();
+    let stamp = Stamp {
+        at: T0,
+        actor: Actor::System(SystemComponent::Engine),
+    };
+    let waiting = engine_pool(&app).await;
+    let second = NewAttempt {
+        mapping,
+        intent: &intent,
+        stamp,
+    };
+    let second_id = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
+    let (opened, ()) = tokio::join!(opening.open(&lease, second_id, &second), async {
+        // Wait for the open to be observably blocked rather than sleeping
+        // for a guessed interval, so the overlap is a fact rather than a
+        // hope. Then take the mapping, which is settle's second lock.
+        for _ in 0..600 {
+            let blocked: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity \
+                     WHERE wait_event_type = 'Lock' AND query ILIKE '%write_attempt%'",
+            )
+            .fetch_one(&waiting)
+            .await
+            .unwrap_or(0);
+            if blocked > 0 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        sqlx::query("SELECT id FROM mapping WHERE org_id = $1 AND id = $2 FOR UPDATE")
+            .bind(uuid::Uuid::from_bytes(tenant.org.0 .0))
+            .bind(uuid::Uuid::from_bytes(mapping.0 .0))
+            .fetch_one(&mut *settle_like)
+            .await
+            .expect(
+                "the settle-like transaction takes the mapping second; a deadlock here \
+                     is the lock order inverted",
+            );
+        settle_like
+            .commit()
+            .await
+            .expect("and commits, releasing both");
+    },);
+
+    if let Err(error) = opened {
+        assert!(
+            matches!(
+                error,
+                StorageError::AttemptInFlight | StorageError::MappingAlreadyBound
+            ),
+            "the open is refused by a fence if at all, never by the deadlock detector: \
+             {error:?}"
+        );
+    }
+}
+
+/// A settle and an open on the same mapping run at once without deadlocking.
+///
+/// Both take the `write_attempt` row and then the `mapping` row, and this is
+/// what holds them to it. The reversed variant cannot be run — it is the code
+/// this test exists to prevent, not a branch of it — so what is asserted is
+/// the consequence: two transactions racing on one mapping both return, one
+/// possibly refused by a fence, neither killed by the deadlock detector.
+///
+/// Why that mattered enough to add a dev-dependency for: with `open` taking
+/// the mapping first, a settle holding the attempt row and wanting the mapping
+/// met an open holding the mapping and wanting the attempt row. Postgres
+/// resolves that by killing one, there is no retry on this path, and the
+/// victim is a create that may already have reached the marketplace and can no
+/// longer record that it did — the one failure this ledger cannot undo.
+///
+/// Two pool connections and `join!` rather than one: a single connection
+/// serialises the two into something that cannot reproduce it at all.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_settle_and_an_open_on_one_mapping_do_not_deadlock(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xF1, true).await;
+    enqueue_one(&engine, &tenant, 0xF2, 0xF3).await;
+    let held = claim(&app, tenant.org, "racing-device", 60)
+        .await
+        .expect("the item leases");
+    let first = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &held.lease_ref(),
+            first,
+            &NewAttempt {
+                mapping: held.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the first attempt opens");
+
+    let settling = WriteAttemptRepo::new(engine.clone());
+    let opening = WriteAttemptRepo::new(engine_pool(&app).await);
+    let lease = held.lease_ref();
+    let mapping = held.mapping;
+    let verdict = AttemptVerdict {
+        state: "committed".to_owned(),
+        failure_code: None,
+        landing: LandingEffect::Landed {
+            id: RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/x-9".to_owned(),
+            },
+            lifecycle: RemoteLifecycle::Draft,
+        },
+    };
+    let racing = AttemptRef {
+        attempt: first,
+        mapping,
+    };
+    let intent = intent();
+    let stamp = Stamp {
+        at: T0,
+        actor: Actor::System(SystemComponent::Engine),
+    };
+    let second = NewAttempt {
+        mapping,
+        intent: &intent,
+        stamp,
+    };
+    let opened_id = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
+    let (settled, opened) = tokio::join!(
+        settling.settle(&lease, racing, &verdict, T0),
+        opening.open(&lease, opened_id, &second),
+    );
+
+    drop(settled.expect("the settle completes rather than being killed as a deadlock victim"));
+    if let Err(error) = opened {
+        assert!(
+            matches!(
+                error,
+                StorageError::AttemptInFlight | StorageError::MappingAlreadyBound
+            ),
+            "the open is refused by a fence if at all, never by the deadlock detector: \
+             {error:?}"
+        );
+    }
+}
+
+/// An attempt naming a mapping its item does not is refused.
+///
+/// The item's mapping is the server's, read under the lease; the caller's is
+/// data. Without this the two are never compared, so a device could open a
+/// fencing row against a mapping it was not leased for — and the fence that
+/// stops a duplicate listing is per mapping, so a row filed under the wrong
+/// one fences nothing.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_attempt_naming_a_mapping_its_item_does_not_is_refused(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xD7, true).await;
+    enqueue_one(&engine, &tenant, 0xD8, 0xD9).await;
+    let held = claim(&app, tenant.org, "confused-device", 60)
+        .await
+        .expect("the item leases");
+    // A real mapping of this tenant's, on another inventory, so the foreign
+    // key is satisfied and the only thing wrong is that it is not the
+    // mapping this item names. A mapping that did not exist at all would be
+    // refused by the key before the check ran, which would prove nothing.
+    let other = seed_mapping_on(&app, &tenant, 0xDA, InventoryId::TesUs).await;
+
+    let opened = WriteAttemptRepo::new(engine.clone())
+        .open(
+            &held.lease_ref(),
+            tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: other,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await;
+    assert!(
+        matches!(opened, Err(StorageError::Inconsistent { .. })),
+        "the caller's mapping is compared against the item's rather than trusted: {opened:?}"
+    );
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM write_attempt")
+        .fetch_one(&engine)
+        .await
+        .expect("the attempts read");
+    assert_eq!(
+        attempts, 0,
+        "and the insert is rolled back, so a refused open leaves no row filed under \
+         either mapping"
+    );
+}
+
+/// The park exit records what happened, and what happened is the gate moving.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_park_exit_records_the_gate_it_moved_to(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xEA, true).await;
+    enqueue_one(&engine, &tenant, 0xEB, 0xEC).await;
+    let held = claim(&app, tenant.org, "parked-device", 60)
+        .await
+        .expect("the item leases");
+    let leases = LeaseRepo::new(engine.clone());
+    leases
+        .park(&held.lease_ref(), REAUTH_REQUIRED, 1)
+        .await
+        .expect("the create parks on reauth");
+    sqlx::query("UPDATE job_item SET park_expires_at = now() - interval '1 hour'")
+        .execute(&engine)
+        .await
+        .expect("the park ages out");
+
+    leases
+        .revive_expired(T0, ATTEMPTS_MAX)
+        .await
+        .expect("the revive pass runs");
+
+    let (kind, payload): (String, serde_json::Value) =
+        sqlx::query_as("SELECT kind, payload FROM job_event ORDER BY org_seq DESC LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the newest event reads");
+    assert_eq!(
+        kind, "ItemGateChanged",
+        "the timeline says the gate moved, not that a second park began"
+    );
+    assert_eq!(
+        payload["gate"], AWAITING_SELLER_SIGNIN,
+        "and it names the gate the item moved to, which is the whole of what changed: \
+         {payload}"
+    );
+}
+
+/// A replay after the original bound the mapping still answers the attempt it
+/// already has.
+///
+/// The admission re-check runs when the insert writes, and only then. A caller
+/// re-offering an id it already opened is recovering a lost response, and the
+/// row it is asking about may since have committed and bound the mapping
+/// itself — so refusing the replay would tell a device its own committed
+/// create belonged to somebody else, and the recovery `open`'s idempotence
+/// exists for would be exactly the case that could not use it.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_replay_after_its_own_create_bound_the_mapping_is_still_idempotent(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xE3, true).await;
+    enqueue_one(&engine, &tenant, 0xE4, 0xE5).await;
+    let held = claim(&app, tenant.org, "recovering-device", 60)
+        .await
+        .expect("the item leases");
+    let attempts = WriteAttemptRepo::new(engine.clone());
+    let minted = tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes());
+    let new = NewAttempt {
+        mapping: held.mapping,
+        intent: &intent(),
+        stamp: Stamp {
+            at: T0,
+            actor: Actor::System(SystemComponent::Engine),
+        },
+    };
+    attempts
+        .open(&held.lease_ref(), minted, &new)
+        .await
+        .expect("the attempt opens");
+    // This run's own create landed and bound the mapping. The response was
+    // lost, so the device re-offers the id it minted.
+    sqlx::query(
+        "UPDATE mapping SET binding_state = 'bound', remote_id_kind = 'tes', \
+             remote_url = 'https://www.tes.com/teaching-resource/x-3', \
+             first_seen_at = now(), verify_stale_since = now()",
+    )
+    .execute(&engine)
+    .await
+    .expect("this run's create binds the mapping");
+
+    attempts.open(&held.lease_ref(), minted, &new).await.expect(
+        "the replay answers the attempt it already has; the bind it is being refused \
+             for is its own",
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM write_attempt")
+        .fetch_one(&engine)
+        .await
+        .expect("the attempts read");
+    assert_eq!(rows, 1, "and no second row is written");
 }

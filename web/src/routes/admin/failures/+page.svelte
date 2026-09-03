@@ -18,8 +18,8 @@
 <div class="page">
 	<PageHead
 		icon="✕"
-		title="Failed writes"
-		description="Write attempts that recorded a failure, newest first, across every tenant."
+		title="Failed and stranded writes"
+		description="Write attempts that recorded a failure, and attempts stranded in flight whose run is gone. Stranded first, then newest, across every tenant."
 	>
 		{#snippet aside()}
 			<span class="tag-note">newest 100</span>
@@ -64,7 +64,11 @@
 									<div class="s">{write.state}</div>
 								</td>
 								<td>
-									<span class="pill bad">{write.failure_code}</span>
+									{#if write.failure_code !== undefined}
+										<span class="pill bad">{write.failure_code}</span>
+									{:else}
+										<span class="pill run">in flight past its lease</span>
+									{/if}
 									{#if write.ambiguity_cause !== undefined}
 										<div class="s">{write.ambiguity_cause}</div>
 									{/if}

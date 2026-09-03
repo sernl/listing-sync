@@ -600,6 +600,27 @@ pub const fn seller_clears(challenge: ChallengeKind) -> bool {
     }
 }
 
+/// The gate a challenge parks on, where it parks at all.
+///
+/// Both seller-clearable challenges clear the same way, so both park on the
+/// gate that way opens. The driver writes `blocked_on` from this kind's debug
+/// form and `revive_expired`'s re-link arm matches `ReauthRequired` exactly,
+/// so parking a one-time password under its own name would be a park no
+/// re-link ever wakes. A challenge the seller cannot clear does not park at
+/// all, which is why this answers `None` rather than a gate nobody opens.
+///
+/// A function rather than a line inside `challenged`, because the storage
+/// crate's gate vocabulary rests on the answer and can now assert it instead
+/// of restating it.
+#[must_use]
+pub const fn park_gate_for(challenge: ChallengeKind) -> Option<ChallengeKind> {
+    if seller_clears(challenge) {
+        Some(ChallengeKind::ReauthRequired)
+    } else {
+        None
+    }
+}
+
 #[must_use]
 pub fn verification_settles(operation: &ItemOperation, observed: &ObservedListing) -> bool {
     let absent = matches!(observed.lifecycle, RemoteLifecycle::Absent);
@@ -1432,12 +1453,9 @@ impl SyncMachine {
             }
             return self.advance(SyncState::Terminal(Outcome::Blocked { challenge }), vec![]);
         }
-        // Both seller-clearable challenges clear the same way, so both park on
-        // the gate that way opens. The driver writes `blocked_on` from this
-        // effect's kind and `revive_expired`'s re-link arm matches
-        // `REAUTH_REQUIRED` exactly, so parking a one-time password under its
-        // own name would be a park no re-link ever wakes.
-        let gate = ChallengeKind::ReauthRequired;
+        let Some(gate) = park_gate_for(challenge) else {
+            return self.advance(SyncState::Terminal(Outcome::Blocked { challenge }), vec![]);
+        };
         let effects = vec![
             Effect::ParkItem {
                 item: self.item,

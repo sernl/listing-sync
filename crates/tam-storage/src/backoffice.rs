@@ -257,7 +257,10 @@ pub struct FailedWrite {
     pub state: String,
     pub opened_at: Timestamp,
     pub settled_at: Option<Timestamp>,
-    pub failure_code: FailureCode,
+    /// `None` where the attempt is still in flight: it has recorded no
+    /// failure and may yet record none, which is exactly why it needs an
+    /// operator.
+    pub failure_code: Option<FailureCode>,
     pub ambiguity_cause: Option<String>,
     pub item_failure_code: Option<FailureCode>,
     pub item_failure_detail: Option<String>,
@@ -451,17 +454,40 @@ impl BackofficeRepo {
         Ok(SyncHealth { jobs, items })
     }
 
-    /// Write attempts that recorded a failure, newest first, across tenants.
+    /// Write attempts an operator needs to see: those that recorded a
+    /// failure, and those stranded in flight.
+    ///
+    /// The second half is not decoration. A create's attempt is deliberately
+    /// left standing when a run cannot prove what happened — releasing it is
+    /// the only fence there is against a second live listing — so it is
+    /// invisible to a view keyed on `failure_code`, mapping-scoped, and
+    /// permanent until someone reconciles it.
+    ///
+    /// Stranded is defined against the lease rather than against the clock.
+    /// An elapsed time cannot say it: the heartbeat renews a lease for as
+    /// long as a device keeps working, so a healthy run holds its attempt
+    /// open well past one TTL and a clock-keyed view would report it as a
+    /// fault. The epoch does say it. An attempt whose `lease_epoch` is behind
+    /// its item's current one belonged to a run that has been superseded, and
+    /// one whose item is no longer in a live state belonged to a run that has
+    /// ended; either way the run that could have settled it is gone.
+    ///
+    /// Stranded rows sort first, because they are the oldest by construction
+    /// and would otherwise fall off the end of a newest-first page.
     pub async fn failed_writes(&self, limit: i64) -> Result<Vec<FailedWrite>, StorageError> {
         let rows = sqlx::query!(
             "SELECT w.org_id, w.id, w.job_item_id, w.mapping_id, w.state, \
-                    w.opened_at, w.settled_at, w.failure_code AS \"failure_code!\", \
+                    w.opened_at, w.settled_at, w.failure_code, \
                     w.ambiguity_cause, i.failure_code AS item_failure_code, \
                     i.failure_detail AS item_failure_detail \
              FROM write_attempt w \
              JOIN job_item i ON i.org_id = w.org_id AND i.id = w.job_item_id \
              WHERE w.failure_code IS NOT NULL \
-             ORDER BY w.opened_at DESC, w.id DESC LIMIT $1",
+                OR (w.state = 'in_flight' \
+                    AND (w.lease_epoch < i.lease_epoch \
+                         OR i.state NOT IN ('leased', 'running', 'verifying'))) \
+             ORDER BY (w.state = 'in_flight' AND w.failure_code IS NULL) DESC, \
+                      w.opened_at DESC, w.id DESC LIMIT $1",
             limit.clamp(1, MAX_ROWS),
         )
         .fetch_all(&self.pool)
@@ -476,7 +502,11 @@ impl BackofficeRepo {
                     state: row.state,
                     opened_at: timestamp_from_db(row.opened_at),
                     settled_at: row.settled_at.map(timestamp_from_db),
-                    failure_code: failure_code_from_db(&row.failure_code)?,
+                    failure_code: row
+                        .failure_code
+                        .as_deref()
+                        .map(failure_code_from_db)
+                        .transpose()?,
                     ambiguity_cause: row.ambiguity_cause,
                     item_failure_code: row
                         .item_failure_code

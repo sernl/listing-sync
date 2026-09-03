@@ -334,7 +334,11 @@ pub struct FailedWriteView {
     pub opened_at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settled_at: Option<Timestamp>,
-    pub failure_code: FailureCode,
+    /// Absent where the attempt is still in flight past the lease that
+    /// opened it, which is a row an operator needs and a failure code cannot
+    /// describe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<FailureCode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ambiguity_cause: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

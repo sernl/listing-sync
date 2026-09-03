@@ -141,6 +141,7 @@ fn every_ledger_answer_round_trips() {
     }
     for error in [
         LedgerError::AttemptInFlight,
+        LedgerError::MappingAlreadyBound,
         LedgerError::StaleLease,
         LedgerError::Refused {
             detail: "the aggregate is inconsistent".to_owned(),
@@ -382,6 +383,16 @@ fn every_ledger_call_and_answer_round_trips() {
         // than as transport faults, or a device retries what it must not.
         LedgerAnswer::Refused {
             error: LedgerError::AttemptInFlight,
+        },
+        // The refusal a create meets when the mapping was bound while it ran.
+        // It travels as an answer for the same reason the other two do, though
+        // the interpreter does something different with it: it abandons on
+        // `AttemptInFlight` and on `StaleLease`, and settles on this one,
+        // because a bound mapping is permanent for this item where the other
+        // two may clear. A device that saw any of the three as a transport
+        // fault would retry what it must not.
+        LedgerAnswer::Refused {
+            error: LedgerError::MappingAlreadyBound,
         },
         LedgerAnswer::Refused {
             error: LedgerError::StaleLease,

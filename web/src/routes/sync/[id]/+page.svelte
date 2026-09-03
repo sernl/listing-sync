@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { api, type ItemDetail, type ItemView, type JobView } from '$lib/api';
 	import { agoLabel } from '$lib/elapsed';
+	import { gateLabel } from '$lib/gates';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import { segments } from '$lib/outcome';
 	import PageHead from '$lib/PageHead.svelte';
@@ -126,7 +127,7 @@
 							<span class="pill mut">{item.outcome}</span>
 						{/if}
 						{#if item.blocked_on}
-							<span class="pill run">blocked on {item.blocked_on}</span>
+							<span class="pill run">blocked on {gateLabel(item.blocked_on)}</span>
 						{/if}
 						{#if item.failure_code}
 							<span class="pill bad">{item.failure_code}</span>

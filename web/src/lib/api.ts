@@ -395,7 +395,7 @@ export interface FailedWriteView {
 	state: string;
 	opened_at: number;
 	settled_at?: number;
-	failure_code: FailureCode;
+	failure_code?: FailureCode;
 	ambiguity_cause?: string;
 	item_failure_code?: FailureCode;
 	item_failure_detail?: string;

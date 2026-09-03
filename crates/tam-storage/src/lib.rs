@@ -55,8 +55,8 @@ pub use jobs::{
     Charged, ClaimPolicy, CreatedJob, DeviceClaim, DeviceRef, EventScope, HaltCause, HaltRepo,
     InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef,
     LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
-    OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, WriteAttemptRepo,
-    AWAITING_COUNTERPART, ELECTION, REAUTH_REQUIRED, REVIVABLE_GATES,
+    OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, Revived, WriteAttemptRepo, ALL_GATES,
+    AWAITING_COUNTERPART, AWAITING_SELLER_SIGNIN, ELECTION, REAUTH_REQUIRED, REVIVABLE_GATES,
 };
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
@@ -100,6 +100,14 @@ pub enum StorageError {
     DuplicateIdempotencyKey { key: uuid::Uuid },
     #[error("another write attempt is in flight for this mapping")]
     AttemptInFlight,
+    /// A create was refused at `open` because the mapping is already bound.
+    ///
+    /// Distinct from [`Self::AttemptInFlight`] because the caller must act
+    /// differently: an attempt in flight is a fence that may still clear,
+    /// while a bound mapping means the listing this create would have made
+    /// already exists, and no later run will change that.
+    #[error("that mapping is already bound, so this create has nothing to make")]
+    MappingAlreadyBound,
     /// A second mapping claims a listing another mapping already binds.
     ///
     /// Reachable through the ordinary seller path rather than only through a

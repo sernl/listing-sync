@@ -1245,7 +1245,10 @@ async fn every_write_this_endpoint_serves_lands_under_the_tenant_pin(pool: PgPoo
             "call": "halt_this_tenant", "lease": lease, "inventory": "TesGb",
             "reason": "a device asked for it", "at_ms": 1_756_000_031_000_i64,
         }),
-        serde_json::json!({ "call": "park", "lease": lease, "blocked_on": "reauth_required" }),
+        serde_json::json!({
+            "call": "park", "lease": lease,
+            "blocked_on": tam_storage::REAUTH_REQUIRED,
+        }),
     ];
     for body in calls {
         let name = body["call"].clone();
@@ -1531,4 +1534,42 @@ async fn fault(pool: &PgPool) -> StatusCode {
     )
     .await
     .status
+}
+
+/// A device cannot park an item on a gate the ledger does not know.
+///
+/// `blocked_on` carries no database constraint and the device names it, so an
+/// unchecked park would put a gate in the ledger that no revive arm matches
+/// and no console can label — a park nothing ever clears, written by the party
+/// the park is holding.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_park_on_a_gate_outside_the_vocabulary_is_refused(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    let answer = ledger_call(
+        &pool,
+        serde_json::json!({
+            "call": "park",
+            "lease": lease,
+            "blocked_on": "a_gate_of_my_own_invention",
+        }),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let answer: serde_json::Value =
+        serde_json::from_slice(&answer.body).expect("the answer parses");
+    assert_eq!(
+        answer["answer"], "refused",
+        "the gate is not one this ledger knows, so the park does not happen: {answer}"
+    );
+
+    let (state, gate): (String, Option<String>) =
+        sqlx::query_as("SELECT state, blocked_on FROM job_item")
+            .fetch_one(&engine_pool(&pool).await)
+            .await
+            .expect("the item reads");
+    assert_ne!(
+        state, "parked_live",
+        "and the item is left where it was rather than parked on a gate nothing clears"
+    );
+    assert_eq!(gate, None, "with no gate written");
 }

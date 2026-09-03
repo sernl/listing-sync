@@ -359,6 +359,44 @@ Proves each of the three stalls that a closed lid makes common rather than rare 
 Verification: revert-run-restore for each, so every fix has a test that fails on the reverted code.
 Kill gate: a give-up that settles an item the seller could still have revived by signing in.
 
+Step 12 landed as ruled, in three parts, and its own review found four more defects that landed with it.
+
+The operator view widened: `failed_writes` surfaces a stranded attempt beside the failures, and `failure_code` became optional through `FailedWrite`, `FailedWriteView`, the admin route and its page.
+Stranded is defined against the lease rather than the clock, and the first attempt at it was the clock: an attempt whose `lease_epoch` is behind its item's belonged to a run that has been superseded, and one whose item is no longer in a live state belonged to a run that has ended.
+A heartbeat renews for as long as a device keeps working, so elapsed time says nothing at all — a healthy run holds its attempt open well past one TTL.
+`a_stranded_attempt_reaches_an_operator_and_a_live_one_does_not` drives both disjuncts and asserts the ordering by index, because stranded rows are the oldest by construction and a newest-first page would push them off the end.
+
+Admission is re-checked at `open`.
+The operation and the mapping are read from `job_item` under the lease rather than taken from the caller, the mapping is read `FOR SHARE` inside `open`'s own transaction, and the refusal is its own answer, `LedgerError::MappingAlreadyBound`, which the interpreter settles skipped rather than abandoning: the mapping was bound after this run was admitted, so the listing exists and no later lease could make it again.
+The check runs only when the insert wrote a row, because a replay of a caller-minted id is a device recovering a lost response, and the bind it would be refused for may be its own.
+Six existing tests in `tam-storage::bind` had to change, and that is the finding rather than a side effect: each was modelling a second create against a mapping its own first landing had bound, which is the sequence this refuses.
+Three of them model a change and are revises; three model a takedown and are removals.
+
+A create parked on `ReauthRequired` past its park age leaves the park for `awaiting_seller_signin` and nothing else moves.
+The attempt stays in flight, the mapping stays fenced, no attempt is charged and nothing settles, because only a read-back under the seller's own session can decide whether the listing exists — that is step 12b, and until it lands the gate is a better label on the same stranded item rather than a remedy.
+`REVIVABLE_GATES` and its two guards are untouched.
+The transition is recorded as `ItemGateChanged`, a new payload variant, because `ItemParked` says a park began and when it ends and neither is true here.
+The gate vocabulary reaches the client through typegen as `BlockedGate`, so the console's label map is `Record<BlockedGate, string>` and a gate added in Rust without a label fails `svelte-check`.
+
+Four defects the review of this step found, all fixed here.
+`WriteAttemptRepo::open` was taking the mapping before the attempt row while `settle` takes them the other way round, which is a deadlock with no retry and a create that may already have landed as its victim; the module now states one lock order — `job_item`, then `write_attempt`, then `mapping` — names every method it binds, and `settle` takes the item row first to obey it.
+The park exit was recording a second park with an elapsed expiry and no gate.
+`revive_expired` was summing relabelled parks into its revival count, so a pass that revived nothing read as though it had.
+And the admission re-check was firing on the idempotent replay path.
+
+Proves the three stalls are each terminated by something a seller or an operator can see, or in the third case named for the step that will terminate it.
+Verification: revert-run-restore on each of the three; the label map proved exhaustive by deleting one entry and watching the type check fail; and the lock order proved by a forced overlap, a test-held transaction taking `settle`'s locks in `settle`'s order and waiting until the real `open` is observably blocked before reaching for the mapping.
+Kill gate: a gate reaching `blocked_on` that `ALL_GATES` does not name — detectable, because `the_gate_vocabulary_covers_every_gate_the_tree_writes` fails on a one-sided addition and the ledger refuses a device-named gate outside the vocabulary.
+
+Two things are recorded rather than fixed.
+The read-back reconciliation that finding 4 named is owed to 12b.
+And `open` compares no lease epoch in its own statement: it is fenced by `held_by` at the API, which is the same pre-existing gap the stolen-lease settle has, and closing both is one change rather than two.
+
+`tam-storage` gained one dev-dependency edge in the process, `tokio` at the version and features `tam-api`'s tests already use, granted because a deadlock needs two transactions and the lock order the module documents cannot be proved with one; sqlx already brings that runtime, so it is an edge in the graph rather than a crate in it.
+
+One process note for whoever does the next revert-run-restore here: reverting a change that touches SQL leaves the committed query cache holding the reverted statement, so `just db-prepare` has to run again after restoring.
+It costs one red `check` that looks exactly like a real failure.
+
 Step 13, the entitlement gate inside the loop.
 `AssertFormSchema` consumes a rate grant (finding 12), and the per-effect entitlement check sits at the four network-bearing effects and in `verify_with_backoff`'s per-try preamble, producing the shape `BudgetGrant::Exhausted` already produces rather than a new terminal outcome.
 Two additions ruled during step 11 belong here.
@@ -377,6 +415,7 @@ Kill gate: an attestation that changes the idempotency key, which would make a r
 
 Step 14 does not complete the split.
 The broker deletion, the exclusivity-claim lift with its pepper re-sited off the vault key, the four crate dispositions of open question 3, and D1's structural build-failing test are all held until the desktop runs the driver against a live marketplace.
+The broker deletion carries a predecessor that was not visible when it was scoped: `crates/tam-session-broker/src/vault.rs` holds the only writer of `connection.state = 'linked'` anywhere in the tree, and the device claim's candidate filter requires a linked connection, so deleting the crate stops every device claiming until a device-reported link exists to replace it.
 
 ## 8. Open questions for the founder
 

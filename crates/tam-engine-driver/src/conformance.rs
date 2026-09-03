@@ -572,3 +572,46 @@ pub async fn a_preflight_challenge_abandons_and_advances_the_streak<L>(
         "an interstitial is not something a re-link fixes, so the connection stays linked"
     );
 }
+
+/// A create whose mapping was bound while it ran settles skipped.
+///
+/// The refusal is permanent for this item — the listing exists and no later
+/// lease could make it again — so the interpreter settles rather than
+/// abandoning, which is what stops the item re-abandoning on every lease
+/// until its attempt budget settled it `failed` with nothing in the ledger to
+/// say why. Not a conformance body over both ledgers: it needs the ledger to
+/// answer a refusal Postgres reaches through a concurrent bind, which only
+/// the in-memory one can be told to do.
+pub async fn a_create_bound_elsewhere_settles_skipped<L: ItemLedger + LedgerInspector>(
+    ledger: &L,
+    lease: &LeasedItem,
+) {
+    let switch = Switch::default();
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
+    let verdict = drive(ledger, lease, &adapter, &switch).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Skipped),
+        "the create settles skipped rather than abandoning, because nothing it could do \
+         on a later lease would change the answer"
+    );
+    let item = ledger.item(lease.item).await;
+    assert_eq!(
+        (item.state.as_str(), item.outcome.as_deref()),
+        ("settled", Some("skipped")),
+        "and the item row says so, so the job that owns it can complete"
+    );
+    assert!(
+        item.failure_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("created by another run")),
+        "the detail names what happened, because an operator reading the row cannot \
+         otherwise tell this from an ordinary skip: {:?}",
+        item.failure_detail
+    );
+    assert!(
+        ledger.attempt(lease.mapping).await.is_none(),
+        "and no attempt is left standing: the refusal happened before one was opened, so \
+         there is no fence to release and none to leak"
+    );
+}

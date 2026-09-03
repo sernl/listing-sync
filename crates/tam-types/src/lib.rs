@@ -730,6 +730,17 @@ pub enum JobEventPayload {
     ItemParked {
         expires_ms: i64,
     },
+    /// The park stayed, and what it waits on changed.
+    ///
+    /// Distinct from [`Self::ItemParked`], which says a park began and when it
+    /// ends. This one says neither: the item was already parked and stays
+    /// parked, and what moved is the gate — from one a clock was going to
+    /// clear to one only the seller can. A second `ItemParked` would put an
+    /// expiry in the timeline that had already elapsed and name no gate at
+    /// all, which is a worse record than none.
+    ItemGateChanged {
+        gate: String,
+    },
     ItemResumed,
     ItemSettled {
         outcome: String,
@@ -778,7 +789,7 @@ pub enum JobEventPayload {
 impl JobEventPayload {
     /// Every kind name, in a stable order, for the vocabulary generator and
     /// the client's stream subscriptions.
-    pub const ALL_KINDS: [&'static str; 14] = [
+    pub const ALL_KINDS: [&'static str; 15] = [
         "JobQueued",
         "JobStarted",
         "ItemQueued",
@@ -787,6 +798,7 @@ impl JobEventPayload {
         "ItemActionFinished",
         "ItemBlocked",
         "ItemParked",
+        "ItemGateChanged",
         "ItemResumed",
         "ItemSettled",
         "JobSettled",
@@ -808,6 +820,7 @@ impl JobEventPayload {
             Self::ItemActionFinished { .. } => "ItemActionFinished",
             Self::ItemBlocked { .. } => "ItemBlocked",
             Self::ItemParked { .. } => "ItemParked",
+            Self::ItemGateChanged { .. } => "ItemGateChanged",
             Self::ItemResumed => "ItemResumed",
             Self::ItemSettled { .. } => "ItemSettled",
             Self::JobSettled { .. } => "JobSettled",

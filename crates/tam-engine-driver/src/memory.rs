@@ -76,6 +76,9 @@ struct State {
     events: Vec<(JobItemId, String)>,
     /// Grants already issued in the current window, keyed by connection.
     grants: HashMap<ConnectionId, i32>,
+    /// Mappings a run other than this one has already bound, which is what
+    /// `open_attempt` refuses a create against.
+    bound_mappings: Vec<MappingId>,
     ceiling: i32,
 }
 
@@ -110,6 +113,14 @@ pub struct Seeded {
 }
 
 impl InMemoryLedger {
+    /// Records that another run bound this mapping while ours was working.
+    ///
+    /// The one state a create's `open_attempt` refuses on, and the only way to
+    /// reach that arm of the interpreter without a database.
+    pub fn bind_elsewhere(&self, mapping: MappingId) {
+        self.with(|state| state.bound_mappings.push(mapping));
+    }
+
     /// A ledger holding one leased item, one linked connection and an unbound
     /// mapping — the state `seed()` leaves behind on the Postgres side.
     #[must_use]
@@ -279,6 +290,11 @@ impl ItemLedger for InMemoryLedger {
                 .is_some_and(|attempt| !attempt.settled)
             {
                 return Err(LedgerError::AttemptInFlight);
+            }
+            // Admission's re-check as structure: a create whose mapping was
+            // bound while the run was working has nothing left to make.
+            if state.bound_mappings.contains(&new.mapping) {
+                return Err(LedgerError::MappingAlreadyBound);
             }
             state.attempts.insert(
                 new.mapping,

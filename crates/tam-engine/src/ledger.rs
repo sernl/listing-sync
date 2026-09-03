@@ -126,6 +126,7 @@ fn to_wire_grant(grant: tam_storage::BudgetGrant) -> wire::BudgetGrant {
 pub fn to_wire_error(error: &StorageError) -> wire::LedgerError {
     match *error {
         StorageError::AttemptInFlight => wire::LedgerError::AttemptInFlight,
+        StorageError::MappingAlreadyBound => wire::LedgerError::MappingAlreadyBound,
         StorageError::StaleLease => wire::LedgerError::StaleLease,
         StorageError::Db(_)
         | StorageError::TimestampOutOfRange { .. }
@@ -267,11 +268,21 @@ impl ItemLedger for PgLedger {
     /// The span is [`PARK_TTL_MS`], the machine's own park window, supplied
     /// here rather than by the caller: on the device branch the caller is the
     /// party being parked.
+    /// The gate is checked against the vocabulary before it is written. A
+    /// device names it, `blocked_on` carries no database constraint, and an
+    /// unchecked one would put a gate in the ledger that no revive arm matches
+    /// and no console can label: a park nothing ever clears, written by the
+    /// party the park is holding.
     async fn park(
         &self,
         lease: &wire::LeaseRef,
         blocked_on: &str,
     ) -> Result<(), wire::LedgerError> {
+        if !tam_storage::ALL_GATES.contains(&blocked_on) {
+            return Err(wire::LedgerError::Refused {
+                detail: format!("{blocked_on} is not a gate this ledger knows"),
+            });
+        }
         self.leases
             .park(
                 &to_storage_lease(lease),

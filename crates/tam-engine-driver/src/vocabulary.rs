@@ -188,6 +188,15 @@ pub enum LedgerError {
     /// The mapping already has an open attempt, which is the duplicate-create
     /// fence holding.
     AttemptInFlight,
+    /// A create was refused because the mapping is already bound: the listing
+    /// it would have made exists, made by another run.
+    ///
+    /// Distinct from [`Self::AttemptInFlight`] because the interpreter must
+    /// act differently. An attempt in flight may still clear, so the run
+    /// abandons and the item is offered again; a bound mapping is permanent
+    /// for this item, so the run settles it rather than handing back work no
+    /// later lease could do either.
+    MappingAlreadyBound,
     /// Another holder owns this item now; the epoch fence refused the write.
     StaleLease,
     /// Anything else the server refused, carried as text because the
@@ -199,6 +208,9 @@ impl core::fmt::Display for LedgerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::AttemptInFlight => f.write_str("an attempt is already in flight"),
+            Self::MappingAlreadyBound => {
+                f.write_str("that mapping is already bound, so this create has nothing to make")
+            }
             Self::StaleLease => f.write_str("the lease epoch is stale"),
             Self::Refused { detail } => write!(f, "the ledger refused the write: {detail}"),
         }
@@ -441,10 +453,12 @@ pub struct Renewed {
 /// What the ledger answers.
 ///
 /// `Refused` carries a [`LedgerError`] as an answer rather than as a transport
-/// failure, and that distinction is the point: `AttemptInFlight` is the
-/// duplicate-create fence holding and `StaleLease` is another holder owning the
-/// item now, and the interpreter branches on both. A device that saw them as
-/// HTTP faults would retry the two conditions it must not retry.
+/// failure, and that distinction is the point. `AttemptInFlight` is the
+/// duplicate-create fence holding, `StaleLease` is another holder owning the
+/// item now, and `MappingAlreadyBound` is a create whose listing another run
+/// already made; the interpreter branches on all three, abandoning on the
+/// first two and settling on the third. A device that saw them as HTTP faults
+/// would retry the conditions it must not retry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
 pub enum LedgerAnswer {

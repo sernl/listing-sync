@@ -18,7 +18,8 @@ use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_api::admin::{
-    FailedWritesView, ImpersonationsView, OrgDetailView, OrgsView, SignupsView, SyncHealthView,
+    FailedWriteView, FailedWritesView, ImpersonationsView, OrgDetailView, OrgsView, SignupsView,
+    SyncHealthView,
 };
 use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
 use tam_storage::{OperatorRepo, SessionRepo, SessionToken};
@@ -419,6 +420,137 @@ async fn failed_writes_carry_both_tenants_with_the_owning_item(pool: PgPool) {
             "the owning item's detail travels beside the attempt's own code"
         );
     }
+}
+
+/// A stranded attempt reaches an operator; one whose run is still going does
+/// not.
+///
+/// The definition is what makes this a view rather than a firehose, and it is
+/// the lease rather than the clock: a heartbeat renews for as long as a device
+/// keeps working, so elapsed time says nothing. An attempt whose item has moved
+/// on — settled, or leased again at a higher epoch — belonged to a run that is
+/// over, and nothing will settle it now.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_stranded_attempt_reaches_an_operator_and_a_live_one_does_not(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let id = |byte: u8| uuid::Uuid::from_bytes([byte; 16]).to_string();
+    // Org A's attempt is stranded: its item has settled, so the run that
+    // could have settled the attempt is gone. Org B's is healthy: its item is
+    // still leased at the same epoch the attempt names, which is a run in
+    // progress and holds its attempt open for as long as it keeps
+    // heartbeating. `write_attempt_one_in_flight` is unique per mapping,
+    // which is why they are on different tenants.
+    pinned(
+        &pool,
+        ORG_B,
+        &[
+            "UPDATE job_item SET state = 'leased', lease_owner = 'a-working-device', \
+           lease_expires_at = now() + interval '5 minutes', outcome = NULL, \
+           failure_code = NULL, failure_detail = NULL, settled_at = NULL \
+           WHERE org_id = $1"
+                .to_owned(),
+        ],
+    )
+    .await;
+    for (org, attempt, item, mapping, age) in [
+        (ORG_A, 0x53u8, 0x41u8, 0x21u8, "1 day"),
+        (ORG_B, 0x54u8, 0x42u8, 0x22u8, "0 seconds"),
+    ] {
+        // Org B's is the live one: same epoch as its item, which is leased.
+        pinned(
+            &pool,
+            org,
+            &[format!(
+                "INSERT INTO write_attempt (org_id, id, job_item_id, mapping_id, lease_epoch, \
+                     intent, intent_hash, state, opened_at, actor_kind) \
+                 VALUES ($1, '{}', '{}', '{}', 0, '{{}}'::jsonb, '\\x01'::bytea, 'in_flight', \
+                     now() - interval '{age}', 'system')",
+                id(attempt),
+                id(item),
+                id(mapping)
+            )],
+        )
+        .await;
+    }
+
+    let backoffice = backoffice_pool(&pool).await;
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/failed-writes",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: FailedWritesView = answer.json();
+    // Before the bump, org B's attempt is live: same epoch as its item, and
+    // the item is leased. It does not surface, which is the half a
+    // clock-keyed view got wrong.
+    assert_eq!(
+        view.writes
+            .iter()
+            .filter(|write| write.failure_code.is_none())
+            .count(),
+        1,
+        "only the settled item's attempt is stranded so far: {:?}",
+        view.writes.iter().map(|w| w.attempt).collect::<Vec<_>>()
+    );
+
+    // And now the stolen-lease half: org B's item is leased again at a higher
+    // epoch than its attempt names. The item is live, so the
+    // item-state disjunct says nothing about it; only the epoch does.
+    pinned(
+        &pool,
+        ORG_B,
+        &["UPDATE job_item SET lease_epoch = lease_epoch + 1 WHERE org_id = $1".to_owned()],
+    )
+    .await;
+
+    let view: FailedWritesView = call(
+        pool.clone(),
+        Some(backoffice_pool(&pool).await),
+        "/v1/admin/failed-writes",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await
+    .json();
+
+    let stranded: Vec<&FailedWriteView> = view
+        .writes
+        .iter()
+        .filter(|write| write.failure_code.is_none())
+        .collect();
+    assert_eq!(
+        stranded.len(),
+        2,
+        "both halves of the definition surface: the settled item's attempt and the one \
+         whose lease was stolen: {:?}",
+        view.writes.iter().map(|w| w.attempt).collect::<Vec<_>>()
+    );
+    assert!(
+        stranded
+            .iter()
+            .any(|write| write.attempt == tam_types::Uuid([0x54; 16])),
+        "including the stolen-lease one, which no clock and no item state would catch"
+    );
+    for write in &stranded {
+        assert_eq!(
+            write.state, "in_flight",
+            "the rows say what they are; there is no failure code to say it with"
+        );
+    }
+    // By index rather than by filter: stranded rows are the oldest by
+    // construction, so a newest-first page would push them off the end and an
+    // operator would never see the ones that most need them.
+    assert!(
+        view.writes[0].failure_code.is_none() && view.writes[1].failure_code.is_none(),
+        "stranded rows come first in the page, ahead of every failure: {:?}",
+        view.writes
+            .iter()
+            .map(|w| (w.attempt, w.failure_code))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

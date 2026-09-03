@@ -66,3 +66,15 @@ conformance_test!(an_expired_session_parks_and_gates);
 conformance_test!(a_cancellation_after_the_read_back_still_settles);
 conformance_test!(a_cancellation_after_a_lapsed_session_still_parks);
 conformance_test!(a_preflight_challenge_abandons_and_advances_the_streak);
+
+/// The one body that needs the ledger told something Postgres would learn
+/// from a concurrent transaction, so it is instantiated here rather than in
+/// the conformance macro above.
+#[test]
+fn a_create_bound_elsewhere_settles_skipped() {
+    let (ledger, lease) = fixture();
+    ledger.bind_elsewhere(lease.mapping);
+    futures::executor::block_on(conformance::a_create_bound_elsewhere_settles_skipped(
+        &ledger, &lease,
+    ));
+}

@@ -2,6 +2,27 @@
 //! the event stream with its per-organisation sequence, halts, the outbox and
 //! the rate budget.
 //!
+//! # Lock order
+//!
+//! One order for this whole module, and every method that locks more than one
+//! row takes its locks in it: `job_item`, then `write_attempt`, then
+//! `mapping`. A method needing two of the three skips the one it does not
+//! need rather than reordering the two it does.
+//!
+//! Where each takes what. `WriteAttemptRepo::settle` takes the item row, then
+//! the attempt it is settling, then the mapping it binds or severs.
+//! `WriteAttemptRepo::open_asserted` takes the attempt it inserts, then the
+//! mapping its admission check reads. `LeaseRepo::revive_expired` takes item
+//! rows, then the attempt rows its re-link arm settles.
+//! `LeaseRepo::charge_and_requeue` takes the item row alone.
+//!
+//! Why this is a module-level rule rather than a habit of each method:
+//! Postgres resolves a cycle by killing one transaction, nothing on these
+//! paths retries, and the victim is whatever was in flight — most
+//! consequentially a create that has already reached the marketplace and can
+//! no longer record that it did. That is the one failure this ledger cannot
+//! undo.
+//!
 //! Every method here runs correctly on either role, but the lease scan and
 //! the stealer are inherently cross-tenant and see nothing under `tam_app`'s
 //! forced row-level security; the engine constructs these repositories over a
@@ -68,6 +89,18 @@ pub enum Charged {
     Requeued,
     /// That attempt was the item's last, so it is settled failed.
     Settled,
+}
+
+/// What one revive pass did, as two numbers rather than one sum.
+///
+/// A pass that relabelled three parked creates and revived nothing is not
+/// three revivals, and a single total says it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Revived {
+    /// Items put back on the queue, by the clock or by a re-link.
+    pub requeued: u64,
+    /// Parked creates whose gate moved to one only the seller can clear.
+    pub re_gated: u64,
 }
 
 /// A renewed lease, in the server's own two instants.
@@ -500,6 +533,43 @@ pub const REVIVABLE_GATES: [&str; 10] = [
     "unbound",
     "subject_diverged",
     "lifecycle_diverged",
+];
+
+/// The gate a create carries once its `ReauthRequired` park has aged out.
+///
+/// Not a revive and not a settle. A create's write attempt stays in flight,
+/// because releasing it is the only fence there is against a second live
+/// listing, so the item cannot go back on the queue and cannot be settled on
+/// evidence nobody has. What changes is what the seller is told: the park
+/// stops looking like something a clock will clear and starts naming the one
+/// action that does clear it. The console renders it as awaiting sign-in to
+/// reconcile.
+///
+/// Deliberately absent from [`REVIVABLE_GATES`], for the same reason
+/// [`REAUTH_REQUIRED`] is: that list is time-gated, and no clock opens this.
+pub const AWAITING_SELLER_SIGNIN: &str = "awaiting_seller_signin";
+
+/// Every gate the tree can write to `blocked_on`, for the client's
+/// vocabulary.
+///
+/// Not a filter and nothing selects on it: `REVIVABLE_GATES` is still the
+/// list the revive and give-up arms read. This exists so the console can
+/// label every gate it might render rather than printing the raw string for
+/// the ones nobody thought of, and `the_gate_vocabulary_covers_every_gate_the_tree_writes`
+/// keeps it in step with the two sources it unions.
+pub const ALL_GATES: [&str; 12] = [
+    "reconciliation",
+    ELECTION,
+    "currency_unknown",
+    "cover_missing",
+    "scan_incomplete",
+    AWAITING_COUNTERPART,
+    "binding",
+    "unbound",
+    "subject_diverged",
+    "lifecycle_diverged",
+    REAUTH_REQUIRED,
+    AWAITING_SELLER_SIGNIN,
 ];
 
 /// The gate a counterpart-bound item waits on. Stated here because both the
@@ -1683,7 +1753,7 @@ impl LeaseRepo {
         &self,
         now: Timestamp,
         attempts_max: i32,
-    ) -> Result<u64, StorageError> {
+    ) -> Result<Revived, StorageError> {
         let mut tx = self.pool.begin().await?;
         // The give-up arm, first, mirroring `expire_and_steal`'s two-statement
         // shape. A park cycling forever is invisible to every existing reaper
@@ -1772,6 +1842,46 @@ impl LeaseRepo {
         // and those predicates keep a concurrent pass that already revived a
         // row from advancing its `attempt_count` a second time.
         let at = timestamp_to_db(now)?;
+        // A create whose `ReauthRequired` park has aged out leaves the park
+        // for a gate that names what will clear it, and nothing else moves.
+        // The attempt stays in flight, the mapping stays fenced, the state
+        // stays `parked_live` and no attempt is charged: the listing may or
+        // may not exist, and only a read-back under the seller's own session
+        // can decide which. Creates only — a non-create's `ReauthRequired`
+        // park is the re-link arm's below, which excludes them for the same
+        // reason.
+        let re_gated = sqlx::query!(
+            "UPDATE job_item \
+             SET blocked_on = $2, park_expires_at = NULL \
+             WHERE state = 'parked_live' AND park_expires_at <= now() \
+               AND blocked_on = $1 AND operation = 'create' \
+             RETURNING org_id, job_id, id",
+            REAUTH_REQUIRED,
+            // Bound rather than spelled, for the reason the give-up arm's
+            // code is: nothing in the schema constrains this column.
+            AWAITING_SELLER_SIGNIN,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        // The seller sees this on the item, so the item's own history has to
+        // say it happened, and say it truthfully: the park did not begin again
+        // and has no new expiry — the gate moved. A second `ItemParked` would
+        // record an expiry that had already elapsed and name no gate at all.
+        for row in &re_gated {
+            append_event(
+                &mut tx,
+                &EventScope {
+                    org: OrgId(uuid_from_db(row.org_id)),
+                    job: JobId(uuid_from_db(row.job_id)),
+                    item: Some(JobItemId(uuid_from_db(row.id))),
+                },
+                &JobEventPayload::ItemGateChanged {
+                    gate: AWAITING_SELLER_SIGNIN.to_owned(),
+                },
+                Stamp::system(SystemComponent::Engine, now),
+            )
+            .await?;
+        }
         let relinked = sqlx::query!(
             "WITH eligible AS ( \
                  SELECT ji.org_id, ji.id, ji.subject_kind, ji.subject_url, \
@@ -1825,7 +1935,10 @@ impl LeaseRepo {
             .await?;
         }
         tx.commit().await?;
-        Ok(count_of(&revived).saturating_add(count_of(&relinked)))
+        Ok(Revived {
+            requeued: count_of(&revived).saturating_add(count_of(&relinked)),
+            re_gated: u64::try_from(re_gated.len()).unwrap_or(u64::MAX),
+        })
     }
 
     /// The tenant's connection for a marketplace, if one is linked.
@@ -2043,6 +2156,9 @@ pub struct AttemptRef {
 
 /// The fencing token's ledger: the row is written before the click, because
 /// the commit boundary is intent recorded rather than response received.
+///
+/// Both of its multi-row methods obey the module's lock order; see the module
+/// documentation for what that is and what a violation costs.
 pub struct WriteAttemptRepo {
     pool: PgPool,
 }
@@ -2111,13 +2227,73 @@ impl WriteAttemptRepo {
         )
         .execute(&mut *tx)
         .await;
-        map_unique(inserted, "write_attempt_one_in_flight", || {
+        let inserted = map_unique(inserted, "write_attempt_one_in_flight", || {
             StorageError::AttemptInFlight
         })?;
+        // Only when the insert wrote. A caller re-offering an id it already
+        // opened is recovering a lost response, and the answer to that is the
+        // attempt it already has: the row it is asking about was admitted when
+        // it was written, and may since have committed and bound the mapping
+        // itself. Refusing the replay would tell a device its own committed
+        // create was somebody else's.
+        if inserted.rows_affected() > 0 {
+            admit(&mut tx, lease, mapping).await?;
+        }
         tx.commit().await?;
         Ok(())
     }
+}
 
+/// Admission, re-checked at the moment the fencing row is written.
+///
+/// The check has to exist because `prepare_item`'s admission and this write
+/// are separated by everything the run does in between, and a concurrent run
+/// binding the mapping in that window is the case a create must not lose.
+///
+/// The order is what puts it after the insert: `settle` takes the attempt row
+/// and then the mapping row, so a check that took the mapping first would
+/// invert the order against the very transaction it races, and the two would
+/// deadlock with no retry to recover — stranding a create that had already
+/// landed. See the lock-order note on this module.
+///
+/// Returning the refusal rolls the insert back, so a refused create leaves no
+/// attempt row behind.
+///
+/// The operation and the mapping are read from the item rather than taken from
+/// the caller: a caller that could name either could name its way out of the
+/// check, and on the device branch the caller is the party the check is about.
+async fn admit(
+    tx: &mut Transaction<'_, Postgres>,
+    lease: &LeaseRef,
+    mapping: MappingId,
+) -> Result<(), StorageError> {
+    let admission = sqlx::query!(
+        "SELECT ji.operation = 'create' AS \"creating!\", ji.mapping_id, \
+                m.binding_state = 'bound' AS \"bound!\" \
+         FROM job_item ji \
+         JOIN mapping m ON m.org_id = ji.org_id AND m.id = ji.mapping_id \
+         WHERE ji.org_id = $1 AND ji.id = $2 \
+         FOR SHARE OF m",
+        uuid_to_db(lease.org.0),
+        uuid_to_db(lease.item.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(admission) = admission else {
+        return Ok(());
+    };
+    if uuid_from_db(admission.mapping_id) != mapping.0 {
+        return Err(StorageError::Inconsistent {
+            reason: "the attempt names a mapping the item does not".to_owned(),
+        });
+    }
+    if admission.creating && admission.bound {
+        return Err(StorageError::MappingAlreadyBound);
+    }
+    Ok(())
+}
+
+impl WriteAttemptRepo {
     /// Epoch-fenced settlement of the attempt row, and — when the verdict
     /// carries a landing or a sever — the mapping write, in one transaction.
     /// A separate call would leave a crash window where the attempt says
@@ -2918,19 +3094,77 @@ impl HaltRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::{REAUTH_REQUIRED, REVIVABLE_GATES};
-    use tam_marketplace::ChallengeKind;
+    use super::{ALL_GATES, AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED, REVIVABLE_GATES};
 
-    /// The driver parks a challenge under `format!("{challenge:?}")`, so this
-    /// constant is bound to a `Debug` derivation rather than to a codec. A
-    /// rename of the variant would otherwise leave the revive reading a gate
-    /// nothing writes, and the park would go back to being unreachable.
+    /// The client's gate vocabulary covers every gate the tree can write.
+    ///
+    /// `ALL_GATES` is a union of two sources and a filter for neither, so
+    /// nothing catches it drifting except this. The length check is the half
+    /// that matters: containment alone would pass while a gate was added to
+    /// one source and forgotten here.
     #[test]
-    fn the_reauth_gate_matches_the_debug_form_the_driver_writes() {
+    fn the_gate_vocabulary_covers_every_gate_the_tree_writes() {
+        for gate in REVIVABLE_GATES {
+            assert!(
+                ALL_GATES.contains(&gate),
+                "{gate} is written by the revive arms but the client has no label for it"
+            );
+        }
+        for gate in [REAUTH_REQUIRED, AWAITING_SELLER_SIGNIN] {
+            assert!(
+                ALL_GATES.contains(&gate),
+                "{gate} is written by the driver or the park exit but is not in the vocabulary"
+            );
+        }
         assert_eq!(
-            format!("{:?}", ChallengeKind::ReauthRequired),
-            REAUTH_REQUIRED
+            ALL_GATES.len(),
+            REVIVABLE_GATES.len() + 2,
+            "the vocabulary is exactly the revivable gates plus the two the clock never \
+             clears; a gate added to either side without the other is what this catches"
         );
+    }
+
+    /// Only one challenge kind's name is ever a gate, and the vocabulary
+    /// knows which.
+    ///
+    /// This is the assumption the vocabulary's completeness rests on: the
+    /// driver writes `blocked_on` as a `ChallengeKind`'s debug form, so a
+    /// second kind parking under its own name would put a gate in the
+    /// database that no list here mentions and that the re-link arm would
+    /// never match.
+    ///
+    /// What this drives is `park_gate_for`, which is the funnel itself rather
+    /// than the machine that calls it: `SyncMachine::challenged` reaches it
+    /// through a transition needing a whole machine and a submitted attempt to
+    /// build, and this crate has neither. So the guard is layered rather than
+    /// complete — this pins the funnel's answer, `tam-domain`'s own tests pin
+    /// that `challenged` uses it, and `PgLedger::park` refuses a gate outside
+    /// the vocabulary at the wire, which is what catches a writer that
+    /// bypasses the funnel altogether.
+    #[test]
+    fn only_one_challenge_kinds_name_is_ever_a_gate() {
+        use tam_marketplace::ChallengeKind;
+        for kind in [
+            ChallengeKind::EmailedOneTimePassword,
+            ChallengeKind::Captcha,
+            ChallengeKind::JavaScriptInterstitial,
+            ChallengeKind::ReauthRequired,
+        ] {
+            let Some(gate) = tam_domain::park_gate_for(kind) else {
+                continue;
+            };
+            let gate = format!("{gate:?}");
+            assert_eq!(
+                gate, REAUTH_REQUIRED,
+                "{kind:?} parks under {gate}, which is a gate outside the vocabulary and \
+                 outside the re-link arm's match; the funnel in `SyncMachine::challenged` \
+                 has changed and both need to know"
+            );
+            assert!(
+                ALL_GATES.contains(&gate.as_str()),
+                "and the gate it parks under has to be in the vocabulary"
+            );
+        }
     }
 
     /// The re-link arm and the expiry arm must stay disjoint: `REVIVABLE_GATES`

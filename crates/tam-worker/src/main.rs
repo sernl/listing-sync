@@ -865,8 +865,24 @@ async fn run_pump(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
             Err(error) => eprintln!("tam-worker {worker_name}: steal failed: {error}"),
         }
         match leases.revive_expired(now, attempts_max).await {
-            Ok(0) => {}
-            Ok(revived) => eprintln!("tam-worker {worker_name}: revived {revived} expired parks"),
+            // Reported apart, because they are different things: one put work
+            // back on the queue, the other left work parked and changed what
+            // it waits on.
+            Ok(revived) => {
+                if revived.requeued > 0 {
+                    eprintln!(
+                        "tam-worker {worker_name}: revived {} expired parks",
+                        revived.requeued
+                    );
+                }
+                if revived.re_gated > 0 {
+                    eprintln!(
+                        "tam-worker {worker_name}: {} parked create(s) now await the seller \
+                         signing in",
+                        revived.re_gated
+                    );
+                }
+            }
             Err(error) => eprintln!("tam-worker {worker_name}: revive failed: {error}"),
         }
         match run_breaker(&jobs, &halts, now).await {

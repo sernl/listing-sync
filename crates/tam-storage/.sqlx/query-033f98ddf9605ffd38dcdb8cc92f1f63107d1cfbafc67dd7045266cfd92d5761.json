@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ji.operation = 'create' AS \"creating!\", ji.mapping_id, m.binding_state = 'bound' AS \"bound!\" FROM job_item ji JOIN mapping m ON m.org_id = ji.org_id AND m.id = ji.mapping_id WHERE ji.org_id = $1 AND ji.id = $2 FOR SHARE OF m",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "creating!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "bound!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "033f98ddf9605ffd38dcdb8cc92f1f63107d1cfbafc67dd7045266cfd92d5761"
+}

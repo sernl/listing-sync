@@ -272,7 +272,7 @@ pub const ROUTES: [Route; 52] = [
     Route {
         method: "get",
         path: "/{version}/admin/failed-writes",
-        summary: "Operator: write attempts carrying a failure code, newest first",
+        summary: "Operator: write attempts that failed or are stranded in flight",
     },
     Route {
         method: "get",

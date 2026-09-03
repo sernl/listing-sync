@@ -17,7 +17,8 @@ use tam_marketplace::{
     RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_types::{
-    BindAnomaly, ConnectionId, ContentHash, FailureCode, JobEventPayload, LogicalInstant, Timestamp,
+    BindAnomaly, ConnectionId, ContentHash, FailureCode, FailureDetail, JobEventPayload,
+    LogicalInstant, Timestamp,
 };
 
 use crate::ports::{Cancellation, IdSource, ItemLedger};
@@ -612,6 +613,35 @@ pub async fn run_item<
                             return Ok(RunVerdict::Abandoned {
                                 reason: "another attempt is in flight for this mapping".to_owned(),
                             })
+                        }
+                        // Settled rather than abandoned, and the difference
+                        // matters. The mapping was bound between this run's
+                        // admission and this write, so the listing exists and
+                        // no later lease could make it again; abandoning would
+                        // re-abandon on every lease until the attempt budget
+                        // settled the item `failed` with nothing in the ledger
+                        // to say why.
+                        Err(LedgerError::MappingAlreadyBound) => {
+                            let verdict = ItemVerdict {
+                                outcome: ItemOutcome::Skipped,
+                                failure_code: Some(FailureCode::Other),
+                                failure_detail: Some(FailureDetail(
+                                    "the listing this item would have created was created by \
+                                     another run, so this item had nothing left to do"
+                                        .to_owned(),
+                                )),
+                            };
+                            ctx.ledger.settle_item(&lease_ref, &verdict, now).await?;
+                            record_event(
+                                ctx,
+                                lease,
+                                &JobEventPayload::ItemSettled {
+                                    outcome: format!("{:?}", ItemOutcome::Skipped),
+                                },
+                                now,
+                            )
+                            .await?;
+                            return Ok(RunVerdict::Settled(ItemOutcome::Skipped));
                         }
                         Err(error) => return Err(error.into()),
                     }
