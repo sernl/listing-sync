@@ -86,9 +86,10 @@ pub struct NewAttempt {
 /// Optional because it is a fact of one marketplace rather than of every
 /// write: TPT's product form makes the seller declare it and Tes's does not,
 /// so an order for a Tes item carries none and that absence is not a missing
-/// value. The instant is the seller's own, carried from the link rather than
-/// minted here, because a minted one would be this system attesting on their
-/// behalf.
+/// value. The instant is when the seller declared, and it reaches this order
+/// off the connection row rather than being minted on the device: it is
+/// stamped where the declaration was made, by the broker's link or by the
+/// declaration route, so a machine that only carries the write never dates it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attestation {
     pub attested_by: String,

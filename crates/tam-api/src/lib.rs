@@ -228,6 +228,13 @@ pub fn router(state: AppState) -> Router {
             "/{version}/devices/{device}/revoke",
             post(devices::revoke_device),
         )
+        // Beside the device routes because it is what makes them able to
+        // write, and keyed on the marketplace rather than on a device because
+        // the declaration outlives every machine that carries it.
+        .route(
+            "/{version}/connections/{marketplace}/authorship",
+            post(devices::declare_authorship),
+        )
         // D1's declarative-intent surface: the device asks what is due and
         // reports what it did. The server never says now.
         .route("/{version}/devices/{device}/work", post(work::claim))

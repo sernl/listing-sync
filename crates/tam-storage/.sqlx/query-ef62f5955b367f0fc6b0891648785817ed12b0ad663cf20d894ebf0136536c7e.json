@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) VALUES ($1, $2, $3, 'linked', now(), now()) ON CONFLICT (org_id, marketplace) DO UPDATE SET state = 'linked', updated_at = now() WHERE connection.state IN ('unlinked', 'linking', 'needs_reauth') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ef62f5955b367f0fc6b0891648785817ed12b0ad663cf20d894ebf0136536c7e"
+}

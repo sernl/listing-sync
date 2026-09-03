@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO connection\n                 (org_id, id, marketplace, state, created_at, updated_at,\n                  authorship_name, authorship_attested_at)\n               VALUES ($1, $2, $3, 'unlinked', now(), now(), $4, $5)\n               ON CONFLICT (org_id, marketplace) DO UPDATE\n                   SET authorship_name = EXCLUDED.authorship_name,\n                       authorship_attested_at = EXCLUDED.authorship_attested_at,\n                       updated_at = now()\n               RETURNING authorship_name AS \"name!\",\n                         authorship_attested_at AS \"attested_at!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "attested_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "6ef485fa3a9834ca090b26c791cf31b611550c6c50ac9a1b3663892473f6a71f"
+}

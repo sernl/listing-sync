@@ -27,6 +27,10 @@ const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
 const TOKEN_A: SessionToken = SessionToken([0x41; 32]);
 const TOKEN_B: SessionToken = SessionToken([0x42; 32]);
 const LAPTOP: &str = "11112222333344445555666677778888";
+/// A second machine of the same seller's, for the facts that are about there
+/// being more than one: the link is existential over devices, and the
+/// declaration outlives any of them.
+const DESKTOP: &str = "99998888777766665555444433332222";
 const NOW: Timestamp = Timestamp(1_756_000_000_000);
 
 /// Three fixed instants, one per call that needs to be distinguishable from
@@ -244,6 +248,64 @@ async fn devices(pool: &PgPool, token: &SessionToken) -> Vec<DeviceView> {
     .await;
     assert_eq!(answer.status, StatusCode::OK, "the listing answers");
     answer.json::<DevicesView>().devices
+}
+
+/// The seller's declaration of authorship, over the wire.
+async fn declare(
+    pool: &PgPool,
+    token: &SessionToken,
+    marketplace: &str,
+    name: &str,
+    wall: WallClock,
+) -> Answer {
+    call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/connections/{marketplace}/authorship"),
+            token,
+            body: Some(serde_json::json!({ "name": name })),
+            wall,
+        },
+    )
+    .await
+}
+
+/// One device's whole reported session set, as a heartbeat body.
+fn holding(marketplace: &str, status: &str) -> serde_json::Value {
+    serde_json::json!([
+        { "marketplace": marketplace, "account_label": null, "status": status },
+    ])
+}
+
+/// The stored link state for one marketplace, or `None` where no connection
+/// row exists at all -- which is a different fact from an unlinked one and is
+/// what every test here starts from.
+///
+/// Read under the tenant pin deliberately. `connection` is under forced
+/// row-level security, so an unpinned read answers `None` for a row that is
+/// really there, and an assertion built on that would be green for the wrong
+/// reason in exactly the way the step-11 fixture found.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn link_state(pool: &PgPool, org: OrgId, marketplace: &str) -> Option<String> {
+    let mut tx = pool.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    let state: Option<String> =
+        sqlx::query_scalar("SELECT state FROM connection WHERE org_id = $1 AND marketplace = $2")
+            .bind(uuid::Uuid::from_bytes(org.0 .0))
+            .bind(marketplace)
+            .fetch_optional(&mut *tx)
+            .await
+            .expect("the connection reads");
+    tx.commit().await.expect("the read commits");
+    state
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -1611,4 +1673,464 @@ async fn a_park_on_a_gate_outside_the_vocabulary_is_refused(pool: PgPool) {
         "and the item is left where it was rather than parked on a gate nothing clears"
     );
     assert_eq!(gate, None, "with no gate written");
+}
+
+/// One canonical term's counterpart in one inventory's vocabulary.
+fn path(
+    inventory: tam_types::InventoryId,
+    kind: tam_domain::TermKind,
+    label: &str,
+    native: &str,
+) -> tam_domain::VocabularyPath {
+    tam_domain::VocabularyPath {
+        vocabulary: tam_domain::VocabularyId(inventory, kind),
+        segments: vec![label.to_owned()],
+        native_id: Some(native.to_owned()),
+    }
+}
+
+fn crosswalk_edge(
+    from: tam_types::CanonicalTermId,
+    to: tam_domain::VocabularyPath,
+) -> tam_domain::ProjectionEdge {
+    tam_domain::ProjectionEdge {
+        from,
+        to,
+        kind: tam_domain::EdgeKind::Exact,
+        decided_by: tam_domain::Decider::Imported {
+            source: "devices_flow fixture".to_owned(),
+        },
+        decided_at: NOW,
+    }
+}
+
+/// One queued TPT create, and deliberately no `connection` row.
+///
+/// Everything the seller has that a device does not: the taxonomy counterparts
+/// TPT projects through, a product, a mapping and a job item. TPT is the
+/// marketplace this has to be, because its product form is the one that makes
+/// the seller declare authorship, so it is the only place where the attestation
+/// is the difference between a write and a refusal.
+///
+/// There is no `connection` row here and none may be added. That row is what
+/// the heartbeat and the declaration route exist to write, so a fixture that
+/// inserted one would leave every test built on this green with both writers
+/// deleted -- which is precisely the regression this fixture is here to catch.
+/// `seed_claimable` above does insert one, deliberately and for a different
+/// job: those tests are about the ledger and the fences, and they predate any
+/// writer that could have made the row for them.
+///
+/// Unlike `seed_claimable` this product projects cleanly rather than parking on
+/// a taxonomy election, which is what lets `/work` answer with an order at all.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_tpt_claimable(app: &PgPool) {
+    use tam_types::Uuid as Id;
+    let product = tam_types::ProductId(Id([0x11; 16]));
+    let mapping = tam_types::MappingId(Id([0x12; 16]));
+    let subject = tam_types::CanonicalTermId(Id([0x77; 16]));
+    let grade = tam_types::CanonicalTermId(Id([0x79; 16]));
+    let declared = path(
+        tam_types::InventoryId::TesUs,
+        tam_domain::TermKind::Phase,
+        "Kindergarten",
+        "17",
+    );
+    tam_storage::TaxonomyRepo::new(app.clone())
+        .seed(
+            &[
+                tam_domain::CanonicalTerm {
+                    id: subject,
+                    kind: tam_domain::TermKind::Subject,
+                    parent: None,
+                    label: "Maths for early years".to_owned(),
+                },
+                tam_domain::CanonicalTerm {
+                    id: grade,
+                    kind: tam_domain::TermKind::Phase,
+                    parent: None,
+                    label: "Kindergarten".to_owned(),
+                },
+            ],
+            &[
+                crosswalk_edge(
+                    subject,
+                    path(
+                        tam_types::InventoryId::Tpt,
+                        tam_domain::TermKind::Subject,
+                        "Maths for early years",
+                        "tpt-maths",
+                    ),
+                ),
+                crosswalk_edge(
+                    grade,
+                    path(
+                        tam_types::InventoryId::Tpt,
+                        tam_domain::TermKind::Phase,
+                        "Kindergarten",
+                        "tpt-kindergarten",
+                    ),
+                ),
+                // Seeded on the source side too. The product declares its grade
+                // as a TesUs path, and the projection reaches TPT by ingesting
+                // that into the canonical term and projecting out again; without
+                // this edge the ingest finds nothing and the item parks on a
+                // taxonomy election instead of producing an order.
+                crosswalk_edge(grade, declared.clone()),
+            ],
+        )
+        .await
+        .expect("the crosswalk seeds");
+    tam_storage::ProductRepo::new(app.clone())
+        .insert(
+            ORG_A,
+            &tam_domain::CanonicalProduct {
+                id: product,
+                org: ORG_A,
+                title: tam_types::Title("Fractions practice".to_owned()),
+                body: tam_types::ListingCopy {
+                    body: "A worksheet.".to_owned(),
+                    format: tam_types::CopyFormat::Markdown,
+                },
+                payload: tam_types::PayloadSet::new(
+                    tam_types::ProductFile {
+                        id: tam_types::FileId(Id([0x13; 16])),
+                        role: tam_types::FileRole::Payload,
+                        kind: tam_types::FileKind::Pdf,
+                        hash: tam_types::ContentHash([0x14; 32]),
+                        byte_len: 4,
+                        scan: tam_types::ScanOutcome::Clean { at: NOW },
+                    },
+                    vec![],
+                ),
+                cover: Some(tam_types::ProductFile {
+                    id: tam_types::FileId(Id([0x15; 16])),
+                    role: tam_types::FileRole::Cover,
+                    kind: tam_types::FileKind::Image,
+                    hash: tam_types::ContentHash([0x16; 32]),
+                    byte_len: 4,
+                    scan: tam_types::ScanOutcome::Clean { at: NOW },
+                }),
+                previews: vec![],
+                subjects: vec![subject],
+                grades: tam_domain::GradeDeclaration {
+                    source: tam_domain::DeclarationSource::Imported {
+                        vocabulary: tam_domain::VocabularyId(
+                            tam_types::InventoryId::TesUs,
+                            tam_domain::TermKind::Phase,
+                        ),
+                    },
+                    raw: vec![declared],
+                    derived: Some(tam_domain::AgeInterval::new(5, 7).expect("a bounded range")),
+                },
+                price: tam_types::PriceIntent::Free,
+                rights: tam_domain::RightsDeclaration::Unstated,
+                native_residue: vec![],
+            },
+            NOW,
+        )
+        .await
+        .expect("the product inserts");
+    tam_storage::MappingRepo::new(app.clone())
+        .insert(
+            ORG_A,
+            &tam_domain::Mapping {
+                id: mapping,
+                org: ORG_A,
+                product,
+                inventory: tam_types::InventoryId::Tpt,
+                binding: tam_domain::Binding::Unbound,
+                policies: tam_domain::FieldPolicies {
+                    title: tam_domain::FieldPolicy::Managed,
+                    description: tam_domain::FieldPolicy::Managed,
+                    price: tam_domain::FieldPolicy::Managed,
+                    taxonomy: tam_domain::FieldPolicy::Managed,
+                    grades: tam_domain::FieldPolicy::Managed,
+                    files: tam_domain::FieldPolicy::Managed,
+                },
+                price_rule: tam_types::PriceRule::Explicit(tam_types::PriceIntent::Free),
+                publish: tam_domain::PublishMode::DryRun,
+                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+            },
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+    tam_storage::JobRepo::new(engine_pool(app).await)
+        .enqueue(
+            ORG_A,
+            &tam_storage::NewJob {
+                job: tam_types::JobId(Id([0x17; 16])),
+                inventory: tam_types::InventoryId::Tpt,
+                stamp: tam_types::Stamp {
+                    at: NOW,
+                    actor: tam_types::Actor::System(tam_types::SystemComponent::Engine),
+                },
+            },
+            &[tam_storage::NewJobItem {
+                item: tam_domain::JobItemId(Id([0x18; 16])),
+                mapping,
+                idempotency_key: tam_marketplace::IdempotencyKey(Id([0x19; 16])),
+                operation: tam_domain::ItemOperation::Create,
+                requires_bound_on: None,
+            }],
+        )
+        .await
+        .expect("the job enqueues");
+}
+
+/// The whole link a TPT write needs, made only of what a seller and a device
+/// actually do.
+///
+/// No `connection` row is seeded: the device's check-in writes the link and the
+/// seller's declaration writes the attestation, and between them the item
+/// becomes claimable and the order carries what the adapter refuses to write
+/// without. This is the test the broker deletion is gated on, so it must fail
+/// against a tree with no device-reported writer -- and it did, twice over,
+/// because nothing wrote `connection.state` outside the vault and no work order
+/// could carry an attestation under `tam_app` even where a row existed.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_device_and_a_declaration_are_the_whole_link_a_tpt_write_needs(pool: PgPool) {
+    provision(&pool).await;
+    seed_tpt_claimable(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await,
+        None,
+        "a registered device that has reported nothing links nothing: the row does not \
+         exist yet, which is a different fact from an unlinked one"
+    );
+    let before = work(&pool, t0).await;
+    assert_eq!(
+        before["state"], "idle",
+        "and nothing is claimable through it: {before}"
+    );
+
+    connected(&pool, &TOKEN_A, LAPTOP).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("linked"),
+        "the check-in is the link: a device reporting a connected session is the only \
+         evidence of one this server can ever hold"
+    );
+    let declared = declare(&pool, &TOKEN_A, "Tpt", "Ada Lovelace", t1).await;
+    assert_eq!(
+        declared.status,
+        StatusCode::OK,
+        "the declaration lands: {}",
+        String::from_utf8_lossy(&declared.body)
+    );
+
+    let order = work(&pool, t2).await;
+    assert_eq!(
+        order["state"], "work",
+        "the item is claimable, which is what the linked connection bought: {order}"
+    );
+    assert_eq!(
+        order["attestation"]["attested_by"], "Ada Lovelace",
+        "and the order carries the seller's own declaration, without which the TPT \
+         adapter refuses every write before it reaches the transport: {order}"
+    );
+    assert_eq!(
+        order["attestation"]["attested_at_ms"],
+        serde_json::json!(t1().0),
+        "stamped when the declaration was made rather than when the order was built, \
+         which is {} here: {order}",
+        t2().0
+    );
+}
+
+/// A connection is linked while any live device holds it, and gated when the
+/// last one stops.
+///
+/// The quantifier is what a wrong implementation gets wrong: deriving from the
+/// reporting device alone would gate a seller who is still signed in on their
+/// other machine, which is D14's whole point.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_connection_is_linked_while_any_device_holds_it_and_gated_when_the_last_stops(
+    pool: PgPool,
+) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    register(&pool, &TOKEN_A, DESKTOP, "desktop").await;
+
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t0).await;
+    beat(&pool, &TOKEN_A, DESKTOP, holding("Tpt", "connected"), t0).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("linked"),
+        "both machines hold it"
+    );
+
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "signed_out"), t1).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("linked"),
+        "one signing out is not the connection going: the desktop still holds a session, \
+         and gating here would ask a signed-in seller to re-link"
+    );
+
+    beat(&pool, &TOKEN_A, DESKTOP, holding("Tpt", "signed_out"), t2).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("needs_reauth"),
+        "and the last one stopping is, because nothing holds a session any more"
+    );
+}
+
+/// A marketplace dropped from the report derives exactly like one reported
+/// signed out.
+///
+/// The heartbeat deletes what a device stops naming, so the delete arm has to
+/// derive as much as the upsert arm does; a derivation over the named set alone
+/// leaves the connection linked on a session nothing reports at all.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_marketplace_dropped_from_a_report_gates_the_connection_it_held(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t0).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("linked")
+    );
+
+    beat(&pool, &TOKEN_A, LAPTOP, serde_json::json!([]), t1).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("needs_reauth"),
+        "the device stopped naming it, which is how it says the session is gone"
+    );
+    let held = devices(&pool, &TOKEN_A).await;
+    assert!(
+        held.iter().all(|device| device.sessions.is_empty()),
+        "and the session row went with it: {held:?}"
+    );
+}
+
+/// The declaration outlives the device that was registered when it was made.
+///
+/// It is keyed on the marketplace connection, so a seller who replaces a laptop
+/// declares nothing again -- which is the difference between this and anything
+/// stored per device.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_declaration_outlives_the_device_that_was_registered_when_it_was_made(pool: PgPool) {
+    provision(&pool).await;
+    seed_tpt_claimable(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
+    declare(&pool, &TOKEN_A, "Tpt", "Ada Lovelace", t0).await;
+    revoke(&pool, &TOKEN_A, LAPTOP, t1).await;
+
+    register(&pool, &TOKEN_A, DESKTOP, "desktop").await;
+    connected(&pool, &TOKEN_A, DESKTOP).await;
+    let order = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{DESKTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t2,
+        },
+    )
+    .await;
+    assert_eq!(
+        order.status,
+        StatusCode::OK,
+        "the new machine is served: {}",
+        String::from_utf8_lossy(&order.body)
+    );
+    let order: serde_json::Value =
+        serde_json::from_slice(&order.body).expect("the claim view parses");
+    assert_eq!(
+        order["state"], "work",
+        "the replacement machine's own check-in relinks the connection: {order}"
+    );
+    assert_eq!(
+        order["attestation"]["attested_by"], "Ada Lovelace",
+        "and it writes under the declaration the seller made on the machine they no \
+         longer have, which is what keying it on the connection buys: {order}"
+    );
+}
+
+/// A declaration reaches its own tenant's connection and no other's.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_declaration_reaches_only_the_tenant_that_made_it(pool: PgPool) {
+    provision(&pool).await;
+    let declared = declare(&pool, &TOKEN_B, "Tpt", "Grace Hopper", t0).await;
+    assert_eq!(declared.status, StatusCode::OK);
+
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await,
+        None,
+        "the other tenant has no connection at all, and a route that took the \
+         organisation from anywhere but the session would have given it one"
+    );
+    assert_eq!(
+        link_state(&pool, ORG_B, "tpt").await.as_deref(),
+        Some("unlinked"),
+        "and the declaring tenant's row is unlinked rather than linked: declaring is a \
+         fact about the seller, not a session any device reported"
+    );
+
+    declare(&pool, &TOKEN_A, "Tpt", "Ada Lovelace", t1).await;
+    let sanctioned = declare(&pool, &TOKEN_A, "Etsy", "Ada Lovelace", t1).await;
+    assert_eq!(
+        sanctioned.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a marketplace with an official API composes its writes server-side, so no \
+         device ever reads a declaration for it back: {}",
+        String::from_utf8_lossy(&sanctioned.body)
+    );
+    assert_eq!(
+        link_state(&pool, ORG_A, "etsy").await,
+        None,
+        "and the refusal wrote nothing"
+    );
+}
+
+/// A check-in never lifts a revoked connection.
+///
+/// The same reading `register` already applies to a revoked device: a
+/// revocation any machine could undo by restarting would not be the seller's
+/// decision any more.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_check_in_never_lifts_a_revoked_connection(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t0).await;
+
+    // What the console's revoke does, written directly: that route goes through
+    // the credential broker's socket, which no test configures, so this is the
+    // only way to put the row in the state under test.
+    let mut tx = pool.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query("UPDATE connection SET state = 'revoked' WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .execute(&mut *tx)
+        .await
+        .expect("the revocation writes");
+    tx.commit().await.expect("the revocation commits");
+
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t1).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("revoked"),
+        "the device still reports a session and it changes nothing here"
+    );
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "signed_out"), t2).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("revoked"),
+        "and the gating arm leaves it alone too, so neither direction rewrites the \
+         seller's decision"
+    );
 }

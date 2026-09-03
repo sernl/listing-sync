@@ -18,12 +18,28 @@
 //! heartbeat; a device that never reconnects keeps its marketplace cookies
 //! until the marketplace itself expires them. That limit is D14's and is
 //! stated rather than engineered away.
+//!
+//! The heartbeat is also where a connection becomes linked, which is why a
+//! module about devices writes a `connection` row. D1 puts every no-API
+//! marketplace session on the seller's own machine, so a device saying so is
+//! the only evidence of one the server can ever hold: the check-in derives
+//! `connection.state` from what this organisation's live devices report,
+//! `linked` while at least one holds a connected session and `needs_reauth`
+//! when the last one stops. It never writes `unlinked`, which is the state of
+//! a connection no device has reported at all, and never writes over
+//! `revoked`, because a revocation a device lifted by restarting would not be
+//! the seller's decision any more.
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use tam_types::{Marketplace, OrgId, Timestamp};
+use tam_types::{
+    ConnectionEvent, ConnectionId, Marketplace, OrgId, Stamp, SystemComponent, Timestamp,
+};
 
-use crate::codec::{marketplace_to_db, timestamp_from_db, timestamp_to_db, uuid_to_db};
-use crate::connections::marketplace_from_db;
+use crate::codec::{
+    marketplace_to_db, timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db,
+};
+use crate::connections::{marketplace_from_db, record_connection_event, ConnectionEventRecord};
 use crate::{pin_org, StorageError};
 
 /// What a device last reported about one marketplace session.
@@ -192,8 +208,9 @@ impl DeviceRepo {
             })
     }
 
-    /// Stamps the device seen, replaces what it holds, and answers whether it
-    /// is revoked.
+    /// Stamps the device seen, replaces what it holds, derives the link state
+    /// of every marketplace that moves, and answers whether the device is
+    /// revoked.
     ///
     /// The report is the device's whole session set rather than a delta, so a
     /// marketplace the device no longer names is deleted here. A delta would
@@ -228,40 +245,8 @@ impl DeviceRepo {
             return Ok(None);
         };
 
-        let named: Vec<String> = sessions
-            .iter()
-            .map(|session| marketplace_to_db(session.marketplace).to_owned())
-            .collect();
-        sqlx::query!(
-            "DELETE FROM device_marketplace_session \
-             WHERE org_id = $1 AND device_id = $2 AND marketplace <> ALL($3)",
-            uuid_to_db(org.0),
-            device,
-            &named,
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        for session in sessions {
-            sqlx::query!(
-                "INSERT INTO device_marketplace_session \
-                 (org_id, device_id, marketplace, account_label, linked_at, last_used_at, status) \
-                 VALUES ($1, $2, $3, $4, $5, $5, $6) \
-                 ON CONFLICT (org_id, device_id, marketplace) DO UPDATE \
-                     SET account_label = EXCLUDED.account_label, \
-                         status = EXCLUDED.status, \
-                         last_used_at = CASE WHEN EXCLUDED.status = 'connected' \
-                                             THEN EXCLUDED.last_used_at \
-                                             ELSE device_marketplace_session.last_used_at END",
-                uuid_to_db(org.0),
-                device,
-                marketplace_to_db(session.marketplace),
-                session.account_label,
-                seen,
-                session.status.as_str(),
-            )
-            .execute(&mut *tx)
-            .await?;
+        for marketplace in replace_sessions(&mut tx, org, device, sessions, seen).await? {
+            derive_link(&mut tx, org, &marketplace, at).await?;
         }
         tx.commit().await?;
         Ok(Some(DeviceHeartbeat {
@@ -307,6 +292,150 @@ impl DeviceRepo {
         tx.commit().await?;
         Ok(row.map(|row| timestamp_from_db(row.revoked_at)))
     }
+}
+
+/// Replaces what one device holds, answering every marketplace whose link
+/// state this check-in could have moved.
+///
+/// That is the ones it named together with the ones it stopped naming.
+/// Dropping a marketplace from the report is how a device says it no longer
+/// holds that session, so the delete arm has to derive as much as the upsert
+/// arm does; a derivation over the named set alone would leave a connection
+/// linked on a session nothing reports.
+async fn replace_sessions(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    device: &str,
+    sessions: &[DeviceSessionReport<'_>],
+    seen: DateTime<Utc>,
+) -> Result<Vec<String>, StorageError> {
+    let named: Vec<String> = sessions
+        .iter()
+        .map(|session| marketplace_to_db(session.marketplace).to_owned())
+        .collect();
+    let dropped = sqlx::query_scalar!(
+        "DELETE FROM device_marketplace_session \
+         WHERE org_id = $1 AND device_id = $2 AND marketplace <> ALL($3) \
+         RETURNING marketplace",
+        uuid_to_db(org.0),
+        device,
+        &named,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    for session in sessions {
+        sqlx::query!(
+            "INSERT INTO device_marketplace_session \
+             (org_id, device_id, marketplace, account_label, linked_at, last_used_at, status) \
+             VALUES ($1, $2, $3, $4, $5, $5, $6) \
+             ON CONFLICT (org_id, device_id, marketplace) DO UPDATE \
+                 SET account_label = EXCLUDED.account_label, \
+                     status = EXCLUDED.status, \
+                     last_used_at = CASE WHEN EXCLUDED.status = 'connected' \
+                                         THEN EXCLUDED.last_used_at \
+                                         ELSE device_marketplace_session.last_used_at END",
+            uuid_to_db(org.0),
+            device,
+            marketplace_to_db(session.marketplace),
+            session.account_label,
+            seen,
+            session.status.as_str(),
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    let mut touched = named;
+    touched.extend(dropped);
+    touched.sort_unstable();
+    touched.dedup();
+    Ok(touched)
+}
+
+/// Derives one marketplace's link state from what this organisation's live
+/// devices report, and records the transition where there was one.
+///
+/// The quantifier is existential deliberately: a seller with two machines has
+/// a linked connection while either holds a session, and loses it when the
+/// last one stops. A revoked device is not a live one -- it has been asked to
+/// forget its sessions, so counting what it still reports would hold a
+/// connection open on a machine we have disowned, which is the reading the
+/// claim's own device predicate already takes.
+async fn derive_link(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    marketplace: &str,
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    let connected = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM device_marketplace_session dms
+             JOIN device d ON d.org_id = dms.org_id AND d.id = dms.device_id
+             WHERE dms.org_id = $1 AND dms.marketplace = $2
+               AND dms.status = 'connected' AND d.revoked_at IS NULL
+           ) AS "connected!""#,
+        uuid_to_db(org.0),
+        marketplace,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    // Each statement answers a row only where it moved one, so the audit
+    // records transitions rather than check-ins: a device reporting the same
+    // session every thirty seconds writes one row, not one per beat.
+    let moved = if connected {
+        // The only path that may create a connection. A seller who declared
+        // authorship before connecting anything left an `unlinked` row here,
+        // and a live session is what turns it into one the claim will serve.
+        sqlx::query_scalar!(
+            "INSERT INTO connection \
+             (org_id, id, marketplace, state, created_at, updated_at) \
+             VALUES ($1, $2, $3, 'linked', now(), now()) \
+             ON CONFLICT (org_id, marketplace) DO UPDATE \
+                 SET state = 'linked', updated_at = now() \
+                 WHERE connection.state IN ('unlinked', 'linking', 'needs_reauth') \
+             RETURNING id",
+            uuid_to_db(org.0),
+            uuid::Uuid::new_v4(),
+            marketplace,
+        )
+        .fetch_optional(&mut **tx)
+        .await?
+    } else {
+        // Only ever the downgrade of a link that stood. A marketplace the
+        // seller never linked stays `unlinked`, because asking them to re-link
+        // something they never linked names the wrong remedy, and `revoked` is
+        // a decision no check-in may lift.
+        sqlx::query_scalar!(
+            "UPDATE connection SET state = 'needs_reauth', updated_at = now() \
+             WHERE org_id = $1 AND marketplace = $2 AND state IN ('linking', 'linked') \
+             RETURNING id",
+            uuid_to_db(org.0),
+            marketplace,
+        )
+        .fetch_optional(&mut **tx)
+        .await?
+    };
+    let Some(connection) = moved else {
+        return Ok(());
+    };
+    record_connection_event(
+        tx,
+        &ConnectionEventRecord {
+            org,
+            connection: ConnectionId(uuid_from_db(connection)),
+            event: if connected {
+                ConnectionEvent::Linked
+            } else {
+                ConnectionEvent::NeedsReauth
+            },
+            // The vocabulary's `linked` was written for the vault sealing a
+            // credential, and nothing is sealed here. The detail is what
+            // separates the two writers inside one log.
+            detail: Some("device-reported"),
+            stamp: Stamp::system(SystemComponent::Device, at),
+        },
+    )
+    .await
 }
 
 /// The devices and their sessions, folded into one record each. `only` narrows

@@ -536,6 +536,59 @@ And `tam-worker` still builds a server-side TPT adapter, which is the branch D1 
 Step 14 does not complete the split.
 The broker deletion, the exclusivity-claim lift with its pepper re-sited off the vault key, the four crate dispositions of open question 3, and D1's structural build-failing test are all held until the desktop runs the driver against a live marketplace.
 The broker deletion carries a predecessor that was not visible when it was scoped: `crates/tam-session-broker/src/vault.rs` holds the only writer of `connection.state = 'linked'` anywhere in the tree, and the device claim's candidate filter requires a linked connection, so deleting the crate stops every device claiming until a device-reported link exists to replace it.
+Step 15 built that writer, so the gate is now a test rather than an absence: the deletion lands when `a_device_and_a_declaration_are_the_whole_link_a_tpt_write_needs` is green with `vault.rs`'s writer removed.
+It also closes a collision step 15 opened and could not close from its own side.
+`vault.rs` links with `ON CONFLICT (org_id, id)` while `connection` also carries `CONSTRAINT connection_one_per_marketplace UNIQUE (org_id, marketplace)` from migration 0006, and step 15's two writers key on the marketplace and mint their own id, so a connection they created first makes a later broker link raise on the unique index the vault's conflict target does not cover.
+The order that reaches it is device-first-then-broker, which is a seller who connects a device for a marketplace before ever linking it through the broker; a row the vault made first is found and updated by all three writers, so no existing seller is affected.
+Refusing the declaration for a marketplace with an official API removes the permanent half, because Etsy is the one marketplace that stays on the broker branch for good; what is left is a transition window that ends when the vault's writer does.
+Closing it sooner is one conflict target widened in `vault.rs`, which step 15 deliberately did not touch.
+
+Step 15, the device-reported link and the seller's declaration.
+
+The predecessor step 14 named, built: `connection` now has a writer outside the crate that is being deleted, so the deletion has something to be gated on rather than being blocked outright.
+
+The link is derived rather than declared, and the heartbeat is where it happens.
+A check-in already replaces what one device holds, and it now also derives `connection.state` for every marketplace that check-in could have moved: the ones the device named, and the ones it stopped naming, because dropping a marketplace from the report is how a device says the session is gone and a derivation over the named set alone would leave a connection linked on a session nothing reports.
+The rule is existential over live devices — `linked` while at least one non-revoked device reports that marketplace `connected`, `needs_reauth` when the last one stops — which is what D14 asks for, since a seller signed in on their desktop should not be told to re-link because they signed out on the laptop.
+A revoked device does not count, matching the claim's own device predicate: it has been asked to forget its sessions, so holding a connection open on what it still reports would keep a machine we have disowned in the loop.
+Two states are never written.
+`unlinked` is not, because it is the state of a connection no device has reported at all and the heartbeat only ever runs when one has.
+`revoked` is not written over, for the reason `DeviceRepo::register` refuses to clear `revoked_at`: a revocation any machine could lift by restarting would stop being the seller's decision.
+The transitions reach `connection_audit` as `linked` and `needs_reauth` under `Stamp::system(SystemComponent::Device, at)` with the detail `device-reported`, and only where a row actually moved, so a device beating every thirty seconds writes nothing.
+The detail column is carrying the distinction the event vocabulary cannot: `ConnectionEvent::Linked` is documented as a credential being sealed, and nothing is sealed here.
+
+The declaration is the other half, and it is deliberately not derived from anything.
+The copyright declaration TPT's product form requires is the seller's own statement, so it is made by the seller, once, and stored against the marketplace connection rather than against a device — which is what makes it survive a machine being replaced, and is the contract the console's declaration screen builds against:
+
+- `POST /{version}/connections/{marketplace}/authorship`, cookie-session authenticated like every other route on this surface.
+- The `{marketplace}` segment is the marketplace's serde name, `Tes`, `Tpt` or `Etsy`, which is the same spelling the heartbeat body and the generated client vocabulary already use; anything else is `404` with `ResourceMissing`.
+- The body is `{"name": "..."}` and nothing else. The name is trimmed, must be non-empty and is capped at 200 characters, and a violation is `422` naming the bound it applied.
+- The organisation is taken from `OrgContext` and is not representable in the body, so a caller cannot declare authorship into another tenant.
+- The instant is stamped server-side. That is not a departure from the broker's rule that the instant is the seller's: this request *is* the declaration, so our receipt of it is when the seller made it, and an instant off the body would let a caller date their own statement.
+- The answer is `{"marketplace", "name", "attested_at"}`, the declaration as it now stands, so the screen renders what was stored rather than what was sent.
+- Declaring is idempotent and re-declaring replaces. It is a fact about the seller rather than about the link, so it neither links nor unlinks: a marketplace with no connection row gets one in `unlinked`, and an existing row keeps whatever state it stands in, `revoked` included.
+- A marketplace whose transport class is `OfficialApi` is refused `422`, in the shape the heartbeat already refuses one. Its automation runs server-side under a sanctioned token, no device composes a write for it, and nothing would read the declaration back.
+- What the screen has to say, which the route cannot: an unattested TPT connection does not fail loudly. The run reaches the submit and the adapter refuses on the declaration, which settles the item `Failed` and terminal, so declaring afterwards does not bring it back. That is the founder item step 14 raised and did not answer, and it is unchanged by this step.
+
+One defect this step found and fixed, which is the reason the decisive test would have failed even with a writer in place.
+`ConnectionFactsRepo::authorship_for` read on a pool with no tenant pin, correctly for the cross-tenant lease scan it was written for, and step 14 then called it from the API path — where the pool is `tam_app`, which is neither superuser nor BYPASSRLS and reads `connection` under forced row-level security.
+An unpinned read there matches nothing on a fresh pooled connection and raises on one whose transaction-local pin has reverted to the empty string, so until this commit no work order could carry an attestation at all, whatever wrote the row.
+Nothing caught it because the desktop's tests drive a scripted adapter and no test had ever driven `/work` to a real order.
+Both reads now run under `pin_org`, which is inert for `tam_engine` and correct for `tam_app`.
+
+Proves that the link and the attestation a TPT write needs are both produced by what a seller and a device actually do, with nothing seeded.
+Verification, all in `crates/tam-api/tests/devices_flow.rs`: `a_device_and_a_declaration_are_the_whole_link_a_tpt_write_needs` seeds no `connection` row, registers, polls `/work` and gets idle, checks in, declares, and asserts the order comes back carrying the seller's name at the declaration's own instant rather than the order's; `a_connection_is_linked_while_any_device_holds_it_and_gated_when_the_last_stops` drives the quantifier over two machines, which is the half a wrong implementation gets wrong; `a_marketplace_dropped_from_a_report_gates_the_connection_it_held` drives the delete arm; `a_declaration_outlives_the_device_that_was_registered_when_it_was_made` revokes the declaring machine, registers another and asserts the order still carries the declaration; `a_declaration_reaches_only_the_tenant_that_made_it` covers the tenancy and the sanctioned-marketplace refusal; and `a_check_in_never_lifts_a_revoked_connection` drives both arms against a revoked row.
+That fixture is also what step 12d recorded as owed: `seed_tpt_claimable` projects cleanly where `seed_claimable` parks on a taxonomy election, so `/work` returns an order in this file for the first time.
+Kill gate: a connection reaching `linked` on anything other than a live device reporting a connected session.
+
+What this does not prove, stated rather than counted as closed.
+It does not exercise the deletion. The gate recorded in step 14 stands unchanged — this test green with `crates/tam-session-broker/src/vault.rs`'s writer removed — and that is a later commit.
+`vault.rs` is untouched here and the rows it wrote stay valid: both new writers key on `(org_id, marketplace)`, so a row the vault made is found and updated rather than duplicated.
+
+Two things recorded rather than fixed.
+The vault's conflict target does not cover the unique index these writers key on, so a connection they created first makes a later broker link raise rather than update; it is recorded with the deletion that closes it, above.
+And `DeviceRepo::revoke` does not re-derive, so signing out the last connected device from the console leaves its connection reading `linked` until some device checks in.
+Nothing is served on it — the claim independently requires a non-revoked device holding a connected session — so the cost is a stale word on the connections page rather than work going anywhere it should not.
 
 ## 8. Open questions for the founder
 

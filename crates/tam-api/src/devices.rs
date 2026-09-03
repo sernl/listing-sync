@@ -26,8 +26,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{
-    DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord, DeviceSessionReport,
-    DeviceSessionStatus,
+    ConnectionFactsRepo, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
+    DeviceSessionReport, DeviceSessionStatus,
 };
 use tam_types::{Marketplace, Timestamp, TransportClass};
 
@@ -41,6 +41,10 @@ pub const ID_MAX_CHARS: usize = 64;
 pub const NAME_MAX_CHARS: usize = 200;
 pub const FACET_MAX_CHARS: usize = 64;
 pub const LABEL_MAX_CHARS: usize = 200;
+/// The name a seller declares authorship under. Bounded like the rest, and at
+/// the same width as an account label because it is the same kind of thing: a
+/// human name typed into a form.
+pub const AUTHORSHIP_MAX_CHARS: usize = 200;
 
 fn validation(message: &str) -> APIError {
     APIError::new(
@@ -217,6 +221,80 @@ fn reported(session: &HeartbeatSession) -> Result<DeviceSessionReport<'_>, APIEr
     })
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DeclareAuthorshipBody {
+    pub name: String,
+}
+
+/// The declaration as it stands after the request that made it.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthorshipView {
+    pub marketplace: Marketplace,
+    pub name: String,
+    pub attested_at: Timestamp,
+}
+
+/// The marketplace as the path spells it, which is its serde name -- the same
+/// derivation `/{version}/vocabulary/{inventory}` uses, so one spelling serves
+/// the body, the path and the generated client vocabulary.
+fn marketplace_of(raw: &str) -> Option<Marketplace> {
+    Marketplace::ALL
+        .into_iter()
+        .find(|marketplace| serde_json::to_value(marketplace).ok() == Some(raw.into()))
+}
+
+/// The seller declares who authored what one marketplace connection
+/// publishes.
+///
+/// Once per connection rather than once per device, which is what makes it
+/// survive a machine being replaced: the seller declares here and every device
+/// they ever register writes under it, reading it off the work order. TPT's
+/// product form makes this declaration a required field, so without one the
+/// adapter refuses every write -- correctly, because the copyright declaration
+/// is the seller's statement and not a constant a connector may make for them.
+///
+/// The organisation comes from [`OrgContext`] and is not representable in the
+/// body. The instant is stamped here rather than taken from the body, because
+/// this request is the declaration: our receipt of it is when the seller made
+/// it, and an instant a caller supplied would let them date their own
+/// statement.
+///
+/// A marketplace with an official API is refused, for the reason [`reported`]
+/// refuses one: its automation runs server-side under a sanctioned token, no
+/// device ever composes a write for it, and nothing would ever read the
+/// declaration back.
+pub(crate) async fn declare_authorship(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, marketplace)): Path<(String, String)>,
+    Json(body): Json<DeclareAuthorshipBody>,
+) -> Result<Json<AuthorshipView>, APIError> {
+    let marketplace = marketplace_of(&marketplace).ok_or_else(|| {
+        APIError::new(
+            StatusCode::NOT_FOUND,
+            APIErrorEntry::new("no such marketplace")
+                .code(APIErrorCode::ResourceMissing)
+                .kind(APIErrorKind::NotFound),
+        )
+    })?;
+    if marketplace.transport_class() == TransportClass::OfficialApi {
+        return Err(validation(&format!(
+            "{marketplace:?} publishes an official API, so its automation runs \
+             server-side and no device composes a write to declare authorship on"
+        )));
+    }
+    let name = bounded("an authorship name", &body.name, AUTHORSHIP_MAX_CHARS)?;
+    let record = ConnectionFactsRepo::new(state.pool.clone())
+        .declare_authorship(context.org, marketplace, name, (state.wall)())
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    Ok(Json(AuthorshipView {
+        marketplace,
+        name: record.name,
+        attested_at: record.attested_at,
+    }))
+}
+
 pub(crate) async fn register(
     State(state): State<AppState>,
     context: OrgContext,
@@ -305,7 +383,8 @@ pub(crate) async fn revoke_device(
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded, reported, status_of, wipe_outstanding, HeartbeatSession, FACET_MAX_CHARS,
+        bounded, marketplace_of, reported, status_of, wipe_outstanding, HeartbeatSession,
+        FACET_MAX_CHARS,
     };
     use crate::error::APIErrorKind;
     use axum::http::StatusCode;
@@ -377,6 +456,32 @@ mod tests {
             assert!(
                 reported(&session(marketplace, "connected")).is_ok(),
                 "{marketplace:?} is a seller-device marketplace and may be reported"
+            );
+        }
+    }
+
+    #[test]
+    fn a_marketplace_path_segment_is_its_serde_name_and_nothing_else() {
+        for marketplace in Marketplace::ALL {
+            let spelled = serde_json::to_value(marketplace).ok();
+            assert_eq!(
+                marketplace_of(
+                    spelled
+                        .as_ref()
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                ),
+                Some(marketplace),
+                "the path spells a marketplace the way the body and the generated \
+                 vocabulary already do"
+            );
+        }
+        for raw in ["tpt", "TPT", "teacherspayteachers", ""] {
+            assert_eq!(
+                marketplace_of(raw),
+                None,
+                "{raw:?} is not a marketplace, and a route that guessed would declare \
+                 authorship against the wrong connection"
             );
         }
     }
