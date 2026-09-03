@@ -4,7 +4,7 @@
 // create. Pure, so it tests without a component.
 
 import { INVENTORY_ORDER } from '$lib/listings-view';
-import type { InventoryId } from '$lib/generated/vocab';
+import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 
 /** How one marketplace is named to a seller.
  *
@@ -40,6 +40,14 @@ export const SHORT_NAME: Record<InventoryId, string> = {
 	TesUs: 'TES US',
 	TesNz: 'TES NZ',
 	Etsy: 'Etsy'
+};
+
+/** How a marketplace is named where the surface is per-marketplace rather
+ *  than per-inventory: a device holds one login for Tes, not three. */
+export const MARKETPLACE_NAME: Record<Marketplace, string> = {
+	Tpt: 'TPT (Teachers Pay Teachers)',
+	Tes: 'TES (Tes.com)',
+	Etsy: 'Etsy (Etsy.com)'
 };
 
 export function platformTitle(inventory: InventoryId): string {

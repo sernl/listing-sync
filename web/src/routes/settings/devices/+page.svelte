@@ -4,14 +4,16 @@
 	import { agoLabel } from '$lib/elapsed';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
 	import { type BrowserSession, matchNote, merge, sessionLabel } from './merge';
 	import { currentSessionToken, listBrowserSessions, revokeBrowserSession } from './sessions';
 
-	// Keyed locally rather than in `$lib/query`: these three reads belong to
-	// this page and nothing else invalidates them.
+	// The registry read is keyed in `$lib/query` because the dashboard's device
+	// band reads the same rows; the two identity-plane reads are keyed here,
+	// because they belong to this page and nothing else invalidates them.
 	const KEYS = {
-		devices: ['devices'] as const,
+		devices: queryKeys.devices,
 		browserSessions: ['browser-sessions'] as const,
 		currentToken: ['current-session-token'] as const
 	};

@@ -1,0 +1,281 @@
+import { describe, expect, it } from 'vitest';
+import {
+	bandNotice,
+	CHECK_IN_CADENCE_MS,
+	deviceRows,
+	deviceStanding,
+	deviceSummary,
+	needingSignIn,
+	QUIET_AFTER_MS,
+	schedulesRunning,
+	signInStates,
+	type MarketplaceSignIn
+} from './devices-view';
+import { present } from './connection-status';
+import type { ConnectionView, DeviceSessionView, DeviceView } from './api';
+import type { Marketplace } from './generated/vocab';
+
+const NOW = 1_000_000_000;
+
+function session(
+	marketplace: Marketplace,
+	status: DeviceSessionView['status'] = 'connected',
+	label: string | null = 'Miss Cooper'
+): DeviceSessionView {
+	return {
+		marketplace,
+		account_label: label,
+		linked_at: NOW - 10_000,
+		last_used_at: NOW - 5_000,
+		status
+	};
+}
+
+function device(partial: Partial<DeviceView> = {}): DeviceView {
+	return {
+		id: 'd1',
+		name: 'staffroom-laptop',
+		os: 'windows',
+		arch: 'x86_64',
+		app_version: '0.1.0',
+		first_seen_at: NOW - 100_000,
+		last_seen_at: NOW - 1_000,
+		revoked_at: null,
+		wipe_outstanding: false,
+		sessions: [],
+		...partial
+	};
+}
+
+function connection(
+	marketplace: Marketplace,
+	status: ConnectionView['status'] = 'connected'
+): ConnectionView {
+	return {
+		id: `c-${marketplace}`,
+		marketplace,
+		state: 'linked',
+		status,
+		created_at: 1,
+		updated_at: 1
+	};
+}
+
+/** Looked up rather than destructured by position: the band's order is a
+ *  ranked map and a re-rank must not silently retarget a test. */
+function of(states: readonly MarketplaceSignIn[], marketplace: Marketplace): MarketplaceSignIn {
+	const found = states.find((entry) => entry.marketplace === marketplace);
+	if (found === undefined) {
+		throw new Error(`no state for ${marketplace}`);
+	}
+	return found;
+}
+
+describe('a device standing', () => {
+	it('tolerates one missed check-in and reports the second', () => {
+		expect(deviceStanding(device({ last_seen_at: NOW - CHECK_IN_CADENCE_MS }), NOW)).toBe(
+			'checking_in'
+		);
+		expect(deviceStanding(device({ last_seen_at: NOW - QUIET_AFTER_MS }), NOW)).toBe(
+			'checking_in'
+		);
+		expect(deviceStanding(device({ last_seen_at: NOW - QUIET_AFTER_MS - 1 }), NOW)).toBe('quiet');
+	});
+
+	it('reads a revoked machine as signed out however recently it spoke', () => {
+		expect(
+			deviceStanding(device({ last_seen_at: NOW, revoked_at: NOW - 10 }), NOW)
+		).toBe('signed_out');
+	});
+});
+
+describe('the summary', () => {
+	it('counts what is current, what is quiet and what is still to be wiped', () => {
+		const rows = deviceRows(
+			[
+				device({ id: 'a', sessions: [session('Tpt')] }),
+				device({ id: 'b', last_seen_at: NOW - QUIET_AFTER_MS - 1 }),
+				device({ id: 'c', revoked_at: NOW - 5, wipe_outstanding: true, sessions: [session('Tes')] })
+			],
+			NOW
+		);
+		expect(deviceSummary(rows)).toEqual({
+			total: 3,
+			checkingIn: 1,
+			quiet: 1,
+			signedOut: 1,
+			wipesOutstanding: 1
+		});
+	});
+
+	it('lists only the marketplaces a machine currently holds', () => {
+		const rows = deviceRows(
+			[device({ sessions: [session('Tpt'), session('Tes', 'wiped')] })],
+			NOW
+		);
+		expect(rows[0].holding).toEqual(['Tpt']);
+	});
+});
+
+describe('where each login lives', () => {
+	it('names the machine holding a no-API marketplace, and D30 words it', () => {
+		const tpt = of(signInStates([device({ sessions: [session('Tpt')] })], [], NOW), 'Tpt');
+		expect(tpt.state).toBe('signed_in');
+		expect(tpt.device?.name).toBe('staffroom-laptop');
+		expect(tpt.accountLabel).toBe('Miss Cooper');
+		expect(tpt.line).toContain('never leaves that device');
+	});
+
+	it('says a schedule is not running when the holder has gone quiet', () => {
+		const tpt = of(
+			signInStates(
+				[device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tpt')] })],
+				[],
+				NOW
+			),
+			'Tpt'
+		);
+		expect(tpt.state).toBe('signed_in');
+		expect(tpt.tone).toBe('run');
+		expect(tpt.line).toContain('not running');
+	});
+
+	it('separates having no machine at all from needing a sign-in on one', () => {
+		const none = signInStates([], [], NOW);
+		expect(none.every((entry) => entry.state !== 'needs_signin')).toBe(true);
+		expect(of(none, 'Tpt').state).toBe('no_device');
+
+		const some = signInStates([device({ sessions: [session('Tpt')] })], [], NOW);
+		expect(of(some, 'Tes').state).toBe('needs_signin');
+	});
+
+	it('separates a registry emptied by signing out from one that was never filled', () => {
+		const states = signInStates(
+			[device({ revoked_at: NOW - 5, sessions: [session('Tpt')] })],
+			[],
+			NOW
+		);
+		const tpt = of(states, 'Tpt');
+		expect(tpt.state).toBe('all_signed_out');
+		expect(tpt.line).toContain('Every machine of yours is signed out');
+		expect(needingSignIn(states)).toEqual([]);
+	});
+
+	it('names every marketplace whatever the order is ranked as', () => {
+		const states = signInStates([], [], NOW);
+		expect([...states].map((entry) => entry.marketplace).sort()).toEqual(['Etsy', 'Tes', 'Tpt']);
+	});
+
+	it('never asks for a device for a marketplace with a sanctioned API', () => {
+		const etsy = of(signInStates([], [connection('Etsy')], NOW), 'Etsy');
+		expect(etsy.state).toBe('served_here');
+		expect(etsy.line).toContain('No device is needed');
+	});
+
+	it('does not call an unverified server-side connection served', () => {
+		for (const status of ['checking', 'unstable'] as const) {
+			const etsy = of(signInStates([], [connection('Etsy', status)], NOW), 'Etsy');
+			expect(etsy.state).toBe('unverified');
+			expect(etsy.line).toBe(present(status).explanation);
+			expect(etsy.tone).toBe(present(status).tone);
+		}
+	});
+
+	it('still reports a dropped server-side connection, in the connections page words', () => {
+		const etsy = of(signInStates([], [connection('Etsy', 'disconnected')], NOW), 'Etsy');
+		expect(etsy.state).toBe('needs_signin');
+		expect(etsy.tone).toBe('bad');
+		expect(etsy.line).toBe(present('disconnected').explanation);
+	});
+
+	it('separates a marketplace with no account linked from one that broke', () => {
+		const etsy = of(signInStates([], [], NOW), 'Etsy');
+		expect(etsy.state).toBe('no_account');
+		expect(needingSignIn(signInStates([], [], NOW))).toEqual([]);
+	});
+
+	it('ignores a signed-out machine when deciding who holds a login', () => {
+		const states = signInStates(
+			[
+				device({ id: 'gone', revoked_at: NOW - 5, sessions: [session('Tpt')] }),
+				device({ id: 'here', sessions: [session('Tes')] })
+			],
+			[],
+			NOW
+		);
+		expect(of(states, 'Tpt').state).toBe('needs_signin');
+		expect(of(states, 'Tes').state).toBe('signed_in');
+	});
+
+	it('collects what is waiting on a sign-in', () => {
+		const waiting = needingSignIn(
+			signInStates([device({ sessions: [session('Tpt')] })], [connection('Etsy')], NOW)
+		);
+		expect(waiting.map((entry) => entry.marketplace)).toEqual(['Tes']);
+	});
+});
+
+describe('whether anything scheduled can run', () => {
+	it('needs a machine that is both checking in and holding a login', () => {
+		expect(schedulesRunning(deviceRows([device({ sessions: [session('Tpt')] })], NOW))).toBe(true);
+		expect(schedulesRunning(deviceRows([device()], NOW))).toBe(false);
+		expect(
+			schedulesRunning(
+				deviceRows(
+					[device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tpt')] })],
+					NOW
+				)
+			)
+		).toBe(false);
+	});
+});
+
+describe('what the band says when nothing is running', () => {
+	function summaryOf(devices: DeviceView[]) {
+		const rows = deviceRows(devices, NOW);
+		return { summary: deviceSummary(rows), running: schedulesRunning(rows) };
+	}
+
+	it('says nothing at all when there is no machine to speak about', () => {
+		const { summary, running } = summaryOf([]);
+		expect(bandNotice(summary, running)).toBeNull();
+	});
+
+	it('says nothing while a machine is checking in and holding a login', () => {
+		const { summary, running } = summaryOf([device({ sessions: [session('Tpt')] })]);
+		expect(bandNotice(summary, running)).toBeNull();
+	});
+
+	it('does not blame silence for a registry the seller signed out', () => {
+		const { summary, running } = summaryOf([
+			device({ revoked_at: NOW - 5, sessions: [session('Tpt')] })
+		]);
+		const notice = bandNotice(summary, running);
+		expect(notice?.kind).toBe('all_signed_out');
+		expect(notice?.body).not.toContain('checked in');
+	});
+
+	it('blames silence only where a live machine has actually gone quiet', () => {
+		const { summary, running } = summaryOf([
+			device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tpt')] })
+		]);
+		const notice = bandNotice(summary, running);
+		expect(notice?.kind).toBe('nothing_checking_in');
+		expect(notice?.body).toContain('checked in for over two hours');
+	});
+
+	it('says a current machine has nothing to run when it holds no login', () => {
+		const { summary, running } = summaryOf([device()]);
+		const notice = bandNotice(summary, running);
+		expect(notice?.kind).toBe('no_login');
+		expect(notice?.body).toContain('nothing for it to run');
+	});
+
+	it('prefers the signed-out sentence over silence when both could be said', () => {
+		const { summary, running } = summaryOf([
+			device({ id: 'a', revoked_at: NOW - 5, last_seen_at: NOW - QUIET_AFTER_MS - 1 }),
+			device({ id: 'b', revoked_at: NOW - 5, last_seen_at: NOW - QUIET_AFTER_MS - 1 })
+		]);
+		expect(bandNotice(summary, running)?.kind).toBe('all_signed_out');
+	});
+});

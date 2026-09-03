@@ -36,6 +36,12 @@ The run timeline is not rebuilt here; a run links to `/sync/{job}`, which alread
 `/settings/devices` already renders the registry in full and stays the place a machine is signed out.
 The dashboard band and the item screen link into it rather than duplicating it.
 
+The dashboard band answers three questions in the order a seller asks them.
+Is anything scheduled running at all, which is true only where a machine is checking in and holds at least one marketplace login.
+Where does each marketplace's login live, which the transport branch decides: for TPT and Tes the device registry is the only place one can be, because no server has ever held one, and for Etsy the connection record is, because no device does.
+Which machines exist, when each was last heard from, and whether a machine signed out still has a wipe outstanding.
+A device checks in hourly, so the band calls a machine current within two cadences and quiet after that: one missed check-in is a laptop that slept, and two is the first silence that carries information.
+
 ## The states, and the words for them
 
 The state set is derived from what the API serves and from nothing else.
@@ -128,3 +134,8 @@ Filtering is therefore title search, marketplace and standing only.
 G7. Transport class is not served.
 `TransportClass` is generated into the client's vocabulary but appears on no view, so the console mirrors the Rust mapping rather than reading it.
 Serving it on `VocabularyView` would remove the mirror.
+
+G8. Removing a listing from one marketplace without deleting the resource.
+`DELETE /{version}/products/{id}` with `remove_from` deletes the product and removes it from the marketplaces named, and `ItemOperation::Remove` is enqueued only by the migrate drain, so a teacher retiring a resource from Tes while keeping it on TPT has no path.
+The research asks for exactly this verb and asks that it not be called a refresh.
+Shape needed: a per-mapping removal, either its own endpoint or an intent on `POST /{version}/jobs`.

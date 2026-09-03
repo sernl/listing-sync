@@ -11,6 +11,7 @@
 		salesCapture,
 		syncTally
 	} from '$lib/dashboard';
+	import DeviceBand from '$lib/DeviceBand.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import { badgesFor, formatPrice, rowStatus } from '$lib/listings-view';
 	import PageHead from '$lib/PageHead.svelte';
@@ -34,6 +35,13 @@
 	const connections = createQuery(() => ({
 		queryKey: queryKeys.connections,
 		queryFn: () => api.connections()
+	}));
+	// The seller's own machines. Decision D1 puts TPT and Tes work on them, so
+	// whether one is checking in belongs on the first screen rather than in
+	// settings: a machine that is off is a schedule that is not running.
+	const devices = createQuery(() => ({
+		queryKey: queryKeys.devices,
+		queryFn: () => api.devices().then((view) => view.devices)
 	}));
 	const drain = createQuery(() => ({
 		queryKey: queryKeys.drainStats,
@@ -200,6 +208,12 @@
 			{/if}
 		</Panel>
 	</div>
+
+	<DeviceBand
+		devices={devices.data ?? []}
+		connections={connections.data?.connections ?? []}
+		pending={devices.isPending || connections.isPending}
+	/>
 
 	<Panel
 		title="Recently updated listings"

@@ -49,6 +49,10 @@ export const queryKeys = {
 	 *  that one holds job views, this one holds the items inside them, and one
 	 *  key under two shapes is a cache collision. */
 	inventoryWork: ['inventory-work'] as const,
+	/** The seller's own machines. Shared by the dashboard's device band and by
+	 *  the devices page, which is the one place a machine is signed out, so a
+	 *  revoke there moves the band on the next read. */
+	devices: ['devices'] as const,
 	mappings: ['mappings'] as const,
 	status: ['status'] as const,
 	org: ['org'] as const,
