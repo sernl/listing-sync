@@ -8,6 +8,11 @@ description = "The Teachouse desktop client: the seller's device, where every no
 [lib]
 name = "tam_desktop"
 path = "src/lib.rs"
+# `cdylib` is what an Android `System.loadLibrary` opens, and Gradle has
+# nothing to package without it; `staticlib` is the iOS half of the same
+# requirement. `rlib` stays first-class because the binary and the tests link
+# the library normally.
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
 name = "teachouse"

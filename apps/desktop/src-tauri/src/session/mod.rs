@@ -10,8 +10,17 @@
 //! and the status type the interface reads is a separate struct that has no
 //! field the jar could travel in.
 
+// `keyring` 3.6.3 has no Android backend, and this crate's manifest declares
+// it only for the three platforms that do, so on Android the module below has
+// no crate to reach. What stands in its place refuses rather than forgets;
+// `unavailable` says why.
+#[cfg(not(target_os = "android"))]
 pub mod keychain;
 pub mod memory;
+// Compiled everywhere though selected only on Android, because it holds no
+// platform-specific code and a module compiled only for a target no lane
+// builds is a module whose tests never run.
+pub mod unavailable;
 
 use core::future::Future;
 use core::pin::Pin;

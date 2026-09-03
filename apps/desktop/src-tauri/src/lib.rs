@@ -43,7 +43,13 @@ use crate::device::DeviceIdentity;
 use crate::heartbeat::cycle;
 use crate::run::wall_now;
 use crate::scheduler::Scheduler;
-use crate::session::keychain::KeychainSessionStore;
+// The credential store this platform actually has. `keyring` covers Windows,
+// macOS and Linux; on Android it has no backend at all, and what stands in for
+// it there refuses a capture rather than accepting one it cannot keep.
+#[cfg(not(target_os = "android"))]
+use crate::session::keychain::KeychainSessionStore as PlatformSessionStore;
+#[cfg(target_os = "android")]
+use crate::session::unavailable::UnavailableSessionStore as PlatformSessionStore;
 use crate::state::DesktopState;
 use crate::webview_session::WebviewSession;
 use crate::work::{DeviceWork, LiveMarketplaces};
@@ -56,6 +62,7 @@ use crate::work::{DeviceWork, LiveMarketplaces};
 /// degraded mode to fall back to: a client that cannot resolve its own data
 /// directory would generate a new device identity on every launch and
 /// re-register forever.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[expect(
     clippy::exit,
     reason = "tauri::generate_context! expands to a process exit on a malformed bundle; the call \
@@ -63,10 +70,29 @@ use crate::work::{DeviceWork, LiveMarketplaces};
 )]
 pub fn run() {
     startup::catch_panics();
-    let built = tauri::Builder::default()
-        .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+    // What replaces the timer on a phone. The activity is resumed whenever the
+    // seller brings the application forward, and that is the only moment a
+    // device which was signed out elsewhere can learn it, because D3 leaves it
+    // no background schedule to learn it in.
+    #[cfg(mobile)]
+    let resumed = Arc::new(tokio::sync::Notify::new());
+    #[cfg(mobile)]
+    let on_resume = Arc::clone(&resumed);
+    // A second clone, moved into `setup` rather than borrowed by it: the
+    // closure outlives this function.
+    #[cfg(mobile)]
+    let on_start = Arc::clone(&resumed);
+    let builder = tauri::Builder::default().plugin(tauri_plugin_os::init());
+    // `tauri-plugin-updater` declares `platforms.support.android.level = "none"`
+    // in its own manifest, so a phone updates through the store it was
+    // installed from and never through us. Registering it there anyway would
+    // give the console an update surface that answers nothing. Shadowing
+    // rather than a `mut` binding, which would be pointlessly mutable on the
+    // build where this line is compiled out.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let built = builder
+        .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             let device: DeviceIdentity =
                 device::load_or_create(&data_dir, &tauri_plugin_os::hostname())?;
@@ -77,7 +103,7 @@ pub fn run() {
             let origin = base_url();
             let sessions = Arc::new(WebviewSession::new(app.handle().clone(), &origin)?);
             let plane = Arc::new(HttpControlPlane::against(&origin, sessions)?);
-            let store = Arc::new(KeychainSessionStore::new());
+            let store = Arc::new(PlatformSessionStore::new());
             // Method-call syntax rather than `Arc::clone`, which would resolve
             // its own type parameter against the annotation and refuse the
             // unsizing coercion these two bindings exist to perform.
@@ -99,7 +125,14 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 payload::sweep(&sweep_dir).await.ok();
             });
+            #[cfg(desktop)]
             tauri::async_runtime::spawn(run_schedule(app.handle().clone(), work));
+            #[cfg(mobile)]
+            tauri::async_runtime::spawn(run_schedule(
+                app.handle().clone(),
+                work,
+                Arc::clone(&on_start),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -128,21 +161,31 @@ pub fn run() {
         Ok(data_dir) => startup::opening(&data_dir),
         Err(why) => startup::fatal(&why),
     }
-    app.run(|_, _| {});
+    app.run(move |_app, _event| {
+        #[cfg(mobile)]
+        if matches!(_event, tauri::RunEvent::Resumed) {
+            on_resume.notify_one();
+        }
+    });
+}
+
+/// One cycle: check in, then pull whatever work the entitlement gate still
+/// allows.
+///
+/// The check-in is the half that matters today, because it is how a device the
+/// seller signed out from the console learns to wipe between console loads.
+///
+/// Nothing here can panic: `cycle` swallows a failed check-in on purpose — an
+/// offline period is not a revocation — and returns a report rather than
+/// raising. That is what makes the dropped join handles below safe, which is
+/// the property the workspace's ban on bare `tokio::spawn` protects.
+async fn run_cycle<W: scheduler::WorkSource>(app: &AppHandle, scheduler: &Scheduler, work: &W) {
+    let state = app.state::<DesktopState>();
+    cycle(&state, state.control_plane(), scheduler, work, wall_now()).await;
 }
 
 /// The local timer, running for the life of the process.
-///
-/// One cycle per tick: check in, then pull whatever work the entitlement gate
-/// still allows. The check-in is the half that matters today, because it is
-/// how a device the seller signed out from the console learns to wipe between
-/// console loads; the work pull reaches [`NoWork`] until the engine driver
-/// split lands a real source.
-///
-/// Nothing in the loop can panic: `cycle` swallows a failed check-in on
-/// purpose — an offline period is not a revocation — and returns a report
-/// rather than raising. That is what makes the dropped join handle safe here,
-/// which is the property the workspace's ban on bare `tokio::spawn` protects.
+#[cfg(desktop)]
 #[expect(
     clippy::infinite_loop,
     reason = "a supervisor loop for the life of the process; the application exits by exiting"
@@ -157,7 +200,30 @@ async fn run_schedule<W: scheduler::WorkSource>(app: AppHandle, work: W) {
     let mut ticks = tokio::time::interval(scheduler.cadence());
     loop {
         ticks.tick().await;
-        let state = app.state::<DesktopState>();
-        cycle(&state, state.control_plane(), &scheduler, &work, wall_now()).await;
+        run_cycle(&app, &scheduler, &work).await;
+    }
+}
+
+/// The same cycle on a phone, with no timer behind it.
+///
+/// D3 limits a phone to work the seller starts, and the platform is why:
+/// Android's Doze stops `JobScheduler` and therefore `WorkManager`, and the
+/// battery-optimisation exemption that would evade it is barred by Play
+/// policy. A cadence here would be a promise the platform breaks, so there is
+/// none — the scheduler's own cadence field is never read on this path, and it
+/// is constructed only for the marketplace set it carries. What replaces the
+/// timer is the seller: one cycle at start-up, one on every resume, and the
+/// console's own commands in between.
+#[cfg(mobile)]
+async fn run_schedule<W: scheduler::WorkSource>(
+    app: AppHandle,
+    work: W,
+    resumed: Arc<tokio::sync::Notify>,
+) {
+    let scheduler = Scheduler::hourly_over_seller_device_marketplaces();
+    run_cycle(&app, &scheduler, &work).await;
+    loop {
+        resumed.notified().await;
+        run_cycle(&app, &scheduler, &work).await;
     }
 }

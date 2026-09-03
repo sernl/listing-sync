@@ -211,7 +211,11 @@ Clock-tamper detection is not implemented; the gate reads the wall clock and bel
 The updater is configured but cannot update anything.
 Its endpoint is the CrabNebula format with literal `ORG` and `APP` placeholders, its public key is the string `PLACEHOLDER_FOUNDER_SUPPLIES_THIS`, and `createUpdaterArtifacts` is `false`.
 The icons are a generated placeholder set, not artwork.
-macOS, Android and iOS are not built; D2 defers them, and the mobile targets additionally need a hand-written Tauri plugin for Android cookie access and a `crate-type` change for the mobile entry point.
+macOS, Android and iOS are not built; D2 defers them, and the mobile targets additionally need a `crate-type` change for the mobile entry point.
+Corrected 2026-09-03: this sentence also claimed a hand-written Tauri plugin for Android cookie access, and that is not true of the versions this tree resolves.
+`wry` 0.55.1 implements `cookies_for_url` on Android (`src/android/mod.rs:423`) by calling the Kotlin method `RustWebView.getCookies(url)` (`src/android/main_pipe.rs:457`), whose body is `CookieManager.getInstance().getCookie(url)` (`src/android/kotlin/RustWebView.kt:90`) — the platform's own store, so HttpOnly cookies are included.
+What is genuinely absent there is `cookies()`, the all-URLs read, which returns an empty vector, and `set_cookie` and `delete_cookie`, which are no-ops; none of the three is called by this crate.
+`docs/notes/design/android-client.md` carries the reading and its consequences.
 
 ## What the founder must supply
 
