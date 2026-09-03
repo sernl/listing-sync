@@ -209,7 +209,7 @@
 <div class="page">
 	<PageHead
 		icon="✚"
-		title="New listing"
+		title="New item"
 		description="Author the item once, on the same fields TPT asks for, and choose which marketplaces carry it."
 	>
 		{#snippet aside()}
