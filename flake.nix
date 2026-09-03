@@ -298,6 +298,12 @@
             shellHook = ''
               export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules''${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}"
             '';
+            # Without this, sqlx's compile-time query macros connect to the
+            # DATABASE_URL in .env, so a bare `cargo check` in this shell
+            # validates against the development database. The justfile exports
+            # the same value, and db-prepare and db-verify set it back to false
+            # where a live connection is the point.
+            SQLX_OFFLINE = "true";
             # The Windows cross-compile needs an *unwrapped* clang. Measured:
             # nixpkgs' cc-wrapper is not multi-target aware, so it reads
             # cargo-xwin's MSVC-style `/imsvc` include flags as filenames and
