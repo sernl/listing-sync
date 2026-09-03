@@ -531,7 +531,7 @@ fn node_key(id: u64, market: Market) -> Option<String> {
 /// The canonical id is derived from the GB native id, which is total over the
 /// seeding domain and durable, so reseeding is idempotent and no later capture
 /// can re-key a term that already exists.
-fn canonical_id(gb_native_id: u64) -> CanonicalTermId {
+pub(crate) fn canonical_id(gb_native_id: u64) -> CanonicalTermId {
     let namespace = uuid::Uuid::from_bytes(NAMESPACE_TAM_TAXONOMY.0);
     let derived = uuid::Uuid::new_v5(&namespace, format!("tes:{gb_native_id}").as_bytes());
     CanonicalTermId(tam_types::Uuid(derived.into_bytes()))

@@ -12,6 +12,7 @@ pub mod listing;
 pub mod native_labels;
 pub mod project;
 pub mod provenance;
+pub mod subjects;
 pub mod tes;
 pub mod tpt_form;
 
@@ -24,6 +25,10 @@ pub use project::{
     GradeIngest, TermsOutcome,
 };
 pub use provenance::{check_native_ids, ForeignNativeId, ForeignNativeIds};
+pub use subjects::{
+    derive_subject_crosswalk, SubjectCrosswalk, SubjectError, SubjectMismatch,
+    SubjectMismatchReason, SubjectResidue,
+};
 pub use tes::{
     derive_crosswalk, derive_interval, parse_tree, Crosswalk, CrosswalkError, Mismatch,
     MismatchReason, Residue, ResidueNode, TesAgeRange, TesSubject, TesTopic, TesTree,

@@ -152,6 +152,15 @@ pub struct TaxonomyTag {
     pub category: Option<String>,
     #[serde(default)]
     pub legacy_id: Option<String>,
+    /// The slug of the facet this one hangs under, where the capture states
+    /// one. `taxonomyTags` addresses a parent by slug rather than by
+    /// `legacyId`, so this is a key into the same map.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// A retired facet: it reads back on existing products and is never
+    /// offered on create.
+    #[serde(default)]
+    pub is_hidden: Option<bool>,
 }
 
 /// A year group whose declared ages no Tes GB band admits. Reported rather

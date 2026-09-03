@@ -1,0 +1,367 @@
+{
+  "_source": "Authored against docs/design/data/tpt-vocabulary.json (taxonomyTags, category PreK-12-Subject-Area, polled 2026-09-03) and docs/design/data/tes-taxonomy-GB.json (43 subjects, 453 topics, crawled 2026-08-25). No network contact.",
+  "_status": "DRAFT awaiting founder confirmation, drafted 2026-09-03. The team lead confirmed these twenty rows as the working baseline on 2026-09-03 and the derivation builds against them, so a later change to a row is a data edit and a re-run rather than a redesign.",
+  "_rulings": {
+    "date": "2026-09-03",
+    "A": "A row may cross levels in both directions: a TPT child facet may pair with a Tes subject, and a TPT root with a Tes topic.",
+    "B": "A TPT facet's canonical TermKind is a per-term modelling choice rather than its parentId depth, so a child may be minted as Subject. TPT's Subject and Topic axes bind one flat taxonomyTags field, so nothing on the platform contradicts it.",
+    "C": "A hidden facet holds no edge at all: unrecognised on ingest and retained verbatim, never an Exact edge that would post a retired slug on create.",
+    "D": "`for-all-subject-areas` holds the Exact claim on `Cross-curricular topics`; `not-subject-specific` reaches it through Broader."
+  },
+  "kindMeaning": {
+    "exact": "The facet and the one named Tes node denote the same thing. The node's existing canonical term is reused -- its id is preserved, its label becomes the facet's -- and gains an Exact edge into the TPT vocabulary.",
+    "broader": "The facet is broader than each named Tes node. It mints its own canonical term holding an Exact edge into TPT, and each named node's canonical term gains a Broader edge into that same TPT path. Many-to-one onto a TPT path, legal only through Broader.",
+    "narrower": "The facet is narrower than the one named Tes node, whose Exact claim is already taken. It mints its own canonical term holding an Exact edge into TPT and a Broader edge into the Tes path.",
+    "null": "The derivation cannot say. The facet mints a term holding its TPT edge alone, unless it is hidden, in which case ruling C emits nothing at all."
+  },
+  "withdrawal": "A root's broader list states the root's full denotation. Where a child of that root holds an exact claim on one of the listed nodes, the derivation withdraws that node from the root's broader set, because a term holding both an Exact edge and a Broader edge onto different TPT paths projects Ambiguous and blocks. The lists below are therefore denotations, not the edge set.",
+  "childPairing": "The 120 children are not authored. Each is paired by normalised description against the Tes nodes inside its root's denotation -- the listed subjects and their topics -- and a child matching none is minted with its TPT edge alone. 8 children match a Tes subject and 19 a Tes topic, one of them (`handwriting`) matching two.",
+  "pairs": [
+    {
+      "tpt": "art",
+      "tptName": "Art",
+      "tptHidden": false,
+      "kind": "exact",
+      "tes": [
+        {
+          "id": 1000741,
+          "level": "subject",
+          "description": "Art and design"
+        }
+      ],
+      "rationale": "Tes files visual art under `Art and design` and nothing else; the early-years `Expressive arts and design` combines art, music, drama and dance, so it is not this facet's counterpart."
+    },
+    {
+      "tpt": "arts",
+      "tptName": "Arts & Music",
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "A retired root spanning `Art and design`, `Music` and `Drama` at once. Hidden, so under ruling C it holds no edge, and its denotation is already claimed by `art` and `performing-arts`, which may hold one."
+    },
+    {
+      "tpt": "english-language-arts",
+      "tptName": "English Language Arts",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000756,
+          "level": "subject",
+          "description": "English"
+        },
+        {
+          "id": 1000694,
+          "level": "subject",
+          "description": "Literacy for early years"
+        }
+      ],
+      "rationale": "Tes splits one field by phase -- `English` for school age, `Literacy for early years` for EYFS -- so one TPT root denotes both and is broader than either."
+    },
+    {
+      "tpt": "for-all-subject-areas",
+      "tptName": "For All Subjects",
+      "tptHidden": false,
+      "kind": "exact",
+      "tes": [
+        {
+          "id": 1000880,
+          "level": "subject",
+          "description": "Cross-curricular topics"
+        }
+      ],
+      "rationale": "`Cross-curricular topics` is the one Tes subject meaning the resource is not filed under a single subject. Ruling D gives it the Exact claim; the exact-reverse index admits only one."
+    },
+    {
+      "tpt": "health",
+      "tptName": "Health",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000988,
+          "level": "topic",
+          "under": "Primary science",
+          "description": "Health"
+        },
+        {
+          "id": 1000996,
+          "level": "topic",
+          "under": "Biology",
+          "description": "Health"
+        }
+      ],
+      "rationale": "Ruling A. Tes carries health only at topic level, under `Primary science` and under `Biology`, and this root is broader than both. The nearest Tes subject, `Personal, social and health education`, is wider than health alone and is therefore not the pair."
+    },
+    {
+      "tpt": "holidays-seasonal",
+      "tptName": "Holidays/Seasonal",
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "Retired, and Tes files seasonal material as topics under `Cross-curricular topics` rather than as a subject."
+    },
+    {
+      "tpt": "math",
+      "tptName": "Math",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000896,
+          "level": "subject",
+          "description": "Mathematics"
+        },
+        {
+          "id": 1000454,
+          "level": "subject",
+          "description": "Maths for early years"
+        }
+      ],
+      "rationale": "The same phase split as English: `Mathematics` for school age, `Maths for early years` for EYFS."
+    },
+    {
+      "tpt": "not-subject-specific",
+      "tptName": "Not Subject Specific",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 1000880,
+          "level": "subject",
+          "description": "Cross-curricular topics"
+        }
+      ],
+      "rationale": "Ruling D. Co-extensive with `Cross-curricular topics` but second to `for-all-subject-areas` for the Exact claim, so its own term holds a Broader edge into the Tes path instead -- many-to-one onto a Tes path, legal only through Broader."
+    },
+    {
+      "tpt": "other-art",
+      "tptName": "Other (Art)",
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "Retired TPT catch-all under art; Tes carries no `other` subject to denote."
+    },
+    {
+      "tpt": "performing-arts",
+      "tptName": "Performing Arts",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000757,
+          "level": "subject",
+          "description": "Drama"
+        },
+        {
+          "id": 1000912,
+          "level": "subject",
+          "description": "Music"
+        }
+      ],
+      "rationale": "Denotes Tes `Drama` and `Music` together. Both are withdrawn by the exact claims of its own children `drama` and `music`, which leaves this root broader over nothing and holding its TPT edge alone. `Expressive arts and design` is excluded: it also covers visual art."
+    },
+    {
+      "tpt": "phonics",
+      "tptName": "Phonics",
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "Retired. It matches the Tes topic `Literacy for early years / Phonics` (1000699), but ruling C gives a hidden facet no edge, so the match is recorded here and not seeded."
+    },
+    {
+      "tpt": "phonics-and-phonemic-awareness",
+      "tptName": "Phonics and Phonemic Awareness",
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "Retired, and duplicates TPT's own live child `phonics-and-phonological-awareness` under `english-language-arts`."
+    },
+    {
+      "tpt": "physical-education",
+      "tptName": "Physical Education",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000917,
+          "level": "subject",
+          "description": "Physical education"
+        },
+        {
+          "id": 1000726,
+          "level": "subject",
+          "description": "Physical development"
+        }
+      ],
+      "rationale": "The phase split again: `Physical education` for school age and `Physical development` for EYFS. The only root whose label matches a Tes subject label exactly."
+    },
+    {
+      "tpt": "science",
+      "tptName": "Science",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000928,
+          "level": "subject",
+          "description": "Primary science"
+        },
+        {
+          "id": 1000993,
+          "level": "subject",
+          "description": "Biology"
+        },
+        {
+          "id": 1001002,
+          "level": "subject",
+          "description": "Chemistry"
+        },
+        {
+          "id": 1001141,
+          "level": "subject",
+          "description": "Physics"
+        }
+      ],
+      "rationale": "Denotes the primary subject and the three sciences Tes separates. Three of the four are withdrawn by the exact claims of its own children `biology`, `chemistry` and `physics`, leaving this root broader over `Primary science` alone. `Understanding the world` is excluded: the EYFS area also covers geography, history and RE."
+    },
+    {
+      "tpt": "social-emotional",
+      "tptName": "Social Emotional",
+      "tptHidden": false,
+      "kind": null,
+      "tes": [],
+      "rationale": "The containment runs the wrong way. Tes folds this field into `Personal, social and health education`, which is wider than this facet and wider than TPT `health`, so no edge in either direction states the truth."
+    },
+    {
+      "tpt": "social-studies",
+      "tptName": "Social Studies",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000849,
+          "level": "subject",
+          "description": "History"
+        },
+        {
+          "id": 1000792,
+          "level": "subject",
+          "description": "Geography"
+        },
+        {
+          "id": 1000745,
+          "level": "subject",
+          "description": "Citizenship"
+        },
+        {
+          "id": 1001265,
+          "level": "subject",
+          "description": "Government and politics"
+        },
+        {
+          "id": 1001202,
+          "level": "subject",
+          "description": "Economics"
+        },
+        {
+          "id": 1001242,
+          "level": "subject",
+          "description": "Sociology"
+        },
+        {
+          "id": 1001191,
+          "level": "subject",
+          "description": "Business and finance"
+        },
+        {
+          "id": 1001264,
+          "level": "subject",
+          "description": "Law and legal studies"
+        },
+        {
+          "id": 1100007,
+          "level": "subject",
+          "description": "Anthropology"
+        },
+        {
+          "id": 1001235,
+          "level": "subject",
+          "description": "Psychology"
+        },
+        {
+          "id": 1001595,
+          "level": "subject",
+          "description": "Aboriginal studies"
+        },
+        {
+          "id": 1000484,
+          "level": "subject",
+          "description": "Philosophy and ethics"
+        },
+        {
+          "id": 1000926,
+          "level": "subject",
+          "description": "Religious education"
+        }
+      ],
+      "rationale": "The widest row: thirteen Tes subjects against one TPT root. Three -- `Geography`, `Economics` and `Psychology` -- are withdrawn by the exact claims of its own children, leaving it broader over ten."
+    },
+    {
+      "tpt": "speaking-and-listening",
+      "tptName": "Speaking & Listening",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1000697,
+          "level": "topic",
+          "under": "Literacy for early years",
+          "description": "Speaking and listening"
+        },
+        {
+          "id": 1000765,
+          "level": "topic",
+          "under": "English",
+          "description": "Speaking and listening"
+        }
+      ],
+      "rationale": "Ruling A. Tes carries this only at topic level and twice, under `Literacy for early years` and under `English`, so the root is broader than both."
+    },
+    {
+      "tpt": "trigonometry",
+      "tptName": "Trigonometry",
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "Retired, and Tes carries trigonometry below topic level under `Mathematics`."
+    },
+    {
+      "tpt": "word-problems",
+      "tptName": "Word Problems",
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "Retired, and Tes carries word problems below topic level rather than as a subject."
+    },
+    {
+      "tpt": "world-languages",
+      "tptName": "World Languages",
+      "tptHidden": false,
+      "kind": "broader",
+      "tes": [
+        {
+          "id": 1100000,
+          "level": "subject",
+          "description": "Languages"
+        },
+        {
+          "id": 1001123,
+          "level": "subject",
+          "description": "Classics"
+        }
+      ],
+      "rationale": "Denotes `Languages` and `Classics`; TPT's own `latin` child sits under this root, which is what puts Classics here rather than under an ancient-history reading."
+    }
+  ]
+}

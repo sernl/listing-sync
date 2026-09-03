@@ -21,7 +21,10 @@ So the inversion is one derivation, not four.
 
 Subject and topic invert.
 A new pure module `crates/tam-taxonomy/src/subjects.rs` derives them from `docs/design/data/tpt-vocabulary.json`, whose `taxonomyTags.options` holds 358 facets addressed by slug, with `parentId` naming another slug rather than a `legacyId`.
-Within `category: PreK-12-Subject-Area` there are 140 facets: 20 with no parent, which become canonical subjects, and 120 children, which become canonical topics; seven of the 140 carry `isHidden: true` and are minted as terms but recorded `NoCounterpart` for write, because a hidden facet reads back and is not offered on create.
+Within `category: PreK-12-Subject-Area` there are 140 facets: 20 with no parent, which become canonical subjects, and 120 children, which become canonical topics; Seven of the 140 carry `isHidden: true`, and all seven are roots rather than a spread across the level: `arts`, `other-art`, `phonics`, `holidays-seasonal`, `trigonometry`, `word-problems` and `phonics-and-phonemic-awareness`, which leaves thirteen visible roots.
+Ruling C settles what they seed, against this design's own first answer: nothing.
+`NoCounterpart` has no write-only form, because `crates/tam-taxonomy/src/project.rs:105-110` consults it only when the term holds no edge into the target at all, so a hidden facet either holds an `Exact` edge and is posted back on the next publish — sending a retired slug on create — or holds none and arrives as an unrecognised path retained verbatim on the product.
+The second loses nothing, and because a minted id derives from the slug, un-hiding a facet later mints the same id it would have had now.
 Identity is the one thing that must not move: `canonical_term.id` is referenced by `projection_edge.from_term`, `projection_no_counterpart` and `reconciliation_item` (`crates/tam-storage/migrations/0013_taxonomy_hub.sql:7-63`), so a paired term keeps the id `canonical_id` already gave it and only a TPT-only facet mints a new one, as `derived("tpt-subject:{slug}")` in the style of `crates/tam-taxonomy/src/grades.rs:765-773`.
 Label authority does flip, and costs nothing, because `crates/tam-storage/src/taxonomy.rs:123-125` re-seeds with `ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label, parent = EXCLUDED.parent`.
 The pairing between the 20 TPT roots and the 43 Tes GB subjects is authored, as `GRADE_PAIRS` is authored (`crates/tam-taxonomy/src/grades.rs:75`), and it is the only authored artefact the inversion adds; `Exact` where one TPT root denotes one Tes subject, `Broader` where it denotes several, nothing where the derivation cannot say.
@@ -43,7 +46,9 @@ Adding `TermKind::ResourceType` to `ROUTED_AXES` is the last step of that work a
 
 ## The categories that stay unbound, and where each routes
 
-The remaining 147 facets are `Format` (26), `theme` (39), `supports` (31), `audience` (10), `programs-and-methods` (6), `language` (3), `Price-Range` (5), `topic` (6, all hidden) and `Featured` (1, hidden).
+The remaining 127 facets are `Format` (26), `theme` (39), `supports` (31), `audience` (10), `programs-and-methods` (6), `language` (3), `Price-Range` (5), `topic` (6, all hidden) and `Featured` (1, hidden).
+That count was stated as 147 before it was checked against the capture: 147 is the enumeration below plus the 20 `Grade-Level` facets, which `grades.rs` already binds, so it double-counted a bound category.
+The nine categories below sum to 127, and 140 + 71 + 127 + 20 is the measured total of 358.
 None of them routes to an equivalence axis in Phase 3, and the reason is that no measured target vocabulary pairs them: Tes binds five axes and no more (`crates/tam-domain/src/registry/tes.rs:203-238`), and Etsy binds none at all and declares none absent (`crates/tam-domain/src/registry/etsy.rs:36-38`), which is the unmeasured case that blocks.
 They route instead as TPT natives on `taxonomyTags`, carried on the product, written to TPT, and disclosed as a loss on any projection out of it.
 `audience` is the one to watch, because `crates/tam-taxonomy/src/grades.rs:66-69` already notes that Homeschool and Staff are `audience` facets the grade selector offers, and routing them as grades would be forcing an edge; they stay natives until a target measures an audience axis.
@@ -154,3 +159,22 @@ Verification: `just check` and `just web-check`, the second failing if `vocab.ts
 
 Step 6, the drift job and its `just` recipe.
 Verification: run it against the committed captures with one facet deleted from a copy, and assert a non-zero exit and one mismatch row; it fails if the diff reports clean.
+
+## What landed, and where the captures contradicted the design
+
+Step 1 landed on 2026-09-03: `crates/tam-taxonomy/src/subjects.rs`, its tests, the authored pairing at `docs/design/data/tpt-tes-subject-pairs.json`, and two enabling changes — `TaxonomyTag` gains `parentId` and `isHidden`, and `tes::canonical_id` becomes `pub(crate)`.
+`just check` is green: fmt, clippy, purity and 991 workspace tests, of which 131 are `tam-taxonomy`'s and 11 are new.
+
+The pairing's shape is not the one this design assumed, because the two hierarchies do not align at either level.
+Eight TPT *children* denote a Tes *subject* — `biology`, `chemistry` and `physics` under `science`, `geography`, `economics` and `psychology` under `social-studies`, `drama` and `music` under `performing-arts` — while only `physical-education` denotes one from the root, and two TPT roots, `health` and `speaking-and-listening`, denote Tes *topics*.
+A twenty-root-against-forty-three-subject table states none of that, and forcing it through would have collapsed all eight exact pairings into `Broader` edges onto three coarse roots.
+Four founder rulings on 2026-09-03 settled it: a row may cross levels in both directions; a facet's canonical `TermKind` is a per-term modelling choice rather than its `parentId` depth, which TPT's own flat `taxonomyTags` field permits; a hidden facet seeds nothing; and `for-all-subject-areas` holds the `Exact` claim on `Cross-curricular topics` while `not-subject-specific` reaches it through `Broader`.
+
+Two mechanisms carry the rulings that this design did not name.
+A root's row states the root's whole denotation and the derivation *withdraws* from it any node one of that root's own children denotes exactly, because a term holding an `Exact` and a `Broader` edge onto two different TPT paths projects `Ambiguous` and blocks the publish; eight withdrawals fire.
+And the 120 children are paired by normalised description against the Tes nodes inside their root's denotation rather than authored, which is what the design meant by deriving them against the pairing: 8 match a Tes subject, 19 a Tes topic, one of those (`handwriting`) matching two, and the remaining 93 reach nothing and become residue rather than a guessed edge.
+
+The figures the derivation seeds, all pinned in `the_derivation_seeds_the_pinned_counts`: 601 terms (496 from the Tes half, 105 minted), 1,146 edges (986 from the Tes half, 133 `Exact` into TPT — one for each writable facet — 25 `Broader` from the Tes side, and the two Tes paths `not-subject-specific` reaches), 443 no-counterpart records, and a residue of 95 facets reaching no Tes node, 443 Tes nodes reaching no facet, 8 withdrawals and 7 hidden facets seeded neither way.
+
+The kill gate passes and did so without ever being close, because consuming `derive_crosswalk` rather than replacing it makes the property structural: every edge the Tes-to-Tes derivation holds is present, on the same term, at the same path, as `Exact`.
+`no_edge_the_tes_derivation_holds_is_lost_by_the_inversion` therefore earns its place as a regression guard rather than as a discovery, and it is joined by `every_existing_canonical_id_survives_unchanged`, which pins every base term's id, kind and parent.
