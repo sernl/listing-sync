@@ -57,6 +57,7 @@ pub(crate) fn product() -> TptBaseProduct {
             tags: slugs(&["centers"]),
             formats: vec![],
             custom_categories: vec![],
+            appropriate_for_country: false,
         },
         standards: vec![],
         details: DetailGroup::default(),

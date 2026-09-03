@@ -536,6 +536,9 @@ export interface TptBaseInput {
 	tags?: string[];
 	formats?: string[];
 	custom_categories?: string[];
+	/** `data[ItemsLocalization][country_id_flag]`. Absent reads as false, which is
+	 *  what an unticked checkbox posts. */
+	appropriate_for_country?: boolean;
 	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
 	teaching_duration_id?: number | null;
 	pages_or_slides?: number | null;
@@ -817,6 +820,18 @@ export interface CopyrightView {
 	preselect: boolean;
 }
 
+/** The Categories group's last control.
+ *
+ *  `label` is the words TPT itself renders, which name the seller's own
+ *  country. It is null for every seller today and the absence is measured
+ *  rather than pending: TPT publishes no country list and nothing yet reads
+ *  the connected account's country back, so there is no country to name. A
+ *  client renders `generic_label` instead of a blank. */
+export interface LocalisationView {
+	label: string | null;
+	generic_label: string;
+}
+
 export interface FrameworkView {
 	jurisdiction_id: number;
 	name: string;
@@ -835,6 +850,7 @@ export interface FormVocabularyView {
 	answer_keys: FormOption[];
 	thumbnail_modes: FormOption[];
 	copyright: CopyrightView;
+	localisation: LocalisationView;
 	statuses: FormOption[];
 	standards_frameworks: FrameworkView[];
 	caps: FormCaps;
@@ -860,6 +876,9 @@ export interface DraftInput {
 	tags?: string[];
 	formats?: string[];
 	custom_categories?: string[];
+	/** `data[ItemsLocalization][country_id_flag]`. Absent reads as false, which is
+	 *  what an unticked checkbox posts. */
+	appropriate_for_country?: boolean;
 	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
 	teaching_duration_id?: number | null;
 	pages_or_slides?: number | null;

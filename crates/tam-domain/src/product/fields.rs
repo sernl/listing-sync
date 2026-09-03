@@ -228,7 +228,8 @@ pub fn suggested_additional_licence(price: Money) -> Option<Money> {
 
 /// The Categories group. Every member is a `data[TaxonomyTags][]` slug except
 /// the custom categories, which are the seller's own shelves and reach the
-/// wire as `data[Category][Category][]` row ids.
+/// wire as `data[Category][Category][]` row ids, and the localisation flag,
+/// which is a checkbox of its own.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CategoryGroup {
     pub grades: Vec<FacetSlug>,
@@ -238,6 +239,14 @@ pub struct CategoryGroup {
     /// Seller-scoped shelves rather than a platform vocabulary, so no member
     /// set is held anywhere and no cap is measured.
     pub custom_categories: Vec<String>,
+    /// `data[ItemsLocalization][country_id_flag]`, the last control TPT
+    /// renders in this group. The boolean is the whole field: the country id
+    /// beside it is never posted by either the create or the edit, and no
+    /// country list appears in the DOM or in the page bootstrap, so which
+    /// country the seller is asserting for is presentation a caller supplies
+    /// rather than a value this model holds. `false` is what an unticked
+    /// checkbox posts, and TPT requires nothing here.
+    pub appropriate_for_country: bool,
 }
 
 /// One alignment the seller claimed.

@@ -22,9 +22,10 @@ import type {
 	FormVocabularyView,
 	PathInput,
 	PriceIntent,
-	TptBaseInput
+	TptBaseInput,
+	VocabularyView
 } from '$lib/api';
-import type { FormGroup, InventoryId } from '$lib/generated/vocab';
+import type { FormGroup, InventoryId, TermKind } from '$lib/generated/vocab';
 import { core, loadCore } from '$lib/core';
 
 // Started at module scope so the rules are ready before the seller has typed
@@ -91,6 +92,10 @@ export interface TptDraft {
 	tags: string[];
 	formats: string[];
 	customCategories: string[];
+	/** `data[ItemsLocalization][country_id_flag]`. The label beside it names a
+	 *  country and is served, never written here, so a seller outside the one
+	 *  country we have measured does not read another country's name. */
+	appropriateForCountry: boolean;
 	standards: StandardPick[];
 	teachingDuration: string | null;
 	pagesOrSlides: string;
@@ -126,6 +131,7 @@ export function emptyTptDraft(): TptDraft {
 		tags: [],
 		formats: [],
 		customCategories: [],
+		appropriateForCountry: false,
 		standards: [],
 		teachingDuration: null,
 		pagesOrSlides: '',
@@ -436,10 +442,48 @@ export interface ProjectedRow {
 	kind: 'field' | 'axis';
 	label: string;
 	values: string[];
-	decided_by: DecidedBy;
+	/** Null where nothing has decided this row yet, which is every axis row
+	 *  today: the four cases above are the listing's doing or the projection's,
+	 *  and an axis no projection has run over is neither. */
+	decided_by: DecidedBy | null;
 	/** What this platform drops whatever the seller picks, where the
 	 *  projection says so. Null is "nothing recorded", never "nothing lost". */
 	loss: string | null;
+	/** Present on an axis row and absent on a field row. */
+	axis?: AxisFacts;
+}
+
+/** How one axis will be settled on this marketplace.
+ *
+ *  Three modes, of which this client produces two. `seller_decides` is an axis
+ *  no computation may ever answer, which the registry states as
+ *  `Delegation::Never`; licence is the exemplar and the only one today.
+ *  `best_fit` is an axis a seller may hand to a best-fit suggestion by opting
+ *  in. `resolved` is an axis the projection settled on its own and shows
+ *  values for, and no client can produce one, because the equivalence relation
+ *  lives in Postgres and a mapping invented in the browser would be one nobody
+ *  recorded. */
+export type AxisMode = 'resolved' | 'best_fit' | 'seller_decides';
+
+/** What the registry says about one axis, read off the served vocabulary
+ *  rather than restated here. */
+export interface AxisFacts {
+	mode: AxisMode;
+	/** Whether a seller may ever hand this axis to a computed answer.
+	 *
+	 *  False on a legal-content axis and not negotiable there. The domain
+	 *  constructor refuses it, a database CHECK refuses it, and this row is the
+	 *  third layer: a tab that offered an override here would undo both. */
+	delegable: boolean;
+	/** The platform field this axis lands in, which is what a seller would
+	 *  recognise on the other site. */
+	native: string;
+	/** The listing's own terms for this axis, where the draft holds a set for
+	 *  one. What the seller chose, never what the platform will carry. */
+	stated: string[];
+	/** How many terms this platform takes. Null is unmeasured, never
+	 *  unlimited, so an absent cap discloses no loss. */
+	cap: number | null;
 }
 
 export interface MarketplaceProjection {
@@ -447,47 +491,125 @@ export interface MarketplaceProjection {
 	rows: ProjectedRow[];
 }
 
-/** One marketplace's tab, built from what this client holds and what the core
- *  decides.
+/** One marketplace's tab, built from what this client holds, what the core
+ *  decides and what the served vocabulary declares.
  *
- *  Field rows only. The values are this listing's — its own overrides where the
- *  seller set one — and the losses are the core's, read from the compiled-in
- *  field registry: a cap one platform declares and this listing's value exceeds
- *  is a real disclosed loss rather than the `null` this function used to state
- *  for every row.
+ *  Field rows carry this listing's values — its own overrides where the seller
+ *  set one — and the losses are the core's, read from the compiled-in field
+ *  registry: a cap one platform declares and this listing's value exceeds is a
+ *  real disclosed loss.
  *
- *  Axis rows are still the missing half and still arrive from the server whole.
- *  The equivalence relation lives in Postgres, so a client that resolved an
- *  axis would be inventing a mapping nobody recorded; `GET /v1/vocabulary/
- *  {inventory}` serves the registry's field table and `GET /v1/mappings` serves
- *  mapping heads, and neither answers "what will this listing's subject be on
- *  Tes". The endpoint that would is owed, and is the same gap the per-
- *  organisation override slice fills. */
-export function projectionOf(draft: TptDraft, inventory: InventoryId): MarketplaceProjection {
+ *  Axis rows carry no value, and the emptiness is the honest answer rather than
+ *  a gap: the equivalence relation lives in Postgres, so a client that resolved
+ *  an axis would be inventing a mapping nobody recorded. What they do carry is
+ *  everything the registry already states — how the axis is settled, whether it
+ *  may ever be delegated, the field it lands in, the seller's own terms and the
+ *  cap those terms may exceed. When the projection endpoint lands it fills
+ *  `values` and `decided_by` on these same rows rather than replacing them.
+ *
+ *  `vocabulary` null is a tab whose vocabulary has not arrived, which renders
+ *  field rows and no axis rows rather than guessing at the axes. */
+export function projectionOf(
+	draft: TptDraft,
+	inventory: InventoryId,
+	vocabulary: VocabularyView | null = null
+): MarketplaceProjection {
 	const rules = core();
-	const declared =
-		rules === null
-			? new Map<string, string | null>()
-			: new Map(
-					rules
-						.projectPreview(draftInputOf(draft), inventory)
-						.rows.map((row) => [row.key, row.loss] as const)
-				);
+	const preview = rules === null ? null : rules.projectPreview(draftInputOf(draft), inventory);
+	const declared = new Map((preview?.rows ?? []).map((row) => [row.key, row.loss] as const));
+	const fields: ProjectedRow[] = OVERRIDABLE.map((entry) => ({
+		key: entry.field,
+		kind: 'field' as const,
+		label: entry.label,
+		values: [valueFor(draft, inventory, entry.field)],
+		decided_by: diverges(draft, inventory, entry.field)
+			? ({ by: 'listing_override' } as const)
+			: ({ by: 'listing' } as const),
+		// Null is "nothing recorded", never "nothing lost": a registry that
+		// declares no cap for this field has not measured one.
+		loss: declared.get(canonicalKey(entry.field)) ?? null
+	}));
 	return {
 		inventory,
-		rows: OVERRIDABLE.map((entry) => ({
-			key: entry.field,
-			kind: 'field' as const,
-			label: entry.label,
-			values: [valueFor(draft, inventory, entry.field)],
-			decided_by: diverges(draft, inventory, entry.field)
-				? ({ by: 'listing_override' } as const)
-				: ({ by: 'listing' } as const),
-			// Null is "nothing recorded", never "nothing lost": a registry that
-			// declares no cap for this field has not measured one.
-			loss: declared.get(canonicalKey(entry.field)) ?? null
-		}))
+		rows: [...fields, ...axisRowsOf(draft, preview?.undecided_axes ?? [], vocabulary)]
 	};
+}
+
+/** The words a seller reads for one axis. Presentation, and the only part of
+ *  an axis row this file decides: the registry carries no label for an axis. */
+const AXIS_LABELS: Record<TermKind, string> = {
+	subject: 'Subject',
+	topic: 'Topic',
+	resource_type: 'Resource type',
+	phase: 'Grade level',
+	licence: 'Licence'
+};
+
+/** Which of the draft's own sets states an axis.
+ *
+ *  Two, and the omissions are the point. Tags, formats and the seller's own
+ *  shelves reach `native_residue` with no axis claimed for them, because
+ *  claiming one would be inventing a reading the registry does not hold. */
+const AXIS_TERMS: Partial<Record<TermKind, 'grades' | 'subjectAreas'>> = {
+	phase: 'grades',
+	subject: 'subjectAreas'
+};
+
+/** One row per axis the core could not decide, joined to what the served
+ *  vocabulary declares about it. An axis the core names and the vocabulary does
+ *  not describe is skipped rather than rendered half-known. */
+function axisRowsOf(
+	draft: TptDraft,
+	undecided: readonly string[],
+	vocabulary: VocabularyView | null
+): ProjectedRow[] {
+	if (vocabulary === null) {
+		return [];
+	}
+	const declared = new Map(vocabulary.axes.map((view) => [view.axis as string, view] as const));
+	return undecided.flatMap((token) => {
+		const view = declared.get(token);
+		if (view === undefined) {
+			return [];
+		}
+		const held = AXIS_TERMS[view.axis];
+		const stated = held === undefined ? [] : draft[held];
+		// A one-valued axis is a cap of one. Reading it that way rather than
+		// as a separate case is what stops a set silently arriving as its
+		// first element.
+		const cap = view.cardinality === 'one' ? 1 : (view.cap ?? null);
+		const delegable = view.delegation.kind !== 'never';
+		return [
+			{
+				key: view.axis as string,
+				kind: 'axis' as const,
+				label: AXIS_LABELS[view.axis],
+				// Never narrowed to fit the cap: a set cut to length is a
+				// different listing from the one the seller described, and the
+				// loss below is how they learn it before the write.
+				values: [],
+				decided_by: null,
+				loss: capLoss(cap, stated.length),
+				axis: {
+					mode: delegable ? ('best_fit' as const) : ('seller_decides' as const),
+					delegable,
+					native: view.native,
+					stated,
+					cap
+				}
+			}
+		];
+	});
+}
+
+/** What this platform drops, where its declared cap and this listing's own set
+ *  disagree. Null is "nothing recorded": an unmeasured cap discloses nothing,
+ *  because absent is unmeasured and never unlimited. */
+function capLoss(cap: number | null, chosen: number): string | null {
+	if (cap === null || chosen <= cap) {
+		return null;
+	}
+	return `This platform takes ${cap} and you have chosen ${chosen}; the rest will not reach it.`;
 }
 
 /** The registry's own name for one of this form's overridable fields. The two
@@ -556,6 +678,7 @@ export function draftInputOf(draft: TptDraft): DraftInput {
 		tags: draft.tags,
 		formats: draft.formats,
 		custom_categories: draft.customCategories,
+		appropriate_for_country: draft.appropriateForCountry,
 		standards: draft.standards.map((pick) => ({
 			framework: pick.framework,
 			code: pick.code,
@@ -617,6 +740,7 @@ export function tptBaseOf(draft: TptDraft): TptBaseInput {
 		tags: draft.tags,
 		formats: draft.formats,
 		custom_categories: draft.customCategories,
+		appropriate_for_country: draft.appropriateForCountry,
 		standards: draft.standards.map((pick) => ({
 			framework: pick.framework,
 			code: pick.code,

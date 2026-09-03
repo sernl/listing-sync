@@ -137,6 +137,11 @@ pub struct DraftInput {
     pub formats: Vec<String>,
     #[serde(default)]
     pub custom_categories: Vec<String>,
+    /// `data[ItemsLocalization][country_id_flag]`, the Categories group's last
+    /// control. Absent reads as false, which is what an unticked checkbox
+    /// posts and what TPT's own form sends when the seller leaves it alone.
+    #[serde(default)]
+    pub appropriate_for_country: bool,
     #[serde(default)]
     pub standards: Vec<StandardInput>,
     #[serde(default)]
@@ -285,6 +290,7 @@ fn read_draft(draft: &DraftInput) -> (Option<TptBaseProduct>, Vec<AuthoringError
         tags: slugs(&draft.tags, &mut errors),
         formats: slugs(&draft.formats, &mut errors),
         custom_categories: draft.custom_categories.clone(),
+        appropriate_for_country: draft.appropriate_for_country,
     };
     let thumbnails: Vec<UploadRef> = draft
         .thumbnail_hashes
@@ -434,6 +440,11 @@ pub struct TptBaseInput {
     pub formats: Vec<String>,
     #[serde(default)]
     pub custom_categories: Vec<String>,
+    /// `data[ItemsLocalization][country_id_flag]`, the Categories group's last
+    /// control. Absent reads as false, which is what an unticked checkbox
+    /// posts and what TPT's own form sends when the seller leaves it alone.
+    #[serde(default)]
+    pub appropriate_for_country: bool,
     #[serde(default)]
     pub standards: Vec<StandardInput>,
     #[serde(default)]
@@ -481,6 +492,7 @@ impl TptBaseInput {
             tags: self.tags,
             formats: self.formats,
             custom_categories: self.custom_categories,
+            appropriate_for_country: self.appropriate_for_country,
             standards: self.standards,
             teaching_duration_id: self.teaching_duration_id,
             pages_or_slides: self.pages_or_slides,

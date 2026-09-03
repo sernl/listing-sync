@@ -85,7 +85,8 @@ The vocabulary generator emits two new unions into `web/src/lib/generated/vocab.
 
 ## 4. The form
 
-`web/src/routes/listings/new/+page.svelte` renders the nine sections through `FormSection.svelte`, which carries the heading, the helper text and that section's own refusals.
+`web/src/routes/inventory/new/+page.svelte` renders the nine sections through `FormSection.svelte`, which carries the heading, the helper text and that section's own refusals.
+`web/src/routes/listings/new/+page.svelte` is a redirect stub and `web/src/routes/listings/+page.ts` performs the 308, so the route this note first named is no longer the live one.
 
 Control by control, matching TPT and improving only where the improvement costs no structure.
 Title is a text input with a hard cap and a live counter.
@@ -124,6 +125,7 @@ What the API lacks for this, precisely.
 There is no endpoint that renders one product's projection onto one marketplace field by field.
 `GET /{version}/vocabulary/{inventory}` serves the registry's field table and `GET /{version}/mappings` serves mapping heads with their recorded losses, and neither answers "what will this listing's title be on Tes".
 So the divergence above is computed client-side from the seller's own overrides rather than from a server-side diff, and the tab shows three fields rather than every field a platform carries.
+The per-field losses on those rows are no longer null: `projectionOf` reads them from the compiled core, which is the server's own field registry compiled to wasm, and the same call returns the `undecided_axes` list the axis rows are built from.
 Closing that needs a projection endpoint taking a draft or a product and an inventory and returning the per-field projected value with its loss, which would also let the tab show what a platform drops before the create rather than after it.
 
 The client contract is shaped so that endpoint can feed it without a rewrite.

@@ -266,6 +266,30 @@ pub struct CopyrightView {
     pub preselect: bool,
 }
 
+/// The localisation checkbox TPT renders last in its Categories group.
+///
+/// `data[ItemsLocalization][country_id_flag]` is a plain boolean on the wire
+/// and the country beside it is never posted, by either the create or the
+/// edit. The label is the only part that names a country, which is why it is
+/// served here rather than written into a client: a seller outside the one we
+/// measured must not read another country's name on their own form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalisationView {
+    /// The label TPT itself renders, which reads "Appropriate for New Zealand"
+    /// for the seller the form was captured from.
+    ///
+    /// `None` for every seller today, and the absence is measured rather than
+    /// pending: TPT publishes no country list in the form's DOM or in its page
+    /// bootstrap, and nothing yet reads the connected account's own country
+    /// back, so there is no country to name. A client renders
+    /// [`LocalisationView::generic_label`] instead of a blank.
+    pub label: Option<String>,
+    /// What a client renders while `label` is `None`. It names the country the
+    /// checkbox is about without claiming to know which one it is, so the
+    /// control still reads as a whole sentence.
+    pub generic_label: String,
+}
+
 /// One education-standards jurisdiction the form offers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameworkView {
@@ -274,7 +298,7 @@ pub struct FrameworkView {
     pub button_label: String,
 }
 
-/// Everything the eight-group form needs to render its controls.
+/// Everything the nine-group form needs to render its controls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FormVocabularyView {
     /// The seventeen writable grades in the column-major order TPT's own grid
@@ -296,6 +320,9 @@ pub struct FormVocabularyView {
     pub answer_keys: Vec<OptionView>,
     pub thumbnail_modes: Vec<OptionView>,
     pub copyright: CopyrightView,
+    /// The Categories group's last control, whose label is the only served
+    /// string on this form that names a country.
+    pub localisation: LocalisationView,
     pub statuses: Vec<OptionView>,
     pub standards_frameworks: Vec<FrameworkView>,
     pub caps: CapsView,
@@ -491,6 +518,12 @@ pub fn form_vocabulary() -> Option<FormVocabularyView> {
                 .collect(),
             preselect: false,
         },
+        localisation: LocalisationView {
+            // No caller can supply one yet, so serving a name here would be
+            // inventing the seller's country rather than reading it.
+            label: None,
+            generic_label: "Appropriate for your TPT account's country".to_owned(),
+        },
         statuses: ListingStatus::ALL
             .into_iter()
             .map(|status| {
@@ -683,6 +716,29 @@ mod tests {
             .copyright
             .preamble
             .starts_with("Intellectual Property Rights:"));
+    }
+
+    /// The one served string that would name a country, checked to name none.
+    ///
+    /// The capture was read from a New Zealand seller, so "New Zealand" is the
+    /// value a careless implementation reaches for. Nothing measures a
+    /// seller's country yet, and serving that name would put another
+    /// country's on their form.
+    #[test]
+    fn the_localisation_label_names_no_country_until_one_is_measured() {
+        let view = rendered();
+        assert_eq!(
+            view.localisation.label, None,
+            "no caller supplies a country, so there is none to name"
+        );
+        assert!(
+            !view.localisation.generic_label.is_empty(),
+            "the fallback is what renders while the label is absent, so a blank one              would leave the control unlabelled"
+        );
+        assert!(
+            !view.localisation.generic_label.contains("New Zealand"),
+            "the country the capture was read from is not every seller's country"
+        );
     }
 
     /// The caps the API serves and the caps the domain validates against are

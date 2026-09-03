@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT thumbnail_mode, thumbnail_hashes, video_preview_hash, additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, teaching_duration_id, pages_or_slides, answer_key_id, copyright_declaration_id, status_user FROM product_tpt_base WHERE org_id = $1 AND product_id = $2",
+  "query": "SELECT thumbnail_mode, thumbnail_hashes, video_preview_hash, additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, teaching_duration_id, pages_or_slides, answer_key_id, copyright_declaration_id, status_user, appropriate_for_country FROM product_tpt_base WHERE org_id = $1 AND product_id = $2",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,11 @@
         "ordinal": 15,
         "name": "status_user",
         "type_info": "Int2"
+      },
+      {
+        "ordinal": 16,
+        "name": "appropriate_for_country",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -106,8 +111,9 @@
       true,
       true,
       true,
+      false,
       false
     ]
   },
-  "hash": "97a43e0f263605774c94ff71d49aebd19a5ef9ff54c56e3a63e0f4f18e126505"
+  "hash": "25d4dbbd9ba7261728b265205e798847f5f348cf56de808031a0e25ec3e17ab4"
 }

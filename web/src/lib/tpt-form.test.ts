@@ -13,6 +13,7 @@ import {
 	gradeColumns,
 	labelOf,
 	minorUnitsOf,
+	OVERRIDABLE,
 	projectionOf,
 	refusalsOf,
 	refusalsIn,
@@ -26,7 +27,7 @@ import {
 	type MarketplaceProjection,
 	type TptDraft
 } from './tpt-form';
-import type { FacetView, FormVocabularyView } from '$lib/api';
+import type { FacetView, FormVocabularyView, VocabularyView } from '$lib/api';
 
 // The refusals below are the compiled core's, not this file's, so the module
 // has to be in memory before any of them is asked for.
@@ -99,6 +100,10 @@ const VOCABULARY: FormVocabularyView = {
 			{ id: '2', label: 'I attest that I have used copyrighted and/or trademarked materials…' }
 		],
 		preselect: false
+	},
+	localisation: {
+		label: null,
+		generic_label: "Appropriate for your TPT account's country"
 	},
 	statuses: [
 		{ id: '0', label: 'Draft, visible only to you' },
@@ -365,6 +370,23 @@ describe('the request bodies', () => {
 		expect(Object.keys(base)).not.toContain('grades');
 	});
 
+	it('carries the localisation flag in the sidecar block and nowhere else', () => {
+		const body = createBodyOf({ ...complete(), appropriateForCountry: true });
+		expect(body?.tpt_base?.appropriate_for_country).toBe(true);
+		// Serialised with the block removed rather than checked key by key: a
+		// named-key assertion would pass an implementation that promoted the
+		// flag onto some other part of the body, and promoting it anywhere on
+		// the body changes a wire that migration 0040's sidecar already holds.
+		expect(JSON.stringify({ ...body, tpt_base: null })).not.toContain(
+			'appropriate_for_country'
+		);
+	});
+
+	it('sends the flag unticked on a blank draft, which is what TPT’s own checkbox posts', () => {
+		expect(emptyTptDraft().appropriateForCountry).toBe(false);
+		expect(tptBaseOf(complete()).appropriate_for_country).toBe(false);
+	});
+
 	it('sends no tax code or licence price on a free listing', () => {
 		const base = tptBaseOf(complete());
 		expect(base.tax_code_id).toBeNull();
@@ -382,7 +404,9 @@ describe('the marketplace tab contract', () => {
 	it('renders one field row per overridable field, decided by the listing', () => {
 		const projection = projectionOf({ ...complete(), inventories: ['TesGb'] }, 'TesGb');
 		expect(projection.inventory).toBe('TesGb');
-		expect(projection.rows.map((row) => [row.key, row.kind, row.decided_by.by])).toEqual([
+		expect(
+			projection.rows.map((row) => [row.key, row.kind, row.decided_by?.by])
+		).toEqual([
 			['name', 'field', 'listing'],
 			['description', 'field', 'listing'],
 			['price', 'field', 'listing']
@@ -398,7 +422,7 @@ describe('the marketplace tab contract', () => {
 			'Fractions — UK edition'
 		);
 		const row = projectionOf(draft, 'TesGb').rows[0];
-		expect(row.decided_by.by).toBe('listing_override');
+		expect(row.decided_by?.by).toBe('listing_override');
 		expect(row.values).toEqual(['Fractions — UK edition']);
 	});
 
@@ -424,5 +448,126 @@ describe('the marketplace tab contract', () => {
 			decided_at: '2026-09-03T00:00:00Z'
 		});
 		expect(fromServer.rows[0].values).toHaveLength(2);
+	});
+});
+
+/** One marketplace's served vocabulary, trimmed to the axes these tests read.
+ *
+ *  The bindings are Tes's own, from `crates/tam-domain/src/registry/tes.rs:205-234`:
+ *  subject and phase are many-valued and delegable by opt-in, and licence is
+ *  one-valued and never delegable, which is the legal-content refusal declared
+ *  as data. The subject cap is the one invented value here and it is a fixture
+ *  rather than a claim: no Tes cap has been measured, and the registry says so
+ *  by leaving it absent. It is set to exercise the rule that a set over a cap
+ *  is disclosed and never narrowed. */
+function vocabularyWithSubjectCap(cap: number | undefined): VocabularyView {
+	return {
+		inventory: 'TesGb',
+		marketplace: 'Tes',
+		canonical: [],
+		natives: [],
+		axes: [
+			{
+				axis: 'subject',
+				native: 'categories',
+				cardinality: 'many',
+				cap,
+				delegation: { kind: 'by_opt_in' },
+				required: false
+			},
+			{
+				axis: 'phase',
+				native: 'ageRange',
+				cardinality: 'many',
+				delegation: { kind: 'by_opt_in' },
+				required: false
+			},
+			{
+				axis: 'licence',
+				native: 'licence',
+				cardinality: 'one',
+				delegation: { kind: 'never', reason: 'legal_content' },
+				required: true
+			}
+		],
+		absent_axes: [],
+		authoring: {
+			payload_files: 'every_payload_file',
+			body_wire: 'carries_declared_format',
+			body_formats: ['Html']
+		}
+	};
+}
+
+function axisRow(projection: MarketplaceProjection, axis: string) {
+	return projection.rows.find((row) => row.kind === 'axis' && row.key === axis);
+}
+
+describe('the axis rows on a marketplace tab', () => {
+	it('discloses a cap the listing exceeds and narrows nothing to fit it', () => {
+		const draft = {
+			...complete(),
+			subjectAreas: ['math', 'science', 'social-studies'],
+			inventories: ['TesGb' as const]
+		};
+		const row = axisRow(projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(2)), 'subject');
+		expect(row?.loss).toContain('takes 2');
+		expect(row?.loss).toContain('chosen 3');
+		// The whole point: the seller's three survive on the row and the row
+		// carries no two-element value that a later reader could mistake for
+		// what they chose. A truncating implementation passes every other
+		// assertion here and fails this one.
+		expect(row?.axis?.stated).toEqual(['math', 'science', 'social-studies']);
+		expect(row?.values).toEqual([]);
+	});
+
+	it('discloses nothing where no cap is measured, because absent is not unlimited', () => {
+		const draft = {
+			...complete(),
+			subjectAreas: ['math', 'science', 'social-studies'],
+			inventories: ['TesGb' as const]
+		};
+		const row = axisRow(projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(undefined)), 'subject');
+		expect(row?.loss).toBeNull();
+		expect(row?.axis?.cap).toBeNull();
+	});
+
+	it('reads a one-valued axis as a cap of one rather than as a separate case', () => {
+		const draft = { ...complete(), inventories: ['TesGb' as const] };
+		expect(axisRow(projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(3)), 'licence')?.axis?.cap)
+			.toBe(1);
+	});
+
+	it('refuses the licence axis an override and any computed answer', () => {
+		const draft = { ...complete(), inventories: ['TesGb' as const] };
+		const projection = projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(3));
+		const licence = axisRow(projection, 'licence');
+		expect(licence?.axis?.delegable).toBe(false);
+		expect(licence?.axis?.mode).toBe('seller_decides');
+		expect(licence?.values).toEqual([]);
+		// Not vacuous: a delegable axis on the same tab reads the other way, so
+		// an implementation that marked every axis undelegable fails here.
+		expect(axisRow(projection, 'subject')?.axis?.delegable).toBe(true);
+		expect(axisRow(projection, 'subject')?.axis?.mode).toBe('best_fit');
+		// Overrides are keyed by field and the licence axis is not one of them,
+		// which is what stops the tab offering a control for it.
+		expect(OVERRIDABLE.map((entry) => entry.field)).not.toContain('licence');
+	});
+
+	it('decides no axis in the browser, whatever the mode says', () => {
+		const draft = { ...complete(), inventories: ['TesGb' as const] };
+		const rows = projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(3)).rows.filter(
+			(row) => row.kind === 'axis'
+		);
+		expect(rows.length).toBeGreaterThan(0);
+		for (const row of rows) {
+			expect(row.values).toEqual([]);
+			expect(row.decided_by).toBeNull();
+		}
+	});
+
+	it('renders no axis row at all until the marketplace vocabulary has arrived', () => {
+		const draft = { ...complete(), inventories: ['TesGb' as const] };
+		expect(projectionOf(draft, 'TesGb', null).rows.every((row) => row.kind === 'field')).toBe(true);
 	});
 });

@@ -111,6 +111,11 @@ fn full() -> TptBaseRecord {
             tags: slugs(&["centers"]),
             formats: slugs(&["easel"]),
             custom_categories: vec!["Autumn unit".to_owned()],
+            // True rather than false on purpose: the column defaults to
+            // false, so a write path that dropped it would read back equal
+            // to a false fixture and the round trip would pass on a value
+            // that never reached the row.
+            appropriate_for_country: true,
         },
         standards: vec![StandardAlignment {
             framework: StandardsFramework::CommonCore,

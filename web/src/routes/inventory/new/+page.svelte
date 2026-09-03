@@ -507,6 +507,19 @@
 						{/if}
 					</div>
 				{/if}
+
+				{#if form}
+					<div class="inline-choices" style="margin-top: 12px">
+						<label>
+							<input
+								type="checkbox"
+								checked={draft.appropriateForCountry}
+								onchange={(event) => set('appropriateForCountry', event.currentTarget.checked)}
+							/>
+							{form.localisation.label ?? form.localisation.generic_label}
+						</label>
+					</div>
+				{/if}
 			</FormSection>
 
 			<FormSection group="education_standards" help={GROUP_HELP.education_standards} {refusals}>
@@ -636,6 +649,7 @@
 			</FormSection>
 		{:else}
 			{@const view = known.get(tab)}
+			{@const projection = projectionOf(draft, tab, view ?? null)}
 			<section class="panel">
 				<div class="head-row">
 					<div>
@@ -647,9 +661,9 @@
 					</div>
 				</div>
 
-				{#each projectionOf(draft, tab).rows as row (row.key)}
+				{#each projection.rows.filter((row) => row.kind === 'field') as row (row.key)}
 					{@const own = row.values[0]}
-					{@const differs = row.decided_by.by === 'listing_override'}
+					{@const differs = row.decided_by?.by === 'listing_override'}
 					<div class="field override">
 						<span>
 							{row.label}
@@ -686,6 +700,43 @@
 					</div>
 				{/each}
 
+				{#each projection.rows.filter((row) => row.axis !== undefined) as row (row.key)}
+					{@const facts = row.axis}
+					{#if facts}
+						<div class="field">
+							<span>
+								{row.label}
+								{#if facts.delegable}
+									<span class="pill mut">best fit, once you opt in</span>
+								{:else}
+									<span class="pill mut">yours to decide</span>
+								{/if}
+							</span>
+							<div class="hint">
+								{#if facts.stated.length > 0}
+									You chose {facts.stated.join(', ')}.
+								{/if}
+								It lands in this platform's “{facts.native}” field.
+								{#if facts.cap !== null}
+									It takes {facts.cap}.
+								{/if}
+								{#if row.loss}
+									<span class="why bad">{row.loss}</span>
+								{/if}
+							</div>
+							<div class="hint">
+								{#if facts.delegable}
+									Nothing has resolved this yet, and nothing here will: the mapping lives on the
+									server and a value chosen in the browser would be one nobody recorded.
+								{:else}
+									This one is never computed for you. No opt-in admits a machine answer, on this
+									form or anywhere else.
+								{/if}
+							</div>
+						</div>
+					{/if}
+				{/each}
+
 				{#if view}
 					{#each view.absent_axes as axis (axis)}
 						<p class="disclosure">
@@ -708,9 +759,11 @@
 				{/if}
 
 				<p class="foot-note">
-					Only these three fields carry a per-marketplace value today. The rest of the listing —
-					the categories, the standards and the details — projects through the taxonomy relation,
-					and anything a platform cannot place is raised in Reconciliation rather than edited here.
+					Only the three fields above carry a per-marketplace value you can edit here. The axes
+					below them are settled by the taxonomy relation on the server rather than on this form,
+					so none of them shows a value yet and none offers an override; anything the relation
+					cannot place is raised in Reconciliation. The standards and the details project the same
+					way and carry no axis of their own.
 				</p>
 			</section>
 		{/if}

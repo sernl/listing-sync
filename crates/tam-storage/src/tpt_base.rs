@@ -3,7 +3,7 @@
 //! `product` already stores the name, the description with its declared
 //! format, the price, the payload files and the verbatim grade declaration.
 //! Everything else TPT's create form asks for lands here, in the sidecar
-//! migration 0040 declares, keyed on the product's own key.
+//! migrations 0040 and 0049 declare, keyed on the product's own key.
 //!
 //! One row per product, and a product with no row is one authored before this
 //! table existed or through a path that does not carry these fields. Every
@@ -160,9 +160,9 @@ impl TptBaseRepo {
               additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, \
               subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, \
               teaching_duration_id, pages_or_slides, answer_key_id, \
-              copyright_declaration_id, status_user, updated_at) \
+              copyright_declaration_id, status_user, appropriate_for_country, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
-                     $17, $18, $19) \
+                     $17, $18, $19, $20) \
              ON CONFLICT (org_id, product_id) DO UPDATE SET \
                  thumbnail_mode                 = EXCLUDED.thumbnail_mode, \
                  thumbnail_hashes               = EXCLUDED.thumbnail_hashes, \
@@ -180,6 +180,7 @@ impl TptBaseRepo {
                  answer_key_id                  = EXCLUDED.answer_key_id, \
                  copyright_declaration_id       = EXCLUDED.copyright_declaration_id, \
                  status_user                    = EXCLUDED.status_user, \
+                 appropriate_for_country        = EXCLUDED.appropriate_for_country, \
                  updated_at                     = EXCLUDED.updated_at",
             uuid_to_db(org.0),
             uuid_to_db(product.0),
@@ -214,6 +215,7 @@ impl TptBaseRepo {
                 .copyright
                 .map(|declaration| i16::from(declaration.wire_id())),
             i16::from(record.status.wire_id()),
+            record.categories.appropriate_for_country,
             timestamp_to_db(now)?,
         )
         .execute(&mut *tx)
@@ -239,7 +241,7 @@ impl TptBaseRepo {
                     additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, \
                     subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, \
                     teaching_duration_id, pages_or_slides, answer_key_id, \
-                    copyright_declaration_id, status_user \
+                    copyright_declaration_id, status_user, appropriate_for_country \
                FROM product_tpt_base WHERE org_id = $1 AND product_id = $2",
             uuid_to_db(org.0),
             uuid_to_db(product.0),
@@ -280,6 +282,7 @@ impl TptBaseRepo {
                 tags: slugs(&row.tag_slugs)?,
                 formats: slugs(&row.format_slugs)?,
                 custom_categories: row.custom_categories,
+                appropriate_for_country: row.appropriate_for_country,
             },
             standards,
             details: DetailGroup {

@@ -79,10 +79,10 @@ impl TptBaseProduct {
     ///
     /// The rest of the TPT base — the thumbnail decision, the additional
     /// licence and bundle discount, the tax code, the standards, the three
-    /// details and the attestation — has no `CanonicalProduct` field and no
-    /// residue shape either, because residue is a list of vocabulary terms and
-    /// none of those is one. They live on this type and, once the repository
-    /// lands, in the 0040 sidecar.
+    /// details, the attestation and the localisation flag — has no
+    /// `CanonicalProduct` field and no residue shape either, because residue
+    /// is a list of vocabulary terms and none of those is one. They live on
+    /// this type and in the sidecar, which migrations 0040 and 0049 declare.
     #[must_use]
     pub fn into_canonical(self, identity: ProductIdentity) -> CanonicalProduct {
         let raw: Vec<VocabularyPath> = self

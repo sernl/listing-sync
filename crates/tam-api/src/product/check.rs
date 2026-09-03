@@ -68,6 +68,7 @@ pub(crate) fn record_of(draft: &DraftInput) -> Result<TptBaseRecord, APIError> {
             tags: slugs(&draft.tags)?,
             formats: slugs(&draft.formats)?,
             custom_categories: draft.custom_categories.clone(),
+            appropriate_for_country: draft.appropriate_for_country,
         },
         standards: draft
             .standards

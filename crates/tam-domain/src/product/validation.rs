@@ -145,7 +145,7 @@ pub enum AuthoringWarning {
     FreeResourceOverPageGuidance { pages: u32, guidance: u32 },
 }
 
-/// The eight headings the form renders, in TPT's own order, with Education
+/// The nine headings the form renders, in TPT's own order, with Education
 /// Standards lifted out of Categories where TPT nests it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormGroup {
