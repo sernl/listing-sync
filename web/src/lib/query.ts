@@ -35,6 +35,9 @@ export const queryKeys = {
 	 *  answer. */
 	catalogue: (label: string | null) => ['products', label] as const,
 	labels: ['labels'] as const,
+	/** The seller's own projection overrides, which the Templates screen reads
+	 *  and writes. */
+	overrides: ['overrides'] as const,
 	/** One product's aggregate, keyed by its identifier. */
 	product: (id: string) => ['product', id] as const,
 	/** One marketplace's authoring vocabulary, keyed by inventory: the create

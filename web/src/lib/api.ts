@@ -174,6 +174,43 @@ export interface LabelsView {
 	labels: LabelView[];
 }
 
+/** One seller's own answer for how a term of theirs projects onto a
+ *  marketplace, as `GET /v1/mappings/overrides` serves it. The term arrives as
+ *  its identifier; the screen resolves the word from the taxonomy it already
+ *  reads. */
+export interface OverrideView {
+	inventory: InventoryId;
+	axis: TermKind;
+	from_term: string;
+	segments: string[];
+	native_id?: string;
+	kind: 'exact' | 'broader';
+	decided_at: number;
+}
+
+export interface OverridesView {
+	overrides: OverrideView[];
+}
+
+/** What an override write names. The organisation and the user are absent on
+ *  purpose: the server takes both from the session, so a body cannot speak for
+ *  an organisation it does not belong to. */
+export interface OverrideInput {
+	inventory: InventoryId;
+	axis: TermKind;
+	from_term: string;
+	to: { segments: string[]; native_id?: string };
+	kind: 'exact' | 'broader';
+}
+
+/** Which override to withdraw: one organisation holds at most one per
+ *  marketplace, axis and term, so the triple is the key. */
+export interface WithdrawOverrideInput {
+	inventory: InventoryId;
+	axis: TermKind;
+	from_term: string;
+}
+
 export interface MappingHead {
 	id: string;
 	product: string;
@@ -1016,6 +1053,22 @@ export const api = {
 	 *  lists. A label nothing carries is not in the set: it left the
 	 *  vocabulary when the last item stopped carrying it. */
 	labels: () => request<LabelsView>('/v1/labels'),
+
+	/** The calling organisation's own projection overrides. Another
+	 *  organisation's are unreachable: the server pins the tenant itself. */
+	overrides: () => request<OverridesView>('/v1/mappings/overrides'),
+	/** Record one override, replacing any this organisation already holds for
+	 *  the same marketplace, axis and term. Answers no content. */
+	setOverride: (body: OverrideInput) => post<void>('/v1/mappings/overrides', body),
+	/** Withdraw one override, leaving the global relation to answer again. A
+	 *  withdrawal that matches nothing succeeds: the state it asks for is the
+	 *  state that already holds. */
+	withdrawOverride: (body: WithdrawOverrideInput) =>
+		request<void>('/v1/mappings/overrides', {
+			method: 'DELETE',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		}),
 	/** The labels on one item. */
 	productLabels: (product: string) =>
 		request<LabelsView>(`/v1/products/${product}/labels`),

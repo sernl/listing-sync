@@ -357,6 +357,28 @@ async fn the_drain_workflow_runs_entirely_through_the_api(pool: PgPool) {
         "/v1/reconciliation/items/{}/resolve",
         first.id.to_hyphenated()
     );
+    // The same bound the override route applies, on the same shared check: a
+    // path a client names is durable, and an array nobody bounds is the
+    // caller's to fill.
+    for oversized in [
+        serde_json::json!({ "segments": (0..9).map(|n| format!("level {n}")).collect::<Vec<_>>() }),
+        serde_json::json!({ "segments": ["x".repeat(201)] }),
+    ] {
+        let (status, _body) = call(
+            pool.clone(),
+            Config::default(),
+            Method::POST,
+            &resolve_path,
+            Some(oversized),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a path deeper or longer than any vocabulary publishes is refused"
+        );
+    }
+
     let (status, _body) = call(
         pool.clone(),
         Config::default(),

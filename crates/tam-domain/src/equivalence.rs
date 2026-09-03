@@ -346,6 +346,14 @@ pub enum ProjectionOverrideError {
     /// A path with no segments names nothing, so the projection would resolve
     /// to a value no target can be told.
     EmptyPath,
+    /// The override names an axis this inventory does not bind, so no field on
+    /// that marketplace could carry the answer.
+    ///
+    /// The same refusal `ElectionRule::new` makes, for the same reason: an
+    /// answer for an axis the target never asks about is durable, invisible
+    /// and unreachable, and a seller who set it would be owed an explanation
+    /// nothing could give.
+    UnboundAxis,
 }
 
 impl core::fmt::Display for ProjectionOverrideError {
@@ -355,6 +363,9 @@ impl core::fmt::Display for ProjectionOverrideError {
                 f.write_str("the licence axis is never delegated, so it is never overridden")
             }
             Self::EmptyPath => f.write_str("an override names a path with no segments"),
+            Self::UnboundAxis => {
+                f.write_str("the override names an axis this marketplace does not bind")
+            }
         }
     }
 }
@@ -371,6 +382,9 @@ impl ProjectionOverride {
         }
         if request.to.segments.is_empty() {
             return Err(ProjectionOverrideError::EmptyPath);
+        }
+        if registry(request.inventory).axis(request.axis).is_none() {
+            return Err(ProjectionOverrideError::UnboundAxis);
         }
         Ok(Self {
             org: request.org,
@@ -947,6 +961,28 @@ mod tests {
             ProjectionOverride::new(request),
             Err(ProjectionOverrideError::EmptyPath)
         );
+    }
+
+    /// An answer for an axis the target never asks about is durable, invisible
+    /// and unreachable, which is why `ElectionRule::new` refuses one; an
+    /// override is the same kind of answer and earns the same refusal. Etsy
+    /// binds no equivalence axis at all, so every axis is unbound there.
+    #[test]
+    fn an_override_may_not_name_an_axis_the_marketplace_does_not_bind() {
+        for axis in [
+            TermKind::Subject,
+            TermKind::Topic,
+            TermKind::ResourceType,
+            TermKind::Phase,
+        ] {
+            let mut request = an_override(axis);
+            request.inventory = InventoryId::Etsy;
+            assert_eq!(
+                ProjectionOverride::new(request),
+                Err(ProjectionOverrideError::UnboundAxis),
+                "Etsy binds no {axis:?} field, so there is nothing for an override to answer"
+            );
+        }
     }
 
     /// The refusal is a property of the axis rather than of the delegation

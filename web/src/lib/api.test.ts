@@ -294,6 +294,51 @@ describe('the authoring endpoints', () => {
 		expect(view.labels[0].colour).toBe('teal');
 	});
 
+	it('records an override without naming an organisation the body could forge', async () => {
+		const seen: Array<{ url: string; method?: string; body: unknown }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+				// A 204 carries no body at all; the Response constructor refuses one.
+				return new Response(null, { status: 204 });
+			})
+		);
+		await api.setOverride({
+			inventory: 'Tpt',
+			axis: 'subject',
+			from_term: 't1',
+			to: { segments: ['Maths'], native_id: 'math-elementary' },
+			kind: 'broader'
+		});
+		expect(seen[0].method).toBe('POST');
+		expect(seen[0].url).toBe('/v1/mappings/overrides');
+		expect(seen[0].body).toEqual({
+			inventory: 'Tpt',
+			axis: 'subject',
+			from_term: 't1',
+			to: { segments: ['Maths'], native_id: 'math-elementary' },
+			kind: 'broader'
+		});
+		expect(JSON.stringify(seen[0].body)).not.toContain('org');
+	});
+
+	it('withdraws an override by the triple that keys it', async () => {
+		const seen: Array<{ url: string; method?: string; body: unknown }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+				// A 204 carries no body at all; the Response constructor refuses one.
+				return new Response(null, { status: 204 });
+			})
+		);
+		await api.withdrawOverride({ inventory: 'Tpt', axis: 'subject', from_term: 't1' });
+		expect(seen[0].method).toBe('DELETE');
+		expect(seen[0].url).toBe('/v1/mappings/overrides');
+		expect(seen[0].body).toEqual({ inventory: 'Tpt', axis: 'subject', from_term: 't1' });
+	});
+
 	it('reads one marketplace vocabulary per inventory', async () => {
 		const seen: string[] = [];
 		vi.stubGlobal(

@@ -10,14 +10,15 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_domain::equivalence::{
     resolution_for, ElectionAnswer, ElectionRule, ElectionRuleError, ElectionTriggerKind, Mode,
-    NewElectionRule,
+    NewElectionRule, NewProjectionOverride, OverrideKind, ProjectionOverride,
+    ProjectionOverrideError,
 };
 use tam_domain::registry::listing_url::{listing_url, parse_listing_url, UrlRefusal};
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
     ConnectionRepo, DrainStats, ElectionRepo, LabelRepo, LedgerCursor, MappingRepo, NewAnswer,
-    OpenElection, PastedBind, ProductRepo, StorageError, TaxonomyRepo,
+    OpenElection, OverrideRepo, PastedBind, ProductRepo, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
@@ -58,6 +59,45 @@ fn parse_id(raw: &str) -> Result<Uuid, APIError> {
 
 const PAGE_LIMIT_DEFAULT: i64 = 50;
 const PAGE_LIMIT_MAX: i64 = 200;
+
+/// How deep a path a client names may be, and how long one segment of it may
+/// run.
+///
+/// Measured against the committed vocabularies rather than picked: the deepest
+/// real path is two segments, a Tes subject and its topic, and the longest
+/// label is 69 characters, in TPT's licence list. Four times that depth and
+/// roughly three times that length leaves room for a vocabulary that grows,
+/// without leaving an array a stranger fills at their own discretion. Both are
+/// limits a founder may replace.
+const PATH_SEGMENTS_MAX: usize = 8;
+const PATH_SEGMENT_CHARS_MAX: usize = 200;
+
+/// The one shape check every path a client names passes.
+///
+/// Shared by the two handlers that write one: the reconciliation queue's
+/// resolution and the seller's own override. Both take a path from a request
+/// body and make it durable, so a bound on one and not the other is a bound
+/// with a way around it.
+fn check_path(segments: &[String]) -> Result<(), APIError> {
+    if segments.is_empty() {
+        return Err(validation("an edge needs at least one path segment"));
+    }
+    if segments.len() > PATH_SEGMENTS_MAX {
+        return Err(validation(
+            "a path is at most eight segments deep; the deepest any marketplace publishes is two",
+        ));
+    }
+    if let Some(long) = segments
+        .iter()
+        .find(|segment| segment.chars().count() > PATH_SEGMENT_CHARS_MAX)
+    {
+        return Err(validation(&format!(
+            "a path segment is at most two hundred characters, and one here is {}",
+            long.chars().count()
+        )));
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------- catalogue
 
@@ -565,9 +605,7 @@ pub(crate) async fn resolve_item(
     Path((_version, item)): Path<(String, String)>,
     Json(body): Json<ResolveBody>,
 ) -> Result<StatusCode, APIError> {
-    if body.segments.is_empty() {
-        return Err(validation("an edge needs at least one path segment"));
-    }
+    check_path(&body.segments)?;
     let kind = match body.kind.as_str() {
         "exact" => EdgeKind::Exact,
         "broader" => EdgeKind::Broader,
@@ -735,6 +773,227 @@ pub(crate) async fn list_mappings(
     Ok(Json(MappingsView {
         mappings: rows.into_iter().map(MappingHeadView::of).collect(),
     }))
+}
+
+// ----------------------------------------------------------- overrides
+
+/// One seller's own mapping decision, as the Templates screen sends it.
+///
+/// The organisation and the user are deliberately absent: they come from the
+/// session through [`OrgContext`], so a body cannot name an organisation it
+/// does not speak for.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OverrideBody {
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub from_term: CanonicalTermId,
+    pub to: PathInput,
+    /// `exact` or `broader`.
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PathInput {
+    pub segments: Vec<String>,
+    #[serde(default)]
+    pub native_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverrideView {
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub from_term: CanonicalTermId,
+    pub segments: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_id: Option<String>,
+    pub kind: String,
+    pub decided_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverridesView {
+    pub overrides: Vec<OverrideView>,
+}
+
+/// Which override to withdraw. The triple is the key: one organisation holds
+/// at most one override per marketplace, axis and term.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WithdrawOverrideBody {
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    pub from_term: CanonicalTermId,
+}
+
+fn override_kind_of(raw: &str) -> Option<OverrideKind> {
+    match raw {
+        "exact" => Some(OverrideKind::Exact),
+        "broader" => Some(OverrideKind::Broader),
+        _ => None,
+    }
+}
+
+const fn override_kind_str(kind: OverrideKind) -> &'static str {
+    match kind {
+        OverrideKind::Exact => "exact",
+        OverrideKind::Broader => "broader",
+    }
+}
+
+/// Records one seller's own answer for how a term of theirs projects.
+///
+/// The organisation and the user come from the session rather than the body,
+/// so `decided_by` names who actually asked. `ProjectionOverride::new` is the
+/// only way the value is built, because the licence refusal is half domain and
+/// half database CHECK and skipping the constructor would leave the database
+/// to answer what the seller should have been told. The native identifier is
+/// checked before the write by the same function the reconciliation queue's
+/// resolution runs, which is what keeps an identifier of the wrong shape from
+/// reaching a live listing.
+pub(crate) async fn upsert_override(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Json(body): Json<OverrideBody>,
+) -> Result<StatusCode, APIError> {
+    let kind = override_kind_of(&body.kind)
+        .ok_or_else(|| validation("an override is exact or broader"))?;
+    // Before the constructor, which checks only that the path is non-empty:
+    // the domain's own bound is about meaning, and this one is about what a
+    // stranger may make this server write.
+    check_path(&body.to.segments)?;
+    let to = VocabularyPath {
+        vocabulary: VocabularyId(body.inventory, body.axis),
+        segments: body.to.segments,
+        native_id: body.to.native_id,
+    };
+    let decided_at = (state.wall)();
+    let decided_by = Decider::Human {
+        user: context.user,
+        org: context.org,
+    };
+
+    let entry = ProjectionOverride::new(NewProjectionOverride {
+        org: context.org,
+        inventory: body.inventory,
+        axis: body.axis,
+        from: body.from_term,
+        to: to.clone(),
+        kind,
+        decided_by: decided_by.clone(),
+        decided_at,
+    })
+    .map_err(|error| match error {
+        ProjectionOverrideError::LicenceNeverOverridden => validation(
+            "a licence is a legal statement about the work rather than a mapping choice, so it is never overridden",
+        ),
+        ProjectionOverrideError::EmptyPath => {
+            validation("an override names at least one path segment")
+        }
+        ProjectionOverrideError::UnboundAxis => validation(
+            "this marketplace carries no field for that axis, so an override for it would reach nothing",
+        ),
+    })?;
+
+    // The same check the reconciliation queue's resolution runs, over the one
+    // edge this override would produce. An identifier of the wrong shape is
+    // refused where it is authored rather than where it is spent, which is
+    // after the seller has already asked for the cross-listing.
+    check_native_ids(&[ProjectionEdge {
+        from: body.from_term,
+        to,
+        kind: match kind {
+            OverrideKind::Exact => EdgeKind::Exact,
+            OverrideKind::Broader => EdgeKind::Broader,
+        },
+        decided_by,
+        decided_at,
+    }])
+    .map_err(|foreign| {
+        APIError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            APIErrorEntry::new(
+                "that value's identifier is not one this marketplace issues, so a listing carrying it would be refused",
+            )
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({
+                "native_ids": foreign
+                    .0
+                    .iter()
+                    .map(|entry| entry.native_id.clone())
+                    .collect::<Vec<_>>(),
+            })),
+        )
+    })?;
+
+    OverrideRepo::new(state.pool.clone())
+        .upsert(&entry)
+        .await
+        .map_err(|error| unknown_term_or_fault(&state, &error))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The foreign key `projection_override.from_term` carries onto the canonical
+/// taxonomy, under the name Postgres gives an inline `REFERENCES`.
+const FROM_TERM_FKEY: &str = "projection_override_from_term_fkey";
+
+/// A term this taxonomy does not hold is the caller's to correct, not a fault
+/// of ours.
+///
+/// It is reachable through an ordinary client: the Templates screen picks from
+/// a cached list of terms, so a seller whose tab has been open across a
+/// taxonomy change can name one that has since gone. Without this it surfaces
+/// as a five-hundred, which tells them nothing and reads as our failure.
+fn unknown_term_or_fault(state: &AppState, error: &StorageError) -> APIError {
+    if let StorageError::Db(sqlx::Error::Database(database)) = error {
+        if database.constraint() == Some(FROM_TERM_FKEY) {
+            return validation(
+                "that term is not in the taxonomy any more; reload and pick it again",
+            );
+        }
+    }
+    storage_fault(state, error)
+}
+
+/// The calling organisation's own overrides. No other organisation's are
+/// reachable: the repository pins the tenant itself.
+pub(crate) async fn list_overrides(
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<OverridesView>, APIError> {
+    let held = OverrideRepo::new(state.pool.clone())
+        .for_org(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(OverridesView {
+        overrides: held
+            .into_iter()
+            .map(|entry| OverrideView {
+                inventory: entry.inventory,
+                axis: entry.axis,
+                from_term: entry.from,
+                segments: entry.to.segments,
+                native_id: entry.to.native_id,
+                kind: override_kind_str(entry.kind).to_owned(),
+                decided_at: entry.decided_at,
+            })
+            .collect(),
+    }))
+}
+
+/// Withdraws one override, leaving the global relation to answer again.
+///
+/// A withdrawal that matches nothing is not an error: the seller's intent is
+/// that no override stand for that term, and it already does not.
+pub(crate) async fn withdraw_override(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Json(body): Json<WithdrawOverrideBody>,
+) -> Result<StatusCode, APIError> {
+    OverrideRepo::new(state.pool.clone())
+        .remove(context.org, body.inventory, body.axis, body.from_term)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // -------------------------------------------------------------- labels

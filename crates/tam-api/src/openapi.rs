@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 57] = [
+pub const ROUTES: [Route; 60] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -73,6 +73,21 @@ pub const ROUTES: [Route; 57] = [
         method: "get",
         path: "/{version}/mappings",
         summary: "The flat mapping listing the product-by-inventory table joins",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/mappings/overrides",
+        summary: "Record one seller's own answer for how a term of theirs projects",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/mappings/overrides",
+        summary: "The calling organisation's own projection overrides",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/mappings/overrides",
+        summary: "Withdraw one override, leaving the global relation to answer again",
     },
     Route {
         method: "post",
@@ -371,11 +386,12 @@ mod tests {
             .map(serde_json::Map::len);
         // /v1/jobs, /v1/session, /v1/org, /v1/devices and
         // /v1/products/{product}/labels each carry two operations,
-        // /v1/products carries two and /v1/products/{product} three, so
-        // distinct paths are eight fewer than the operations in the table.
+        // /v1/products carries two, /v1/products/{product} three and
+        // /v1/mappings/overrides three, so distinct paths are ten fewer than
+        // the operations in the table.
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 8),
+            Some(ROUTES.len() - 10),
             "each operation lands in the document exactly once"
         );
     }

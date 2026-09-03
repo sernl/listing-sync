@@ -259,6 +259,12 @@ pub fn router(state: AppState) -> Router {
             post(resources::withdraw_decision),
         )
         .route("/{version}/elections/rules", post(resources::upsert_rule))
+        .route(
+            "/{version}/mappings/overrides",
+            post(resources::upsert_override)
+                .get(resources::list_overrides)
+                .delete(resources::withdraw_override),
+        )
         .route("/{version}/mappings", get(resources::list_mappings))
         .route(
             "/{version}/mappings/{mapping}/bind",

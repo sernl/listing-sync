@@ -179,6 +179,15 @@ The figures the derivation seeds, all pinned in `the_derivation_seeds_the_pinned
 The kill gate passes and did so without ever being close, because consuming `derive_crosswalk` rather than replacing it makes the property structural: every edge the Tes-to-Tes derivation holds is present, on the same term, at the same path, as `Exact`.
 `no_edge_the_tes_derivation_holds_is_lost_by_the_inversion` therefore earns its place as a regression guard rather than as a discovery, and it is joined by `every_existing_canonical_id_survives_unchanged`, which pins every base term's id, kind and parent.
 
+Step 5 landed as one change, the route and the screen together, and one thing in it is a choice rather than a derivation.
+The two override kinds are shown to a seller as "Same as" for `Exact` and "Belongs under" for `Broader`, with one hint line on the second: buyers on this marketplace see the heading, not your term.
+The domain names the two kinds and no source names the words for them, so this wording is the team lead's and the founder may replace it; it is recorded here as a founder item rather than left as a silent choice in a Svelte file.
+
+Step 5 also bounds the paths a client may name, on both handlers that make one durable: the seller's override and the reconciliation queue's resolution.
+Neither was bounded before, and `to_segments` carries only a non-empty CHECK, so an unbounded array reached the database on a caller's say-so.
+The limits are eight segments and two hundred characters each, measured rather than picked: the deepest path in the committed vocabularies is two segments, a Tes subject and its topic, and the longest label is 69 characters, in TPT's licence list.
+Both are limits the founder may replace, and both refusals are validation errors naming what was wrong.
+
 ## Step 2: the seeder, and what the database confirmed independently
 
 The seeder now derives the subject and topic axes through `derive_subject_crosswalk` rather than `derive_crosswalk`, which it no longer calls directly.
@@ -280,10 +289,9 @@ The Etsy-branch server capture is deferred too, for a reason Q4 did not anticipa
 Step 5 is the only part of the build order this stream did not build, because the override endpoint lives in `crates/tam-api` and the Templates screen in `web/`, and both belong to the stream that owns them.
 Everything behind them is built, tested and landed, so what follows is the contract rather than a sketch.
 
-Read this first, because it is the fact most easily missed and it is outside step 5's stated scope: nothing calls the override layer yet.
-`crates/tam-engine/src/seed.rs` and `crates/tam-import/src/lib.rs` both call `project_listing`, which delegates with an empty override set, so a seller can record an override through the new route and it will change no projection until a caller switches to `project_listing_with_overrides` and passes that org's overrides, read with `OverrideRepo::for_org`.
-Until that happens the layer is durable, tenant-isolated, tested and inert.
-Wiring it is a change in the engine and the importer rather than in the API, and it is not step 5's, but shipping the route and the screen without it would give a seller a control that silently does nothing.
+This paragraph recorded, while it was true, that nothing called the override layer: `crates/tam-engine/src/seed.rs` and `crates/tam-import/src/lib.rs` both called `project_listing`, which delegates with an empty override set, so an override a seller recorded changed no projection.
+Both callers are wired now, as 12d1ca50 and 37b72408, so the layer is live end to end and a seller's override reaches the projection.
+It is kept rather than deleted because it is why step 5 was sequenced behind the wiring: the alternative was shipping a control that silently did nothing, and the landing order is what avoided it rather than a note on the screen apologising for it.
 
 The route is `POST /{version}/mappings/overrides`, registered beside `.route("/{version}/elections/rules", post(resources::upsert_rule))` at `crates/tam-api/src/lib.rs:256`, with `GET` on the same path listing the calling org's overrides and `DELETE` withdrawing one.
 The handler takes the shape `upsert_rule` takes at `crates/tam-api/src/resources.rs:1161`: `State(state): State<AppState>`, `context: OrgContext`, `Json(body)`, returning `Result<StatusCode, APIError>`.
@@ -294,6 +302,9 @@ The organisation and the user come from `OrgContext` and never from the body, so
 `ProjectionOverride::new` is the only way to construct the value, because it is the domain half of the licence refusal and the database CHECK is the other half; its two errors, `LicenceNeverOverridden` and `EmptyPath`, map to validation errors rather than to a five-hundred.
 `check_native_ids` runs before the write, over a one-element slice holding the `ProjectionEdge` the override would produce, which is the same check the reconciliation queue's resolution runs at `crates/tam-taxonomy/src/provenance.rs:11-16` and the reason a wrong tag never reaches a live listing.
 And the write is `OverrideRepo::upsert`, the read `OverrideRepo::for_org`, the withdrawal `OverrideRepo::remove`, all of which pin `app.current_org` themselves, so the handler passes `context.org` and does not open its own transaction.
+Two behaviours the handler has beyond that list, both tested.
+A withdrawal matching no override answers 204 rather than 404: the seller's intent is that no override stand for that term, and after the call none does, so answering not-found would make a client distinguish two states it should treat identically and turn a double-click into an error.
+And a term the taxonomy no longer holds is refused as a validation error rather than surfacing as a fault, recognised by the `projection_override_from_term_fkey` constraint name: the screen picks from a cached term list, so a tab left open across a taxonomy change names a term that has since gone, and a seller meeting that is owed "reload and pick it again" rather than a five-hundred.
 
 The screen is `web/src/routes/templates/+page.svelte`, today a thirteen-line placeholder whose own description already names the feature: "Reusable sync presets — licence choices, category mappings, pricing rules".
 It becomes a per-marketplace list of the seller's own overrides with add, edit and remove, reading the route through `web/src/lib/api.ts`.
