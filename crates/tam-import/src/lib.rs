@@ -23,10 +23,10 @@ use tam_pipeline::scan::EicarScanner;
 use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{
-    BlobRepo, ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob, ProductRepo, RaiseReport,
-    RaiseScope, StorageError, TaxonomyRepo, TenantBlobSink,
+    BlobRepo, ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob, OverrideRepo, ProductRepo,
+    RaiseReport, RaiseScope, StorageError, TaxonomyRepo, TenantBlobSink,
 };
-use tam_taxonomy::listing::{project_listing, ListingContext};
+use tam_taxonomy::listing::{project_listing_with_overrides, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
 use tam_taxonomy::TES_MAIN_AGE_RANGES;
 use tam_types::{
@@ -597,7 +597,13 @@ where
     // A freshly minted product has settled nothing, and the read is here
     // anyway so the two projection sites stay one shape rather than two.
     let settled = elections.answered_for(run.org, product_id).await?;
-    let outcome = project_listing(
+    // This projection is outbound — the imported product into `run.target` —
+    // so the seller's own mapping decisions apply to it exactly as they apply
+    // to a sync run's. Reading them here is what makes the import's gap report
+    // the same measurement the engine would produce, rather than one that
+    // raises gaps the seller has already answered.
+    let overrides = OverrideRepo::new(run.pool.clone()).for_org(run.org).await?;
+    let outcome = project_listing_with_overrides(
         &product,
         &ListingContext {
             org: run.org,
@@ -610,6 +616,7 @@ where
             rules: &rules,
             settled: &settled,
         },
+        &overrides,
     );
     let (projectable, blocked_by, raised) = match outcome {
         Ok(projection) => {

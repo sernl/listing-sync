@@ -6,6 +6,7 @@
 #![cfg(feature = "pg-tests")]
 
 use sqlx::PgPool;
+use tam_domain::equivalence::{NewProjectionOverride, OverrideKind, ProjectionOverride};
 use tam_domain::{
     CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
 };
@@ -18,11 +19,16 @@ use tam_marketplace::transport::{HttpRequest, HttpResponse};
 use tam_marketplace::FetchReason;
 use tam_marketplace_tes::{endpoints as tes, DraftId, TesAdapter};
 use tam_secrets::Kek;
-use tam_storage::{JobReadRepo, ProductRepo, TaxonomyRepo};
+use tam_storage::{JobReadRepo, OverrideRepo, ProductRepo, TaxonomyRepo};
 use tam_taxonomy::licences::derive_licence_crosswalk;
-use tam_types::{CanonicalTermId, FileKind, InventoryId, OrgId, PriceIntent, Timestamp, Uuid};
+use tam_types::{
+    CanonicalTermId, FileKind, InventoryId, OrgId, PriceIntent, Timestamp, UserId, Uuid,
+};
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
+/// A second tenant on the same global relation, so a test about one seller's
+/// decision can show it is one seller's.
+const OTHER_ORG: OrgId = OrgId(Uuid([0xAB; 16]));
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
 const TOPIC: CanonicalTermId = CanonicalTermId(Uuid([0x78; 16]));
 const NOW: Timestamp = Timestamp(1_000);
@@ -188,21 +194,31 @@ fn pdf() -> Vec<u8> {
     bytes
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
-)]
 fn run_for(
     pool: PgPool,
     adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
     store_root: std::path::PathBuf,
+) -> ImportRun<'_, TesAdapter<CassetteTransport, NoImportFiles>> {
+    run_for_org(pool, adapter, store_root, ORG)
+}
+
+/// The same run for a stated tenant.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn run_for_org(
+    pool: PgPool,
+    adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
+    store_root: std::path::PathBuf,
+    org: OrgId,
 ) -> ImportRun<'_, TesAdapter<CassetteTransport, NoImportFiles>> {
     ImportRun {
         pool,
         kek: Kek::from_bytes(&[0x11; 32]).expect("a well-formed kek"),
         store_root,
         adapter,
-        org: ORG,
+        org,
         source: InventoryId::TesGb,
         target: InventoryId::TesNz,
         now: NOW,
@@ -452,6 +468,91 @@ async fn a_gap_blocks_the_projection_and_raises_exactly_once(pool: PgPool) {
         .await
         .expect("the queue reads");
     assert_eq!(open.len(), 2, "the founder sees exactly the two gaps");
+}
+
+/// A seller's own override answers a gap the global relation cannot, for that
+/// seller and for nobody else.
+///
+/// The fixture is the one `a_gap_blocks_the_projection_and_raises_exactly_once`
+/// uses: no NZ edges, so both terms are uncovered and two items raise. One
+/// override on the subject leaves exactly one gap for the org that set it and
+/// both for an org that did not, which is the tenancy of the layer and its
+/// effect in the same assertion. Before this wiring the importer projected
+/// through `project_listing`, which delegates with an empty override set, so
+/// the org that had answered still had its answer raised back at it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
+    seed(&pool, false).await;
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-b', now())")
+        .bind(uuid::Uuid::from_bytes(OTHER_ORG.0 .0))
+        .execute(&pool)
+        .await
+        .expect("the second org seeds");
+    let decided = ProjectionOverride::new(NewProjectionOverride {
+        org: ORG,
+        inventory: InventoryId::TesNz,
+        axis: TermKind::Subject,
+        from: SUBJECT,
+        to: VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Subject),
+            segments: vec!["Mathematics".to_owned()],
+            native_id: Some("nz-mathematics".to_owned()),
+        },
+        kind: OverrideKind::Exact,
+        decided_by: Decider::Human {
+            user: UserId(Uuid([0xC1; 16])),
+            org: ORG,
+        },
+        decided_at: NOW,
+    })
+    .expect("the override is well formed");
+    OverrideRepo::new(pool.clone())
+        .upsert(&decided)
+        .await
+        .expect("the override writes");
+
+    let adapter = adapter_for(13_549_794);
+    let mine = import_one(
+        &run_for_org(pool.clone(), &adapter, store_root("override-mine"), ORG),
+        &entry_for(13_549_794),
+    )
+    .await
+    .expect("the import runs for the org that decided");
+    assert_eq!(
+        mine.raised.new, 1,
+        "the subject is answered by the seller's own decision, so only the topic is still a \
+         gap: the importer consulted the override rather than raising a question back at the \
+         seller who had already answered it"
+    );
+
+    let other_adapter = adapter_for(13_549_794);
+    let theirs = import_one(
+        &run_for_org(
+            pool.clone(),
+            &other_adapter,
+            store_root("override-theirs"),
+            OTHER_ORG,
+        ),
+        &entry_for(13_549_794),
+    )
+    .await
+    .expect("the import runs for the org that decided nothing");
+    assert_eq!(
+        theirs.raised.new, 2,
+        "and the other tenant sees both gaps, because an override is one seller's decision \
+         about their own listings and not a change to the relation everyone shares"
+    );
+}
+
+/// One catalogue row with a file, which every import body needs.
+fn entry_for(resource: i64) -> ImportEntry {
+    ImportEntry {
+        resource,
+        files: vec![NamedBytes {
+            name: "worksheet.pdf".to_owned(),
+            bytes: pdf(),
+        }],
+    }
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

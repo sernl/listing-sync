@@ -70,6 +70,7 @@ pub use mapping::{
 };
 pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo};
+pub use overrides::OverrideRepo;
 pub use product::{ProductEdit, ProductRecord, ProductRepo, ProductSummary};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
