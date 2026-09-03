@@ -308,6 +308,68 @@ async fn link_state(pool: &PgPool, org: OrgId, marketplace: &str) -> Option<Stri
     state
 }
 
+/// One tenant's connection lifecycle log, oldest first, as (event, actor kind,
+/// actor id, detail).
+///
+/// Read under the tenant pin for the reason [`link_state`] is: `connection_audit`
+/// carries forced row-level security, so an unpinned read answers an empty log
+/// for a tenant that has one, and "no rows were written" would be indis-
+/// tinguishable from "no rows were visible".
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn audit_log(
+    pool: &PgPool,
+    org: OrgId,
+) -> Vec<(String, String, Option<String>, Option<String>)> {
+    let mut tx = pool.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    let rows = sqlx::query_as(
+        "SELECT event, actor_kind, actor_id, detail FROM connection_audit \
+         WHERE org_id = $1 ORDER BY id",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .fetch_all(&mut *tx)
+    .await
+    .expect("the log reads");
+    tx.commit().await.expect("the read commits");
+    rows
+}
+
+/// The attestation standing on one tenant's connection, and how many
+/// connection rows that tenant has for that marketplace.
+///
+/// The count is half the assertion: "replaces" and "duplicates" both leave the
+/// newest name readable, and only the count tells them apart.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn declared(pool: &PgPool, org: OrgId, marketplace: &str) -> (i64, Option<String>) {
+    let mut tx = pool.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    let row: (i64, Option<String>) = sqlx::query_as(
+        "SELECT count(*), max(authorship_name) FROM connection \
+         WHERE org_id = $1 AND marketplace = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(marketplace)
+    .fetch_one(&mut *tx)
+    .await
+    .expect("the connection reads");
+    tx.commit().await.expect("the read commits");
+    row
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_device_registers_checks_in_and_appears_in_its_own_tenants_listing(pool: PgPool) {
     provision(&pool).await;
@@ -2132,5 +2194,145 @@ async fn a_check_in_never_lifts_a_revoked_connection(pool: PgPool) {
         Some("revoked"),
         "and the gating arm leaves it alone too, so neither direction rewrites the \
          seller's decision"
+    );
+}
+
+/// A revoked device's session keeps nothing linked, even when it is the only
+/// one that ever reported.
+///
+/// The `d.revoked_at IS NULL` join in `derive_link` is what excludes it, and
+/// nothing until here could tell whether that clause was doing anything.
+/// Revoking a device leaves its `device_marketplace_session` row exactly as it
+/// was -- `revoke` writes only `device.revoked_at` -- and a revoked device can
+/// still check in, which is how it learns it was revoked. So a stale
+/// `connected` row genuinely reaches the existence probe, and the last step
+/// below flips on that clause alone: with it, no live device reports and the
+/// connection gates; without it, two disowned machines' stale rows would hold
+/// it open for ever.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_revoked_devices_session_holds_no_connection_open(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    register(&pool, &TOKEN_A, DESKTOP, "desktop").await;
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t0).await;
+    beat(&pool, &TOKEN_A, DESKTOP, holding("Tpt", "connected"), t0).await;
+
+    revoke(&pool, &TOKEN_A, DESKTOP, t1).await;
+    let held = devices(&pool, &TOKEN_A).await;
+    let stale = held
+        .iter()
+        .find(|device| device.id == DESKTOP)
+        .expect("the revoked device is still listed");
+    assert_eq!(
+        stale.sessions.len(),
+        1,
+        "revoking writes only revoked_at, so the session row it reported is still here: \
+         {stale:?}"
+    );
+    assert_eq!(
+        stale.sessions[0].status, "connected",
+        "and still says connected, which is the row the exclusion has to see past"
+    );
+
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t1).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("linked"),
+        "the premise: one machine is still ours and still reports it"
+    );
+
+    revoke(&pool, &TOKEN_A, LAPTOP, t2).await;
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t2).await;
+    assert_eq!(
+        link_state(&pool, ORG_A, "tpt").await.as_deref(),
+        Some("needs_reauth"),
+        "and now every machine reporting it has been disowned. Both still say connected \
+         and neither is ours, so the connection is not held open by what a machine we \
+         have asked to forget its sessions still claims"
+    );
+}
+
+/// The lifecycle log records the transitions and not the check-ins.
+///
+/// Two claims, and neither was asserted anywhere: that a device-derived link
+/// names the device as the actor rather than the broker, and that a device
+/// beating every thirty seconds does not write a row every thirty seconds.
+/// `link_state` reads `connection.state` and never the log, so both were
+/// conclusions from reading the SQL rather than from running it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_lifecycle_log_records_the_transition_and_not_the_check_in(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t0).await;
+    assert_eq!(
+        audit_log(&pool, ORG_A).await,
+        vec![(
+            "linked".to_owned(),
+            "system".to_owned(),
+            Some("device".to_owned()),
+            Some("device-reported".to_owned()),
+        )],
+        "one row, naming the device rather than the broker. The vocabulary's `linked` was \
+         written for a credential being sealed and nothing is sealed here, so the detail \
+         is what separates the two writers inside one log"
+    );
+
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t1).await;
+    assert_eq!(
+        audit_log(&pool, ORG_A).await.len(),
+        1,
+        "the same session reported again is not a second link. A device checks in on a \
+         timer, so a log that recorded check-ins would bury every real transition"
+    );
+
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "signed_out"), t2).await;
+    let log = audit_log(&pool, ORG_A).await;
+    assert_eq!(
+        log.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        vec!["linked", "needs_reauth"],
+        "and the gating is a transition too, recorded in the order it happened: {log:?}"
+    );
+}
+
+/// Declaring again replaces the declaration rather than adding one.
+///
+/// The upsert is keyed on `(org_id, marketplace)`, so a second declaration
+/// structurally cannot make a second row -- but "replaces" and "duplicates"
+/// both leave the newest name readable, so the count is half of what is
+/// asserted here and the name alone would not have caught it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn declaring_again_replaces_the_declaration_rather_than_adding_one(pool: PgPool) {
+    provision(&pool).await;
+    let first = declare(&pool, &TOKEN_A, "Tpt", "Ada Lovelace", t0).await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(
+        declared(&pool, ORG_A, "tpt").await,
+        (1, Some("Ada Lovelace".to_owned()))
+    );
+
+    let second = declare(&pool, &TOKEN_A, "Tpt", "Grace Hopper", t1).await;
+    assert_eq!(
+        second.status,
+        StatusCode::OK,
+        "a seller may correct what they declared: {}",
+        String::from_utf8_lossy(&second.body)
+    );
+    let view: serde_json::Value = second.json();
+    assert_eq!(
+        view["name"], "Grace Hopper",
+        "the answer is the declaration as it now stands rather than what was sent: {view}"
+    );
+    assert_eq!(
+        view["attested_at"],
+        serde_json::json!(t1().0),
+        "stamped when this declaration was made, not when the first one was: {view}"
+    );
+
+    assert_eq!(
+        declared(&pool, ORG_A, "tpt").await,
+        (1, Some("Grace Hopper".to_owned())),
+        "one connection, carrying the second name. Two rows would each be a connection \
+         for the same marketplace, which is the shape the unique index exists to refuse"
     );
 }

@@ -29,6 +29,14 @@ const USER_B: UserId = UserId(Uuid([0x0B; 16]));
 const TOKEN_A: SessionToken = SessionToken([0x41; 32]);
 const TOKEN_B: SessionToken = SessionToken([0x42; 32]);
 const TERM: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
+/// A grade term, so a TPT projection has the phase axis it needs and the
+/// subject axis this file is about is the only one under test.
+const GRADE: CanonicalTermId = CanonicalTermId(Uuid([0x79; 16]));
+/// What the global relation answers for [`TERM`] on TPT, and what the seller
+/// says instead. They must differ, or the assertion cannot tell a decision
+/// that won from one that was never consulted.
+const BY_RELATION: &str = "maths-from-the-relation";
+const BY_SELLER: &str = "maths-the-seller-chose";
 const NOW: Timestamp = Timestamp(5_000);
 
 const PATH: &str = "/v1/mappings/overrides";
@@ -418,5 +426,308 @@ async fn an_axis_the_marketplace_does_not_bind_is_refused(pool: PgPool) {
     assert!(
         view.overrides.is_empty(),
         "the refusal happened before anything was written"
+    );
+}
+
+/// One canonical term's counterpart in one inventory's vocabulary.
+fn path(
+    inventory: tam_types::InventoryId,
+    kind: TermKind,
+    label: &str,
+    native: &str,
+) -> tam_domain::VocabularyPath {
+    tam_domain::VocabularyPath {
+        vocabulary: tam_domain::VocabularyId(inventory, kind),
+        segments: vec![label.to_owned()],
+        native_id: Some(native.to_owned()),
+    }
+}
+
+fn crosswalk_edge(
+    from: CanonicalTermId,
+    to: tam_domain::VocabularyPath,
+) -> tam_domain::ProjectionEdge {
+    tam_domain::ProjectionEdge {
+        from,
+        to,
+        kind: tam_domain::EdgeKind::Exact,
+        decided_by: tam_domain::Decider::Imported {
+            source: "overrides_flow fixture".to_owned(),
+        },
+        decided_at: NOW,
+    }
+}
+
+/// The global relation, which answers for both terms on TPT.
+///
+/// The subject edge is the half that matters: it gives the relation a real
+/// answer for [`TERM`], so an override is measured against a value rather than
+/// against a gap. The grade edges are scaffolding -- seeded on the source side
+/// as well, because the product declares its grade as a TesUs path and the
+/// projection reaches TPT by ingesting that into the canonical term and
+/// projecting out again.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_crosswalk(pool: &PgPool) {
+    TaxonomyRepo::new(pool.clone())
+        .seed(
+            &[CanonicalTerm {
+                id: GRADE,
+                kind: TermKind::Phase,
+                parent: None,
+                label: "Kindergarten".to_owned(),
+            }],
+            &[
+                crosswalk_edge(
+                    TERM,
+                    path(
+                        tam_types::InventoryId::Tpt,
+                        TermKind::Subject,
+                        "Maths",
+                        BY_RELATION,
+                    ),
+                ),
+                crosswalk_edge(
+                    GRADE,
+                    path(
+                        tam_types::InventoryId::Tpt,
+                        TermKind::Phase,
+                        "Kindergarten",
+                        "tpt-kindergarten",
+                    ),
+                ),
+                crosswalk_edge(
+                    GRADE,
+                    path(
+                        tam_types::InventoryId::TesUs,
+                        TermKind::Phase,
+                        "Kindergarten",
+                        "17",
+                    ),
+                ),
+            ],
+        )
+        .await
+        .expect("the crosswalk seeds");
+}
+
+/// One tenant's product and TPT mapping, and the lease a projection of it runs
+/// under. The seed byte separates the two tenants' rows.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_projectable(pool: &PgPool, org: OrgId, seed: u8) -> tam_storage::LeasedItem {
+    let product = tam_types::ProductId(Uuid([seed; 16]));
+    let mapping = tam_types::MappingId(Uuid([seed.wrapping_add(1); 16]));
+    let declared = path(
+        tam_types::InventoryId::TesUs,
+        TermKind::Phase,
+        "Kindergarten",
+        "17",
+    );
+    tam_storage::ProductRepo::new(pool.clone())
+        .insert(
+            org,
+            &tam_domain::CanonicalProduct {
+                id: product,
+                org,
+                title: tam_types::Title("Fractions practice".to_owned()),
+                body: tam_types::ListingCopy {
+                    body: "A worksheet.".to_owned(),
+                    format: tam_types::CopyFormat::Markdown,
+                },
+                payload: tam_types::PayloadSet::new(
+                    tam_types::ProductFile {
+                        id: tam_types::FileId(Uuid([seed.wrapping_add(2); 16])),
+                        role: tam_types::FileRole::Payload,
+                        kind: tam_types::FileKind::Pdf,
+                        hash: tam_types::ContentHash([seed.wrapping_add(3); 32]),
+                        byte_len: 4,
+                        scan: tam_types::ScanOutcome::Clean { at: NOW },
+                    },
+                    vec![],
+                ),
+                cover: Some(tam_types::ProductFile {
+                    id: tam_types::FileId(Uuid([seed.wrapping_add(4); 16])),
+                    role: tam_types::FileRole::Cover,
+                    kind: tam_types::FileKind::Image,
+                    hash: tam_types::ContentHash([seed.wrapping_add(5); 32]),
+                    byte_len: 4,
+                    scan: tam_types::ScanOutcome::Clean { at: NOW },
+                }),
+                previews: vec![],
+                subjects: vec![TERM],
+                grades: tam_domain::GradeDeclaration {
+                    source: tam_domain::DeclarationSource::Imported {
+                        vocabulary: tam_domain::VocabularyId(
+                            tam_types::InventoryId::TesUs,
+                            TermKind::Phase,
+                        ),
+                    },
+                    raw: vec![declared],
+                    derived: Some(tam_domain::AgeInterval::new(5, 7).expect("a bounded range")),
+                },
+                price: tam_types::PriceIntent::Free,
+                rights: tam_domain::RightsDeclaration::Unstated,
+                native_residue: vec![],
+            },
+            NOW,
+        )
+        .await
+        .expect("the product inserts");
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            org,
+            &tam_domain::Mapping {
+                id: mapping,
+                org,
+                product,
+                inventory: tam_types::InventoryId::Tpt,
+                binding: tam_domain::Binding::Unbound,
+                policies: tam_domain::FieldPolicies {
+                    title: tam_domain::FieldPolicy::Managed,
+                    description: tam_domain::FieldPolicy::Managed,
+                    price: tam_domain::FieldPolicy::Managed,
+                    taxonomy: tam_domain::FieldPolicy::Managed,
+                    grades: tam_domain::FieldPolicy::Managed,
+                    files: tam_domain::FieldPolicy::Managed,
+                },
+                price_rule: tam_types::PriceRule::Explicit(tam_types::PriceIntent::Free),
+                publish: tam_domain::PublishMode::DryRun,
+                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+            },
+            0,
+            NOW,
+        )
+        .await
+        .expect("the mapping inserts");
+    tam_storage::LeasedItem {
+        org,
+        item: tam_domain::JobItemId(Uuid([seed.wrapping_add(6); 16])),
+        job: tam_types::JobId(Uuid([seed.wrapping_add(7); 16])),
+        mapping,
+        inventory: tam_types::InventoryId::Tpt,
+        idempotency_key: tam_marketplace::idempotency::derive_idempotency_key(
+            org,
+            tam_types::InventoryId::Tpt,
+            product,
+            1,
+            tam_types::ContentHash([seed.wrapping_add(3); 32]),
+        ),
+        operation: tam_domain::ItemOperation::Create,
+        lease_epoch: 0,
+        attempt_count: 0,
+        requires_bound_on: None,
+        stranded_attempt: None,
+        stranded_title: None,
+    }
+}
+
+/// The native identifier a projection of this item carries on the subject
+/// axis.
+///
+/// The pool is the caller's and it must be the `tam_app` one the rest of this
+/// file uses. `projection_override` carries forced row-level security and
+/// `OverrideRepo::for_org` pins the tenant to read it, so a projection run over
+/// a BYPASSRLS engine role would answer correctly even with that pin gone --
+/// which is the defect this test exists to catch. Do not reach for an engine
+/// pool here.
+///
+/// Every non-projecting answer is named rather than lumped into one `else`,
+/// because which one came back is the whole diagnosis when this stops
+/// projecting.
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn projected_subject(pool: &PgPool, leased: &tam_storage::LeasedItem) -> Option<String> {
+    match tam_engine::seed::prepare_item(pool, leased, NOW)
+        .await
+        .expect("the preparation runs")
+    {
+        tam_engine::seed::ItemPreparation::Ready {
+            projected: Some(projected),
+            ..
+        } => {
+            assert_eq!(
+                projected.taxonomy.len(),
+                1,
+                "the product declares one subject, so the projection carries one: {:?}",
+                projected.taxonomy
+            );
+            projected.taxonomy[0].native_id.clone()
+        }
+        tam_engine::seed::ItemPreparation::Ready {
+            projected: None, ..
+        } => panic!("ready, but describing nothing: this fixture is a create and creates project"),
+        tam_engine::seed::ItemPreparation::Blocked { gate, raised } => {
+            panic!("blocked on {gate}, having raised {raised:?}")
+        }
+        tam_engine::seed::ItemPreparation::CounterpartLost { counterpart } => {
+            panic!("waiting on {counterpart:?}, which this fixture has no counterpart for")
+        }
+    }
+}
+
+/// An override authored the way a seller authors one is what a listing then
+/// carries.
+///
+/// The two halves of this were already proven separately and the wire between
+/// them was not. `an_override_records_and_lists_back` reads back through the
+/// same repository and the same codec that wrote, so a symmetric fault in
+/// either is invisible to it; `a_sellers_override_answers_a_gap_for_that_seller_only`
+/// in the engine suite writes through `OverrideRepo` directly, so it cannot see
+/// anything this route does differently. Nothing until here authored one
+/// through the route and then asked a projection what it holds.
+///
+/// It is measured against a relation that answers rather than against a gap.
+/// A gap being filled proves only that something answered where nothing had; a
+/// value being replaced proves the seller's decision beat the global relation,
+/// which is the property `project_axis_with_overrides` is built around -- and
+/// an implementation that folded the override in beside the global edges rather
+/// than filtering the term out of the relation would see two paths for one term,
+/// answer `Ambiguous`, and block here.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_override_recorded_through_the_route_is_what_a_projection_carries(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    seed_term(&pool).await;
+    seed_crosswalk(&pool).await;
+    let mine = seed_projectable(&pool, ORG_A, 0x11).await;
+    let theirs = seed_projectable(&pool, ORG_B, 0x21).await;
+
+    assert_eq!(
+        projected_subject(&pool, &mine).await.as_deref(),
+        Some(BY_RELATION),
+        "the premise, without which the assertion below cannot tell an override that won \
+         from a gap that got filled: the relation has an answer of its own here"
+    );
+
+    let mut body = override_body("exact");
+    body["to"] = serde_json::json!({ "segments": ["Maths"], "native_id": BY_SELLER });
+    let (status, refused) = call(pool.clone(), Some(&TOKEN_A), Method::POST, Some(body)).await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "the seller's own answer records: {}",
+        String::from_utf8_lossy(&refused)
+    );
+
+    assert_eq!(
+        projected_subject(&pool, &mine).await.as_deref(),
+        Some(BY_SELLER),
+        "and it is what the listing carries. The relation still holds its own answer and \
+         no longer decides, which is what makes an override a decision rather than a \
+         second claimant"
+    );
+    assert_eq!(
+        projected_subject(&pool, &theirs).await.as_deref(),
+        Some(BY_RELATION),
+        "one tenant deciding for a global term decides nothing for another: an override is \
+         theirs, and the projection reads it under their own pin"
     );
 }
