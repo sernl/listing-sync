@@ -895,6 +895,7 @@ async fn preflight(
     let lease = LeasedItem {
         org: ORG,
         stranded_attempt: None,
+        stranded_title: None,
         item: JobItemId(Uuid([0; 16])),
         job: JobId(Uuid([0; 16])),
         mapping,

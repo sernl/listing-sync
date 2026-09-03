@@ -1298,6 +1298,18 @@ fn product_from_locator(locator: &ListingLocator) -> Result<ProductId, AdapterEr
                 "marker reconciliation against MyProductListings is not implemented yet".to_owned(),
             ),
         }),
+        // A recorded title is an identification, never an address. The
+        // reconcile carries one only as far as the catalogue search; what that
+        // search finds is a durable id, and it is the durable id the verifying
+        // read-back addresses.
+        ListingLocator::Recorded { .. } => Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(
+                "a recorded title names no product to read; the search resolves it to a \
+                 durable identifier first"
+                    .to_owned(),
+            ),
+        }),
     }
 }
 

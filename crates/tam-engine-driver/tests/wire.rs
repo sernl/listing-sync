@@ -11,7 +11,8 @@ use tam_engine_driver::driver::VerifyPolicy;
 use tam_engine_driver::vocabulary::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, GrantKind,
     ItemPreparation, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall,
-    LedgerError, NewAttempt, PayloadManifest, PreflightStreak, SettleEnvelope, WorkOrder,
+    LedgerError, NewAttempt, PayloadManifest, PreflightStreak, ReconcileSubject, SettleEnvelope,
+    WorkOrder,
 };
 use tam_marketplace::{
     CreateStrategy, FormId, IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle,
@@ -494,15 +495,19 @@ fn a_work_order_carries_a_reconcile_only_when_it_is_one() {
         "and it comes back absent"
     );
 
-    let attempt = AttemptRef {
-        attempt: Uuid([0x77; 16]),
-        mapping: MappingId(Uuid([0x88; 16])),
+    let subject = ReconcileSubject {
+        attempt: AttemptRef {
+            attempt: Uuid([0x77; 16]),
+            mapping: MappingId(Uuid([0x88; 16])),
+        },
+        title: "Fractions pack".to_owned(),
     };
     assert_eq!(
-        round_trip(&order_fixture(Some(attempt))).reconcile,
-        Some(attempt),
-        "a reconcile order carries the attempt it is reconciling, which is what the device \
-         needs to seed the search and to settle the row rather than open another"
+        round_trip(&order_fixture(Some(subject.clone()))).reconcile,
+        Some(subject),
+        "a reconcile order carries the attempt it is reconciling and the title that attempt \
+         recorded it sent, which is what the device needs to search for the listing and to \
+         settle the row rather than open another"
     );
 
     // An order encoded before the field existed decodes as an ordinary one
@@ -517,7 +522,7 @@ fn a_work_order_carries_a_reconcile_only_when_it_is_one() {
 }
 
 /// One work order, with or without a reconcile.
-fn order_fixture(reconcile: Option<AttemptRef>) -> WorkOrder {
+fn order_fixture(reconcile: Option<ReconcileSubject>) -> WorkOrder {
     WorkOrder {
         reconcile,
         lease: leased(),

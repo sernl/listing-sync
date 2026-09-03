@@ -17,7 +17,7 @@ use tam_marketplace::{
     settle, AdapterError, AmbiguityCause, ChallengeKind, CorrelationMarker, CreateStrategy,
     EvidenceRef, FetchReason, FieldDiffReport, FieldSet, FormId, FormSchemaFingerprint,
     IdempotencyKey, LifecycleTransition, ListingLocator, ListingState, ObservedListing, Outcome,
-    RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence, WriteAttemptId,
+    RecordedTitle, RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence, WriteAttemptId,
 };
 use tam_types::{
     AttemptId, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -679,7 +679,14 @@ pub enum Input {
     /// than opening another, because the standing row is the only fence there
     /// is against a second live listing and releasing it is what the whole
     /// reconciliation exists to avoid.
-    ResumeStranded(WriteAttemptId),
+    ///
+    /// The title travels with it rather than being read from `fields`, which
+    /// hold a fresh projection of the product as it is now. A create is
+    /// identified by what it sent.
+    ResumeStranded {
+        attempt: WriteAttemptId,
+        recorded: RecordedTitle,
+    },
     /// The seller answered the challenge and the item may resume.
     ChallengeCleared,
     /// The park expired unanswered.
@@ -958,17 +965,29 @@ impl SyncMachine {
             // emits the same search, because the situation is the same one —
             // a create whose fate the ledger cannot determine. What differs is
             // how it was arrived at, and nothing downstream depends on that.
-            Input::ResumeStranded(attempt) => {
+            Input::ResumeStranded { attempt, recorded } => {
                 if !matches!(self.operation, ItemOperation::Create) {
                     return Err(MachineError::ResumeNotACreate);
                 }
-                // The same search the ambiguous submit asks for, reached the
-                // same way, because the situation is the same: a create whose
-                // fate the ledger cannot determine. A strategy that cannot be
-                // searched halts here as it would there, rather than sending
-                // a device to enumerate for a marker no create ever wrote.
-                let marker = match self.strategy {
-                    CreateStrategy::CorrelationMarker { .. } => marker_for(attempt),
+                // How the create is identified is the strategy's to say, and
+                // the two that can be searched are searched differently: a
+                // marker is unique and matched by substring, a recorded title
+                // is not unique and is matched exactly and narrowed to the
+                // state a create leaves. `HaltOnAmbiguity` embeds nothing and
+                // leaves nothing to narrow on, which is what its name says.
+                let locator = match self.strategy {
+                    CreateStrategy::CorrelationMarker { .. } => ListingLocator::Marker {
+                        marker: marker_for(attempt),
+                        inventory: self.inventory,
+                    },
+                    // A draft-then-publish create leaves its listing in a
+                    // state the seller's own catalogue walk exposes, so the
+                    // narrowing that makes a non-unique title usable is
+                    // available exactly where this strategy is configured.
+                    CreateStrategy::DraftThenPublish { .. } => ListingLocator::Recorded {
+                        title: recorded,
+                        inventory: self.inventory,
+                    },
                     // Ambiguous, and one item's worth of it. Every other
                     // ambiguity row halts the tenant's inventory, and is right
                     // to: an ambiguity there means this tenant's automation has
@@ -983,7 +1002,7 @@ impl SyncMachine {
                     // mapping's only fence against a second live listing, and
                     // the item stays reconcilable by a build whose strategy can
                     // be searched.
-                    CreateStrategy::DraftThenPublish { .. } | CreateStrategy::HaltOnAmbiguity => {
+                    CreateStrategy::HaltOnAmbiguity => {
                         // `ItemParked` rather than `InventoryHalted`, because
                         // nothing was halted and the closed vocabulary has no
                         // variant for this; it is the "an item stopped, come
@@ -1000,10 +1019,6 @@ impl SyncMachine {
                             effects,
                         );
                     }
-                };
-                let locator = ListingLocator::Marker {
-                    marker,
-                    inventory: self.inventory,
                 };
                 let effects = vec![Effect::Reconcile {
                     attempt,
@@ -1066,7 +1081,7 @@ impl SyncMachine {
             | Input::SubmitResult(_)
             | Input::ReadBackResult(_)
             | Input::ReconcileResult(_)
-            | Input::ResumeStranded(_)
+            | Input::ResumeStranded { .. }
             | Input::ChallengeCleared
             | Input::ParkExpired
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
@@ -1167,7 +1182,7 @@ impl SyncMachine {
             | Input::IntentRecorded(_)
             | Input::ReadBackResult(_)
             | Input::ReconcileResult(_)
-            | Input::ResumeStranded(_)
+            | Input::ResumeStranded { .. }
             | Input::ChallengeCleared
             | Input::ParkExpired
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
@@ -1235,7 +1250,7 @@ impl SyncMachine {
                 | AdapterError::NotSent(_)
                 | AdapterError::Uncaptured { .. },
             ))
-            | Input::ResumeStranded(_)
+            | Input::ResumeStranded { .. }
             | Input::ChallengeCleared
             | Input::ParkExpired
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
@@ -1311,7 +1326,7 @@ impl SyncMachine {
             | Input::SubmitResult(_)
             | Input::ReadBackResult(_)
             | Input::ReconcileResult(_)
-            | Input::ResumeStranded(_)
+            | Input::ResumeStranded { .. }
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
         }
     }
@@ -1884,6 +1899,19 @@ mod machine_tests {
         }
     }
 
+    /// The title the stranded create recorded that it sent, which under a
+    /// draft-then-publish strategy is the whole of how it is identified.
+    fn recorded_title() -> RecordedTitle {
+        RecordedTitle("Fixture".to_owned())
+    }
+
+    fn recorded_locator() -> ListingLocator {
+        ListingLocator::Recorded {
+            title: recorded_title(),
+            inventory: InventoryId::TesGb,
+        }
+    }
+
     fn marker_locator() -> ListingLocator {
         ListingLocator::Marker {
             marker: marker_for(attempt()),
@@ -1991,7 +2019,13 @@ mod machine_tests {
     #[test]
     fn row_awaiting_preflight_resume_stranded_searches_for_the_marker() {
         let transition = machine(SyncState::AwaitingPreflight, marker_strategy(), 10)
-            .step(Input::ResumeStranded(attempt()), now())
+            .step(
+                Input::ResumeStranded {
+                    attempt: attempt(),
+                    recorded: recorded_title(),
+                },
+                now(),
+            )
             .expect("a resume applies in AwaitingPreflight");
         assert_eq!(
             transition.next.state,
@@ -2013,21 +2047,67 @@ mod machine_tests {
         );
     }
 
-    /// A resume under a strategy nothing can search costs one item, never a
-    /// tenant.
+    /// A draft-then-publish create is identified by the title it recorded that
+    /// it sent, with no marker in any listing.
+    ///
+    /// The narrowing that makes a non-unique title usable is the adapter's, so
+    /// what the machine owes is the exact recorded title and the inventory it
+    /// belongs to — never the title `fields` carries, which is a fresh
+    /// projection of a product the seller may have renamed since.
+    #[test]
+    fn row_awaiting_preflight_resume_stranded_searches_for_the_recorded_title() {
+        let transition = machine(SyncState::AwaitingPreflight, draft_strategy(), 10)
+            .step(
+                Input::ResumeStranded {
+                    attempt: attempt(),
+                    recorded: recorded_title(),
+                },
+                now(),
+            )
+            .expect("a resume applies in AwaitingPreflight");
+        assert_eq!(
+            transition.next.state,
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: recorded_locator(),
+            },
+            "the search is for what the create recorded, not for a marker it never wrote"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::Reconcile {
+                attempt: attempt(),
+                locator: recorded_locator(),
+            }]),
+            "exactly the search, and nothing else"
+        );
+    }
+
+    /// A resume under a strategy that leaves nothing to identify costs one
+    /// item, never a tenant.
     ///
     /// Every other ambiguity row halts the tenant's inventory, and is right to:
     /// an ambiguity there means this tenant's automation has stopped being safe
-    /// to continue. Here it means only that this build configures no searchable
-    /// strategy, which is equally true of every item in the queue. The absent
-    /// `Halt` is the assertion — a halt here made a routine device
-    /// disconnection stop the tenant's whole queue until an operator cleared a
-    /// row by hand.
+    /// to continue. Here it means only that this build configures a strategy
+    /// that embeds no marker and leaves no state to narrow on, which is equally
+    /// true of every item in the queue. The absent `Halt` is the assertion — a
+    /// halt here made a routine device disconnection stop the tenant's whole
+    /// queue until an operator cleared a row by hand.
     #[test]
-    fn row_awaiting_preflight_resume_stranded_without_a_marker_costs_one_item() {
-        let transition = machine(SyncState::AwaitingPreflight, draft_strategy(), 10)
-            .step(Input::ResumeStranded(attempt()), now())
-            .expect("a resume applies in AwaitingPreflight");
+    fn row_awaiting_preflight_resume_stranded_with_nothing_to_identify_costs_one_item() {
+        let transition = machine(
+            SyncState::AwaitingPreflight,
+            CreateStrategy::HaltOnAmbiguity,
+            10,
+        )
+        .step(
+            Input::ResumeStranded {
+                attempt: attempt(),
+                recorded: recorded_title(),
+            },
+            now(),
+        )
+        .expect("a resume applies in AwaitingPreflight");
         assert!(
             matches!(
                 transition.next.state,
@@ -2061,7 +2141,13 @@ mod machine_tests {
             marker_strategy(),
             10,
         )
-        .step(Input::ResumeStranded(attempt()), now());
+        .step(
+            Input::ResumeStranded {
+                attempt: attempt(),
+                recorded: recorded_title(),
+            },
+            now(),
+        );
         assert_eq!(
             refused,
             Err(MachineError::ResumeNotACreate),
@@ -3470,7 +3556,10 @@ mod machine_tests {
             Input::ReconcileResult(Err(AdapterError::Ambiguous(
                 AmbiguityCause::ReadBackIndeterminate,
             ))),
-            Input::ResumeStranded(attempt()),
+            Input::ResumeStranded {
+                attempt: attempt(),
+                recorded: recorded_title(),
+            },
             Input::ChallengeCleared,
             Input::ParkExpired,
             Input::BudgetExhausted,
@@ -3544,7 +3633,7 @@ mod machine_tests {
                 input.clone()
             };
             if let Ok(transition) = machine.clone().step(delivered.clone(), at) {
-                resumed |= matches!(delivered, Input::ResumeStranded(_));
+                resumed |= matches!(delivered, Input::ResumeStranded { .. });
                 if let SyncState::Terminal(outcome) = &transition.next.state {
                     terminal = Some(outcome.clone());
                     terminal_at = effects.len();

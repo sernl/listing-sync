@@ -131,6 +131,17 @@ pub enum FetchReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorrelationMarker(pub String);
 
+/// The title a stranded create actually submitted, read back from its own
+/// `write_attempt` intent.
+///
+/// Not the title the product carries now. A create is identified by what it
+/// sent, and a seller who renamed the product between the strand and the
+/// resume would otherwise have the device search its catalogue for a title
+/// that listing never carried — which does not merely fail to find it, it is
+/// how a search binds some other listing that happens to carry the new one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedTitle(pub String);
+
 /// The per-field comparison of declared intent against what read-back observed.
 /// Empty means every managed field matched after normalisation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,12 +497,25 @@ pub struct SubmitEvidence {
 }
 
 /// How a listing is addressed for read-back. A locator is derivable from a
-/// receipt or from a marker search, and from nothing else.
+/// receipt, from a marker search or from what a stranded create recorded that
+/// it sent, and from nothing else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListingLocator {
     Durable(RemoteListingId),
     Marker {
         marker: CorrelationMarker,
+        inventory: InventoryId,
+    },
+    /// The marker-free identification of a stranded create: its recorded
+    /// title, matched exactly against the seller's own catalogue and narrowed
+    /// to the state a create leaves a listing in.
+    ///
+    /// Weaker than a marker and deliberately so, because a marker is text in a
+    /// seller's listing and this is not. A title is not unique, so this
+    /// identifies only when exactly one candidate survives the narrowing;
+    /// zero and several are both answers the search must not resolve.
+    Recorded {
+        title: RecordedTitle,
         inventory: InventoryId,
     },
 }

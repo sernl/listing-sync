@@ -22,11 +22,11 @@ use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
 use tam_engine_driver::vocabulary::{ClaimView, WorkOrder};
 use tam_marketplace::transport::Transport;
 use tam_marketplace::{
-    AdapterError, FetchReason, ListingLocator, MarketplaceAdapter, Pause, RemoteListingId,
-    WriteAttemptId,
+    AdapterError, FetchReason, ListingLocator, ListingState, MarketplaceAdapter, Pause,
+    RecordedTitle, RemoteListingId, WriteAttemptId,
 };
 use tam_marketplace_tes::TesAdapter;
-use tam_marketplace_tpt::TptAdapter;
+use tam_marketplace_tpt::{listing_state_from_status, TptAdapter};
 use tam_types::{FailureCode, FailureDetail, Marketplace};
 
 use crate::device::DeviceId;
@@ -303,6 +303,22 @@ fn refusal(why: &dyn core::fmt::Display) -> EngineError {
     })
 }
 
+/// What a work order says this run is resuming, where it says anything.
+///
+/// The title comes off the order rather than out of the seed's own fields:
+/// those are a fresh projection of the product as it is now, and a create is
+/// identified by what it recorded that it sent. A seller who renamed the
+/// product between the strand and the resume would otherwise have this device
+/// search their catalogue for a title the listing never carried.
+fn resume_from(order: &WorkOrder) -> Option<(WriteAttemptId, RecordedTitle)> {
+    order.reconcile.as_ref().map(|stranded| {
+        (
+            WriteAttemptId(stranded.attempt.attempt),
+            RecordedTitle(stranded.title.clone()),
+        )
+    })
+}
+
 /// Seeds the machine from the server's preparation and pumps it.
 ///
 /// The seed is taken here rather than sent, which is the custody line: the
@@ -327,9 +343,7 @@ async fn interpret<A: MarketplaceAdapter, L: ItemLedger, R: ReconcileSource>(
         Some(listing) => seed_from_projection(adapter, &order.preparation, listing)?,
         None => seed_for_removal(&order.preparation),
     };
-    seed.resume = order
-        .reconcile
-        .map(|stranded| WriteAttemptId(stranded.attempt));
+    seed.resume = resume_from(order);
     let clock = DeviceClock;
     let ids = DeviceIds;
     let pause = SleepingPause;
@@ -348,6 +362,57 @@ async fn interpret<A: MarketplaceAdapter, L: ItemLedger, R: ReconcileSource>(
 impl<P: DevicePlane, M: Marketplaces<P>> WorkSource for DeviceWork<P, M> {
     fn pull(&self, marketplace: Marketplace) -> PullFuture<'_> {
         Box::pin(async move { self.pull_one(marketplace).await })
+    }
+}
+
+/// Exactly one candidate identifies a stranded create; zero and several are
+/// different answers and neither of them is an identification.
+///
+/// Zero is `Ok(None)`: the walk completed and the listing was not in it, which
+/// is the only answer the port's contract lets anything ever build on. Several
+/// is `Err`, because two listings answering to one recorded title is not
+/// absence, it is not knowing which — and a title, unlike a marker, is not
+/// unique, so this is the case the whole marker-free identification turns on.
+fn only_candidate<T>(mut candidates: Vec<T>, title: &str) -> Result<Option<T>, AdapterError> {
+    if candidates.len() > 1 {
+        return Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(format!(
+                "{} of the seller's own listings answer to the recorded title {title:?}, so \
+                 which one this create made cannot be told from the catalogue",
+                candidates.len()
+            )),
+        });
+    }
+    Ok(candidates.pop())
+}
+
+/// What a locator asks this source to look for.
+enum Search {
+    Marker(String),
+    Recorded(String),
+}
+
+/// A locator this source can act on, or the refusal saying it cannot.
+///
+/// Never `Ok(None)` for a locator it cannot search. That answer means a
+/// completed enumeration that did not contain the listing, and it is the one
+/// answer the port's contract says could ever justify releasing the
+/// duplicate-create fence; a search this source cannot perform is
+/// indeterminate and has to say so.
+fn search_for(locator: &ListingLocator) -> Result<Search, AdapterError> {
+    match locator {
+        ListingLocator::Marker { marker, .. } => Ok(Search::Marker(marker.0.clone())),
+        ListingLocator::Recorded { title, .. } => Ok(Search::Recorded(title.0.clone())),
+        ListingLocator::Durable(_) => Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(
+                "this reconcile source searches the seller's catalogue by correlation marker \
+                 or by a stranded create's recorded title, and was handed a locator that \
+                 names neither"
+                    .to_owned(),
+            ),
+        }),
     }
 }
 
@@ -373,21 +438,7 @@ impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync> ReconcileSource
         locator: &'a ListingLocator,
         attempt: WriteAttemptId,
     ) -> Result<Option<RemoteListingId>, AdapterError> {
-        let ListingLocator::Marker { marker, .. } = locator else {
-            // Never `Ok(None)`. That answer means a completed enumeration that
-            // did not contain the listing, and it is the one answer the port's
-            // contract says could ever justify releasing the duplicate-create
-            // fence; a search this source cannot perform is indeterminate and
-            // has to say so.
-            return Err(AdapterError::Rejected {
-                code: FailureCode::Other,
-                detail: FailureDetail(
-                    "this reconcile source searches the seller's catalogue by correlation \
-                     marker, and was handed a locator that names none"
-                        .to_owned(),
-                ),
-            });
-        };
+        let search = search_for(locator)?;
         let entries = self
             .0
             .list_own_resources(&FetchReason::VerifyAttempt { attempt })
@@ -398,10 +449,25 @@ impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync> ReconcileSource
         // the same resource under a different one. A reconcile that minted the
         // import spelling would bind an identity no later revise or removal
         // could match.
-        Ok(entries
-            .into_iter()
-            .find(|entry| entry.title.contains(&marker.0))
-            .map(|entry| entry.remote()))
+        match search {
+            Search::Marker(marker) => Ok(entries
+                .into_iter()
+                .find(|entry| entry.title.contains(&marker))
+                .map(|entry| entry.remote())),
+            // Exact, and narrowed to unpublished. A draft-then-publish create
+            // leaves its resource a draft, so every listing the seller has
+            // already published is excluded — which is the collision that
+            // would otherwise matter, since a title is not unique and one of
+            // the seller's live listings could easily carry this one.
+            Search::Recorded(title) => only_candidate(
+                entries
+                    .into_iter()
+                    .filter(|entry| !entry.published && entry.title == title)
+                    .collect(),
+                &title,
+            )
+            .map(|found| found.map(|entry| entry.remote())),
+        }
     }
 }
 
@@ -416,29 +482,32 @@ impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync, P: Pause + Sync
         locator: &'a ListingLocator,
         attempt: WriteAttemptId,
     ) -> Result<Option<RemoteListingId>, AdapterError> {
-        let ListingLocator::Marker { marker, .. } = locator else {
-            // Never `Ok(None)`. That answer means a completed enumeration that
-            // did not contain the listing, and it is the one answer the port's
-            // contract says could ever justify releasing the duplicate-create
-            // fence; a search this source cannot perform is indeterminate and
-            // has to say so.
-            return Err(AdapterError::Rejected {
-                code: FailureCode::Other,
-                detail: FailureDetail(
-                    "this reconcile source searches the seller's catalogue by correlation \
-                     marker, and was handed a locator that names none"
-                        .to_owned(),
-                ),
-            });
-        };
+        let search = search_for(locator)?;
         let entries = self
             .0
             .list_own_resources(&FetchReason::VerifyAttempt { attempt })
             .await?;
-        Ok(entries
-            .into_iter()
-            .find(|entry| entry.name.contains(&marker.0))
-            .map(|entry| entry.remote()))
+        match search {
+            Search::Marker(marker) => Ok(entries
+                .into_iter()
+                .find(|entry| entry.name.contains(&marker))
+                .map(|entry| entry.remote())),
+            // Narrowed by the status TPT states rather than by a guess: an
+            // unknown status classifies as neither draft nor live and is
+            // therefore not a candidate, which is the conservative direction.
+            Search::Recorded(title) => only_candidate(
+                entries
+                    .into_iter()
+                    .filter(|entry| {
+                        entry.name == title
+                            && entry.status.as_deref().and_then(listing_state_from_status)
+                                == Some(ListingState::Draft)
+                    })
+                    .collect(),
+                &title,
+            )
+            .map(|found| found.map(|entry| entry.remote())),
+        }
     }
 }
 
@@ -456,7 +525,7 @@ mod reconcile_tests {
     use tam_marketplace::transport::HttpResponse;
     use tam_marketplace::{
         AdapterError, CorrelationMarker, FileContent, FileSource, FileSourceError, ListingLocator,
-        RemoteListingId, WriteAttemptId,
+        RecordedTitle, RemoteListingId, WriteAttemptId,
     };
     use tam_marketplace_tes::endpoints::{self as tes_endpoints, DraftId};
     use tam_marketplace_tes::TesAdapter;
@@ -507,17 +576,30 @@ mod reconcile_tests {
 
     /// The published page, then the two empty pages the walk ends each list on.
     fn tes_catalogue(title: &str) -> Cassette {
+        tes_rows(&[(RESOURCE, title, false)])
+    }
+
+    /// A catalogue of stated rows, each an id, a title and whether it is still
+    /// a draft. Every row goes on the first published page; `draft` is the flag
+    /// the parser reads, so the walk classifies them without a second list.
+    fn tes_rows(rows: &[(i64, &str, bool)]) -> Cassette {
         let limit = tes_endpoints::CATALOGUE_PAGE_LIMIT;
         let empty = serde_json::json!([]);
+        let page: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(id, title, draft)| {
+                serde_json::json!({
+                    "id": id, "title": title, "licence": "CC-BY",
+                    "price": 0, "draft": draft,
+                    "url": format!("/teaching-resource/fixture-{id}")
+                })
+            })
+            .collect();
         Cassette {
             interactions: vec![
                 Interaction {
                     request: tes_endpoints::list_resources_request(0, limit),
-                    response: ok_body(&serde_json::json!([{
-                        "id": RESOURCE, "title": title, "licence": "CC-BY",
-                        "price": 0, "draft": false,
-                        "url": "/teaching-resource/fixture-9001"
-                    }])),
+                    response: ok_body(&serde_json::Value::Array(page)),
                 },
                 Interaction {
                     request: tes_endpoints::list_resources_request(1, limit),
@@ -528,6 +610,46 @@ mod reconcile_tests {
                     response: ok_body(&empty),
                 },
             ],
+        }
+    }
+
+    /// One TPT catalogue page of stated rows: an id, a name and TPT's own
+    /// status string.
+    fn tpt_rows(rows: &[(u64, &str, &str)]) -> Cassette {
+        let results: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(id, name, status)| {
+                serde_json::json!({
+                    "id": id.to_string(), "name": name, "price": "$1.00", "status": status
+                })
+            })
+            .collect();
+        let page = serde_json::json!({"data": {"seller": {"resources": {
+            "results": results,
+            "pageInfo": {
+                "totalResultsCount": rows.len(),
+                "currentPage": 1,
+                "totalPageCount": 1,
+            },
+        }}}});
+        Cassette {
+            interactions: vec![Interaction {
+                request: tpt_endpoints::my_product_listings_request(2, 0),
+                response: ok_body(&page),
+            }],
+        }
+    }
+
+    fn tpt(cassette: Cassette) -> TptAdapter<CassetteTransport, NoFiles, InstantPause> {
+        TptAdapter::new(CassetteTransport::new(cassette), NoFiles, InstantPause).with_page_limit(2)
+    }
+
+    const RECORDED: &str = "Fractions pack";
+
+    fn recorded_locator() -> ListingLocator {
+        ListingLocator::Recorded {
+            title: RecordedTitle(RECORDED.to_owned()),
+            inventory: InventoryId::TesGb,
         }
     }
 
@@ -627,6 +749,266 @@ mod reconcile_tests {
         );
     }
 
+    /// One draft answering to the recorded title is the create, and binds.
+    #[tokio::test]
+    async fn a_recorded_title_matching_one_tes_draft_identifies_it() {
+        let adapter = tes(tes_rows(&[
+            (RESOURCE, RECORDED, true),
+            (9002, "Something else", true),
+        ]));
+        let found = TesCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found,
+            Some(DraftId(RESOURCE).remote()),
+            "exactly one candidate survives, so it is the listing this create made"
+        );
+    }
+
+    /// A published listing carrying the same title is not a candidate.
+    ///
+    /// This is the narrowing that makes a non-unique title usable at all: a
+    /// draft-then-publish create leaves a draft, so the seller's already-live
+    /// listings cannot be mistaken for it, and that is the collision most
+    /// likely to happen.
+    #[tokio::test]
+    async fn a_tes_listing_already_published_is_not_a_candidate() {
+        let adapter = tes(tes_rows(&[(RESOURCE, RECORDED, false)]));
+        let found = TesCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found, None,
+            "the walk completed and nothing a create could have left carried the title"
+        );
+    }
+
+    /// Two drafts answering to one title is not knowing which, never absence.
+    #[tokio::test]
+    async fn two_tes_drafts_of_one_title_are_indeterminate() {
+        let adapter = tes(tes_rows(&[
+            (RESOURCE, RECORDED, true),
+            (9002, RECORDED, true),
+        ]));
+        let answer = TesCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await;
+        assert!(
+            matches!(answer, Err(AdapterError::Rejected { .. })),
+            "answering absent here would manufacture the one answer that could release the \
+             duplicate-create fence, on a walk that found two candidates: {answer:?}"
+        );
+    }
+
+    /// The same three outcomes on Tpt, narrowed by the status TPT states.
+    #[tokio::test]
+    async fn a_recorded_title_matching_one_tpt_draft_identifies_it() {
+        let adapter = tpt(tpt_rows(&[
+            (PRODUCT, RECORDED, "NOT_ACTIVE"),
+            (77, "Something else", "NOT_ACTIVE"),
+        ]));
+        let found = TptCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found,
+            Some(RemoteListingId::Tpt {
+                product_id: PRODUCT
+            }),
+            "exactly one draft answers to the recorded title"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_tpt_product_is_not_a_candidate() {
+        let adapter = tpt(tpt_rows(&[(PRODUCT, RECORDED, "ACTIVE")]));
+        let found = TptCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found, None,
+            "an already-live product is not something a fresh create left behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_tpt_drafts_of_one_title_are_indeterminate() {
+        let adapter = tpt(tpt_rows(&[
+            (PRODUCT, RECORDED, "NOT_ACTIVE"),
+            (77, RECORDED, "NOT_ACTIVE"),
+        ]));
+        let answer = TptCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await;
+        assert!(
+            matches!(answer, Err(AdapterError::Rejected { .. })),
+            "two candidates is not knowing which: {answer:?}"
+        );
+    }
+
+    /// A status TPT has never stated classifies as neither, so it is not a
+    /// candidate — the conservative direction, and the same strictness
+    /// `listing_state_from_status` states for itself.
+    #[tokio::test]
+    async fn a_tpt_product_of_unknown_status_is_not_a_candidate() {
+        let adapter = tpt(tpt_rows(&[(PRODUCT, RECORDED, "PENDING_REVIEW")]));
+        let found = TptCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found, None,
+            "a status nobody has seen is not evidence a create left this product"
+        );
+    }
+
+    /// A run resumes only what the order says it resumes, and identifies it by
+    /// the title the order carries rather than by the product's own.
+    #[test]
+    fn a_run_resumes_what_the_order_says_and_nothing_else() {
+        use super::resume_from;
+        use tam_engine_driver::vocabulary::{AttemptRef, ReconcileSubject};
+
+        let mut order = super::tests::order();
+        assert_eq!(
+            resume_from(&order),
+            None,
+            "an ordinary order resumes nothing, so the run begins at the beginning"
+        );
+
+        order.reconcile = Some(ReconcileSubject {
+            attempt: AttemptRef {
+                attempt: tam_types::Uuid([0x5A; 16]),
+                mapping: order.lease.mapping,
+            },
+            title: "Fractions pack".to_owned(),
+        });
+        assert_eq!(
+            resume_from(&order),
+            Some((
+                WriteAttemptId(tam_types::Uuid([0x5A; 16])),
+                RecordedTitle("Fractions pack".to_owned())
+            )),
+            "and a reconcile order resumes its attempt under the title that attempt recorded, \
+             never under the one the product carries now"
+        );
+    }
+
+    /// The narrowing runs before the uniqueness test, not after it.
+    ///
+    /// Both rows answer to the recorded title and only one is in the state a
+    /// create leaves, so the draft binds. Narrowing after counting would see
+    /// two candidates and answer indeterminate, which would strand every
+    /// create whose seller happens to have published a listing of the same
+    /// name — and that is the ordinary case, not an exotic one.
+    #[tokio::test]
+    async fn a_published_tes_listing_of_the_same_title_does_not_hide_the_draft() {
+        let adapter = tes(tes_rows(&[
+            (9002, RECORDED, false),
+            (RESOURCE, RECORDED, true),
+        ]));
+        let found = TesCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found,
+            Some(DraftId(RESOURCE).remote()),
+            "the published one is not a candidate at all, so the draft is the only one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_tpt_product_of_the_same_title_does_not_hide_the_draft() {
+        let adapter = tpt(tpt_rows(&[
+            (77, RECORDED, "ACTIVE"),
+            (PRODUCT, RECORDED, "NOT_ACTIVE"),
+        ]));
+        let found = TptCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found,
+            Some(RemoteListingId::Tpt {
+                product_id: PRODUCT
+            }),
+            "the live one is not a candidate at all, so the draft is the only one"
+        );
+    }
+
+    /// The title match is exact, not a prefix or a substring.
+    ///
+    /// A seller who drafts "Fractions pack (revised)" beside nothing else has
+    /// no listing this create made, and a search matching on containment would
+    /// bind that draft and settle the create on a listing it never wrote.
+    #[tokio::test]
+    async fn a_tes_draft_merely_containing_the_recorded_title_is_not_a_candidate() {
+        let adapter = tes(tes_rows(&[(
+            RESOURCE,
+            &format!("{RECORDED} (revised)"),
+            true,
+        )]));
+        let found = TesCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found, None,
+            "a longer title is a different listing, and the walk completed without finding \
+             the recorded one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tpt_draft_merely_containing_the_recorded_title_is_not_a_candidate() {
+        let adapter = tpt(tpt_rows(&[(
+            PRODUCT,
+            &format!("{RECORDED} (revised)"),
+            "NOT_ACTIVE",
+        )]));
+        let found = TptCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(found, None, "the same on Tpt: containment is not identity");
+    }
+
+    /// A product stating no status at all classifies as neither, exactly as an
+    /// unrecognised one does.
+    #[tokio::test]
+    async fn a_tpt_product_stating_no_status_is_not_a_candidate() {
+        let page = serde_json::json!({"data": {"seller": {"resources": {
+            "results": [
+                { "id": PRODUCT.to_string(), "name": RECORDED, "price": "$1.00" }
+            ],
+            "pageInfo": {
+                "totalResultsCount": 1,
+                "currentPage": 1,
+                "totalPageCount": 1,
+            },
+        }}}});
+        let adapter = tpt(Cassette {
+            interactions: vec![Interaction {
+                request: tpt_endpoints::my_product_listings_request(2, 0),
+                response: ok_body(&page),
+            }],
+        });
+        let found = TptCatalogue(&adapter)
+            .find_listing(&recorded_locator(), attempt())
+            .await
+            .expect("a completed walk answers");
+        assert_eq!(
+            found, None,
+            "silence about the state is not evidence a create left this product"
+        );
+    }
+
     /// Neither source may answer absent to a search it cannot perform.
     #[tokio::test]
     async fn a_reconcile_source_refuses_a_locator_it_cannot_search() {
@@ -710,7 +1092,7 @@ mod tests {
         Uuid(raw)
     }
 
-    fn order() -> WorkOrder {
+    pub(super) fn order() -> WorkOrder {
         WorkOrder {
             reconcile: None,
             lease: LeasedItem {

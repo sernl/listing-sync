@@ -398,6 +398,18 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                 code: FailureCode::Other,
                 detail: FailureDetail("a non-Tes identifier reached the Tes adapter".to_owned()),
             }),
+            // A recorded title is an identification, never an address. The
+            // reconcile carries one only as far as the catalogue search; what
+            // that search finds is a durable id, and it is the durable id the
+            // verifying read-back addresses.
+            ListingLocator::Recorded { .. } => Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(
+                    "a recorded title names no listing to read; the search resolves it to a \
+                     durable identifier first"
+                        .to_owned(),
+                ),
+            }),
             // Marker search is the reconciliation flow's tool and lands with
             // the job engine (M1d).
             ListingLocator::Marker { .. } => Err(AdapterError::Rejected {
@@ -729,9 +741,10 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         let id = Self::draft_id_from_locator(&locator)?;
         let subject = match &locator {
             ListingLocator::Durable(durable) => durable.clone(),
-            ListingLocator::Marker { .. } => RemoteListingId::Tes {
-                url: format!("{}/api/v2/resources/{}", endpoints::ORIGIN, id.0),
-            },
+            // Unreachable for `Recorded`, which `draft_id_from_locator` has
+            // already refused above; both non-durable arms name the resource
+            // the recovered id names.
+            ListingLocator::Marker { .. } | ListingLocator::Recorded { .. } => id.remote(),
         };
         let state = match self.resource_state(id).await {
             Ok(state) => state,

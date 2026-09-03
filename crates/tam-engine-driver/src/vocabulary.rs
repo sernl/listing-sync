@@ -80,6 +80,20 @@ pub struct NewAttempt {
     pub intent: AttemptIntent,
 }
 
+/// The stranded create a reconcile is settling, and what identifies it.
+///
+/// The title is the one that create recorded that it sent, read from its own
+/// `write_attempt` intent, rather than the title the product carries now.
+/// The two differ whenever the seller edited the listing between the strand
+/// and the resume, and searching a catalogue for the current title is not
+/// merely how a search misses: it is how it matches some other listing that
+/// has since acquired that title and binds the mapping to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReconcileSubject {
+    pub attempt: AttemptRef,
+    pub title: String,
+}
+
 /// The two rows a settlement writes: the fenced attempt, and the mapping a
 /// landed write binds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,7 +292,7 @@ pub struct WorkOrder {
     /// `default` so a client built before this field decodes an order without
     /// one as the ordinary order it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reconcile: Option<AttemptRef>,
+    pub reconcile: Option<ReconcileSubject>,
     pub server_now_ms: i64,
     pub server_deadline_ms: i64,
     pub next_poll_ms: u64,

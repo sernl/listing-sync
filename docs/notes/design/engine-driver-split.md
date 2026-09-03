@@ -446,21 +446,42 @@ That arm now settles the item ambiguous with one `Notify` and no `Halt`, leaving
 It is unreachable while the claim gate holds, and that is the point: the gate is the policy and the arm is the bound on being wrong about it, so a resume delivered by any route the gate does not cover costs one item rather than a tenant's queue and an operator's intervention.
 `SellerEvent` has no variant for an item that ended ambiguous, so the arm reuses `ItemParked`, the closed vocabulary's "an item stopped, come and look" signal; a dedicated variant is a client-vocabulary change and belongs with whoever owns `web/`.
 
-Step 12d, the identification a create can be found by, is not yet decided.
-The founder is being asked whether a correlation marker may sit in a seller-visible field at all, and the recommendation is that it need not.
-`docs/design/decisions.md` already records that Tes does not need the marker because draft-then-publish is idempotent there, and neither catalogue enumeration returns a description, so the only field `MarkerField` permits that a walk can actually see is the title — which is the field TPT's Seller Guidelines argue against.
-The marker-free route is therefore the one to scope, and it is this.
+Step 12d, the identification a create is found by, without a marker.
 
-A stranded create is identified by the title its own recorded intent already carries.
-`intent_as_json` writes the create's whole `FieldSet` into the `write_attempt` row before the click, so the title is recoverable from the standing attempt with no new column, no new wire field, and nothing added to any listing a buyer sees.
-The resume searches the same catalogue walk the two `ReconcileSource` implementations already perform, matching the recorded title exactly against the seller's own listings rather than by substring, and narrowing by status where the walk exposes one.
-What each walk exposes is the constraint: TPT's `MyResourceFields` gives `name` and `status`, so a candidate can be required to be the seller's own and in the state a fresh create leaves; Tes's catalogue row gives `title` and `published`, so a draft-then-publish create can be required to be unpublished, which is exactly the state its own strategy leaves it in.
-Exactly one candidate binds; zero or several leave the attempt standing and the item ambiguous, because two listings with one title is precisely the duplicate the fence exists to prevent and picking one would be the guess this whole step refuses.
+The founder was asked whether a correlation marker may sit in a seller-visible field and the recommendation was that it need not be.
+`docs/design/decisions.md` already records that Tes does not need the marker because draft-then-publish is idempotent there, and neither catalogue enumeration returns a description, so the only field `MarkerField` permits that a walk can see is the title — the one TPT's Seller Guidelines argue against.
+The marker-free route was adopted and is what this step built: nothing is written into any listing, and no listing a buyer reads is touched.
 
-Under that route `ProjectedListing` gains nothing and `preparation()` gains nothing beyond a per-inventory `CREATE_STRATEGY`, because the identification uses fields both adapters already parse.
-The claim gate flips by widening `reconcile_is_available` from "the strategy embeds a marker" to "the strategy leaves a create this walk can identify", which `DraftThenPublish` satisfies on both device-branch marketplaces and `HaltOnAmbiguity` does not.
-The cost this route pays instead of listing pollution is a weaker identification: a seller with two listings of the same name gets an ambiguity where a marker would have given an answer, and a create still sitting in TPT's asynchronous processing queue is absent from the walk exactly as it is under a marker.
-Both are the stall bias doing its job, and both are recoverable by a later pass, which is not true of a wrongly released fence.
+A stranded create is identified by the title its own attempt recorded that it sent.
+`intent_as_json` writes the rendered field set into the `write_attempt` row before the click, so the title is already there; the claim reads it out of that intent and it travels to the device on the work order beside the attempt.
+It is deliberately not the title the product carries now, which is what the machine's own `fields` hold: the two differ whenever the seller edited the product between the strand and the resume, and searching a catalogue for the current title is not merely how a search misses — it is how it matches some other listing that has since acquired that title and binds the mapping to it.
+The claim returns the attempt only where its intent names a title, so an attempt that identifies nothing is not offered as a reconcile at all.
+
+The search is exact and narrowed, and the narrowing is what makes a title usable.
+A marker is unique; a title is not, so matching one is only an identification when exactly one candidate survives.
+TPT's walk exposes `name` and `status` and Tes's exposes `title` and `published`, so a candidate must additionally be in the state a draft-then-publish create leaves a listing in: unpublished on Tes, `NOT_ACTIVE` on TPT, with a status TPT has never stated classifying as neither and therefore not a candidate.
+Exactly one candidate binds, zero answers a completed-and-absent `Ok(None)`, and several answers the indeterminate `Err` — because two listings answering to one title is not absence, and `Ok(None)` is the one answer anything could ever build a fence release on.
+
+The residual risk, stated rather than left implicit.
+The narrowing excludes every listing the seller has already published, which is the collision most likely to happen; two of the seller's own drafts sharing a title is two candidates and therefore ambiguous and safe.
+What remains is the case where the create did not land and the seller has exactly one other unpublished listing carrying the identical recorded title: the walk finds one candidate and binds the wrong listing.
+That is the price of identifying by a field that is not unique, it is the price the marker was going to buy out, and it is why the marker option stays in `CreateStrategy` rather than being deleted.
+
+`reconcile_is_available` widened accordingly, from "the strategy embeds a marker" to "the strategy leaves a create this walk can identify", which `DraftThenPublish` satisfies and `HaltOnAmbiguity` does not.
+That flips the claim gate in the same edit, so the reconcile stops being dormant here rather than in a separate change.
+`ProjectedListing` gained nothing and `preparation()` gained nothing, which is the whole point of the route.
+
+Deliberately not extended to the ambiguous submit, which is the obvious next step and is not this one.
+`SyncMachine::reconcile` still searches only under `CorrelationMarker` and halts the tenant's inventory under `DraftThenPublish`, so a submit whose response was lost mid-run is treated as it was before this step.
+The identification now exists for it — during a live run the machine's own fields are the recorded intent, because it is the same run that rendered them, so no wire field would be needed — but an ambiguous submit is a different signal from a device that stopped, and whether it still warrants the halt is a question of its own rather than a consequence of this one.
+
+Proves that a stranded create is identified by what it recorded it sent, or left visibly undecided, and never by what the product says now.
+Verification: the three outcomes on each adapter and both narrowings driven against recorded catalogues, the machine's two searchable strategies and its unsearchable one driven as transition rows, the conformance bodies driving the production strategy rather than a marker, and the claim's title extraction driven against Postgres including the attempt that names none.
+One hop is not covered end to end and is named rather than counted as closed: nothing drives `/v1/devices/{id}/work` against a genuinely stranded create and observes the order that comes back.
+`reconcile_subject` is unit-tested either side of the both-or-neither rule and the claim is driven against Postgres, so the two ends are proven and the wire between them is proven by reading.
+The obstacle is the fixture rather than the code: `seed_claimable` in `crates/tam-api/tests/devices_flow.rs` builds a product that raises a taxonomy election, so `/work` parks on the election gate and answers idle, and no test in that file has ever received a work order.
+Teaching that fixture to resolve an election is the task that closes this, and it is worth doing for every future test of that route rather than for this one.
+Kill gate: an identification that binds on anything other than exactly one candidate in the state a create leaves.
 
 Step 13, the entitlement gate inside the loop.
 `AssertFormSchema` consumes a rate grant (finding 12), and the per-effect entitlement check sits at the four network-bearing effects and in `verify_with_backoff`'s per-try preamble, producing the shape `BudgetGrant::Exhausted` already produces rather than a new terminal outcome.

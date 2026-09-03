@@ -13,8 +13,8 @@ use tam_domain::{
 };
 use tam_marketplace::{
     AdapterError, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator,
-    ListingState, MarketplaceAdapter, ObservedListing, Outcome, Pause, RemoteLifecycle,
-    RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
+    ListingState, MarketplaceAdapter, ObservedListing, Outcome, Pause, RecordedTitle,
+    RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_types::{
     BindAnomaly, ConnectionId, ContentHash, FailureCode, FailureDetail, JobEventPayload,
@@ -72,13 +72,14 @@ impl VerifyPolicy {
 /// will own producing this; until then the worker builds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineSeed {
-    /// The stranded attempt this run is reconciling, where it is one.
+    /// The stranded attempt this run is reconciling and the title it
+    /// recorded, where it is one.
     ///
     /// Set, the run does not begin at the beginning: it steps straight to the
     /// search, and the entry row's effects are discarded rather than
     /// executed. That matters because the first of them is the form
     /// assertion, which on Tes is a write.
-    pub resume: Option<WriteAttemptId>,
+    pub resume: Option<(WriteAttemptId, RecordedTitle)>,
     pub form: FormId,
     pub fields: FieldSet,
     pub intent_hash: ContentHash,
@@ -549,11 +550,15 @@ pub async fn run_item<
     // replaces the entry row's effects rather than running them, and the
     // first of those is the form assertion — write-bearing on Tes, and the
     // last thing an item whose create may already have landed should do.
-    if let Some(stranded) = seed.resume {
+    if let Some((stranded, recorded)) = seed.resume {
         let at = ctx.clock.now();
-        transition = transition
-            .next
-            .step(Input::ResumeStranded(stranded), LogicalInstant(at.0))?;
+        transition = transition.next.step(
+            Input::ResumeStranded {
+                attempt: stranded,
+                recorded,
+            },
+            LogicalInstant(at.0),
+        )?;
     }
     let mut current_attempt: Option<WriteAttemptId> = None;
     // What the verification read last saw, so a bind records the lifecycle

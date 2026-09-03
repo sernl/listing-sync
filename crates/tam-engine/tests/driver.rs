@@ -182,9 +182,11 @@ impl MarketplaceAdapter for ScriptedAdapter {
         }
         let id = match locator {
             ListingLocator::Durable(id) => id,
-            ListingLocator::Marker { .. } => RemoteListingId::Tes {
-                url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
-            },
+            ListingLocator::Marker { .. } | ListingLocator::Recorded { .. } => {
+                RemoteListingId::Tes {
+                    url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+                }
+            }
         };
         if self.cancel_after_read_back {
             self.cancel.cancel();

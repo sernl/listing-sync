@@ -31,7 +31,7 @@ An agent implementing this machine needs every identifier resolved before it sta
 | `FormSchemaFingerprint` | newtype | A content hash over the form's input-name set |
 | `FieldSet` | struct | The projected, length-capped values a submit writes |
 | `SubmitEvidence` | struct | What the driver observed, which is evidence and never a verdict |
-| `ListingLocator` | enum | `Durable(RemoteListingId)` or `Marker { .. }` |
+| `ListingLocator` | enum | `Durable(RemoteListingId)`, `Marker { .. }` or `Recorded { .. }` |
 | `ObservedListing` | struct | What read-back saw |
 | `StepBudget` | struct | Remaining interpreter actions for this job |
 | `HaltScope` | enum | `OrgInventory`, `Org`, `FleetInventory` |
@@ -81,14 +81,17 @@ Every row is total: an `Input` arriving in a state not listed here returns `Err(
 `ResumeStranded` additionally returns `Err(MachineError::ResumeNotACreate)` against any other operation, because only a create leaves a fencing row nothing can settle: a revise re-applies the same fields and a removal re-deletes something already gone, so both are re-run rather than reconciled.
 It is an input rather than a second constructor deliberately — every state but the entry one is reached by a transition, which is what makes this table the whole specification, and a constructor starting mid-graph could establish a state no transition ever checked.
 It adopts the standing attempt rather than opening another, and the entry row's effects are discarded rather than executed, which matters because the first of them is the form assertion and on Tes that is a write.
-Where the create strategy cannot be searched, it halts ambiguous exactly as the ambiguous-submit row does rather than sending a device to enumerate for a marker no create ever wrote.
+How the create is identified is the strategy's to say, and the two that can be searched are searched differently: `CorrelationMarker` embeds a unique marker and is matched by substring, while `DraftThenPublish` embeds nothing and is identified by the title the attempt recorded that it sent, matched exactly and narrowed to the state a create leaves a listing in, because a title is not unique and only one surviving candidate is an identification.
+The recorded title travels on the input rather than being read from the machine's own fields, which hold a fresh projection of a product the seller may have renamed since the strand; searching for the current title is how a reconcile binds a listing its create never made.
+Where the strategy leaves nothing to identify — `HaltOnAmbiguity`, which says so in its name — the resume settles ambiguous with a notification and no halt, leaving the attempt standing: an ambiguity elsewhere means this tenant's automation has stopped being safe to continue, while here it means only that this build configures no identification, which is equally true of every item in the queue and is not a reason to stop it.
 A reconcile that finds the listing never settles ambiguous on the grounds that the write's echo is missing, because the find substitutes for the lost write response and nothing more: it binds nothing by itself and leaves the attempt standing, and the verifying read-back behind it decides against the recorded intent — committed where every field the intent asked for is what the marketplace holds, degraded where the listing exists but a field differs, and ambiguous with the attempt still standing only where the read itself could not be performed.
 `Result` is used only for transitions that are genuinely impossible rather than merely unsuccessful, so every business outcome including ambiguity is a value in `Outcome` travelling the success channel.
 
 | State | Input | Next state | Effects |
 |---|---|---|---|
 | `AwaitingPreflight` | (entry) | `AwaitingPreflight` | `AssertFormSchema` |
-| `AwaitingPreflight` | `ResumeStranded(attempt)` | `AwaitingReadBack` | `Reconcile` |
+| `AwaitingPreflight` | `ResumeStranded` (marker or recorded-title strategy) | `AwaitingReadBack` | `Reconcile` |
+| `AwaitingPreflight` | `ResumeStranded` (nothing to identify) | `Terminal(Ambiguous NoDurableIdentifier)` | `Notify` |
 | `AwaitingPreflight` | `PreflightResult(Ok)` | `PreflightAsserted` | `RecordIntent` |
 | `AwaitingPreflight` | `PreflightResult(Err)` | `Terminal(Rejected FormSchemaDrift)` | `CaptureDiagnostics`, `Halt OrgInventory`, `Notify` |
 | `PreflightAsserted` | `IntentRecorded` | `IntentRecorded` | `Submit` |

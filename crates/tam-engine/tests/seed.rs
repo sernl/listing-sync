@@ -295,6 +295,7 @@ fn leasing(operation: tam_domain::ItemOperation) -> LeasedItem {
     LeasedItem {
         org: ORG,
         stranded_attempt: None,
+        stranded_title: None,
         item: tam_domain::JobItemId(Uuid([0x41; 16])),
         job: JobId(Uuid([0x42; 16])),
         mapping: MAPPING,

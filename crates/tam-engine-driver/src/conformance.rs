@@ -29,8 +29,8 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use tam_domain::{ItemOutcome, StepBudget};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId,
-    FormSchemaFingerprint, IdempotencyKey, InstantPause, ListingLocator, MarkerField,
-    MarkerLifetime, MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle,
+    FormSchemaFingerprint, IdempotencyKey, InstantPause, ListingLocator, MarketplaceAdapter,
+    ObservedListing, ProjectedListing, RecordedTitle, RemoteLifecycle, RemoteLifecycleKind,
     RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence, WriteAttemptId,
 };
 use tam_types::{ContentHash, FieldKey, InventoryId, Timestamp, Uuid};
@@ -230,9 +230,11 @@ impl MarketplaceAdapter for ScriptedAdapter<'_> {
         }
         let id = match locator {
             ListingLocator::Durable(id) => id,
-            ListingLocator::Marker { .. } => RemoteListingId::Tes {
-                url: LANDED_URL.to_owned(),
-            },
+            ListingLocator::Marker { .. } | ListingLocator::Recorded { .. } => {
+                RemoteListingId::Tes {
+                    url: LANDED_URL.to_owned(),
+                }
+            }
         };
         if self.cancel_after_read_back {
             if let Some(switch) = self.cancel {
@@ -308,6 +310,10 @@ async fn drive<L: ItemLedger>(
     }
 }
 
+/// The title the stranded create recorded that it sent, which is what
+/// identifies it to the catalogue walk.
+pub const STRANDED_TITLE: &str = "Fixture";
+
 /// The attempt a reconcile body finds already standing.
 pub const STRANDED: Uuid = Uuid([0x5A; 16]);
 
@@ -336,15 +342,17 @@ async fn drive_reconcile<L: ItemLedger>(
         pause: &InstantPause,
     };
     let mut seed = seed_machine();
-    seed.resume = Some(WriteAttemptId(STRANDED));
-    // The strategy decides whether a resume can search at all: the row halts
-    // ambiguous on every other one rather than sending a device to enumerate
-    // for a marker no create ever wrote, so the shared seed's
-    // `HaltOnAmbiguity` would end each of these bodies before the reconcile
+    seed.resume = Some((
+        WriteAttemptId(STRANDED),
+        RecordedTitle(STRANDED_TITLE.to_owned()),
+    ));
+    // Draft-then-publish, which is what production configures, so these bodies
+    // drive the path a real stranded create takes: identified by the title it
+    // recorded rather than by a marker. The shared seed's `HaltOnAmbiguity`
+    // leaves nothing to identify and would end each body before the reconcile
     // source was ever asked.
-    seed.strategy = CreateStrategy::CorrelationMarker {
-        field: MarkerField::DescriptionTail,
-        ttl: MarkerLifetime { seconds: 3_600 },
+    seed.strategy = CreateStrategy::DraftThenPublish {
+        draft_state: RemoteLifecycleKind::Draft,
     };
     match run_item(&ctx, lease, seed).await {
         Ok(verdict) => verdict,

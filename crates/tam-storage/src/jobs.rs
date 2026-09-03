@@ -166,6 +166,15 @@ pub struct LeasedItem {
     /// ordinary run: the operation cannot say it, because a stranded create is
     /// still a create.
     pub stranded_attempt: Option<Uuid>,
+    /// The title that stranded create recorded that it sent, out of its own
+    /// attempt's intent.
+    ///
+    /// Read here rather than re-projected because the two differ whenever the
+    /// seller edited the product in between, and a search for the current
+    /// title is how a reconcile binds a listing that is not the one its create
+    /// made. Absent where the intent names no title, which leaves the item
+    /// unidentifiable and therefore not a reconcile.
+    pub stranded_title: Option<String>,
 }
 
 impl LeasedItem {
@@ -1062,6 +1071,7 @@ impl LeaseRepo {
                     attempt_count: row.attempt_count,
                     // The server scan never reconciles: that path is the device's.
                     stranded_attempt: None,
+                    stranded_title: None,
                     requires_bound_on: row
                         .requires_bound_on
                         .as_deref()
@@ -1219,8 +1229,31 @@ impl LeaseRepo {
                    (SELECT wa.id FROM write_attempt wa
                      WHERE wa.org_id = item.org_id AND wa.job_item_id = item.id
                        AND wa.state = 'in_flight'
-                       AND wa.lease_epoch = item.lease_epoch)
-                 END AS stranded_attempt"#,
+                       AND wa.lease_epoch = item.lease_epoch
+                       -- And only where that intent names a title. The title
+                       -- is the whole of the identification under a
+                       -- marker-free strategy, so an attempt without one
+                       -- names a reconcile nothing could perform; returning
+                       -- it and leaving the caller to notice would make the
+                       -- pairing a convention rather than a fact.
+                       AND EXISTS (SELECT 1
+                                     FROM jsonb_array_elements(wa.intent->'entries') AS e
+                                    WHERE e->>0 = 'Title'))
+                 END AS stranded_attempt,
+                 -- What that attempt recorded it sent, out of the intent
+                 -- written before the click. `entries` is the rendered field
+                 -- set as pairs, so the title is the second element of the
+                 -- pair whose first is the `FieldKey::Title` variant name.
+                 CASE WHEN candidate.was = 'parked_live' THEN
+                   (SELECT entry->>1
+                      FROM write_attempt wa,
+                           jsonb_array_elements(wa.intent->'entries') AS entry
+                     WHERE wa.org_id = item.org_id AND wa.job_item_id = item.id
+                       AND wa.state = 'in_flight'
+                       AND wa.lease_epoch = item.lease_epoch
+                       AND entry->>0 = 'Title'
+                     LIMIT 1)
+                 END AS stranded_title"#,
             device,
             f64::from(i32::try_from(ttl_seconds).unwrap_or(i32::MAX)),
             i32::try_from(grace_hours).unwrap_or(i32::MAX),
@@ -1304,6 +1337,7 @@ impl LeaseRepo {
             lease_epoch: row.lease_epoch,
             attempt_count: row.attempt_count,
             stranded_attempt: row.stranded_attempt.map(uuid_from_db),
+            stranded_title: row.stranded_title,
             requires_bound_on: row
                 .requires_bound_on
                 .as_deref()
@@ -1363,6 +1397,7 @@ impl LeaseRepo {
             // A plain read of the row, which is not a claim and so never a
             // reconcile; the claim is the only moment that knows.
             stranded_attempt: None,
+            stranded_title: None,
             requires_bound_on: row
                 .requires_bound_on
                 .as_deref()

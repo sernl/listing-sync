@@ -23,7 +23,7 @@ use tam_engine::seed::{
 };
 use tam_engine_driver::vocabulary::{
     AttemptRef, ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall, LedgerError,
-    PayloadManifest, SettleEnvelope, WorkFilter, WorkOrder,
+    PayloadManifest, ReconcileSubject, SettleEnvelope, WorkFilter, WorkOrder,
 };
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
@@ -134,6 +134,27 @@ async fn charge(
         .map_err(|error| state.internal(&error.to_string()))
 }
 
+/// The reconcile an order carries, where the claim found one.
+///
+/// Both or neither. An attempt whose intent named no title cannot be
+/// identified by the catalogue walk, so an order carrying the attempt without
+/// the title would send a device to search for nothing; it is not a reconcile
+/// and the device runs it as the ordinary create it still is. The claim
+/// already refuses to return one without the other, and this keeps the pairing
+/// true of the type rather than of the query alone.
+fn reconcile_subject(leased: &tam_storage::LeasedItem) -> Option<ReconcileSubject> {
+    leased
+        .stranded_attempt
+        .zip(leased.stranded_title.clone())
+        .map(|(attempt, title)| ReconcileSubject {
+            attempt: AttemptRef {
+                attempt,
+                mapping: leased.mapping,
+            },
+            title,
+        })
+}
+
 /// What the device is to do, or `None` where the item turned out not to be the
 /// device's to run.
 async fn work_order(
@@ -186,10 +207,7 @@ async fn work_order(
         // Its presence is the whole of how a device tells a reconcile from an
         // ordinary run, because the operation cannot: a stranded create is
         // still a create.
-        reconcile: leased.stranded_attempt.map(|attempt| AttemptRef {
-            attempt,
-            mapping: leased.mapping,
-        }),
+        reconcile: reconcile_subject(leased),
         preparation,
         payload,
         server_now_ms: now.0,
@@ -469,4 +487,85 @@ async fn dispatch(ledger: &PgLedger, call: LedgerCall) -> Result<LedgerAnswer, L
             LedgerAnswer::Done
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconcile_subject;
+    use tam_engine_driver::vocabulary::AttemptRef;
+    use tam_marketplace::IdempotencyKey;
+    use tam_types::{InventoryId, JobId, MappingId, OrgId, Uuid};
+
+    const MAPPING: MappingId = MappingId(Uuid([0x04; 16]));
+    const ATTEMPT: Uuid = Uuid([0x5A; 16]);
+
+    /// A leased item with whatever the claim said about a stranded create.
+    fn leased(
+        stranded_attempt: Option<Uuid>,
+        stranded_title: Option<&str>,
+    ) -> tam_storage::LeasedItem {
+        tam_storage::LeasedItem {
+            org: OrgId(Uuid([0x01; 16])),
+            item: tam_domain::JobItemId(Uuid([0x02; 16])),
+            job: JobId(Uuid([0x03; 16])),
+            mapping: MAPPING,
+            inventory: InventoryId::TesGb,
+            idempotency_key: IdempotencyKey(Uuid([0x05; 16])),
+            operation: tam_domain::ItemOperation::Create,
+            lease_epoch: 7,
+            attempt_count: 0,
+            requires_bound_on: None,
+            stranded_attempt,
+            stranded_title: stranded_title.map(str::to_owned),
+        }
+    }
+
+    /// The recorded title reaches the order, beside the attempt it identifies.
+    ///
+    /// This is the whole of what the device is given to search with: the
+    /// attempt says which row to settle and the title says which listing to
+    /// look for, and a subject carrying one without the other would send a
+    /// device to enumerate a seller's catalogue for nothing.
+    #[test]
+    fn a_stranded_create_becomes_a_subject_carrying_its_recorded_title() {
+        let subject = reconcile_subject(&leased(Some(ATTEMPT), Some("Fractions pack")))
+            .expect("the claim named both, so the order is a reconcile");
+        assert_eq!(
+            subject,
+            tam_engine_driver::vocabulary::ReconcileSubject {
+                attempt: AttemptRef {
+                    attempt: ATTEMPT,
+                    mapping: MAPPING,
+                },
+                title: "Fractions pack".to_owned(),
+            },
+            "the title is carried through unaltered and the attempt names this item's mapping"
+        );
+    }
+
+    /// Both or neither, in both directions.
+    ///
+    /// The claim already refuses to return an attempt whose intent named no
+    /// title, so the first of these is unreachable through it; stating it here
+    /// keeps the pairing a property of this function rather than of that query
+    /// alone, because this is what builds the thing the device acts on.
+    #[test]
+    fn half_a_reconcile_is_not_a_reconcile() {
+        assert_eq!(
+            reconcile_subject(&leased(Some(ATTEMPT), None)),
+            None,
+            "an attempt with no recorded title identifies no listing, so the device runs the \
+             ordinary create it still is"
+        );
+        assert_eq!(
+            reconcile_subject(&leased(None, Some("Fractions pack"))),
+            None,
+            "and a title with no attempt names nothing to settle"
+        );
+        assert_eq!(
+            reconcile_subject(&leased(None, None)),
+            None,
+            "an ordinary claim is not a reconcile"
+        );
+    }
 }

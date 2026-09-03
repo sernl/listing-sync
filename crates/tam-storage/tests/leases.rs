@@ -24,8 +24,8 @@ use tam_storage::{
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
-    FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, Marketplace, OrgId,
-    PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Stamp,
+    FieldKey, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, Marketplace,
+    OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Stamp,
     SystemComponent, Timestamp, Title, TransportClass, Uuid,
 };
 
@@ -1619,9 +1619,41 @@ async fn park_mid_submit(
     lease.item
 }
 
+/// The shape `intent_as_json` writes for a create: the rendered field set as
+/// pairs, which is where the claim reads the recorded title from.
+const RECORDED_TITLE: &str = "Fractions pack";
+
+/// The pairs as the driver encodes them, built from real `FieldKey` values
+/// rather than spelt out here.
+///
+/// The claim matches on the literal `'Title'`, which is `FieldKey`'s serde
+/// spelling and nothing else; a fixture that wrote that string by hand would
+/// keep passing if the enum were renamed or given a `rename_all`, and the
+/// claim would silently stop finding any title. Going through `serde_json`
+/// over the real values ties the two together.
+///
+/// Description first on purpose: with the title in front, a claim that
+/// dropped its `entry->>0 = 'Title'` filter and simply took the first pair
+/// would still pass.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+fn recorded_entries() -> serde_json::Value {
+    serde_json::to_value(vec![
+        (FieldKey::Description, "A worksheet.".to_owned()),
+        (FieldKey::Title, RECORDED_TITLE.to_owned()),
+    ])
+    .expect("a field set encodes")
+}
+
 fn intent() -> AttemptIntent {
     AttemptIntent {
-        body: serde_json::json!({ "fixture": true }),
+        body: serde_json::json!({
+            "operation": "create",
+            "entries": recorded_entries(),
+            "files": [],
+        }),
         hash: vec![0x01; 32],
     }
 }
@@ -3408,10 +3440,12 @@ async fn a_stranded_create_is_claimed_ahead_of_older_queued_work(app: PgPool) {
          reconcile-first ordering and nothing else"
     );
     assert_eq!(
-        leased.stranded_attempt,
-        Some(attempt),
-        "and the claim names the attempt to reconcile, which is the only way the device can \
-         tell a reconcile from an ordinary create: the operation still reads 'create'"
+        (leased.stranded_attempt, leased.stranded_title.as_deref()),
+        (Some(attempt), Some(RECORDED_TITLE)),
+        "and the claim names the attempt to reconcile and the title that attempt recorded it \
+         sent, which is the only way the device can tell a reconcile from an ordinary create \
+         and the only thing that identifies the listing: the operation still reads 'create', \
+         and the product's title now may not be the one the create used"
     );
     let (state, blocked_on, _, timed, _) = item_disposition(&engine, tenant.org, stranded).await;
     assert_eq!(
@@ -3693,5 +3727,48 @@ async fn a_stranded_create_is_left_parked_where_no_reconcile_can_run(app: PgPool
         (leased.item, leased.stranded_attempt),
         (stranded, Some(attempt)),
         "the flag was the only thing standing between the device and the same item"
+    );
+}
+
+/// An attempt whose intent names no title is not a reconcile.
+///
+/// The title is the whole of the identification under a marker-free strategy,
+/// so an attempt that cannot supply one leaves the item an ordinary create
+/// rather than sending a device to search its catalogue for nothing. The
+/// attempt still stands, so that run abandons on the fence — bounded, and the
+/// item stays reconcilable by a build that can read a title from it.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_attempt_whose_intent_names_no_title_is_not_a_reconcile(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x7A, true).await;
+    enqueue_one(&engine, &tenant, 0x7B, 0x7C).await;
+    let (item, _) = strand_a_create(&app, &engine, tenant.org, tenant.mapping).await;
+    // Non-empty and title-free, so a claim whose `EXISTS` had lost its
+    // `entry->>0 = 'Title'` filter would still find a pair here and hand out a
+    // reconcile it cannot identify. An empty array could not tell the two
+    // apart.
+    sqlx::query("UPDATE write_attempt SET intent = $1")
+        .bind(serde_json::json!({
+            "operation": "create",
+            "entries": serde_json::to_value(vec![(
+                FieldKey::Description,
+                "A worksheet.".to_owned(),
+            )])
+            .expect("a field set encodes"),
+            "files": [],
+        }))
+        .execute(&engine)
+        .await
+        .expect("the intent loses its entries");
+
+    let leased = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the item is still claimable");
+    assert_eq!(leased.item, item, "the same item comes back");
+    assert_eq!(
+        (leased.stranded_attempt, leased.stranded_title),
+        (None, None),
+        "both or neither: an attempt that names no title identifies no listing, so this is \
+         not a reconcile and the device is not sent to search for one"
     );
 }

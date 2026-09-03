@@ -596,29 +596,37 @@ fn native_term(path: &VocabularyPath) -> NativeTerm {
 /// it is decided.
 ///
 /// One constant rather than a per-inventory table because there is one answer
-/// today. The correlation marker's carrier is an open founder decision — the
-/// design records it as "a product decision about listing pollution rather
-/// than an engineering one" — so no inventory has a strategy a reconcile can
-/// search, and `reconcile_is_available` reads this rather than restating it.
-/// The commit that answers the founder changes this and the claim's admission
-/// of stranded creates together, which is the point of deriving one from the
-/// other.
+/// today: both device-branch marketplaces create draft-first, and a
+/// draft-then-publish create is identified by the title it recorded that it
+/// sent, narrowed to the state it leaves a listing in. The correlation
+/// marker's carrier stayed an open founder decision and the marker-free route
+/// was adopted instead, so no listing carries a marker and none needs to.
+/// `reconcile_is_available` reads this rather than restating it, so a strategy
+/// change and the claim's admission of stranded creates move together.
 const CREATE_STRATEGY: CreateStrategy = CreateStrategy::DraftThenPublish {
     draft_state: RemoteLifecycleKind::Draft,
 };
 
 /// Whether a stranded create is worth taking out of its park.
 ///
-/// The reconcile searches the seller's own catalogue for a correlation marker.
-/// Under a strategy that writes none there is nothing to search for: the run
-/// would reach the machine's unsearchable arm and settle the item ambiguous,
-/// spending an item to learn what this constant already says. The claim
-/// declines to serve one instead, so it stays parked exactly as the reaper
-/// left it — still fencing its mapping, and still reconcilable by the build
-/// that can.
+/// The question is whether the strategy leaves a create this walk can
+/// identify, not whether it embeds a marker. `CorrelationMarker` embeds one.
+/// `DraftThenPublish` embeds nothing but leaves the listing in a state the
+/// seller's own catalogue exposes, which is what makes its recorded title
+/// usable: the narrowing is what turns a title that is not unique into an
+/// identification. `HaltOnAmbiguity` leaves neither, and its name says so.
+///
+/// Under a strategy that leaves nothing there is nothing to search for, and
+/// the run would reach the machine's unsearchable arm and settle the item
+/// ambiguous to learn what this constant already says. The claim declines to
+/// serve one instead, so it stays parked exactly as the reaper left it, still
+/// fencing its mapping and still reconcilable by the build that can.
 #[must_use]
 pub const fn reconcile_is_available() -> bool {
-    matches!(CREATE_STRATEGY, CreateStrategy::CorrelationMarker { .. })
+    matches!(
+        CREATE_STRATEGY,
+        CreateStrategy::CorrelationMarker { .. } | CreateStrategy::DraftThenPublish { .. }
+    )
 }
 
 #[must_use]
