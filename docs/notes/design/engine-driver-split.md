@@ -245,6 +245,84 @@ Proves the whole loop end to end without a client existing yet.
 Verification: an api-flow test claiming as one device, settling as another and asserting the refusal; and the same claim replayed against a lapsed entitlement returning zero rows with a valid-looking token.
 Kill gate: an envelope field that cannot be computed without composing a marketplace request.
 
+### Phase 1b
+
+Phase 1 closed at step 9, and the work continued past the plan above, so steps 9 to 11 are recorded after the fact from the landed code and its tests rather than proposed.
+Steps 12 to 14 are what remains.
+
+Step 9, narrow the halt scope.
+`HaltScope` becomes a single-shape struct, so the effect vocabulary cannot name a scope wider than the lease that produced it, and `breaker.rs` and `canary.rs` stay the only writers of a fleet halt.
+Proves finding 7 is closed by deletion rather than by a guard a relocated interpreter could route around, which is what open question 6 recommended.
+Verification: the engine suite and the gauntlet unchanged in outcome, with the two wide arms absent from the match rather than merely unreachable within it.
+Kill gate: a caller outside the breaker and the canary needing a scope wider than its own inventory.
+
+Step 10, one wire vocabulary.
+Put serde on the domain and marketplace ids, on the driver vocabulary and on the work and settle envelopes, and have the desktop's `work.rs` serialise those shared types rather than a parallel set of its own.
+Proves the ports' types are the wire types, so the Phase 2 contract cannot drift from the trait Phase 1 extracted.
+Verification: `crates/tam-engine-driver/tests/wire.rs`, round-tripping a full work envelope, a full settle envelope and every ledger answer.
+Kill gate: a vocabulary type that cannot derive serde without dragging storage across the boundary, which is finding 17's `EngineError` reaching `sqlx::Error`.
+
+Step 10a, the envelope carries the preparation.
+The work order carries the preparation and the payload manifests and never the seed, `seed_from_projection` and `seed_for_removal` move into the driver crate, one shared preparation constructor serves both the claim endpoint and the worker, and `describe_files` states the manifests.
+Proves the device composes and the server does not: the intent hash is computed where the field set is rendered, which is what keeps the architecture off S3.
+Verification: both hosts constructing the preparation through the one constructor, and `just check-portable` compiling the driver crate with the seed inside it for all five client triples.
+Kill gate: an envelope field that cannot be computed without composing a marketplace request.
+
+Step 10b, the ledger call as data, and the endpoint that dispatches it.
+`LedgerCall` and `LedgerAnswer` become wire enums covering all twelve calls, a device-asserted instant is recorded beside the server's receipt under migration `0045_device_asserted_instants.sql`, the driver crate takes a direct `blake3` edge for its digests, and the device ledger endpoint dispatches every call under the settle fences with the payload route guarded by live lease, projection reference and organisation.
+Proves finding 48: a device-originated row records the seller's assertion and our receipt as two facts rather than conflating them, while `org_seq` still orders.
+Verification: `every_ledger_call_and_answer_round_trips` and `the_asserted_instant_travels_with_every_call_that_records_one` in `wire.rs`, with the Phase 2 desktop host as the first consumer, running the interpreter against a fake control plane end to end.
+Kill gate: a call whose answer cannot be represented without a storage type, or a dispatch arm that trusts an organisation the caller named.
+
+The filter step, the pull honours a marketplace filter.
+`WorkFilter` on the request and `ClaimPolicy` on the claim statement, so held-by-another-device is scoped to the marketplace that was asked for rather than to the organisation.
+Proves step 7's per-connection mutex re-scope reaches the pull: a seller running TPT on one device and Tes on another has neither device told the queue is empty because the other holds a lease.
+Verification: `the_work_route_accepts_a_marketplace_filter_and_serves_without_one` in the api fixture, and the desktop scheduler pulling once per marketplace it holds a session for.
+Kill gate: a filter honoured as given rather than intersected with what the lease and the entitlement already allow.
+
+Step 11, renewable device leases.
+`LedgerCall::Renew` carries the device's asserted instant, `HttpLedger::renew` calls it from the desktop, the `RunGate` deadline moves only by the expiry the server states, a refused renew stops the run before the next request, and the reaper reclaims only leases that stopped heartbeating rather than ones that are merely slow.
+The wire vocabulary was made uniformly snake_case in the same step.
+Proves finding 24 against a closed lid: a device that is working keeps its lease and a device that went away loses it, decided by the heartbeat rather than by a fixed 300 seconds.
+Verification: `the_reaper_reclaims_a_lease_that_stopped_heartbeating_and_not_one_that_did_not` and `a_renew_against_a_bumped_epoch_is_refused` in `crates/tam-storage/tests/leases.rs`; `a_renewed_run_outlives_the_deadline_the_claim_gave_it` and `a_late_or_smaller_renewal_cannot_cut_a_run_short` in `apps/desktop/src-tauri/src/run.rs`; `a_renewal_moves_the_gate_by_the_servers_own_numbers` and `a_refused_renewal_stops_the_run_before_the_next_request` in `apps/desktop/src-tauri/src/ledger.rs`; and the api fixture `crates/tam-api/tests/devices_flow.rs` over the whole device surface.
+Kill gate: a renewal a device can extend by its own arithmetic.
+
+The fixture is the step's own finding, because writing it exposed three defects every test before it had missed.
+`POST /v1/devices/{device}/work` leaked the lease when preparation returned `Blocked`, leaving an item claimed by a device that had just been told there was nothing to do; the path now calls `LeaseRepo::release`.
+Unpinned reads under forced row-level security made the epoch fences refuse everyone, so `a_settle_from_a_device_other_than_the_holder_is_refused` had been green for the wrong reason: the refusal it asserted came from RLS hiding the row, not from the fence rejecting the epoch.
+Unpinned writes made the whole device write path inert, fixed by pinning the tenant with `pin_tenant` on the twelve write paths.
+The second generalises: a negative test under forced RLS proves nothing until the row it expects to see refused is one the connection can see.
+
+The heartbeat narrows the stolen-lease anomaly rather than removing it.
+`a_stolen_lease_is_caught_at_the_heartbeat_before_any_request` in `crates/tam-engine/tests/gauntlet.rs` and `a_stale_worker_is_fenced_after_a_steal` in `crates/tam-storage/tests/leases.rs` pin what holds: a device whose lease was stolen learns it at its next renew and stops, and anything it had already issued is still fenced at the ledger, but the window between the steal and the next heartbeat is bounded by the heartbeat interval rather than closed.
+
+Step 12, the three open defects.
+Widen the operator view to surface `state = 'in_flight'` past the lease TTL so a stranded in-flight create attempt reaches an operator instead of staying mapping-scoped and invisible (finding 4), and add the read-back reconciliation the code names for itself if it fits inside the step, otherwise land the view alone and record the reconciliation as still owed.
+Add the binding predicate to `open`'s statement for a create and return a distinct refusal the driver settles as skipped, so a resumed run and a stolen lease cannot both create (finding 22).
+Give a create parked on `ReauthRequired` a give-up keyed on park age, because `REVIVABLE_GATES` excludes that gate and `attempt_count` never advances, so no attempt-budget give-up can fire (finding 23).
+Proves each of the three stalls that a closed lid makes common rather than rare is terminated by something.
+Verification: revert-run-restore for each, so every fix has a test that fails on the reverted code.
+Kill gate: a give-up that settles an item the seller could still have revived by signing in.
+
+Step 13, the entitlement gate inside the loop.
+`AssertFormSchema` consumes a rate grant (finding 12), and the per-effect entitlement check sits at the four network-bearing effects and in `verify_with_backoff`'s per-try preamble, producing the shape `BudgetGrant::Exhausted` already produces rather than a new terminal outcome.
+Two additions ruled during step 11 belong here.
+Revocation before any request has been issued must leave the item requeue-able rather than settling `Outcome::Skipped`, which is what `exhaust_budget` does today from `AwaitingPreflight`, `PreflightAsserted` and `Parked` (`crates/tam-domain/src/lib.rs:1198`).
+And the desktop test pinning the current behaviour, `a_revocation_in_flight_stops_the_run_before_it_opens_an_attempt` in `apps/desktop/src-tauri/src/work.rs`, is flipped to assert the requeue-able outcome.
+Proves a mid-run revocation never settles an item on evidence the run does not have, in either direction: not abandoned with a listing committed, and not skipped with nothing attempted.
+Verification: a driver test per effect site revoking immediately before it, and the flipped desktop test failing against the unflipped machine.
+Kill gate: a requeue with no terminator, which is the refuted finding's point that the lease budget is the only thing ending the `AttemptInFlight` loop.
+
+Step 14, the preparation port and the attestation.
+Put `Preparation` behind a trait with `prepare_item` implementing it on the server, completing the three-port surface section 3 names.
+Carry `attested_by` and `attested_at` into `AttemptIntent.body` at `RecordIntent` so the `write_attempt` row is the immutable record of the attestation the write went out under, and leave `intent_hash` alone because it feeds the idempotency key (finding 26).
+Proves the last concrete storage call on the driver's path is behind a port, and that the authorship attestation survives the deletion of the crate that writes it today.
+Verification: the driver crate compiling with no concrete preparation type in scope, and a ledger test asserting the attestation reaches the `write_attempt` row and not the intent hash.
+Kill gate: an attestation that changes the idempotency key, which would make a re-attested create a second listing.
+
+Step 14 does not complete the split.
+The broker deletion, the exclusivity-claim lift with its pepper re-sited off the vault key, the four crate dispositions of open question 3, and D1's structural build-failing test are all held until the desktop runs the driver against a live marketplace.
+
 ## 8. Open questions for the founder
 
 1. Restate the Phase 1 verification as port conformance over two ledger implementations. Recommended: yes, because the current wording is unrunnable and the phase would otherwise ship without evidence.
