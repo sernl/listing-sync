@@ -241,10 +241,19 @@ extension_static := "manifest.json background.js popup.html popup.js"
 # The extension shell's wasm, built exactly as `web-wasm` builds the core: the
 # same pinned wasm-bindgen, a second cdylib, and nothing else structural.
 extension-wasm:
-    cargo build --target wasm32-unknown-unknown --release --lib -p tam-extension
+    # Absolute paths reach the binary through panic messages and debug info, so
+    # without remapping the bytes depend on where the checkout and the registry
+    # cache happen to sit, and a reviewer rebuilding from the source package
+    # cannot reproduce ours.
+    RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/registry" \
+        cargo build --target wasm32-unknown-unknown --release --lib -p tam-extension
     wasm-bindgen --target web --out-name extension \
         --out-dir apps/extension/dist \
         "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/tam_extension.wasm"
+
+# The generated half of the package, named so the .d.ts files wasm-bindgen also
+# writes stay out of what ships
+extension_built := "extension.js extension_bg.wasm"
 
 # The unpacked extension, loadable from disk with "Load unpacked"
 extension-dev: extension-wasm
@@ -254,6 +263,22 @@ extension-dev: extension-wasm
         cp "apps/extension/static/$file" "apps/extension/dist/$file"
     done
     echo "extension: apps/extension/dist is loadable unpacked"
+
+# The package a store receives. Deterministic by construction: sorted entries,
+# a fixed timestamp and fixed permissions, so two builds of one tree are
+# byte-identical and a reviewer can check the artefact against the source
+# package below.
+extension-build: extension-dev
+    python3 apps/extension/pack.py \
+        apps/extension/build/tam-extension.zip \
+        apps/extension/dist \
+        {{extension_static}} {{extension_built}}
+
+# The reviewable source package Mozilla requires for machine-generated code:
+# source, lockfiles, the pinned toolchain and the command list, sufficient to
+# rebuild the byte-identical zip from a clean checkout.
+extension-source-package:
+    python3 apps/extension/source-package.py
 
 web-wasm-fixtures:
     cargo run -q -p tam-core-wasm --bin verdict-fixtures > crates/tam-core-wasm/fixtures/verdicts.json

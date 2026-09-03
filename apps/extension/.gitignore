@@ -1,3 +1,8 @@
-# wasm-bindgen output and the assembled unpacked extension, both rebuilt by
-# `just extension-dev` from sources that are tracked
+# wasm-bindgen output, the assembled unpacked extension and the packaged
+# artefacts, all rebuilt by `just extension-dev` and `just extension-build`
+# from sources that are tracked
 /dist/
+/build/
+
+# `source-package.py` imports `pack.py`, so running it writes bytecode here
+__pycache__/
