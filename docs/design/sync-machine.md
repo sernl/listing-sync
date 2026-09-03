@@ -12,11 +12,11 @@ An agent implementing this machine needs every identifier resolved before it sta
 | Identifier | Kind | What it is |
 |---|---|---|
 | `SyncState` | enum | The seven states below |
-| `Input` | enum | The eight things that can happen to the machine |
+| `Input` | enum | The nine things that can happen to the machine |
 | `Effect` | enum | The ten things the machine can ask for |
 | `EffectList` | newtype | An ordered `Vec<Effect>`, executed in order |
 | `Transition` | struct | The next machine plus its effects |
-| `MachineError` | enum | `InputNotApplicable`, `AttemptMismatch`, `EffectBudgetExceeded` |
+| `MachineError` | enum | `InputNotApplicable`, `AttemptMismatch`, `EffectBudgetExceeded`, `UnloweredPublish`, `ResumeNotACreate` |
 | `LogicalInstant` | newtype | A clock reading passed in, never read by the machine |
 | `Outcome` | enum | The six terminal answers a submit can reach |
 | `FailureCode` | enum | The closed, versioned failure vocabulary shared with the client |
@@ -78,11 +78,17 @@ A requeued item recomputes the same key, which is what lets a connection that tr
 ## The transitions
 
 Every row is total: an `Input` arriving in a state not listed here returns `Err(MachineError::InputNotApplicable)`, and an input naming a `WriteAttemptId` the machine does not own returns `Err(MachineError::AttemptMismatch)`.
+`ResumeStranded` additionally returns `Err(MachineError::ResumeNotACreate)` against any other operation, because only a create leaves a fencing row nothing can settle: a revise re-applies the same fields and a removal re-deletes something already gone, so both are re-run rather than reconciled.
+It is an input rather than a second constructor deliberately — every state but the entry one is reached by a transition, which is what makes this table the whole specification, and a constructor starting mid-graph could establish a state no transition ever checked.
+It adopts the standing attempt rather than opening another, and the entry row's effects are discarded rather than executed, which matters because the first of them is the form assertion and on Tes that is a write.
+Where the create strategy cannot be searched, it halts ambiguous exactly as the ambiguous-submit row does rather than sending a device to enumerate for a marker no create ever wrote.
+A reconcile that finds the listing never settles ambiguous on the grounds that the write's echo is missing, because the find substitutes for the lost write response and nothing more: it binds nothing by itself and leaves the attempt standing, and the verifying read-back behind it decides against the recorded intent — committed where every field the intent asked for is what the marketplace holds, degraded where the listing exists but a field differs, and ambiguous with the attempt still standing only where the read itself could not be performed.
 `Result` is used only for transitions that are genuinely impossible rather than merely unsuccessful, so every business outcome including ambiguity is a value in `Outcome` travelling the success channel.
 
 | State | Input | Next state | Effects |
 |---|---|---|---|
 | `AwaitingPreflight` | (entry) | `AwaitingPreflight` | `AssertFormSchema` |
+| `AwaitingPreflight` | `ResumeStranded(attempt)` | `AwaitingReadBack` | `Reconcile` |
 | `AwaitingPreflight` | `PreflightResult(Ok)` | `PreflightAsserted` | `RecordIntent` |
 | `AwaitingPreflight` | `PreflightResult(Err)` | `Terminal(Rejected FormSchemaDrift)` | `CaptureDiagnostics`, `Halt OrgInventory`, `Notify` |
 | `PreflightAsserted` | `IntentRecorded` | `IntentRecorded` | `Submit` |
@@ -96,7 +102,7 @@ Every row is total: an `Input` arriving in a state not listed here returns `Err(
 | `IntentRecorded` | `SubmitResult(Err NotSent)` | `PreflightAsserted` | `RecordIntent` |
 | `AwaitingReadBack` | `ReadBackResult(Ok)` | `Terminal(Committed or Degraded)` | none |
 | `AwaitingReadBack` | `ReadBackResult(Err Ambiguous)` | `Terminal(Ambiguous)` | `CaptureDiagnostics`, `Halt OrgInventory`, `Notify` |
-| `AwaitingReadBack` | `ReconcileResult(Ok Some)` | `Terminal(Committed or Degraded)` | `ReadBack` |
+| `AwaitingReadBack` | `ReconcileResult(Ok Some)` | `AwaitingReadBack` | `ReadBack` |
 | `AwaitingReadBack` | `ReconcileResult(Ok None)` | `Terminal(Ambiguous NoDurableIdentifier)` | `Halt OrgInventory`, `Notify` |
 | `AwaitingReadBack` | `ReconcileResult(Err)` | `Terminal(Ambiguous ReadBackIndeterminate)` | `Halt OrgInventory`, `Notify` |
 | `Parked` | `ChallengeCleared` | `AwaitingPreflight` | `AssertFormSchema` |

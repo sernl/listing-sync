@@ -21,8 +21,8 @@ use tam_engine::seed::{
     preparation as preparation_for, prepare_and_dispose, prepare_item, Disposed, ItemPreparation,
 };
 use tam_engine_driver::vocabulary::{
-    ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall, LedgerError, PayloadManifest,
-    SettleEnvelope, WorkFilter, WorkOrder,
+    AttemptRef, ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall, LedgerError,
+    PayloadManifest, SettleEnvelope, WorkFilter, WorkOrder,
 };
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
@@ -178,6 +178,14 @@ async fn work_order(
     };
     Ok(Some(WorkOrder {
         lease: driven,
+        // Set only where the claim took a stranded create out of its park.
+        // Its presence is the whole of how a device tells a reconcile from an
+        // ordinary run, because the operation cannot: a stranded create is
+        // still a create.
+        reconcile: leased.stranded_attempt.map(|attempt| AttemptRef {
+            attempt,
+            mapping: leased.mapping,
+        }),
         preparation,
         payload,
         server_now_ms: now.0,

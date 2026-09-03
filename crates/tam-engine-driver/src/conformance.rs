@@ -29,13 +29,14 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use tam_domain::{ItemOutcome, StepBudget};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId,
-    FormSchemaFingerprint, IdempotencyKey, InstantPause, ListingLocator, MarketplaceAdapter,
-    ObservedListing, ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan,
-    SubmitEvidence,
+    FormSchemaFingerprint, IdempotencyKey, InstantPause, ListingLocator, MarkerField,
+    MarkerLifetime, MarketplaceAdapter, ObservedListing, ProjectedListing, RemoteLifecycle,
+    RemoteListingId, RemovalPlan, RevisePlan, SubmitEvidence, WriteAttemptId,
 };
 use tam_types::{ContentHash, FieldKey, InventoryId, Timestamp, Uuid};
 
 use crate::driver::{run_item, DriverContext, MachineSeed, NowSource, RunVerdict, VerifyPolicy};
+use crate::memory::ScriptedReconcile;
 use crate::ports::{Cancellation, IdSource, ItemLedger, LedgerInspector};
 use crate::vocabulary::LeasedItem;
 
@@ -263,6 +264,7 @@ pub fn landed_evidence() -> SubmitEvidence {
 #[must_use]
 fn seed_machine() -> MachineSeed {
     MachineSeed {
+        resume: None,
         form: FormId(Uuid([0x09; 16])),
         fields: FieldSet {
             entries: vec![(FieldKey::Title, "Fixture".to_owned())],
@@ -290,6 +292,9 @@ async fn drive<L: ItemLedger>(
     let clock = SteppingClock::from(Timestamp(T0.0 + 1_000));
     let ids = SequentialIds::default();
     let ctx = DriverContext {
+        reconcile: &ScriptedReconcile::could_not_read(
+            "this body drives no reconcile; a body that does says so",
+        ),
         adapter,
         ledger,
         clock: &clock,
@@ -298,6 +303,50 @@ async fn drive<L: ItemLedger>(
         pause: &InstantPause,
     };
     match run_item(&ctx, lease, seed_machine()).await {
+        Ok(verdict) => verdict,
+        Err(error) => panic!("the driver runs: {error:?}"),
+    }
+}
+
+/// The attempt a reconcile body finds already standing.
+pub const STRANDED: Uuid = Uuid([0x5A; 16]);
+
+/// The same drive, seeded to reconcile a standing attempt rather than to
+/// create.
+///
+/// The seed's `resume` is what makes it one: the run steps straight to the
+/// search and the entry row's effects are discarded, so no form is asserted
+/// and no second attempt is opened.
+async fn drive_reconcile<L: ItemLedger>(
+    ledger: &L,
+    lease: &LeasedItem,
+    adapter: &ScriptedAdapter<'_>,
+    switch: &Switch,
+    reconcile: &ScriptedReconcile,
+) -> RunVerdict {
+    let clock = SteppingClock::from(Timestamp(T0.0 + 1_000));
+    let ids = SequentialIds::default();
+    let ctx = DriverContext {
+        reconcile,
+        adapter,
+        ledger,
+        clock: &clock,
+        ids: &ids,
+        cancel: &switch,
+        pause: &InstantPause,
+    };
+    let mut seed = seed_machine();
+    seed.resume = Some(WriteAttemptId(STRANDED));
+    // The strategy decides whether a resume can search at all: the row halts
+    // ambiguous on every other one rather than sending a device to enumerate
+    // for a marker no create ever wrote, so the shared seed's
+    // `HaltOnAmbiguity` would end each of these bodies before the reconcile
+    // source was ever asked.
+    seed.strategy = CreateStrategy::CorrelationMarker {
+        field: MarkerField::DescriptionTail,
+        ttl: MarkerLifetime { seconds: 3_600 },
+    };
+    match run_item(&ctx, lease, seed).await {
         Ok(verdict) => verdict,
         Err(error) => panic!("the driver runs: {error:?}"),
     }
@@ -613,5 +662,95 @@ pub async fn a_create_bound_elsewhere_settles_skipped<L: ItemLedger + LedgerInsp
         ledger.attempt(lease.mapping).await.is_none(),
         "and no attempt is left standing: the refusal happened before one was opened, so \
          there is no fence to release and none to leak"
+    );
+}
+
+/// A reconcile that finds the listing settles succeeded and binds it.
+///
+/// The whole point of the reconciliation: a create whose fate the ledger
+/// could not determine is decided by what is actually on the marketplace,
+/// and the fencing row that was standing is settled rather than released.
+pub async fn a_reconcile_that_finds_the_listing_settles_it<L: ItemLedger + LedgerInspector>(
+    ledger: &L,
+    lease: &LeasedItem,
+    found: RemoteListingId,
+) {
+    let switch = Switch::default();
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
+    let verdict = drive_reconcile(
+        ledger,
+        lease,
+        &adapter,
+        &switch,
+        &ScriptedReconcile::found(found),
+    )
+    .await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "the listing is there, so the create did land and the item settles on that"
+    );
+    let attempt = ledger
+        .attempt(lease.mapping)
+        .await
+        .expect("the stranded attempt is still the one settled");
+    assert!(
+        attempt.settled,
+        "and the fence it was holding is released by settling it, not by dropping it"
+    );
+    // A settle keyed on any other attempt is refused as a stale lease, so
+    // reaching here at all is what proves the row settled is the stranded one
+    // rather than a second the run opened behind it.
+    assert_eq!(
+        (attempt.state.as_str(), attempt.remote_url.as_deref()),
+        ("committed", Some(LANDED_URL)),
+        "settled on the committed class and addressed to the listing the search found, \
+         which is the whole chain: the find supplied the identifier, the read-back \
+         verified it, and the settle recorded it"
+    );
+    let binding = ledger
+        .binding(lease.mapping)
+        .await
+        .expect("the mapping exists");
+    assert_eq!(
+        (
+            binding.binding_state.as_str(),
+            binding.remote_url.as_deref()
+        ),
+        ("bound", Some(LANDED_URL)),
+        "and the mapping is bound to it, so no later pass can create a second"
+    );
+}
+
+/// A reconcile that cannot identify the listing leaves it stranded.
+///
+/// Both remaining answers reach here — a complete enumeration that did not
+/// contain it, and a read that could not be performed — because neither is
+/// evidence the create did not land. The item stays where an operator can see
+/// it rather than being settled on a guess.
+pub async fn a_reconcile_that_cannot_identify_leaves_it_stranded<
+    L: ItemLedger + LedgerInspector,
+>(
+    ledger: &L,
+    lease: &LeasedItem,
+    answer: ScriptedReconcile,
+) {
+    let switch = Switch::default();
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
+    let verdict = drive_reconcile(ledger, lease, &adapter, &switch, &answer).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Ambiguous),
+        "not knowing is its own answer, and it is not a failure: the halt is what brings a \
+         human to it"
+    );
+    let attempt = ledger
+        .attempt(lease.mapping)
+        .await
+        .expect("the attempt is still there to be reconciled again");
+    assert!(
+        !attempt.settled,
+        "and it is still standing, because nothing here proved the create did not land and \
+         releasing it on that is the one failure this ledger cannot undo"
     );
 }

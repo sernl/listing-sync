@@ -19,6 +19,8 @@
 use tam_domain::{JobItemId, SellerEvent};
 use tam_types::{ConnectionId, InventoryId, JobEventPayload, MappingId, OrgId, Timestamp};
 
+use tam_marketplace::{AdapterError, ListingLocator, RemoteListingId, WriteAttemptId};
+
 use crate::vocabulary::{
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind, ItemVerdict, LeaseRef,
     LedgerError, NewAttempt, PreflightStreak, Renewed,
@@ -43,6 +45,35 @@ pub trait IdSource: Send + Sync {
 /// Written with explicit `impl Future` returns rather than `async fn`, because
 /// `async_fn_in_trait` is a hard error under a deny-warnings build and the
 /// desugaring is what a multi-threaded host requires anyway.
+/// The seller's own catalogue, searched for one stranded create's listing.
+///
+/// A port rather than a method on the ledger, and served by the device rather
+/// than the server, because the read runs under the seller's own session:
+/// D1 puts every request to a no-API marketplace on the seller's machine, and
+/// an enumeration is a request like any other.
+///
+/// The contract the answer has to keep, and the whole reconciliation rests on
+/// it. `Ok(Some)` is the listing, found. `Ok(None)` is a complete enumeration
+/// that did not contain it — a walk that reached its end under the seller's
+/// own session and saw everything there was to see. Anything else is `Err`: a
+/// partial page, a session that lapsed mid-walk, an endpoint that refused, a
+/// search this adapter cannot perform. The two look identical from here and
+/// only the adapter can tell them apart, which is why this says so rather
+/// than assuming it.
+///
+/// What turns on the distinction: `Ok(None)` is the only answer that could
+/// ever justify releasing the duplicate-create fence, and releasing it
+/// wrongly is the one failure this ledger cannot undo. Nothing releases it
+/// today — the machine halts ambiguous on both — but the day that changes,
+/// this contract is what it will change against.
+pub trait ReconcileSource: Send + Sync {
+    fn find_listing<'a>(
+        &'a self,
+        locator: &'a ListingLocator,
+        attempt: WriteAttemptId,
+    ) -> impl core::future::Future<Output = Result<Option<RemoteListingId>, AdapterError>> + Send + 'a;
+}
+
 pub trait ItemLedger: Send + Sync {
     /// The connection this item's inventory resolves to, read once per run.
     fn connection_for(

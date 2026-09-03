@@ -14,11 +14,10 @@ pub mod product;
 pub mod registry;
 
 use tam_marketplace::{
-    settle, verify_after, AdapterError, AmbiguityCause, ChallengeKind, CorrelationMarker,
-    CreateStrategy, EvidenceRef, FetchReason, FieldDiffReport, FieldSet, FormId,
-    FormSchemaFingerprint, IdempotencyKey, LifecycleTransition, ListingLocator, ListingState,
-    ObservedListing, Outcome, RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence,
-    WriteAttemptId,
+    settle, AdapterError, AmbiguityCause, ChallengeKind, CorrelationMarker, CreateStrategy,
+    EvidenceRef, FetchReason, FieldDiffReport, FieldSet, FormId, FormSchemaFingerprint,
+    IdempotencyKey, LifecycleTransition, ListingLocator, ListingState, ObservedListing, Outcome,
+    RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence, WriteAttemptId,
 };
 use tam_types::{
     AttemptId, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -674,6 +673,13 @@ pub enum Input {
     SubmitResult(Result<SubmitEvidence, AdapterError>),
     ReadBackResult(Result<ObservedListing, AdapterError>),
     ReconcileResult(Result<Option<RemoteListingId>, AdapterError>),
+    /// A create left stranded by a run that ended, resumed to reconcile.
+    ///
+    /// The attempt is the one already standing: this input adopts it rather
+    /// than opening another, because the standing row is the only fence there
+    /// is against a second live listing and releasing it is what the whole
+    /// reconciliation exists to avoid.
+    ResumeStranded(WriteAttemptId),
     /// The seller answered the challenge and the item may resume.
     ChallengeCleared,
     /// The park expired unanswered.
@@ -777,6 +783,13 @@ pub enum MachineError {
     /// step owns that resolution, so this is the caller skipping it rather
     /// than a write that failed.
     UnloweredPublish,
+    /// A resume named an operation that cannot be stranded.
+    ///
+    /// Only a create leaves a fencing row nothing can settle: a revise
+    /// re-applies the same fields and a removal re-deletes something already
+    /// gone, so both are re-run rather than reconciled. A resume against
+    /// either is the caller having decided something the machine owns.
+    ResumeNotACreate,
 }
 
 /// Whether a halting-ambiguous row captures diagnostics before it halts. The
@@ -936,6 +949,44 @@ impl SyncMachine {
 
     fn awaiting_preflight_rows(self, input: Input) -> Result<Transition, MachineError> {
         match input {
+            // The one entry into the graph that is not the beginning of it,
+            // and the reason it is an input rather than a second constructor:
+            // the state it reaches is established by a transition like every
+            // other, so the table stays the whole specification.
+            //
+            // It reaches the same state the ambiguous-submit row reaches, and
+            // emits the same search, because the situation is the same one —
+            // a create whose fate the ledger cannot determine. What differs is
+            // how it was arrived at, and nothing downstream depends on that.
+            Input::ResumeStranded(attempt) => {
+                if !matches!(self.operation, ItemOperation::Create) {
+                    return Err(MachineError::ResumeNotACreate);
+                }
+                // The same search the ambiguous submit asks for, reached the
+                // same way, because the situation is the same: a create whose
+                // fate the ledger cannot determine. A strategy that cannot be
+                // searched halts here as it would there, rather than sending
+                // a device to enumerate for a marker no create ever wrote.
+                let marker = match self.strategy {
+                    CreateStrategy::CorrelationMarker { .. } => marker_for(attempt),
+                    CreateStrategy::DraftThenPublish { .. } | CreateStrategy::HaltOnAmbiguity => {
+                        return self.halt_ambiguous(
+                            attempt,
+                            AmbiguityCause::NoDurableIdentifier,
+                            Capture::Skip,
+                        );
+                    }
+                };
+                let locator = ListingLocator::Marker {
+                    marker,
+                    inventory: self.inventory,
+                };
+                let effects = vec![Effect::Reconcile {
+                    attempt,
+                    locator: locator.clone(),
+                }];
+                self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects)
+            }
             Input::PreflightResult(Ok(schema)) => {
                 let effects = vec![Effect::RecordIntent {
                     intent_hash: self.intent_hash,
@@ -991,6 +1042,7 @@ impl SyncMachine {
             | Input::SubmitResult(_)
             | Input::ReadBackResult(_)
             | Input::ReconcileResult(_)
+            | Input::ResumeStranded(_)
             | Input::ChallengeCleared
             | Input::ParkExpired
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
@@ -1091,6 +1143,7 @@ impl SyncMachine {
             | Input::IntentRecorded(_)
             | Input::ReadBackResult(_)
             | Input::ReconcileResult(_)
+            | Input::ResumeStranded(_)
             | Input::ChallengeCleared
             | Input::ParkExpired
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
@@ -1122,29 +1175,21 @@ impl SyncMachine {
                 self.advance(SyncState::Terminal(ambiguous(attempt, cause)), effects)
             }
             Input::ReconcileResult(Ok(Some(id))) => {
-                let outcome = settle(
-                    as_attempt_id(attempt),
-                    id.clone(),
-                    Timestamp(now.0),
-                    unnormalised_report(),
-                );
-                // The receipt the settle just minted is the only thing that can
-                // justify the post-settle verification read, and `settle`
-                // returns nothing but the two committed-class outcomes; the
-                // remaining arms exist so the match is total.
-                let effects = match &outcome {
-                    Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => {
-                        vec![Effect::ReadBack {
-                            locator: ListingLocator::Durable(id),
-                            reason: verify_after(receipt.clone()),
-                        }]
-                    }
-                    Outcome::Rejected { .. }
-                    | Outcome::Ambiguous { .. }
-                    | Outcome::Blocked { .. }
-                    | Outcome::Skipped { .. } => vec![],
-                };
-                self.advance(SyncState::Terminal(outcome), effects)
+                // The find substitutes for the lost write response and nothing
+                // more, so it does not decide the outcome: the verifying
+                // read-back does, against the recorded intent, exactly as an
+                // ordinary create's read-back decides its own.
+                //
+                // Terminal here would be worse than wrong. The machine cannot
+                // be stepped again, so the read-back this arm schedules could
+                // never be applied, and the outcome would be whatever
+                // `unnormalised_report` implies — ambiguous, on the grounds
+                // that a write echo we already know is lost is missing.
+                //
+                // The attempt stays unsettled, which keeps the duplicate-create
+                // fence standing until the read-back settles it: nothing can
+                // open a second attempt on this mapping in between.
+                self.await_read_back(attempt, Some(id))
             }
             Input::ReconcileResult(Ok(None)) => {
                 self.halt_ambiguous(attempt, AmbiguityCause::NoDurableIdentifier, Capture::Skip)
@@ -1166,6 +1211,7 @@ impl SyncMachine {
                 | AdapterError::NotSent(_)
                 | AdapterError::Uncaptured { .. },
             ))
+            | Input::ResumeStranded(_)
             | Input::ChallengeCleared
             | Input::ParkExpired
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
@@ -1241,6 +1287,7 @@ impl SyncMachine {
             | Input::SubmitResult(_)
             | Input::ReadBackResult(_)
             | Input::ReconcileResult(_)
+            | Input::ResumeStranded(_)
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
         }
     }
@@ -1842,20 +1889,6 @@ mod machine_tests {
             Timestamp(now().0),
             unnormalised_report(),
         )
-    }
-
-    fn receipt_of(outcome: &Outcome) -> tam_marketplace::WriteReceipt {
-        match outcome {
-            Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => {
-                receipt.clone()
-            }
-            Outcome::Rejected { .. }
-            | Outcome::Ambiguous { .. }
-            | Outcome::Blocked { .. }
-            | Outcome::Skipped { .. } => {
-                panic!("settle returns only the two committed-class outcomes")
-            }
-        }
     }
 
     fn entry() -> Transition {
@@ -2723,7 +2756,7 @@ mod machine_tests {
     }
 
     #[test]
-    fn row_awaiting_read_back_reconciled_settles_and_verifies() {
+    fn row_awaiting_read_back_reconciled_verifies_before_it_settles() {
         let transition = machine(
             SyncState::AwaitingReadBack {
                 attempt: attempt(),
@@ -2734,19 +2767,23 @@ mod machine_tests {
         )
         .step(Input::ReconcileResult(Ok(Some(listing()))), now())
         .expect("a reconcile result applies in AwaitingReadBack");
-        let expected = settled();
         assert_eq!(
             transition.next.state,
-            SyncState::Terminal(expected.clone()),
-            "a reconciled identifier settles the write"
+            SyncState::AwaitingReadBack {
+                attempt: attempt(),
+                locator: ListingLocator::Durable(listing()),
+            },
+            "the find substitutes for the lost write response and nothing more, so it names \
+             the listing without deciding the outcome and leaves the attempt standing"
         );
         assert_eq!(
             transition.effects,
             EffectList(vec![Effect::ReadBack {
                 locator: ListingLocator::Durable(listing()),
-                reason: verify_after(receipt_of(&expected)),
+                reason: FetchReason::VerifyAttempt { attempt: attempt() },
             }]),
-            "the post-settle verification is justified by the receipt just minted"
+            "and the read is justified by the fencing row, because no settle has minted a \
+             receipt for it to be justified by"
         );
     }
 
@@ -3212,11 +3249,13 @@ mod machine_tests {
                 intent,
                 Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
                 Input::ReconcileResult(Ok(Some(listing()))),
+                Input::ReadBackResult(Ok(observed())),
             ],
         );
         assert!(
             matches!(reconciled.terminal, Some(Outcome::Committed { .. })),
-            "a reconciled ambiguous create settles as committed, got {:?}",
+            "a reconciled ambiguous create settles as committed once the verifying read \
+             confirms it, got {:?}",
             reconciled.terminal
         );
     }
@@ -3384,6 +3423,13 @@ mod machine_tests {
     /// `Committed` in well under one run in a hundred. The advancing inputs are
     /// therefore over-represented in the sampling pool, which biases the
     /// generator towards the deep paths without removing any input from it.
+    /// The pool weighted towards the spine, so a random walk reaches the deep
+    /// terminals often enough for the conditional properties to bite.
+    ///
+    /// The weight is calibrated against the coverage floor below rather than
+    /// chosen: at six it yields exactly fifty committed runs in two thousand,
+    /// which is the floor with no margin at all, because reaching committed
+    /// through a reconcile now costs the verifying read as well as the find.
     fn sampling_pool() -> Vec<Input> {
         let advancing = [
             Input::PreflightResult(Ok(schema())),
@@ -3393,7 +3439,7 @@ mod machine_tests {
             Input::ReconcileResult(Ok(Some(listing()))),
         ];
         let mut pool = input_pool();
-        for _ in 0..6 {
+        for _ in 0..9 {
             pool.extend(advancing.iter().cloned());
         }
         pool

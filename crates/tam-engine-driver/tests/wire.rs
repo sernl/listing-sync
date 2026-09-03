@@ -6,7 +6,7 @@
 //! serialises but cannot be read back is a client that parses the wrong shape,
 //! and it would otherwise not be noticed until a device existed.
 
-use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
+use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
 use tam_engine_driver::driver::VerifyPolicy;
 use tam_engine_driver::vocabulary::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, GrantKind,
@@ -14,7 +14,8 @@ use tam_engine_driver::vocabulary::{
     LedgerError, NewAttempt, PayloadManifest, PreflightStreak, SettleEnvelope, WorkOrder,
 };
 use tam_marketplace::{
-    IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
+    CreateStrategy, FormId, IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle,
+    RemoteListingId,
 };
 use tam_types::{FailureCode, FailureDetail, InventoryId, JobId, MappingId, OrgId, Uuid};
 
@@ -204,6 +205,7 @@ fn leased() -> LeasedItem {
 #[test]
 fn the_whole_claim_view_round_trips() {
     let order = WorkOrder {
+        reconcile: None,
         lease: leased(),
         preparation: ItemPreparation {
             operation: revision(),
@@ -469,4 +471,72 @@ fn a_renew_cannot_name_a_duration() {
         "a duration on a renew is refused at the surface rather than silently dropped, so \
          a client that still sends one is told: {refused:?}"
     );
+}
+
+/// A work order's reconcile field is absent unless the claim put one there,
+/// and survives a round trip either way.
+///
+/// The absent case is the one that matters. Its presence is what makes an
+/// order a reconcile, so a field that appeared on every order — or that a
+/// client without it decoded as anything but absent — would make every run
+/// look like a reconcile to something branching on it.
+#[test]
+fn a_work_order_carries_a_reconcile_only_when_it_is_one() {
+    let ordinary = serde_json::to_value(order_fixture(None)).expect("an ordinary order encodes");
+    assert!(
+        ordinary.get("reconcile").is_none(),
+        "an ordinary order does not carry the field at all, so a client that has never \
+         heard of it reads exactly what it read before: {ordinary}"
+    );
+    assert_eq!(
+        round_trip(&order_fixture(None)).reconcile,
+        None,
+        "and it comes back absent"
+    );
+
+    let attempt = AttemptRef {
+        attempt: Uuid([0x77; 16]),
+        mapping: MappingId(Uuid([0x88; 16])),
+    };
+    assert_eq!(
+        round_trip(&order_fixture(Some(attempt))).reconcile,
+        Some(attempt),
+        "a reconcile order carries the attempt it is reconciling, which is what the device \
+         needs to seed the search and to settle the row rather than open another"
+    );
+
+    // An order encoded before the field existed decodes as an ordinary one
+    // rather than failing, which is what `serde(default)` is for.
+    let mut older = serde_json::to_value(order_fixture(None)).expect("encodes");
+    older
+        .as_object_mut()
+        .expect("an object")
+        .remove("reconcile");
+    let decoded: WorkOrder = serde_json::from_value(older).expect("an older order still decodes");
+    assert_eq!(decoded.reconcile, None);
+}
+
+/// One work order, with or without a reconcile.
+fn order_fixture(reconcile: Option<AttemptRef>) -> WorkOrder {
+    WorkOrder {
+        reconcile,
+        lease: leased(),
+        preparation: ItemPreparation {
+            operation: revision(),
+            projected: None,
+            form: FormId(Uuid([0x31; 16])),
+            strategy: CreateStrategy::HaltOnAmbiguity,
+            budget: StepBudget {
+                actions_remaining: 32,
+            },
+            verify: VerifyPolicy {
+                tries: 3,
+                interval_ms: 1_000,
+            },
+        },
+        payload: Vec::new(),
+        server_now_ms: 1_756_000_000_000,
+        server_deadline_ms: 1_756_000_600_000,
+        next_poll_ms: 10_000,
+    }
 }

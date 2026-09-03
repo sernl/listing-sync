@@ -268,6 +268,17 @@ pub struct WorkOrder {
     pub lease: LeasedItem,
     pub preparation: ItemPreparation,
     pub payload: Vec<PayloadManifest>,
+    /// Present only on a reconcile, and its presence is what makes the order
+    /// one: the device seeds the interpreter to search for this attempt's
+    /// listing rather than to create another.
+    ///
+    /// The device cannot derive it — a stranded create is still
+    /// `operation = 'create'`, which is exactly why its fence is what it is —
+    /// and the server knows it at claim time, so it travels here.
+    /// `default` so a client built before this field decodes an order without
+    /// one as the ordinary order it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconcile: Option<AttemptRef>,
     pub server_now_ms: i64,
     pub server_deadline_ms: i64,
     pub next_poll_ms: u64,

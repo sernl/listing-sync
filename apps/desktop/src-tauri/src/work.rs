@@ -17,10 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tam_engine_driver::driver::{run_item, DriverContext, EngineError, RunVerdict};
-use tam_engine_driver::ports::ItemLedger;
+use tam_engine_driver::ports::{ItemLedger, ReconcileSource};
 use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
 use tam_engine_driver::vocabulary::{ClaimView, WorkOrder};
-use tam_marketplace::MarketplaceAdapter;
+use tam_marketplace::transport::Transport;
+use tam_marketplace::{
+    AdapterError, FetchReason, ListingLocator, MarketplaceAdapter, Pause, RemoteListingId,
+    WriteAttemptId,
+};
 use tam_marketplace_tes::TesAdapter;
 use tam_marketplace_tpt::TptAdapter;
 use tam_types::Marketplace;
@@ -142,14 +146,14 @@ impl<P: DevicePlane> Marketplaces<P> for LiveMarketplaces {
                     let transport = SessionTransport::new(TptLive, Arc::clone(&self.sessions))
                         .map_err(|why| refusal(&why))?;
                     let adapter = TptAdapter::new(transport, payloads, SleepingPause);
-                    interpret(&adapter, ledger, gate, order).await
+                    interpret(&adapter, &TptCatalogue(&adapter), ledger, gate, order).await
                 }
                 Marketplace::Tes => {
                     let transport = SessionTransport::new(TesLive, Arc::clone(&self.sessions))
                         .map_err(|why| refusal(&why))?;
                     let adapter = TesAdapter::new(order.lease.inventory, transport, payloads)
                         .map_err(|why| refusal(&why))?;
-                    interpret(&adapter, ledger, gate, order).await
+                    interpret(&adapter, &TesCatalogue(&adapter), ledger, gate, order).await
                 }
                 // Unreachable through the scheduler, which walks only the
                 // seller-device marketplaces, and stated rather than assumed:
@@ -304,21 +308,34 @@ fn refusal(why: &dyn core::fmt::Display) -> EngineError {
 /// The seed is taken here rather than sent, which is the custody line: the
 /// adapter renders the field set and the intent hash is taken over what it
 /// rendered, so the recorded intent is the bytes the submit will carry.
-async fn interpret<A: MarketplaceAdapter, L: ItemLedger>(
+async fn interpret<A: MarketplaceAdapter, L: ItemLedger, R: ReconcileSource>(
     adapter: &A,
+    // Per marketplace rather than generic over the adapter: the catalogue read
+    // is an inherent method on each adapter rather than part of the seam, and
+    // widening the seam for one caller would put an enumeration on every
+    // adapter that has no business with one.
+    reconcile: &R,
     ledger: &L,
     gate: &RunGate,
     order: &WorkOrder,
 ) -> Result<RunVerdict, EngineError> {
-    let seed = match order.preparation.projected.as_ref() {
+    // A reconcile is seeded from the attempt rather than from a projection:
+    // its fields are never rendered and never submitted, because the whole
+    // run is one read. Branching here rather than inside the seed keeps
+    // `seed_from_projection` about projecting.
+    let mut seed = match order.preparation.projected.as_ref() {
         Some(listing) => seed_from_projection(adapter, &order.preparation, listing)?,
         None => seed_for_removal(&order.preparation),
     };
+    seed.resume = order
+        .reconcile
+        .map(|stranded| WriteAttemptId(stranded.attempt));
     let clock = DeviceClock;
     let ids = DeviceIds;
     let pause = SleepingPause;
     let context = DriverContext {
         adapter,
+        reconcile,
         ledger,
         clock: &clock,
         ids: &ids,
@@ -331,6 +348,71 @@ async fn interpret<A: MarketplaceAdapter, L: ItemLedger>(
 impl<P: DevicePlane, M: Marketplaces<P>> WorkSource for DeviceWork<P, M> {
     fn pull(&self, marketplace: Marketplace) -> PullFuture<'_> {
         Box::pin(async move { self.pull_one(marketplace).await })
+    }
+}
+
+/// The reconcile port on Tes: the seller's catalogue, searched for a marker.
+///
+/// The contract the port states is the one `list_own_resources` already
+/// keeps: the walk reaches its end or it refuses, never a truncation. That is
+/// what makes `Ok(None)` mean the listing is genuinely absent from the
+/// seller's catalogue rather than absent from the part of it we managed to
+/// read, which is the distinction the whole reconciliation turns on.
+///
+/// `VerifyAttempt` rather than `FirstPartyExport`, because that is what this
+/// read is: the pre-settle verification of an attempt whose fencing row is
+/// still standing, justified by the row rather than by an export capability
+/// nobody is exercising.
+struct TesCatalogue<'a, T, F>(&'a tam_marketplace_tes::TesAdapter<T, F>);
+
+impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync> ReconcileSource
+    for TesCatalogue<'_, T, F>
+{
+    async fn find_listing<'a>(
+        &'a self,
+        locator: &'a ListingLocator,
+        attempt: WriteAttemptId,
+    ) -> Result<Option<RemoteListingId>, AdapterError> {
+        let ListingLocator::Marker { marker, .. } = locator else {
+            return Ok(None);
+        };
+        let entries = self
+            .0
+            .list_own_resources(&FetchReason::VerifyAttempt { attempt })
+            .await?;
+        Ok(entries
+            .into_iter()
+            .find(|entry| entry.title.contains(&marker.0))
+            .map(|entry| RemoteListingId::Tes {
+                url: format!("https://www.tes.com/teaching-resource/-{}", entry.id),
+            }))
+    }
+}
+
+/// The same port on Tpt, differing only in how a listing is named.
+struct TptCatalogue<'a, T, F, P>(&'a tam_marketplace_tpt::TptAdapter<T, F, P>);
+
+impl<T: Transport + Sync, F: tam_marketplace::FileSource + Sync, P: Pause + Sync> ReconcileSource
+    for TptCatalogue<'_, T, F, P>
+{
+    async fn find_listing<'a>(
+        &'a self,
+        locator: &'a ListingLocator,
+        attempt: WriteAttemptId,
+    ) -> Result<Option<RemoteListingId>, AdapterError> {
+        let ListingLocator::Marker { marker, .. } = locator else {
+            return Ok(None);
+        };
+        let entries = self
+            .0
+            .list_own_resources(&FetchReason::VerifyAttempt { attempt })
+            .await?;
+        Ok(entries
+            .into_iter()
+            .find(|entry| entry.name.contains(&marker.0))
+            .map(|entry| RemoteListingId::Tpt {
+                product_id: entry.id.0,
+            }))
     }
 }
 
@@ -357,6 +439,7 @@ mod tests {
     use tam_domain::{ItemOperation, JobItemId, StepBudget};
     use tam_engine_driver::conformance::{landed_evidence, ScriptedAdapter};
     use tam_engine_driver::driver::VerifyPolicy;
+    use tam_engine_driver::memory::ScriptedReconcile;
     use tam_engine_driver::vocabulary::{
         BindDisposition, BudgetGrant, ClaimView, ItemPreparation, LeasedItem, LedgerAnswer,
         LedgerCall, PreflightStreak, Renewed, SettleEnvelope, WorkOrder,
@@ -380,6 +463,7 @@ mod tests {
 
     fn order() -> WorkOrder {
         WorkOrder {
+            reconcile: None,
             lease: LeasedItem {
                 org: OrgId(uuid(1)),
                 item: JobItemId(uuid(2)),
@@ -580,7 +664,17 @@ mod tests {
         ) -> RunFuture<'a> {
             Box::pin(async move {
                 let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
-                interpret(&adapter, ledger, gate, order).await
+                interpret(
+                    &adapter,
+                    // This fixture's order carries no reconcile, so the source
+                    // is never reached; one that did would say what the
+                    // seller's catalogue holds.
+                    &ScriptedReconcile::could_not_read("this fixture drives no reconcile"),
+                    ledger,
+                    gate,
+                    order,
+                )
+                .await
             })
         }
     }

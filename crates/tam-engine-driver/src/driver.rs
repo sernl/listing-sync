@@ -21,7 +21,7 @@ use tam_types::{
     LogicalInstant, Timestamp,
 };
 
-use crate::ports::{Cancellation, IdSource, ItemLedger};
+use crate::ports::{Cancellation, IdSource, ItemLedger, ReconcileSource};
 use crate::vocabulary::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind,
     ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerError, NewAttempt,
@@ -72,6 +72,13 @@ impl VerifyPolicy {
 /// will own producing this; until then the worker builds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineSeed {
+    /// The stranded attempt this run is reconciling, where it is one.
+    ///
+    /// Set, the run does not begin at the beginning: it steps straight to the
+    /// search, and the entry row's effects are discarded rather than
+    /// executed. That matters because the first of them is the form
+    /// assertion, which on Tes is a write.
+    pub resume: Option<WriteAttemptId>,
     pub form: FormId,
     pub fields: FieldSet,
     pub intent_hash: ContentHash,
@@ -80,8 +87,12 @@ pub struct MachineSeed {
     pub verify: VerifyPolicy,
 }
 
-pub struct DriverContext<'a, A, N, P, L, C, I> {
+pub struct DriverContext<'a, A, N, P, L, C, I, R> {
     pub adapter: &'a A,
+    /// The seller's own catalogue, searched when a create's fate is unknown.
+    /// A port rather than a method on the adapter, because the enumeration
+    /// runs under the seller's session on the seller's machine.
+    pub reconcile: &'a R,
     /// The one ledger seam. Four repositories and two raw-pool writers stood
     /// here; collapsing them is what lets the whole surface be keyed on the
     /// lease the server issued.
@@ -380,8 +391,9 @@ async fn verify_with_backoff<
     L: ItemLedger,
     C: Cancellation,
     I: IdSource,
+    R: ReconcileSource,
 >(
-    ctx: &DriverContext<'_, A, N, P, L, C, I>,
+    ctx: &DriverContext<'_, A, N, P, L, C, I, R>,
     lease: &LeasedItem,
     request: Verification<'_>,
 ) -> Result<VerifyOutcome, EngineError> {
@@ -493,8 +505,9 @@ pub async fn run_item<
     L: ItemLedger,
     C: Cancellation,
     I: IdSource,
+    R: ReconcileSource,
 >(
-    ctx: &DriverContext<'_, A, N, P, L, C, I>,
+    ctx: &DriverContext<'_, A, N, P, L, C, I, R>,
     lease: &LeasedItem,
     seed: MachineSeed,
 ) -> Result<RunVerdict, EngineError> {
@@ -532,6 +545,16 @@ pub async fn run_item<
         operation.clone(),
         seed.budget,
     )?;
+    // A reconcile does not start at the beginning. Stepping the resume here
+    // replaces the entry row's effects rather than running them, and the
+    // first of those is the form assertion — write-bearing on Tes, and the
+    // last thing an item whose create may already have landed should do.
+    if let Some(stranded) = seed.resume {
+        let at = ctx.clock.now();
+        transition = transition
+            .next
+            .step(Input::ResumeStranded(stranded), LogicalInstant(at.0))?;
+    }
     let mut current_attempt: Option<WriteAttemptId> = None;
     // What the verification read last saw, so a bind records the lifecycle
     // the listing was observed in rather than the one its create convention
@@ -811,16 +834,24 @@ pub async fn run_item<
                         }
                     }
                 }
-                Effect::Reconcile { .. } => {
-                    // No adapter in this milestone can search by marker; the
-                    // machine turns this refusal into the halting ambiguity,
-                    // which is the stall bias doing its job.
-                    pending = Some(Input::ReconcileResult(Err(AdapterError::Rejected {
-                        code: FailureCode::Other,
-                        detail: tam_types::FailureDetail(
-                            "marker reconciliation is not implemented yet".to_owned(),
-                        ),
-                    })));
+                Effect::Reconcile { attempt, locator } => {
+                    // The lease is extended first, as before every other
+                    // network-bearing effect: an enumeration is one, and on a
+                    // large catalogue a slow one.
+                    ctx.ledger.renew(&lease_ref).await?;
+                    record_action(ctx, lease, sequence, "reconcile", now).await?;
+                    let found = ctx.reconcile.find_listing(&locator, attempt).await;
+                    // A resume opens no attempt, so the run reaches here owning
+                    // none. The find substitutes for the lost write response,
+                    // and adopting the standing row on it is what lets the
+                    // terminal settle that row rather than leave the
+                    // duplicate-create fence standing for ever. Only on a find:
+                    // an answer that identified nothing settles nothing, which
+                    // is the whole of why the other two outcomes stay stranded.
+                    if matches!(found, Ok(Some(_))) {
+                        current_attempt = Some(attempt);
+                    }
+                    pending = Some(Input::ReconcileResult(found));
                 }
                 Effect::ParkItem {
                     item: _,
@@ -1037,6 +1068,7 @@ async fn consume_write_grant(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease: &LeaseRef,
     connection: ConnectionId,
@@ -1060,6 +1092,7 @@ async fn rate_refused_before_the_write(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease_ref: &LeaseRef,
     settling: AttemptRef,
@@ -1127,6 +1160,7 @@ async fn preflight_failed(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease: &LeasedItem,
     error: &AdapterError,
@@ -1292,6 +1326,7 @@ async fn settle_open_attempt(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease: &LeaseRef,
     settling: AttemptRef,
@@ -1360,6 +1395,7 @@ async fn record_event(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease: &LeasedItem,
     payload: &JobEventPayload,
@@ -1379,6 +1415,7 @@ async fn record_action(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease: &LeasedItem,
     sequence: u32,
@@ -1431,6 +1468,7 @@ pub async fn seed_refused(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease: &LeasedItem,
     error: &EngineError,
@@ -1470,6 +1508,7 @@ async fn notify(
         impl ItemLedger,
         impl Cancellation,
         impl IdSource,
+        impl ReconcileSource,
     >,
     lease: &LeasedItem,
     event: SellerEvent,

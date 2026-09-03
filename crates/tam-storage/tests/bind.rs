@@ -208,6 +208,20 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
     .bind(DEVICE)
     .execute(&mut *tx)
     .await?;
+    // The claim serves a device only work whose marketplace it holds a
+    // connected session for, which is what the real device establishes on its
+    // first check-in.
+    sqlx::query(
+        "INSERT INTO device_marketplace_session \
+             (org_id, device_id, marketplace, linked_at, last_used_at, status) \
+         VALUES ($1, $2, 'tes', now(), now(), 'connected'), \
+                ($1, $2, 'tpt', now(), now(), 'connected') \
+         ON CONFLICT (org_id, device_id, marketplace) DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(DEVICE)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }

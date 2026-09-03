@@ -805,11 +805,29 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         &self,
         reason: &FetchReason,
     ) -> Result<Vec<CatalogueEntry>, AdapterError> {
-        if !matches!(reason, FetchReason::FirstPartyExport { .. }) {
+        // Two reasons justify an enumeration, and no third does without a
+        // decision. `FirstPartyExport` is the tier-one capability this read
+        // was written for. `VerifyAttempt` is the reconciliation of a create
+        // whose fate the ledger cannot determine: an enumeration justified by
+        // an open fencing row, entered only for the attempt being settled, and
+        // answering the same complete-or-refuse contract as the export.
+        //
+        // The machine already reasons in these terms — `SyncMachine::reconcile`
+        // reads back under `VerifyAttempt` for the operations that have a
+        // durable subject — so admitting it here makes the create's path
+        // consistent with the ones beside it rather than carving an exception.
+        //
+        // This is the only non-export caller. A third is a decision rather
+        // than a precedent.
+        if !matches!(
+            reason,
+            FetchReason::FirstPartyExport { .. } | FetchReason::VerifyAttempt { .. }
+        ) {
             return Err(AdapterError::Rejected {
                 code: FailureCode::Other,
                 detail: FailureDetail(
-                    "a catalogue read is justified only by the first-party-export capability"
+                    "a catalogue read is justified by the first-party-export capability or by \
+                     the fencing row of the attempt it is reconciling, and by nothing else"
                         .to_owned(),
                 ),
             });

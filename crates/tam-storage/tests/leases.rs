@@ -192,6 +192,77 @@ async fn register_device(app: &PgPool, org: OrgId, device: &str) {
     .await
     .expect("the fixture device registers");
     tx.commit().await.expect("the fixture device commits");
+    // Registration alone no longer admits a claim: the device must also hold
+    // a session for the job's marketplace. Both device-branch marketplaces are
+    // seeded because the fixture tenant enqueues onto either, and `DO NOTHING`
+    // so a test that has flipped a status keeps it across the next claim.
+    for marketplace in ["tes", "tpt"] {
+        connect_session(app, org, device, marketplace, "connected").await;
+    }
+}
+
+/// One marketplace session for a device, at a stated status.
+///
+/// Written over the app role behind a tenant pin, the way every other fixture
+/// row on an RLS-forced table is.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn connect_session(app: &PgPool, org: OrgId, device: &str, marketplace: &str, status: &str) {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO device_marketplace_session \
+             (org_id, device_id, marketplace, linked_at, last_used_at, status) \
+         VALUES ($1, $2, $3, now(), now(), $4) \
+         ON CONFLICT (org_id, device_id, marketplace) DO NOTHING",
+    )
+    .bind(db_uuid(org.0))
+    .bind(device)
+    .bind(marketplace)
+    .bind(status)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture session inserts");
+    tx.commit().await.expect("the fixture session commits");
+}
+
+/// Moves an already-seeded session to a stated status, which the seeding
+/// helper deliberately will not do.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn set_session_status(
+    app: &PgPool,
+    org: OrgId,
+    device: &str,
+    marketplace: &str,
+    status: &str,
+) {
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "UPDATE device_marketplace_session SET status = $4 \
+         WHERE org_id = $1 AND device_id = $2 AND marketplace = $3",
+    )
+    .bind(db_uuid(org.0))
+    .bind(device)
+    .bind(marketplace)
+    .bind(status)
+    .execute(&mut *tx)
+    .await
+    .expect("the session status moves");
+    tx.commit().await.expect("the session status commits");
 }
 
 /// The seller-device claim, as the tests take it. `acquire` is the other
@@ -3205,4 +3276,247 @@ async fn a_replay_after_its_own_create_bound_the_mapping_is_still_idempotent(app
         .await
         .expect("the attempts read");
     assert_eq!(rows, 1, "and no second row is written");
+}
+
+/// Strands a create the way a run that ended without settling it does: the
+/// item leases, its fencing attempt opens, and the item is parked on the gate
+/// with the attempt still `in_flight`.
+///
+/// The attempt is what makes it stranded rather than merely parked. Nothing
+/// can create in its place while that row stands, so every pass that leaves
+/// it there leaves a mapping's fence shut.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn strand_a_create(
+    app: &PgPool,
+    engine: &PgPool,
+    org: OrgId,
+    mapping: MappingId,
+) -> (JobItemId, Uuid) {
+    let lease = claim(app, org, DEVICE, 60).await.expect("the item leases");
+    assert_eq!(
+        lease.mapping, mapping,
+        "the fixture depends on claim order, so the expected item must be the one leased"
+    );
+    let attempt = Uuid(*uuid::Uuid::new_v4().as_bytes());
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &lease.lease_ref(),
+            attempt,
+            &NewAttempt {
+                mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the fencing attempt opens");
+    LeaseRepo::new(engine.clone())
+        .park(&lease.lease_ref(), AWAITING_SELLER_SIGNIN, 3_600)
+        .await
+        .expect("the park is fenced on a live lease");
+    (lease.item, attempt)
+}
+
+/// One item's attempt count, park clock and outcome, which together say
+/// whether a pass charged it, timed it, or settled it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn item_disposition(
+    pool: &PgPool,
+    org: OrgId,
+    item: JobItemId,
+) -> (String, Option<String>, i32, bool, Option<String>) {
+    sqlx::query_as::<_, (String, Option<String>, i32, bool, Option<String>)>(
+        "SELECT state, blocked_on, attempt_count, park_expires_at IS NOT NULL, outcome \
+         FROM job_item WHERE org_id = $1 AND id = $2",
+    )
+    .bind(db_uuid(org.0))
+    .bind(db_uuid(item.0))
+    .fetch_one(pool)
+    .await
+    .expect("the item row is readable")
+}
+
+/// The claim admits a stranded create out of its park and serves it ahead of
+/// queued work, carrying the attempt the device must reconcile.
+///
+/// The queued sibling is aged past the stranded one deliberately: under the
+/// plain FIFO this claim used to have it would be served first, so the
+/// assertion fails unless the reconcile-first ordering is what decided. That
+/// ordering is not a preference — the stranded item holds its mapping's fence,
+/// and every pass that serves something else leaves it shut.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stranded_create_is_claimed_ahead_of_older_queued_work(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x61, true).await;
+    enqueue_one(&engine, &tenant, 0x62, 0x63).await;
+    let (stranded, attempt) = strand_a_create(&app, &engine, tenant.org, tenant.mapping).await;
+
+    // On the other device-branch inventory, because `mapping_one_per_inventory`
+    // allows this product only one mapping per inventory and the stranded item
+    // holds the Tes one.
+    let second = seed_mapping_on(&app, &tenant, 0x64, InventoryId::Tpt).await;
+    link_connection(&app, tenant.org, "tpt", 0x6F).await;
+    let queued = enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: second,
+            job_seed: 0x65,
+            item_seed: 0x66,
+            inventory: InventoryId::Tpt,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+    sqlx::query("UPDATE job_item SET created_at = created_at - interval '1 hour' WHERE id = $1")
+        .bind(db_uuid(queued.0))
+        .execute(&engine)
+        .await
+        .expect("the queued sibling ages past the stranded one");
+
+    let leased = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the stranded create is claimable");
+    assert_eq!(
+        leased.item, stranded,
+        "the older queued item would win a plain FIFO, so serving the stranded one is the \
+         reconcile-first ordering and nothing else"
+    );
+    assert_eq!(
+        leased.stranded_attempt,
+        Some(attempt),
+        "and the claim names the attempt to reconcile, which is the only way the device can \
+         tell a reconcile from an ordinary create: the operation still reads 'create'"
+    );
+    let (state, blocked_on, _, timed, _) = item_disposition(&engine, tenant.org, stranded).await;
+    assert_eq!(
+        (state.as_str(), blocked_on.as_deref(), timed),
+        ("leased", None, false),
+        "the claim took it out of the park rather than leaving a gate a later pass would \
+         act on"
+    );
+}
+
+/// A device claims only work whose marketplace it holds a connected session
+/// for, and a session the seller signed out of is still a row rather than an
+/// absent one.
+///
+/// Both halves are asserted against the same fixture: the signed-out claim
+/// finds nothing and the reconnected one finds the item, so the predicate is
+/// pinned to the session rather than to anything else the fixture happens to
+/// have done.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stranded_create_needs_a_connected_session_for_its_marketplace(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x67, true).await;
+    enqueue_one(&engine, &tenant, 0x68, 0x69).await;
+    let (stranded, attempt) = strand_a_create(&app, &engine, tenant.org, tenant.mapping).await;
+
+    set_session_status(&app, tenant.org, DEVICE, "tes", "signed_out").await;
+    assert!(
+        claim(&app, tenant.org, DEVICE, 60).await.is_none(),
+        "a device that cannot reach the marketplace under the seller's own session must not \
+         be handed its reconciliation: the enumeration is a request like any other"
+    );
+    let (state, blocked_on, _, _, _) = item_disposition(&engine, tenant.org, stranded).await;
+    assert_eq!(
+        (state.as_str(), blocked_on.as_deref()),
+        ("parked_live", Some(AWAITING_SELLER_SIGNIN)),
+        "and the refused claim left it exactly where it was, still fencing its mapping"
+    );
+
+    set_session_status(&app, tenant.org, DEVICE, "tes", "connected").await;
+    let leased = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the reconnected device claims it");
+    assert_eq!(
+        (leased.item, leased.stranded_attempt),
+        (stranded, Some(attempt)),
+        "the session was the only thing standing between the device and the same item"
+    );
+}
+
+/// The reaper parks a create whose device went away rather than settling or
+/// stealing it, charges it nothing, and stops its day clock.
+///
+/// The item is set one attempt short of its budget on purpose. That makes it
+/// match the settle arm as well as the steal arm, so an ordering in which the
+/// park ran anywhere but first would settle it `failed` — an outcome nobody
+/// observed, recorded against a write that may well have landed. The
+/// unchanged `attempt_count` is the other half: a device going offline
+/// mid-run is not the item failing, so nothing is charged for it.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_reaper_parks_a_stranded_create_rather_than_settling_or_stealing_it(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x6A, true).await;
+    let item = enqueue_one(&engine, &tenant, 0x6B, 0x6C).await;
+    let lease = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the item leases");
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &lease.lease_ref(),
+            Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the fencing attempt opens");
+    // The device stops here: the request went out and no read-back followed.
+    sqlx::query(
+        "UPDATE job_item SET lease_expires_at = now() - interval '1 hour', \
+             attempt_count = $1 WHERE id = $2",
+    )
+    .bind(ATTEMPTS_MAX - 1)
+    .bind(db_uuid(item.0))
+    .execute(&engine)
+    .await
+    .expect("the lease ages and the budget is brought to its last attempt");
+
+    let touched = LeaseRepo::new(engine.clone())
+        .expire_and_steal(Timestamp(T0.0 + 61_000), ATTEMPTS_MAX)
+        .await
+        .expect("the reaper runs");
+    assert_eq!(touched, 1, "the expired lease was acted on exactly once");
+
+    let (state, blocked_on, attempts, timed, outcome) =
+        item_disposition(&engine, tenant.org, item).await;
+    assert_eq!(
+        (state.as_str(), blocked_on.as_deref(), outcome.as_deref()),
+        ("parked_live", Some(AWAITING_SELLER_SIGNIN), None),
+        "it goes to the park the reconcile path reads, not to the queue and not to a \
+         settled row recording an outcome nobody observed"
+    );
+    assert_eq!(
+        attempts,
+        ATTEMPTS_MAX - 1,
+        "and it is charged nothing: the steal arm would have spent its last attempt and the \
+         settle arm would have ended it"
+    );
+    assert!(
+        !timed,
+        "the day clock stops, because no amount of waiting reconciles a create: only the \
+         seller's device reading their own catalogue does"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["in_flight".to_owned()],
+        "the fence it was holding is still standing, which is what makes it reconcilable \
+         rather than merely retryable"
+    );
 }

@@ -24,6 +24,7 @@ use tam_domain::{
 use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
 use tam_engine::seed::{prepare_item, ItemPreparation};
 use tam_engine_driver::driver::{run_item, DriverContext, EngineError, NowSource, RunVerdict};
+use tam_engine_driver::memory::ScriptedReconcile;
 use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
 use tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX;
 use tam_marketplace::transport::{
@@ -788,6 +789,9 @@ async fn pump(
     let cancel = TokenCancellation(&cancel);
     let ctx = DriverContext {
         adapter: &adapter,
+        // No body here drives a reconcile; one that did would say what the
+        // seller's catalogue holds.
+        reconcile: &ScriptedReconcile::could_not_read("this fixture drives no reconcile"),
         ledger: &ledger,
         clock: &Clock,
         ids: &RandomIds,
@@ -1511,6 +1515,21 @@ async fn claim(app: &PgPool, device: &str, ttl: i64) -> Option<tam_storage::Leas
     .execute(&mut *tx)
     .await
     .expect("the fixture device registers");
+    // The claim serves a device only work whose marketplace it holds a
+    // connected session for, which is what the real device establishes on its
+    // first check-in.
+    sqlx::query(
+        "INSERT INTO device_marketplace_session \
+             (org_id, device_id, marketplace, linked_at, last_used_at, status) \
+         VALUES ($1, $2, 'tes', now(), now(), 'connected'), \
+                ($1, $2, 'tpt', now(), now(), 'connected') \
+         ON CONFLICT (org_id, device_id, marketplace) DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(device)
+    .execute(&mut *tx)
+    .await
+    .expect("the fixture sessions register");
     tx.commit().await.expect("the fixture device commits");
     match tam_storage::LeaseRepo::new(app.clone())
         .claim_for_device(

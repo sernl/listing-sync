@@ -7,7 +7,7 @@
 
 use tam_domain::{ItemOperation, JobItemId};
 use tam_engine_driver::conformance;
-use tam_engine_driver::memory::{InMemoryLedger, Seeded};
+use tam_engine_driver::memory::{InMemoryLedger, ScriptedReconcile, Seeded};
 use tam_engine_driver::vocabulary::LeasedItem;
 use tam_marketplace::IdempotencyKey;
 use tam_types::{ConnectionId, InventoryId, JobId, MappingId, OrgId, Uuid};
@@ -77,4 +77,54 @@ fn a_create_bound_elsewhere_settles_skipped() {
     futures::executor::block_on(conformance::a_create_bound_elsewhere_settles_skipped(
         &ledger, &lease,
     ));
+}
+
+/// The two answers a reconcile can end on, driven end to end.
+///
+/// Instantiated here rather than through the conformance macro because each
+/// needs the reconcile source told what the seller's catalogue holds, which
+/// is the one thing a Postgres ledger cannot be told.
+#[test]
+fn a_reconcile_that_finds_the_listing_settles_it() {
+    let (ledger, lease) = fixture();
+    ledger.strand(lease.mapping, conformance::STRANDED);
+    futures::executor::block_on(conformance::a_reconcile_that_finds_the_listing_settles_it(
+        &ledger,
+        &lease,
+        // The listing the scripted adapter will observe on the verifying
+        // read-back, so the run is proved end to end rather than stopping at
+        // a mismatch that is only the fixture disagreeing with itself.
+        tam_marketplace::RemoteListingId::Tes {
+            url: conformance::LANDED_URL.to_owned(),
+        },
+    ));
+}
+
+#[test]
+fn a_complete_enumeration_without_the_listing_leaves_it_stranded() {
+    let (ledger, lease) = fixture();
+    ledger.strand(lease.mapping, conformance::STRANDED);
+    futures::executor::block_on(
+        conformance::a_reconcile_that_cannot_identify_leaves_it_stranded(
+            &ledger,
+            &lease,
+            ScriptedReconcile::complete_and_absent(),
+        ),
+    );
+}
+
+/// The other half of the same outcome, and the reason both are tested: a walk
+/// that could not be completed says nothing about the listing either, and the
+/// two must not be allowed to diverge into different item outcomes.
+#[test]
+fn a_read_that_could_not_be_performed_leaves_it_stranded_too() {
+    let (ledger, lease) = fixture();
+    ledger.strand(lease.mapping, conformance::STRANDED);
+    futures::executor::block_on(
+        conformance::a_reconcile_that_cannot_identify_leaves_it_stranded(
+            &ledger,
+            &lease,
+            ScriptedReconcile::could_not_read("the session lapsed mid-walk"),
+        ),
+    );
 }

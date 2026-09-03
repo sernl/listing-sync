@@ -51,6 +51,7 @@ pub fn seed_from_projection<A: MarketplaceAdapter>(
         .as_bytes(),
     );
     Ok(MachineSeed {
+        resume: None,
         form: preparation.form,
         fields,
         intent_hash,
@@ -80,6 +81,7 @@ pub fn seed_for_removal(preparation: &ItemPreparation) -> MachineSeed {
             .as_bytes(),
     );
     MachineSeed {
+        resume: None,
         form: preparation.form,
         fields,
         intent_hash,

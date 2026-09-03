@@ -191,6 +191,31 @@ async fn beat(
     .await
 }
 
+/// The heartbeat that leaves a device holding a session for both device-branch
+/// marketplaces.
+///
+/// Registration alone no longer admits a claim: the claim serves a device only
+/// work whose marketplace it holds a connected session for, which is what the
+/// real device establishes on its first check-in.
+async fn connected(pool: &PgPool, token: &SessionToken, id: &str) {
+    let answered = beat(
+        pool,
+        token,
+        id,
+        serde_json::json!([
+            { "marketplace": "Tes", "account_label": null, "status": "connected" },
+            { "marketplace": "Tpt", "account_label": null, "status": "connected" },
+        ]),
+        t0,
+    )
+    .await;
+    assert_eq!(
+        answered.status,
+        StatusCode::OK,
+        "the fixture's check-in must land, or the claim it precedes proves nothing"
+    );
+}
+
 async fn revoke(pool: &PgPool, token: &SessionToken, id: &str, wall: WallClock) -> Answer {
     call(
         pool.clone(),
@@ -466,8 +491,10 @@ async fn the_surface_is_closed_to_a_session_that_does_not_resolve(pool: PgPool) 
 async fn a_settle_from_a_device_other_than_the_holder_is_refused(pool: PgPool) {
     provision(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
     let second = "99998888777766665555444433332222";
     register(&pool, &TOKEN_A, second, "desktop").await;
+    connected(&pool, &TOKEN_A, second).await;
 
     let claimed = call(
         pool.clone(),
@@ -529,6 +556,7 @@ async fn a_settle_from_a_device_other_than_the_holder_is_refused(pool: PgPool) {
 async fn one_tenants_session_cannot_claim_through_another_tenants_device_id(pool: PgPool) {
     provision(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
 
     let across = call(
         pool.clone(),
@@ -565,6 +593,7 @@ async fn one_tenants_session_cannot_claim_through_another_tenants_device_id(pool
 async fn a_ledger_call_naming_a_lease_this_device_does_not_hold_is_refused(pool: PgPool) {
     provision(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
 
     let refused = call(
         pool.clone(),
@@ -594,6 +623,7 @@ async fn a_ledger_call_naming_a_lease_this_device_does_not_hold_is_refused(pool:
 async fn the_payload_route_refuses_a_device_with_no_live_lease(pool: PgPool) {
     provision(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
 
     let forbidden = call(
         pool.clone(),
@@ -643,6 +673,7 @@ async fn the_payload_route_refuses_a_device_with_no_live_lease(pool: PgPool) {
 async fn neither_new_route_carries_an_organisation_a_caller_could_substitute(pool: PgPool) {
     provision(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
 
     for path in [
         format!("/v1/devices/{LAPTOP}/ledger"),
@@ -682,6 +713,7 @@ async fn neither_new_route_carries_an_organisation_a_caller_could_substitute(poo
 async fn the_work_route_accepts_a_marketplace_filter_and_serves_without_one(pool: PgPool) {
     provision(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
 
     for body in [
         None,
@@ -863,6 +895,7 @@ async fn claimed(pool: &PgPool) -> serde_json::Value {
     provision(pool).await;
     seed_claimable(pool).await;
     register(pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(pool, &TOKEN_A, LAPTOP).await;
     // The lease is taken through the same claim `/work` uses, rather than
     // through `/work` itself. These three tests are about the ledger endpoint,
     // and routing them through the work order would make them depend on the
@@ -1176,6 +1209,7 @@ async fn a_work_route_that_cannot_prepare_hands_the_lease_back(pool: PgPool) {
     provision(&pool).await;
     seed_claimable(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
     let engine = engine_pool(&pool).await;
     break_preparation(&pool, &engine).await;
     let before: i32 = sqlx::query_scalar("SELECT attempt_count FROM job_item")
@@ -1282,6 +1316,7 @@ async fn a_lost_counterpart_settles_through_the_work_route_and_the_queue_moves_o
     provision(&pool).await;
     seed_claimable(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
     let engine = engine_pool(&pool).await;
     // `counterpart_binding` reads never-going-to-bind from one state only:
     // an `ambiguous_create` binding on the mapping the item waits for. The
@@ -1327,6 +1362,7 @@ async fn a_blocked_item_is_parked_through_the_work_route_and_the_queue_moves_on(
     provision(&pool).await;
     seed_claimable(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
     let engine = engine_pool(&pool).await;
     // A create against a bound mapping is what `admission` refuses, and the
     // gate it names is `binding`. The bound shape is the one
@@ -1409,6 +1445,7 @@ async fn a_preparation_that_never_succeeds_settles_failed_once_the_budget_is_spe
     provision(&pool).await;
     seed_claimable(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
     let engine = engine_pool(&pool).await;
     break_preparation(&pool, &engine).await;
 
@@ -1454,6 +1491,7 @@ async fn a_transient_preparation_failure_costs_one_attempt_and_the_next_poll_cla
     provision(&pool).await;
     seed_claimable(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
     let engine = engine_pool(&pool).await;
     let mapping: uuid::Uuid = sqlx::query_scalar("SELECT id FROM mapping")
         .fetch_one(&engine)

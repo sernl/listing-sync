@@ -894,6 +894,7 @@ async fn preflight(
     let inventory = record.mapping.inventory;
     let lease = LeasedItem {
         org: ORG,
+        stranded_attempt: None,
         item: JobItemId(Uuid([0; 16])),
         job: JobId(Uuid([0; 16])),
         mapping,

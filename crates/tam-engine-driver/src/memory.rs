@@ -25,8 +25,12 @@ use std::sync::Mutex;
 use tam_domain::{JobItemId, SellerEvent};
 use tam_types::{ConnectionId, InventoryId, JobEventPayload, MappingId, OrgId, Timestamp, Uuid};
 
+use tam_marketplace::{AdapterError, ListingLocator, RemoteListingId, WriteAttemptId};
+use tam_types::{FailureCode, FailureDetail};
+
 use crate::ports::{
     AttemptObservation, BindingObservation, ItemLedger, ItemObservation, LedgerInspector,
+    ReconcileSource,
 };
 use crate::vocabulary::{
     AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind, ItemVerdict,
@@ -113,6 +117,28 @@ pub struct Seeded {
 }
 
 impl InMemoryLedger {
+    /// Leaves a create's fencing row standing, as a run that ended without
+    /// settling it would.
+    ///
+    /// The state a reconcile starts from, and it cannot be reached by driving
+    /// the fixture: a run that opens an attempt here also finishes it. A
+    /// stranded create is one whose run stopped in between.
+    pub fn strand(&self, mapping: MappingId, attempt: Uuid) {
+        self.with(|state| {
+            state.attempts.insert(
+                mapping,
+                Attempt {
+                    id: attempt,
+                    state: "in_flight".to_owned(),
+                    settled: false,
+                    remote_id_kind: None,
+                    remote_url: None,
+                    remote_numeric_id: None,
+                },
+            );
+        });
+    }
+
     /// Records that another run bound this mapping while ours was working.
     ///
     /// The one state a create's `open_attempt` refuses on, and the only way to
@@ -556,5 +582,47 @@ impl LedgerInspector for InMemoryLedger {
 
     async fn event_count(&self, item: JobItemId) -> usize {
         self.with(|state| state.events.iter().filter(|(i, _)| *i == item).count())
+    }
+}
+
+/// A reconcile source the test tells what the seller's catalogue holds.
+///
+/// The three answers are the contract's three, stated as data: the listing,
+/// a complete enumeration that did not contain it, or a read that could not
+/// be performed. A fixture that could only say "found" or "not found" would
+/// let the interpreter's two ambiguity causes collapse into one.
+pub struct ScriptedReconcile(Result<Option<RemoteListingId>, AdapterError>);
+
+impl ScriptedReconcile {
+    /// The listing is there, and this is it.
+    #[must_use]
+    pub const fn found(id: RemoteListingId) -> Self {
+        Self(Ok(Some(id)))
+    }
+
+    /// The walk reached its end and the listing was not in it.
+    #[must_use]
+    pub const fn complete_and_absent() -> Self {
+        Self(Ok(None))
+    }
+
+    /// The walk could not be completed, which is not the same thing.
+    #[must_use]
+    pub fn could_not_read(detail: &str) -> Self {
+        Self(Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(detail.to_owned()),
+        }))
+    }
+}
+
+impl ReconcileSource for ScriptedReconcile {
+    fn find_listing<'a>(
+        &'a self,
+        _locator: &'a ListingLocator,
+        _attempt: WriteAttemptId,
+    ) -> impl core::future::Future<Output = Result<Option<RemoteListingId>, AdapterError>> + Send + 'a
+    {
+        core::future::ready(self.0.clone())
     }
 }

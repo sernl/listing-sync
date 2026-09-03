@@ -397,6 +397,41 @@ And `open` compares no lease epoch in its own statement: it is fenced by `held_b
 One process note for whoever does the next revert-run-restore here: reverting a change that touches SQL leaves the committed query cache holding the reverted statement, so `just db-prepare` has to run again after restoring.
 It costs one red `check` that looks exactly like a real failure.
 
+Step 12b, the read-back reconciliation.
+
+The reconciliation finding 4 named, and the remedy `awaiting_seller_signin` was standing in for.
+A create whose fate the ledger cannot determine is settled on what is actually on the marketplace, read under the seller's own session on the seller's own device.
+
+The selection is at claim time rather than by an enqueue.
+A stranded create — parked on `awaiting_seller_signin` with its attempt still in flight — is a candidate the claim admits, ranked ahead of ordinary queued work because each one holds a mapping's fence and clearing it unblocks everything behind it.
+That needed no marker column, no bound and no new limit: the lease is the idempotency, and one item per claim is the bound by construction.
+The claim also gained the predicate it turned out never to have had — a `device_marketplace_session` at `status = 'connected'` for the job's marketplace — so a device claims only work it holds a session for, which closes a pre-existing D14 mis-routing the reconcile path exposed rather than created.
+
+The interpreter reaches the search through a new input rather than a second constructor.
+`Input::ResumeStranded` adopts the standing attempt and steps to the state the ambiguous-submit row reaches, so the transition table stays the whole specification of the machine; the entry row's effects are discarded rather than run, because the first of them is the form assertion and on Tes that is a write.
+`ReconcileSource` is a port the device serves, never the server: D1 puts every request to a no-API marketplace on the seller's machine and an enumeration is a request, so `tam-worker` implements it as a refusal that says so.
+
+Two outcomes, not three.
+Found links the listing and settles succeeded, with a verifying read-back behind it.
+Everything else — a complete enumeration that did not contain it, or a read that could not be performed — stays stranded and surfaced, because a negative search is not evidence a create did not land, and releasing the duplicate-create fence on one is the failure this ledger cannot undo.
+The two are recorded as distinct causes even so, `NoDurableIdentifier` against `ReadBackIndeterminate`, which is what would let the founder's answer to question 8 change one without changing the other.
+
+The enumeration gate on both adapters now admits `FetchReason::VerifyAttempt` beside `FirstPartyExport`, because a reconcile is not an export and saying it was would have put a read in the code whose stated justification was not its real one.
+The machine already reads back under `VerifyAttempt` for the operations that have a durable subject, so this makes the create's path consistent with the ones beside it.
+It is the only non-export caller, and a third is a decision rather than a precedent.
+
+The reaper gained a third arm, ahead of the settle and the steal.
+A reaped lease whose item is a create, whose mapping is unbound and whose attempt is still in flight goes back to the park rather than to the queue, charged nothing.
+Not reconcile-specific: an ordinary create whose device died between issuing the request and its read-back is the same shape, and today it is stolen back only to abandon on the fence it is itself holding until its budget settles it failed with nothing in the ledger — the second defect the reconcile path closed.
+
+Proves that a create whose fate is unknown is decided by evidence or left visibly undecided, and never by a guess.
+Verification: the two outcomes driven end to end against the in-memory ledger, the wire field's presence and absence, the adapters refusing every other fetch reason, and the claim and reaper arms driven against Postgres.
+One half of the found rule is stated in `docs/design/sync-machine.md` without a test behind it: a read that differs in one field settles degraded, and no run can reach `Outcome::Degraded` today because `settle` classifies from a `FieldDiffReport` and `unnormalised_report` is hard-coded empty until M1g writes the normaliser.
+The sibling test belongs to M1g with the comparison it is about, and until then the rule binds the code that will be written rather than code that exists.
+Kill gate: a path that releases the duplicate-create fence on anything other than a positive identification.
+
+`docs/design/sync-machine.md` gains the transition row and the new error in the same change, and its `MachineError` table was brought back to the code on 2026-09-03 — it had been three variants behind by one before this step added the second.
+
 Step 13, the entitlement gate inside the loop.
 `AssertFormSchema` consumes a rate grant (finding 12), and the per-effect entitlement check sits at the four network-bearing effects and in `verify_with_backoff`'s per-try preamble, producing the shape `BudgetGrant::Exhausted` already produces rather than a new terminal outcome.
 Two additions ruled during step 11 belong here.
@@ -429,6 +464,8 @@ The broker deletion carries a predecessor that was not visible when it was scope
    Decided 2026-09-03: raise `LEASE_TTL_SECS` to 600, taken as recommended.
    One founder-gated number was the smaller change against a clock port that would have put a timer inside the adapter seam and handed every adapter a way to extend the lease it runs under; the heartbeat already distinguishes a working device from a gone one, so the cost is only that the reaper takes twice as long to notice a device that really stopped.
    Landed in step 11c, and `tpts_theoretical_worst_case_submit_fits_inside_the_lease` now asserts the guarantee where it used to assert the defect.
+8. Release the duplicate-create fence on a positive absence, once the reconciliation has run for a while and the enumeration's reliability on each platform is known from live evidence rather than from its contract.
+   Recommended: not yet, and not on any `Ok(None)` — only on a complete enumeration under the seller's own session, which is what `list_own_resources` already guarantees on both platforms by refusing a walk it cannot finish. The caveat that decides the timing is Tpt's: a create sits in an asynchronous processing queue for minutes, so an enumeration that lacks the marker can legitimately precede the listing appearing, and releasing on that would manufacture the duplicate the fence exists to prevent. Until then both answers stay stranded and surfaced, recorded as distinct causes so this can change without anything else changing.
 
 ## 9. Appendix: the findings
 

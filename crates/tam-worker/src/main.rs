@@ -58,6 +58,7 @@ use tam_engine::broker_client::{claim_account, request_lease, ClaimError, LeaseP
 use tam_engine::ledger::{to_wire_item, PgLedger, RandomIds, TokenCancellation};
 use tam_engine::seed::{preparation, prepare_and_dispose, Disposed};
 use tam_engine_driver::driver::{run_item, seed_refused, DriverContext, NowSource, RunVerdict};
+use tam_engine_driver::ports::ReconcileSource;
 use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
 use tam_marketplace::transport::{Transport, TransportError};
 use tam_marketplace::{MarketplaceAdapter, Pause, ProjectedListing};
@@ -74,10 +75,40 @@ use tam_storage::{
     BlobRepo, ConnectionFactsRepo, ElectionRepo, HaltRepo, JobRepo, LeaseRepo, LeasedItem,
     PipelineFileSource,
 };
-use tam_types::{ConnectionId, InventoryId, Marketplace, OrgId, Timestamp, Uuid};
+use tam_types::{ConnectionId, FailureCode, InventoryId, Marketplace, OrgId, Timestamp, Uuid};
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_POLL_MS: u64 = 5_000;
+/// The server's answer to a reconcile: it does not perform one.
+///
+/// Not a stub. D1 is that every request to a marketplace without an official
+/// API originates on the seller's device under the seller's session, and an
+/// enumeration of the seller's catalogue is exactly such a request. The
+/// device reconciles its own stranded creates; this process refuses, and the
+/// machine reads the refusal as indeterminate, which leaves the item stranded
+/// and surfaced rather than settled on evidence that was never gathered.
+struct ServerDoesNotEnumerate;
+
+impl ReconcileSource for ServerDoesNotEnumerate {
+    fn find_listing<'a>(
+        &'a self,
+        _locator: &'a tam_marketplace::ListingLocator,
+        _attempt: tam_marketplace::WriteAttemptId,
+    ) -> impl core::future::Future<
+        Output = Result<Option<tam_marketplace::RemoteListingId>, tam_marketplace::AdapterError>,
+    > + Send
+           + 'a {
+        core::future::ready(Err(tam_marketplace::AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: tam_types::FailureDetail(
+                "this marketplace is read on the seller's device, so the server performs no \
+                 catalogue enumeration for it"
+                    .to_owned(),
+            ),
+        }))
+    }
+}
+
 /// The real wait the driver's verification poll takes between reads. The
 /// engine holds no timer by design, so the sleep enters here, at the process
 /// boundary, exactly as the wall clock does.
@@ -480,6 +511,14 @@ impl Pump {
         let cancel = TokenCancellation(&self.cancel);
         let ctx = DriverContext {
             adapter,
+            // The server does not enumerate a no-API marketplace. D1 puts
+            // every such request on the seller's own device, and an
+            // enumeration is a request; a create stranded on this branch is
+            // reconciled by the device that holds the session, not here. The
+            // refusal is what the machine reads as indeterminate, so the item
+            // stays stranded and surfaced rather than being settled on
+            // evidence nobody gathered.
+            reconcile: &ServerDoesNotEnumerate,
             ledger: &ledger,
             clock: &WallClock,
             ids: &RandomIds,

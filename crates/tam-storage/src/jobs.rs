@@ -159,6 +159,13 @@ pub struct LeasedItem {
     pub lease_epoch: i64,
     pub attempt_count: i32,
     pub requires_bound_on: Option<InventoryId>,
+    /// The attempt this claim is reconciling, where it is one.
+    ///
+    /// Set only when the claim took a stranded create out of its park, and it
+    /// is the whole of how the rest of the system tells a reconcile from an
+    /// ordinary run: the operation cannot say it, because a stranded create is
+    /// still a create.
+    pub stranded_attempt: Option<Uuid>,
 }
 
 impl LeasedItem {
@@ -1045,6 +1052,8 @@ impl LeaseRepo {
                     .decode()?,
                     lease_epoch: row.lease_epoch,
                     attempt_count: row.attempt_count,
+                    // The server scan never reconciles: that path is the device's.
+                    stranded_attempt: None,
                     requires_bound_on: row
                         .requires_bound_on
                         .as_deref()
@@ -1093,7 +1102,18 @@ impl LeaseRepo {
                  JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
                  JOIN marketplace_inventory mi
                    ON mi.code = j.inventory AND mi.marketplace = j.marketplace
-                 WHERE ji.state = 'queued'
+                 WHERE (ji.state = 'queued'
+                        -- A stranded create is claimable too, and first. Its
+                        -- attempt is still in flight, so nothing else can run
+                        -- on that mapping until this one is settled: every
+                        -- pass that leaves it stranded leaves a fence
+                        -- standing.
+                        OR (ji.state = 'parked_live'
+                            AND ji.blocked_on = 'awaiting_seller_signin'
+                            AND EXISTS (SELECT 1 FROM write_attempt wa
+                                  WHERE wa.org_id = ji.org_id
+                                    AND wa.job_item_id = ji.id
+                                    AND wa.state = 'in_flight')))
                    -- Defence in depth beside the row-level security this
                    -- statement is meant to run under. Forced RLS pins the
                    -- tenant for free under `tam_app`, but the pin is the only
@@ -1114,6 +1134,16 @@ impl LeaseRepo {
                    AND EXISTS (SELECT 1 FROM device d
                          WHERE d.org_id = ji.org_id AND d.id = $1
                            AND d.revoked_at IS NULL)
+                   -- And holding a session for this marketplace, connected
+                   -- rather than merely recorded: the heartbeat rewrites
+                   -- these rows rather than deleting them, so a session the
+                   -- seller signed out of is still here. Keyed on the
+                   -- marketplace rather than the inventory, so one Tes
+                   -- session serves all three Tes inventories.
+                   AND EXISTS (SELECT 1 FROM device_marketplace_session dms
+                         WHERE dms.org_id = ji.org_id AND dms.device_id = $1
+                           AND dms.marketplace = j.marketplace
+                           AND dms.status = 'connected')
                    AND NOT EXISTS (SELECT 1 FROM billing_subscription bs
                          WHERE bs.org_id = ji.org_id
                            AND bs.status NOT IN ('active', 'trialing')
@@ -1136,13 +1166,18 @@ impl LeaseRepo {
                          WHERE live.org_id = ji.org_id
                            AND live.marketplace = ji.marketplace
                            AND live.state IN ('leased', 'running', 'verifying'))
-                 ORDER BY ji.created_at, ji.id
+                 -- Reconciles first: each holds a mapping's fence, so
+                 -- clearing one unblocks every sibling behind it, and a newer
+                 -- create would otherwise be served ahead of the item that is
+                 -- blocking its own mapping.
+                 ORDER BY (ji.state = 'parked_live') DESC, ji.created_at, ji.id
                  LIMIT 1
                  FOR UPDATE OF ji SKIP LOCKED
                )
                UPDATE job_item AS item
                SET state = 'leased', lease_owner = $1,
-                   lease_expires_at = now() + make_interval(secs => $2)
+                   lease_expires_at = now() + make_interval(secs => $2),
+                   blocked_on = NULL, park_expires_at = NULL
                FROM candidate, job j2
                WHERE item.org_id = candidate.org_id AND item.id = candidate.id
                  AND j2.org_id = item.org_id AND j2.id = item.job_id
@@ -1151,7 +1186,10 @@ impl LeaseRepo {
                  item.operation, item.subject_kind, item.subject_url,
                  item.subject_numeric_id, item.state_from, item.state_to,
                  item.requires_bound_on,
-                 j2.inventory AS "inventory!""#,
+                 j2.inventory AS "inventory!",
+                 (SELECT wa.id FROM write_attempt wa
+                   WHERE wa.org_id = item.org_id AND wa.job_item_id = item.id
+                     AND wa.state = 'in_flight') AS stranded_attempt"#,
             device,
             f64::from(i32::try_from(ttl_seconds).unwrap_or(i32::MAX)),
             i32::try_from(grace_hours).unwrap_or(i32::MAX),
@@ -1233,6 +1271,7 @@ impl LeaseRepo {
             .decode()?,
             lease_epoch: row.lease_epoch,
             attempt_count: row.attempt_count,
+            stranded_attempt: row.stranded_attempt.map(uuid_from_db),
             requires_bound_on: row
                 .requires_bound_on
                 .as_deref()
@@ -1289,6 +1328,9 @@ impl LeaseRepo {
             .decode()?,
             lease_epoch: row.lease_epoch,
             attempt_count: row.attempt_count,
+            // A plain read of the row, which is not a claim and so never a
+            // reconcile; the claim is the only moment that knows.
+            stranded_attempt: None,
             requires_bound_on: row
                 .requires_bound_on
                 .as_deref()
@@ -1690,6 +1732,36 @@ impl LeaseRepo {
     ) -> Result<u64, StorageError> {
         let now_db = timestamp_to_db(now)?;
         let mut tx = self.pool.begin().await?;
+        // Before the settle and before the steal, because a stranded create
+        // matches both and must reach neither. Its attempt is still in flight
+        // and its mapping unbound, so the run that could have settled it is
+        // gone and nothing that follows can create in its place: stealing it
+        // back to the queue only burns its budget abandoning on the fence it
+        // is itself holding, and settling it failed records an outcome
+        // nobody observed. It goes back to the park the reconcile path
+        // reads, charged nothing, because a device going offline mid-run is
+        // not the item failing.
+        //
+        // Not reconcile-specific: an ordinary create whose device died
+        // between issuing the request and its read-back is the same shape and
+        // wants the same answer.
+        let stranded = sqlx::query!(
+            "UPDATE job_item ji \
+             SET state = 'parked_live', blocked_on = $1, park_expires_at = NULL, \
+                 lease_owner = NULL, lease_expires_at = NULL \
+             WHERE ji.state IN ('leased', 'running', 'verifying') \
+               AND ji.lease_expires_at <= now() \
+               AND ji.operation = 'create' \
+               AND EXISTS (SELECT 1 FROM write_attempt wa \
+                     WHERE wa.org_id = ji.org_id AND wa.job_item_id = ji.id \
+                       AND wa.state = 'in_flight') \
+               AND NOT EXISTS (SELECT 1 FROM mapping m \
+                     WHERE m.org_id = ji.org_id AND m.id = ji.mapping_id \
+                       AND m.binding_state = 'bound')",
+            AWAITING_SELLER_SIGNIN,
+        )
+        .execute(&mut *tx)
+        .await?;
         let failed = sqlx::query!(
             "UPDATE job_item \
              SET state = 'settled', outcome = 'failed', failure_code = 'Other', \
@@ -1728,7 +1800,9 @@ impl LeaseRepo {
         }
         let expired = u64::try_from(failed.len()).unwrap_or(u64::MAX);
         tx.commit().await?;
-        Ok(expired.saturating_add(stolen.rows_affected()))
+        Ok(expired
+            .saturating_add(stolen.rows_affected())
+            .saturating_add(stranded.rows_affected()))
     }
 
     /// Requeues items whose park has expired, and only those parked on a gate

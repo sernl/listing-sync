@@ -7,18 +7,18 @@ use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{FilePart, HttpResponse, RequestBody};
 use tam_marketplace::{
-    AdapterError, AgeSpan, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource,
-    FileSourceError, FormId, LifecycleTransition, ListingLocator, ListingState, MarketplaceAdapter,
-    NativeAxis, NativeTerm, ProjectedListing, RemoteLifecycle, RemoteListingId, RemovalPlan,
-    RevisePlan, WriteAttemptId,
+    AdapterError, AgeSpan, AmbiguityCause, CanaryGrant, FetchReason, FieldDiffReport, FieldSet,
+    FileContent, FileSource, FileSourceError, FormId, LifecycleTransition, ListingLocator,
+    ListingState, MarketplaceAdapter, NativeAxis, NativeTerm, Outcome, ProjectedListing,
+    RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_marketplace_tes::endpoints::{
     self, CatalogueEntry, DraftId, FreeLicence, TesListing, TesPrice, TesPricing,
 };
 use tam_marketplace_tes::{schema, TesAdapter};
 use tam_types::{
-    CopyFormat, Currency, FailureCode, FieldKey, FileId, InventoryId, Money, PriceIntent, TermKind,
-    Timestamp, Uuid,
+    AttemptId, CopyFormat, Currency, FailureCode, FieldKey, FileId, InventoryId, Money,
+    PriceIntent, TermKind, Timestamp, Uuid,
 };
 
 /// The driver's clock reading a submit is handed. Tes ignores it — its JSON
@@ -1709,37 +1709,106 @@ fn the_catalogue_walk_pages_published_then_drafts_and_stops_on_an_empty_page() {
     );
 }
 
+/// The reconcile of a stranded create reads the catalogue under the fencing
+/// row of the attempt it is settling, so the gate admits `VerifyAttempt`
+/// beside the export capability.
 #[test]
-fn a_catalogue_read_without_the_export_capability_is_refused() {
+fn a_catalogue_read_is_admitted_by_the_fencing_row_of_the_attempt_it_reconciles() {
+    let empty = json!([]);
+    let limit = endpoints::CATALOGUE_PAGE_LIMIT;
     let adapter = adapter(
         Cassette {
-            interactions: vec![Interaction {
-                request: endpoints::list_resources_request(0, endpoints::CATALOGUE_PAGE_LIMIT),
-                response: ok(&json!([])),
-            }],
+            interactions: vec![
+                Interaction {
+                    request: endpoints::list_resources_request(0, limit),
+                    response: ok(&empty),
+                },
+                Interaction {
+                    request: endpoints::list_drafts_request(0, limit),
+                    response: ok(&empty),
+                },
+            ],
         },
         vec![],
     );
-    let refused =
+    let entries =
         futures::executor::block_on(adapter.list_own_resources(&FetchReason::VerifyAttempt {
             attempt: WriteAttemptId(Uuid([3; 16])),
-        }));
-    assert!(
-        matches!(
-            refused,
-            Err(AdapterError::Rejected {
-                code: FailureCode::Other,
-                ..
-            })
-        ),
-        "an enumeration read needs the tier-one capability, not any reason at all"
-    );
+        }))
+        .expect("a reconcile's enumeration is justified by the attempt it is settling");
+    assert!(entries.is_empty(), "the seller's catalogue is empty here");
     assert_eq!(
         adapter.transport().remaining(),
-        1,
-        "the refusal happens before the first request: the walk's own first page is \
-         still unconsumed, which an empty cassette could not have shown"
+        0,
+        "and the walk ran in full rather than being turned back at the gate, which is the \
+         only thing that distinguishes an admitted reason from a refused one"
     );
+}
+
+/// Two reasons justify an enumeration and no third does. This is the test a
+/// later widening has to argue with, so it names every remaining variant
+/// rather than a representative one.
+#[test]
+fn a_catalogue_read_refuses_every_reason_but_the_export_and_the_reconcile() {
+    let receipt = match tam_marketplace::settle(
+        AttemptId(Uuid([4; 16])),
+        RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        },
+        NOW,
+        FieldDiffReport {
+            normaliser_version: 0,
+            mismatches: Vec::new(),
+        },
+    ) {
+        Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => receipt,
+        other @ (Outcome::Rejected { .. }
+        | Outcome::Ambiguous { .. }
+        | Outcome::Blocked { .. }
+        | Outcome::Skipped { .. }) => {
+            panic!("an empty diff report settles into the committed class: {other:?}")
+        }
+    };
+    for reason in [
+        FetchReason::VerifyWrite {
+            receipt: receipt.clone(),
+        },
+        FetchReason::PollLifecycle { receipt },
+        FetchReason::StructuralProbe {
+            grant: CanaryGrant {
+                inventory: InventoryId::TesGb,
+                decided_at: NOW,
+            },
+        },
+    ] {
+        let adapter = adapter(
+            Cassette {
+                interactions: vec![Interaction {
+                    request: endpoints::list_resources_request(0, endpoints::CATALOGUE_PAGE_LIMIT),
+                    response: ok(&json!([])),
+                }],
+            },
+            vec![],
+        );
+        let refused = futures::executor::block_on(adapter.list_own_resources(&reason));
+        assert!(
+            matches!(
+                refused,
+                Err(AdapterError::Rejected {
+                    code: FailureCode::Other,
+                    ..
+                })
+            ),
+            "an enumeration needs the export capability or a fencing row, and {reason:?} is \
+             neither: {refused:?}"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            1,
+            "and the refusal happens before the first request: the walk's own first page is \
+             still unconsumed, which an empty cassette could not have shown"
+        );
+    }
 }
 
 /// A bundle's first bytes are a ZIP local header, and the rest is chosen to

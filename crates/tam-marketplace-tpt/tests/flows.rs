@@ -16,15 +16,17 @@ use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{HttpResponse, ResponseHeader};
 use tam_marketplace::{
-    AdapterError, CanaryGrant, FetchReason, FileContent, FileSource, FileSourceError,
-    FirstPartyExport, ListingState, RemoteListingId,
+    AdapterError, CanaryGrant, FetchReason, FieldDiffReport, FileContent, FileSource,
+    FileSourceError, FirstPartyExport, ListingState, Outcome, RemoteListingId,
 };
 use tam_marketplace_tpt::endpoints::{
     self, AllTimeMetric, MetricResolution, ResolvedMetric, ResolvedStatsQuery, StatsWindow,
 };
 use tam_marketplace_tpt::read_model::ProductId;
 use tam_marketplace_tpt::{listing_state_from_status, InstantPause, TptAdapter};
-use tam_types::{CopyFormat, FailureCode, FileId, ImportedPrice, InventoryId, Timestamp};
+use tam_types::{
+    AttemptId, CopyFormat, FailureCode, FileId, ImportedPrice, InventoryId, Timestamp,
+};
 
 /// The one reason that justifies an enumeration-shaped read.
 fn export() -> FetchReason {
@@ -159,33 +161,104 @@ fn the_flat_taxonomy_and_the_seller_shelves_come_back_verbatim() {
     );
 }
 
+/// The reconcile of a stranded create reads the catalogue under the fencing
+/// row of the attempt it is settling, so the gate admits `VerifyAttempt`
+/// beside the export capability.
 #[test]
-fn a_catalogue_read_without_the_export_capability_is_refused() {
-    let adapter = adapter(
-        Cassette {
-            interactions: vec![],
+fn a_catalogue_read_is_admitted_by_the_fencing_row_of_the_attempt_it_reconciles() {
+    let cassette: Cassette =
+        serde_json::from_str(include_str!("cassettes/my_product_listings.json"))
+            .expect("the committed MyProductListings fixture parses");
+    let adapter = adapter(cassette, 2);
+    let entries = futures::executor::block_on(TptAdapter::list_own_resources(
+        &adapter,
+        &FetchReason::VerifyAttempt {
+            attempt: tam_marketplace::WriteAttemptId(tam_types::Uuid([3; 16])),
         },
-        2,
-    );
-    let reason = FetchReason::VerifyAttempt {
-        attempt: tam_marketplace::WriteAttemptId(tam_types::Uuid([3; 16])),
-    };
-    let refused = futures::executor::block_on(TptAdapter::list_own_resources(&adapter, &reason));
-    assert!(
-        matches!(
-            refused,
-            Err(AdapterError::Rejected {
-                code: FailureCode::Other,
-                ..
-            })
-        ),
-        "an enumeration is the first-party-export capability and nothing else, got {refused:?}"
+    ))
+    .expect("a reconcile's enumeration is justified by the attempt it is settling");
+    assert_eq!(
+        entries.len(),
+        3,
+        "the same walk the export capability drives, reached by the other admitted reason"
     );
     assert_eq!(
         adapter.transport().remaining(),
         0,
-        "a refused read issues no request at all"
+        "and it ran in full rather than being turned back at the gate, which is the only \
+         thing that distinguishes an admitted reason from a refused one"
     );
+}
+
+/// Two reasons justify an enumeration and no third does. This is the test a
+/// later widening has to argue with, so it names every remaining variant
+/// rather than a representative one.
+///
+/// The cassette carries the walk's own first request unconsumed rather than
+/// being empty: an empty one cannot tell a refusal from a divergence, because
+/// a cassette that runs dry is itself reported as a rejection.
+#[test]
+fn a_catalogue_read_refuses_every_reason_but_the_export_and_the_reconcile() {
+    let receipt = match tam_marketplace::settle(
+        AttemptId(tam_types::Uuid([4; 16])),
+        RemoteListingId::Tpt {
+            product_id: 12_854_712,
+        },
+        Timestamp(1_756_000_000_000),
+        FieldDiffReport {
+            normaliser_version: 0,
+            mismatches: Vec::new(),
+        },
+    ) {
+        Outcome::Committed { receipt, .. } | Outcome::Degraded { receipt, .. } => receipt,
+        other @ (Outcome::Rejected { .. }
+        | Outcome::Ambiguous { .. }
+        | Outcome::Blocked { .. }
+        | Outcome::Skipped { .. }) => {
+            panic!("an empty diff report settles into the committed class: {other:?}")
+        }
+    };
+    for reason in [
+        FetchReason::VerifyWrite {
+            receipt: receipt.clone(),
+        },
+        FetchReason::PollLifecycle { receipt },
+        FetchReason::StructuralProbe {
+            grant: CanaryGrant {
+                inventory: InventoryId::Tpt,
+                decided_at: Timestamp(1_756_000_000_000),
+            },
+        },
+    ] {
+        let adapter = adapter(
+            Cassette {
+                interactions: vec![Interaction {
+                    request: endpoints::my_product_listings_request(2, 0),
+                    response: ok(&page(&json!([]), 1, 0, 1)),
+                }],
+            },
+            2,
+        );
+        let refused =
+            futures::executor::block_on(TptAdapter::list_own_resources(&adapter, &reason));
+        assert!(
+            matches!(
+                refused,
+                Err(AdapterError::Rejected {
+                    code: FailureCode::Other,
+                    ..
+                })
+            ),
+            "an enumeration needs the export capability or a fencing row, and {reason:?} is \
+             neither: {refused:?}"
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            1,
+            "and the refusal happens before the first request: the walk's own first page is \
+             still unconsumed"
+        );
+    }
 }
 
 #[test]
