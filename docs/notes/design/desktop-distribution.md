@@ -3,7 +3,7 @@
 How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
 
 - date: 2026-09-03
-- status: `v0.1.3` is published, with the channelled updater endpoint, written release notes and a GitHub release beside the Cloud one; its Android job failed, so no APK is in it yet, and `android-build.yml`'s `attach_to` input adds one without spending another tag
+- status: `v0.1.3` is published and verified from outside, with the channelled updater endpoint, written release notes and a GitHub release beside the Cloud one; its Android job failed and the APK was attached to the GitHub release afterwards by dispatch, which is the only half of that repair the Cloud permits
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 
@@ -193,6 +193,13 @@ One file is the source for both destinations, so the Cloud and GitHub cannot des
 Read from `cn release draft --help` and `cn release publish --help`, cn 0.13.4, on 2026-09-03.
 That is why `v0.1.1`'s manifest carries `"notes":""` and always will — the draft that made it was created without them, and no later verb can add them.
 
+The same boundary governs assets, and it was found the same way, by hitting it.
+`cn release upload` refuses a release that has already been published: "Failed to create asset for uploading: The release was already published", measured on run 33747151917 attaching an APK to the published `0.1.3`.
+So a CrabNebula release is sealed at publish in both its notes and its assets, and everything it will ever carry has to be in place while it is still a draft.
+Two consequences follow.
+The APK reaches the Cloud only through the release workflow's own `android` job, which runs between `draft` and `publish`, so from the next tag it is in the release rather than beside it.
+And `android-build.yml`'s `attach_to` path can repair the GitHub release alone; it still attempts the Cloud, because a release left in draft would accept the asset, and it records that specific refusal as a skip while still failing on any other error.
+
 The workflow also creates a GitHub release for the tag, carrying the same notes file, both installers, the updater `.sig` files, `SHA256SUMS.txt` and `latest.json`.
 `latest.json` is there because it is the hosting escape hatch described above and the workflow artefact it otherwise lives in expires after thirty days, whereas a release asset does not.
 The job is the only one in the file with `contents: write`, and it is the only one that needs it.
@@ -303,6 +310,7 @@ Read from `crates/tauri-cli/Cargo.toml` at `tauri-cli-v2.11.4` and the release's
 The Windows job still installs from npm and invokes `tauri`, which is not an inconsistency to tidy away: it has green runs behind it, and it never enters Gradle.
 
 The `v0.1.2` failure also blocked `publish`, which is what prompted decoupling the APK from the desktop release above; by `v0.1.3` that decoupling held, and the desktop release published while the APK did not.
+Dispatch run 33747151917 then built and signed the APK with the binstall install, which is what proves that fix, and attached `Teachouse_0.1.3_arm64.apk` to the GitHub release.
 
 `v0.1.0` is a spent tag rather than a release.
 It exists on the repository, no GitHub release was ever created for it, and a pushed tag cannot be moved without rewriting what others have already fetched, so the next release is `v0.1.1` and it will be the first published one.

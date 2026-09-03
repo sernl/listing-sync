@@ -232,10 +232,9 @@ jobs:
   # tag. It is a separate job because attaching needs `contents: write` and
   # building does not, and job permissions cannot be made conditional.
   #
-  # GitHub is attached first. `cn release upload` documents itself as uploading
-  # to a draft, so its behaviour against an already published release is
-  # unproven; doing the certain destination first means a refusal there cannot
-  # cost the attachment that would have worked.
+  # GitHub is attached first, and that ordering earned itself on the first run:
+  # `cn release upload` refuses a published release, so the Cloud step is a
+  # recorded skip on this path and the GitHub attachment is the whole repair.
   attach:
     needs: apk
     if: ${{ !github.event.repository.fork && inputs.attach_to != '' }}
@@ -295,18 +294,60 @@ jobs:
           fi
           echo "$NAME is attached to $TAG"
 
+      # The Cloud accepts assets only while a release is a draft. Uploading to a
+      # published one answers "The release was already published", which is the
+      # expected outcome here, because this path exists to repair a release that
+      # has already gone out; it is recorded and skipped rather than failed. A
+      # release still in draft does accept the asset, so the attempt is kept.
+      # Every other error still fails the job.
+      #
+      # `cn` is run directly rather than through the pinned action, which is the
+      # one deviation from this repository's action-pinning convention and is
+      # confined to this step: the action fails the step on any non-zero exit
+      # and discards the message, so the one refusal that must be tolerated
+      # cannot be told apart from the ones that must not be. The binary is the
+      # same one the action fetches, from the same URL, and the action pins its
+      # wrapper rather than the tool in either case.
       - name: upload it to the CrabNebula release
-        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
-        with:
-          command: >-
-            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.attach_to }}
-            --file ${{ steps.apk.outputs.path }}
-            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
-          api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: .
+        id: cn
+        env:
+          CN_API_KEY: ${{ secrets.CN_API_KEY }}
+          CN_APPLICATION: ${{ vars.CN_APPLICATION }}
+          CN_CHANNEL: ${{ vars.CN_CHANNEL }}
+          VERSION: ${{ inputs.attach_to }}
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          curl -sSL --fail \
+            https://cdn.crabnebula.app/download/crabnebula/cn-cli/latest/platform/linux-binary-x86_64 \
+            --output cn
+          chmod +x cn
+          set -- release upload "$CN_APPLICATION" "$VERSION" --file "$APK"
+          if [ -n "${CN_CHANNEL:-}" ]; then
+            set -- "$@" --channel "$CN_CHANNEL"
+          fi
+          if output=$(./cn "$@" 2>&1); then
+            printf '%s\n' "$output"
+            printf 'uploaded=true\n' >> "$GITHUB_OUTPUT"
+            echo 'The APK was also uploaded to the CrabNebula release.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          printf '%s\n' "$output"
+          if printf '%s' "$output" | grep -qF 'The release was already published'; then
+            printf 'uploaded=false\n' >> "$GITHUB_OUTPUT"
+            echo "::notice::CrabNebula refused the asset because the release is already published; the APK is on the GitHub release"
+            {
+              echo 'No APK on the CrabNebula release: the Cloud accepts assets only while a release is a draft, and this one is published.'
+              echo 'The APK is attached to the GitHub release. From the next tag the release workflow uploads it at draft time.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "the CrabNebula upload failed for a reason other than the release already being published" >&2
+          exit 1
 
       - name: read the CrabNebula release back
         id: cnshow
+        if: ${{ steps.cn.outputs.uploaded == 'true' }}
         uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
         with:
           command: >-
@@ -316,6 +357,7 @@ jobs:
           working-directory: .
 
       - name: verify the CrabNebula release names it
+        if: ${{ steps.cn.outputs.uploaded == 'true' }}
         env:
           LISTING: ${{ steps.cnshow.outputs.stdout }}
           NAME: ${{ steps.apk.outputs.name }}
