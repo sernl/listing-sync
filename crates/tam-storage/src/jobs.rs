@@ -12,7 +12,9 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
-use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent, LEASE_TTL_SECS};
+use tam_domain::{
+    attempt_budget_spent, ItemOperation, ItemOutcome, JobItemId, SellerEvent, LEASE_TTL_SECS,
+};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
     Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, Marketplace,
@@ -56,6 +58,16 @@ pub struct NewJob {
     /// struct: a job has one author, and carrying it here rather than beside
     /// it keeps a caller from describing one job and attributing another.
     pub stamp: Stamp,
+}
+
+/// What a charged attempt did to the item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Charged {
+    /// The budget had room, so the item is back on the queue having paid one
+    /// attempt for the failure.
+    Requeued,
+    /// That attempt was the item's last, so it is settled failed.
+    Settled,
 }
 
 /// A renewed lease, in the server's own two instants.
@@ -1426,7 +1438,9 @@ impl LeaseRepo {
     /// what it now stands at.
     ///
     /// Separate from `attempt_count`, which counts leases rather than
-    /// preflights and which only the reapers advance: the caller's bound is
+    /// preflights and which no run advances for itself — the reapers advance
+    /// it, and so does [`LeaseRepo::charge_and_requeue`] when a host hands
+    /// back an item it could not prepare. The caller's bound is
     /// on failures *in a row*, so it needs a counter a healthy preflight can
     /// return to zero. Fenced on the epoch like every other lease write, so a
     /// stolen item's former holder cannot move a counter its new holder is
@@ -1495,6 +1509,100 @@ impl LeaseRepo {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Charges one attempt against a leased item and hands it back, settling
+    /// it failed where that attempt was its last.
+    ///
+    /// The reaper's disposition applied to one named item: a claimant that
+    /// cannot use what it claimed must neither hold the lease to expiry, which
+    /// strands every sibling on that marketplace behind the per-connection
+    /// mutex, nor release it uncharged, which serves the same item again on
+    /// the next poll for ever. Charging is what makes the difference between a
+    /// transient failure, which retries, and a deterministic one, which
+    /// terminates when the budget runs out.
+    ///
+    /// Epoch-fenced and tenant-pinned: this is reachable from the device's own
+    /// route under `tam_app`, where forced row-level security is the tenancy.
+    ///
+    /// The epoch is bumped, as both of the reaper's arms bump it, because the
+    /// item is being taken away from this claimant rather than declined before
+    /// it was used.
+    pub async fn charge_and_requeue(
+        &self,
+        lease: &LeaseRef,
+        attempts_max: i32,
+        detail: Option<FailureDetail>,
+        now: Timestamp,
+    ) -> Result<Charged, StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let held = sqlx::query!(
+            "SELECT attempt_count, job_id FROM job_item \
+             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
+               AND state IN ('leased', 'running', 'verifying') \
+             FOR UPDATE",
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(held) = held else {
+            return Err(StorageError::StaleLease);
+        };
+        let spent = attempt_budget_spent(held.attempt_count, attempts_max);
+        let at = timestamp_to_db(now)?;
+        if spent {
+            // The count is not advanced here, matching both of the reaper's
+            // settle arms: the attempt that ran out is the one already
+            // counted, and advancing it past the budget would misreport how
+            // many the item actually had.
+            sqlx::query!(
+                "UPDATE job_item \
+                 SET state = 'settled', outcome = 'failed', failure_code = $4, \
+                     failure_detail = $5, settled_at = $6, \
+                     lease_owner = NULL, lease_expires_at = NULL, \
+                     lease_epoch = lease_epoch + 1 \
+                 WHERE org_id = $1 AND id = $2 AND lease_epoch = $3",
+                uuid_to_db(org.0),
+                uuid_to_db(item.0),
+                lease_epoch,
+                failure_code_to_db(FailureCode::Other),
+                detail.map(|FailureDetail(text)| text),
+                at,
+            )
+            .execute(&mut *tx)
+            .await?;
+            // The job's own rollup, for the same reason the reaper runs it:
+            // an item that settles here may be the last one its job was
+            // waiting on, and a job nothing completes reads active for ever.
+            settle_if_complete(&mut tx, org, JobId(uuid_from_db(held.job_id)), now).await?;
+        } else {
+            sqlx::query!(
+                "UPDATE job_item \
+                 SET state = 'queued', attempt_count = attempt_count + 1, \
+                     lease_owner = NULL, lease_expires_at = NULL, \
+                     lease_epoch = lease_epoch + 1 \
+                 WHERE org_id = $1 AND id = $2 AND lease_epoch = $3",
+                uuid_to_db(org.0),
+                uuid_to_db(item.0),
+                lease_epoch,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(if spent {
+            Charged::Settled
+        } else {
+            Charged::Requeued
+        })
     }
 
     /// Requeues expired leases with the epoch bumped so the previous holder's

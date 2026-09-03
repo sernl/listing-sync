@@ -875,7 +875,7 @@ async fn claimed(pool: &PgPool) -> serde_json::Value {
                 device: LAPTOP,
             },
             &tam_storage::ClaimPolicy {
-                ttl_seconds: 300,
+                ttl_seconds: i64::from(tam_domain::LEASE_TTL_SECS),
                 grace_hours: 24,
                 marketplace: None,
             },
@@ -1177,27 +1177,7 @@ async fn a_work_route_that_cannot_prepare_hands_the_lease_back(pool: PgPool) {
     seed_claimable(&pool).await;
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
     let engine = engine_pool(&pool).await;
-    // Preparation fails on a mapping that is no longer there, which is the
-    // failure reachable after the claim and before the work order. Every
-    // column on `mapping` is check-constrained into a valid shape, so the
-    // reference is broken rather than the row corrupted; the foreign key goes
-    // first, and this test owns its own database. What is under test is the
-    // route's exit, not this way of reaching it.
-    sqlx::query(
-        "DO $$ DECLARE c text; BEGIN \
-           FOR c IN SELECT conname FROM pg_constraint \
-                    WHERE conrelid = 'job_item'::regclass AND contype = 'f' \
-                      AND confrelid = 'mapping'::regclass \
-           LOOP EXECUTE format('ALTER TABLE job_item DROP CONSTRAINT %I', c); END LOOP; \
-         END $$",
-    )
-    .execute(&pool)
-    .await
-    .expect("the test database drops its own constraints");
-    sqlx::query("UPDATE job_item SET mapping_id = '00000000-0000-0000-0000-000000000009'")
-        .execute(&engine)
-        .await
-        .expect("the item is pointed at a mapping that does not exist");
+    break_preparation(&pool, &engine).await;
     let before: i32 = sqlx::query_scalar("SELECT attempt_count FROM job_item")
         .fetch_one(&engine)
         .await
@@ -1233,8 +1213,10 @@ async fn a_work_route_that_cannot_prepare_hands_the_lease_back(pool: PgPool) {
         "the item is back on the queue with no holder, so the next poll can take it"
     );
     assert_eq!(
-        attempts, before,
-        "and it is not charged an attempt for a failure it had no part in"
+        attempts,
+        before + 1,
+        "and it is charged exactly one attempt, which is what stops a deterministic \
+         preparation failure from being served again on every poll for ever"
     );
 }
 
@@ -1411,4 +1393,142 @@ async fn work(pool: &PgPool, wall: WallClock) -> serde_json::Value {
         String::from_utf8_lossy(&answer.body)
     );
     serde_json::from_slice(&answer.body).expect("the claim view parses")
+}
+
+/// A deterministic preparation failure terminates when the budget runs out.
+///
+/// The route can neither hold the lease to expiry, which strands every sibling
+/// on that marketplace, nor hand the item back uncharged, which would serve
+/// this same item on every poll for ever. Charging is what separates the two
+/// cases: this one never recovers, so it settles once the budget is spent.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_preparation_that_never_succeeds_settles_failed_once_the_budget_is_spent(pool: PgPool) {
+    provision(&pool).await;
+    seed_claimable(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    let engine = engine_pool(&pool).await;
+    break_preparation(&pool, &engine).await;
+
+    let budget = tam_limits::job::ATTEMPTS_MAX;
+    for attempt in 1..budget {
+        let answer = fault(&pool).await;
+        assert_eq!(
+            answer,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "poll {attempt} of {budget} still faults"
+        );
+        let (state, count): (String, i32) =
+            sqlx::query_as("SELECT state, attempt_count FROM job_item")
+                .fetch_one(&engine)
+                .await
+                .expect("the item reads");
+        assert_eq!(
+            (state.as_str(), count),
+            ("queued", i32::try_from(attempt).unwrap_or(i32::MAX)),
+            "inside the budget the item is charged and handed back, so a transient failure \
+             would retry"
+        );
+    }
+
+    assert_eq!(fault(&pool).await, StatusCode::INTERNAL_SERVER_ERROR);
+    let (state, outcome, code): (String, Option<String>, Option<String>) =
+        sqlx::query_as("SELECT state, outcome, failure_code FROM job_item")
+            .fetch_one(&engine)
+            .await
+            .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), outcome.as_deref(), code.as_deref()),
+        ("settled", Some("failed"), Some("Other")),
+        "the last attempt settles it rather than queueing it a sixth time"
+    );
+}
+
+/// One transient preparation failure costs one attempt and nothing else.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_transient_preparation_failure_costs_one_attempt_and_the_next_poll_claims_it_again(
+    pool: PgPool,
+) {
+    provision(&pool).await;
+    seed_claimable(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
+    let engine = engine_pool(&pool).await;
+    let mapping: uuid::Uuid = sqlx::query_scalar("SELECT id FROM mapping")
+        .fetch_one(&engine)
+        .await
+        .expect("the fixture's mapping reads");
+
+    break_preparation(&pool, &engine).await;
+    assert_eq!(fault(&pool).await, StatusCode::INTERNAL_SERVER_ERROR);
+
+    // The fault clears, as a database blip would.
+    sqlx::query("UPDATE job_item SET mapping_id = $1")
+        .bind(mapping)
+        .execute(&engine)
+        .await
+        .expect("the item points at its mapping again");
+
+    // The item is claimed and prepared again rather than being stuck or
+    // settled. What the preparation then decides is not this test's business:
+    // this fixture's product does not project cleanly, so the honest assertion
+    // is that the route reached a disposition rather than faulting again.
+    let served = work(&pool, t1).await;
+    assert_ne!(
+        served["state"], "held",
+        "the item is not still held by the run that failed: {served}"
+    );
+    let (state, count): (String, i32) = sqlx::query_as("SELECT state, attempt_count FROM job_item")
+        .fetch_one(&engine)
+        .await
+        .expect("the item reads");
+    assert_eq!(
+        state, "parked_live",
+        "the second poll claimed it and disposed of it, which is a transient failure \
+         recovering rather than an item stranded"
+    );
+    assert_eq!(
+        count, 1,
+        "and the blip cost exactly one attempt: the park that followed charges none, so \
+         a queue of transient failures still terminates rather than retrying for ever"
+    );
+}
+
+/// Points the item at a mapping that is not there, which is the one
+/// preparation failure reachable after the claim. The foreign keys go first;
+/// this test owns its own database.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should stop the run"
+)]
+async fn break_preparation(pool: &PgPool, engine: &PgPool) {
+    sqlx::query(
+        "DO $$ DECLARE c text; BEGIN \
+           FOR c IN SELECT conname FROM pg_constraint \
+                    WHERE conrelid = 'job_item'::regclass AND contype = 'f' \
+                      AND confrelid = 'mapping'::regclass \
+           LOOP EXECUTE format('ALTER TABLE job_item DROP CONSTRAINT %I', c); END LOOP; \
+         END $$",
+    )
+    .execute(pool)
+    .await
+    .expect("the test database drops its own constraints");
+    sqlx::query("UPDATE job_item SET mapping_id = '00000000-0000-0000-0000-000000000009'")
+        .execute(engine)
+        .await
+        .expect("the item is pointed at a mapping that does not exist");
+}
+
+/// One poll that is expected to fault, answering its status.
+async fn fault(pool: &PgPool) -> StatusCode {
+    call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await
+    .status
 }

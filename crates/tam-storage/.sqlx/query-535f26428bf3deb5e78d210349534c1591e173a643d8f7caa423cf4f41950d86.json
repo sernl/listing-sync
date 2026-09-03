@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item SET state = 'queued', attempt_count = attempt_count + 1, lease_owner = NULL, lease_expires_at = NULL, lease_epoch = lease_epoch + 1 WHERE org_id = $1 AND id = $2 AND lease_epoch = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "535f26428bf3deb5e78d210349534c1591e173a643d8f7caa423cf4f41950d86"
+}

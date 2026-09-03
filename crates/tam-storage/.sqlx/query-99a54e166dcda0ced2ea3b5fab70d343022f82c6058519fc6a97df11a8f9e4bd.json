@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item SET state = 'settled', outcome = 'failed', failure_code = $4, failure_detail = $5, settled_at = $6, lease_owner = NULL, lease_expires_at = NULL, lease_epoch = lease_epoch + 1 WHERE org_id = $1 AND id = $2 AND lease_epoch = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "99a54e166dcda0ced2ea3b5fab70d343022f82c6058519fc6a97df11a8f9e4bd"
+}

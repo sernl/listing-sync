@@ -35,7 +35,36 @@ use tam_types::{
 /// budget in `tam-engine` asserts against it. A copy that drifted would not
 /// fail anything — it would quietly move the moment a working device loses
 /// its item to the reaper.
-pub const LEASE_TTL_SECS: i32 = 300;
+///
+/// Raised from 300 to 600 on 2026-09-03 by founder decision, answering
+/// question 7 of `docs/notes/design/engine-driver-split.md`. At 300 Tpt's
+/// theoretical worst-case submit — two queue-job polls inside one `submit`,
+/// 360s with no renew between them, because the heartbeat sits before the
+/// effect rather than inside the adapter — outlived the lease it began under.
+/// The alternative was a clock port that would have put a timer inside the
+/// adapter seam and handed every adapter a way to extend the lease it runs
+/// under; one number was the smaller change. The cost is bounded and known:
+/// the reaper takes twice as long to notice a device that really stopped,
+/// which the heartbeat already distinguishes from one that is merely slow.
+pub const LEASE_TTL_SECS: i32 = 600;
+
+/// Whether the attempt being charged is the item's last.
+///
+/// `attempt_count` is the value stored before the charge, so the `+ 1` is that
+/// attempt. Here rather than in `tam-limits`, which holds values and not
+/// rules, and here rather than in either crate that calls it, because
+/// `tam-storage` and `tam-engine-driver` both need it and neither depends on
+/// the other.
+///
+/// The rule lives in three places and that is the fewest it can: two in SQL,
+/// `expire_and_steal` and `revive_expired`, because a cross-tenant set-based
+/// scan cannot call into Rust per row, and one in Rust, here.
+/// `the_reaper_and_the_charge_agree_at_the_boundary` pins the SQL against this
+/// one rather than leaving a comment asking the next editor to.
+#[must_use]
+pub const fn attempt_budget_spent(attempt_count: i32, attempts_max: i32) -> bool {
+    attempt_count.saturating_add(1) >= attempts_max
+}
 
 /// The axis vocabulary lives in `tam-types` because the adapter seam names it
 /// too: `ImportedTerm` crosses in `tam-marketplace`, which this crate depends

@@ -25,8 +25,10 @@ use tam_engine_driver::vocabulary::{
     SettleEnvelope, WorkFilter, WorkOrder,
 };
 use tam_pipeline::store::LocalObjectStore;
-use tam_storage::{describe_files, BlobRepo, ClaimPolicy, DeviceClaim, DeviceRef, LeaseRepo};
-use tam_types::Timestamp;
+use tam_storage::{
+    describe_files, BlobRepo, Charged, ClaimPolicy, DeviceClaim, DeviceRef, LeaseRepo,
+};
+use tam_types::{FailureDetail, Timestamp};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
@@ -100,18 +102,30 @@ pub(crate) async fn claim(
             next_poll_ms: next_poll_ms(false),
         })),
         Err(error) => {
-            // The caller is told about the failure it asked about; a release
-            // that fails on top of it must not replace it.
-            drop(release(&state, &lease).await);
+            // The caller keeps the error it asked about, so a charge that
+            // fails on top of it must not replace it.
+            drop(charge(&state, &lease, now).await);
             Err(error)
         }
     }
 }
 
-/// Hands back a claim this request is not going to serve.
-async fn release(state: &AppState, lease: &tam_storage::LeaseRef) -> Result<(), APIError> {
+/// Charges the attempt and hands back a claim this request could not serve.
+async fn charge(
+    state: &AppState,
+    lease: &tam_storage::LeaseRef,
+    now: Timestamp,
+) -> Result<Charged, APIError> {
+    let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
     LeaseRepo::new(state.pool.clone())
-        .release(lease)
+        .charge_and_requeue(
+            lease,
+            attempts_max,
+            Some(FailureDetail(
+                "the item could not be prepared for this device".to_owned(),
+            )),
+            now,
+        )
         .await
         .map_err(|error| state.internal(&error.to_string()))
 }

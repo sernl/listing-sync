@@ -663,23 +663,25 @@ mod lease_budget_tests {
         }
     }
 
-    /// And what it does not buy, asserted rather than left in a comment.
+    /// Tpt's theoretical worst case now fits, which is why the lease was
+    /// raised.
     ///
-    /// Tpt's theoretical worst-case submit is one uninterrupted stretch longer
-    /// than the lease it starts with, because the renew sits before the effect
-    /// and the two queue polls happen inside it. The heartbeat narrows this
-    /// hazard — the submit begins with a full TTL rather than with whatever
-    /// was left of the claim — and does not close it. Recorded as an open
-    /// defect in `docs/notes/design/engine-driver-split.md` under step 11,
-    /// with the two remedies named there; asserted here so that raising the
-    /// TTL or shortening the poll has to come past this test.
+    /// The renew sits before the effect rather than inside the adapter, so two
+    /// queue polls inside one `submit` are one uninterrupted stretch: 360s
+    /// with no heartbeat in it. Against the old 300s lease that stretch
+    /// outlived the lease it began under, and this test asserted the defect.
+    /// `LEASE_TTL_SECS` was raised to 600 on 2026-09-03 by founder decision
+    /// for this reason — question 7 of
+    /// `docs/notes/design/engine-driver-split.md` — so the same measured
+    /// numbers now state a guarantee instead.
     #[test]
-    fn tpts_theoretical_worst_case_submit_still_outlives_the_lease() {
+    fn tpts_theoretical_worst_case_submit_fits_inside_the_lease() {
         assert!(
-            THEORETICAL_SUBMIT_WORST_CASE_MS > lease_ms(),
-            "this assertion is the record of a defect, not of a guarantee: if the worst-case \
-             submit now fits inside the lease, the residual is closed and the note under \
-             step 11 should say so"
+            THEORETICAL_SUBMIT_WORST_CASE_MS < lease_ms(),
+            "the worst-case stretch is {THEORETICAL_SUBMIT_WORST_CASE_MS}ms against a \
+             {}ms lease; if this fails the lease has been lowered without the poll being \
+             shortened to match, and a working device loses its item mid-submit",
+            lease_ms()
         );
     }
 

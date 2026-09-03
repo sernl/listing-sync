@@ -52,7 +52,7 @@ pub use job_reads::{
 pub use jobs::{
     append_event, append_event_asserted, revive_by_gap, revive_counterparts, revive_on,
     settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
-    ClaimPolicy, CreatedJob, DeviceClaim, DeviceRef, EventScope, HaltCause, HaltRepo,
+    Charged, ClaimPolicy, CreatedJob, DeviceClaim, DeviceRef, EventScope, HaltCause, HaltRepo,
     InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef,
     LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
     OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, WriteAttemptRepo,

@@ -744,7 +744,7 @@ async fn pump(
     lease_state: Lease,
 ) -> (Result<RunVerdict, EngineError>, u32) {
     let pool = &engine_pool(app).await;
-    let item = claim(app, DEVICE, 300)
+    let item = claim(app, DEVICE, i64::from(tam_domain::LEASE_TTL_SECS))
         .await
         .expect("the enqueued item leases");
     if lease_state == Lease::Stolen {

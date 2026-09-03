@@ -296,6 +296,14 @@ The failure is stall-biased: the attempt stays in flight and no duplicate listin
 Raising `LEASE_TTL_SECS` is a one-line founder decision that removes the worst case at the cost of widening the window a dead worker's item is stuck in; renewing the lease across long effects is the durable fix and goes on the M2 list.
 Neither is implemented in Phase 3.
 
+Amended 2026-09-03: both are implemented now, and the paragraph above is superseded on the point of raising a limit.
+The interpreter renews the lease before every network-bearing effect and before every verification try, so the requirement is no longer that a whole run fit inside one lease but that no single uninterrupted stretch between two renews outlive it.
+That left one stretch still failing, because the renew sits before the effect rather than inside the adapter: two TPT queue-job polls inside a single `submit` spend 360s with no heartbeat between them.
+The founder raised `LEASE_TTL_SECS` from 300 to 600 by decision on 2026-09-03 to close it, choosing one number over a clock port that would have put a timer inside the adapter seam and handed every adapter a way to extend the lease it runs under.
+The cost is stated rather than avoided: the reaper takes twice as long to reclaim an item from a device that really stopped, which the heartbeat already distinguishes from one that is merely slow.
+The inequality is now asserted as a guarantee rather than as a recorded defect, by `tpts_theoretical_worst_case_submit_fits_inside_the_lease` in `crates/tam-engine/src/seed.rs`.
+The decision and its alternative are recorded as question 7 of `docs/notes/design/engine-driver-split.md`, and the work landed as step 11c in that note's section 7.
+
 `sha2` is hoisted to `[workspace.dependencies]` and TPT's write evidence now carries a `response_body_digest` on every cell, including the pre-existing `submit`.
 The digest is the write-evidence contract, TPT is the adapter most likely to produce ambiguous write evidence — a scraped form and bounce semantics — and an asymmetry where only one adapter answers the contract erodes it.
 No new crate enters the closure: `sha2` was already a direct dependency of `tam-marketplace-tes`.

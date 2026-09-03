@@ -7,8 +7,9 @@
 
 use serde_json::json;
 use tam_domain::{
-    seller_clears, verification_settles, BlockCause, Effect, Input, ItemOperation, ItemOutcome,
-    MachineError, SellerEvent, StepBudget, SyncMachine, SyncState, Transition,
+    attempt_budget_spent, seller_clears, verification_settles, BlockCause, Effect, Input,
+    ItemOperation, ItemOutcome, MachineError, SellerEvent, StepBudget, SyncMachine, SyncState,
+    Transition,
 };
 use tam_marketplace::{
     AdapterError, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator,
@@ -461,8 +462,9 @@ const fn outcome_to_attempt_state(outcome: &Outcome) -> &'static str {
 /// rather than the moment is blamed.
 ///
 /// It is not the only thing that ends the streak. `attempt_count` is the
-/// item's whole history — never reset, advanced by every expired lease and
-/// every park revive — so an item that arrives here already near
+/// item's whole history — never reset, advanced by every expired lease, every
+/// park revive and every preparation the host could not complete — so an item
+/// that arrives here already near
 /// `ATTEMPTS_MAX` has fewer leases left than this bound needs.
 /// [`preflight_failed`] ends the streak early in that case rather than
 /// letting the attempt reaper settle it `failed`/`Other`.
@@ -1055,7 +1057,8 @@ async fn rate_refused_before_the_write(
 /// attempt budget is the arithmetic one, and it is why this reads
 /// `attempt_count` rather than trusting the constants to order themselves.
 /// `attempt_count` is prior history this run did not choose — never reset,
-/// advanced by every expired lease and every park revive — so an item can
+/// advanced by every expired lease, every park revive and every preparation
+/// the host could not complete — so an item can
 /// arrive here with one lease left and no way to reach the streak bound.
 /// Abandoning on that last lease hands it to `expire_and_steal`, which
 /// settles it `failed`/`Other` with a null detail, no gate and no re-link
@@ -1109,7 +1112,7 @@ async fn preflight_failed(
     // nothing moves `attempt_count` during a run, so this is exactly what
     // `expire_and_steal` will test when this lease expires.
     let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
-    let last_attempt = lease.attempt_count.saturating_add(1) >= attempts_max;
+    let last_attempt = attempt_budget_spent(lease.attempt_count, attempts_max);
     if streak.failures < PREFLIGHT_FAILURES_MAX && !last_attempt {
         return Ok(RunVerdict::Abandoned {
             reason: format!("preflight failed transiently: {error:?}"),

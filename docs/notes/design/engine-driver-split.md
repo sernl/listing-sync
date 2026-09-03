@@ -332,10 +332,24 @@ Proves the arm both hosts share is one arm.
 Verification: `a_lost_counterpart_settles_through_the_work_route_and_the_queue_moves_on` and `a_blocked_item_is_parked_through_the_work_route_and_the_queue_moves_on`, each asserting the ledger state the disposition wrote and the second asserting the next poll is not served the same item again.
 Kill gate: a disposition either host needs that the other must not have.
 
-One residual is recorded rather than fixed.
-The interpreter renews before every network-bearing effect, so a submit begins with a full lease, and Tpt's theoretical worst case still outlives one: two queue-job polls at `QUEUE_POLL_MAX` inside a single `submit` can spend 360 seconds with no renew between them, against a 300-second lease.
-`tpts_theoretical_worst_case_submit_still_outlives_the_lease` asserts that this is so, so the fact cannot be lost to an edited comment the way it nearly was.
-The two remedies are a founder decision, put as question 7: raise the device lease TTL to 600 seconds, which is a founder-gated limit, or heartbeat from inside `submit` through a clock port the adapter can reach.
+Step 11c, the preparation failure the release left open.
+
+Step 11b's fix closed the livelock for an item the preparation refuses, and left the one for an item whose preparation fails.
+The route released a failed preparation uncharged, which for a transient fault is right and for a deterministic one is the same unbounded loop under a different name; holding the lease to expiry instead would strand every sibling on that marketplace for the whole TTL.
+Neither is the answer, so the route now charges the attempt: an item with budget left is requeued and retries on the next poll, and one without settles failed.
+
+`LeaseRepo::charge_and_requeue` is the reaper's disposition applied to one named item, epoch-fenced and tenant-pinned because the route reaches it under `tam_app`, calling `settle_if_complete` on the settle arm for the reason the reaper does — an item settling there may be the last its job was waiting on.
+The threshold cannot be one spelling, and three places is the fewest it can occupy: two in SQL, in `expire_and_steal` and `revive_expired`, because a cross-tenant set-based scan cannot call into Rust per row, and one in Rust, `tam_domain::attempt_budget_spent`, which both the charge and the driver's preflight give-up call.
+`the_reaper_and_the_charge_agree_at_the_boundary` is what keeps the SQL honest against the Rust rather than a comment asking the next editor to.
+
+Proves that a failure the route cannot see through terminates, whichever kind it is.
+Verification: `a_preparation_that_never_succeeds_settles_failed_once_the_budget_is_spent`, which polls the budget through and asserts the requeue each time and the settle on the last; `a_transient_preparation_failure_costs_one_attempt_and_the_next_poll_claims_it_again`; the boundary test above; and `a_charge_from_a_run_that_no_longer_holds_the_item_is_refused`, because a charge that ignored the epoch would cost a stolen item two attempts.
+Kill gate: a preparation failure that is neither transient nor deterministic — one whose recovery depends on something the attempt budget cannot count.
+
+One residual was recorded rather than fixed, and step 11c closed it.
+The interpreter renews before every network-bearing effect, so a submit begins with a full lease, and Tpt's theoretical worst case outlived one: two queue-job polls at `QUEUE_POLL_MAX` inside a single `submit` can spend 360 seconds with no renew between them, against what was then a 300-second lease.
+The two remedies went to the founder as question 7 and the answer was the lease, raised to 600 seconds on 2026-09-03, rather than a clock port inside the adapter seam.
+The assertion that recorded the defect now records the guarantee, on the same measured numbers.
 
 Step 12, the three open defects.
 Widen the operator view to surface `state = 'in_flight'` past the lease TTL so a stranded in-flight create attempt reaches an operator instead of staying mapping-scoped and invisible (finding 4), and add the read-back reconciliation the code names for itself if it fits inside the step, otherwise land the view alone and record the reconciliation as still owed.
@@ -373,7 +387,9 @@ The broker deletion, the exclusivity-claim lift with its pepper re-sited off the
 5. Decide whether the rate grant is issued in bulk at claim time and whether consumption moves into the transport seam. Recommended: bulk grant at claim time with reported consumption in the settle envelope, and move consumption into the seam, because the marketplace now sees the seller's own address.
 6. Decide whether `HaltScope::Org` and `HaltScope::FleetInventory` leave the effect vocabulary. Recommended: yes, narrow the enum in `tam-domain` so the driver's match cannot name a scope wider than its lease, leaving the breaker and the canary as the only fleet-halt writers.
 7. Close the TTL residual on Tpt's worst-case submit, where one uninterrupted stretch of 360s runs under a 300s lease.
-   Recommended: raise `LEASE_TTL_SECS` to 600, because it is one founder-gated number, against a clock port that would put a timer inside the adapter seam and hand every adapter a way to extend the lease it is running under; the heartbeat already distinguishes a working device from a gone one, so the cost of the longer TTL is only how late the reaper notices a device that really stopped.
+   Decided 2026-09-03: raise `LEASE_TTL_SECS` to 600, taken as recommended.
+   One founder-gated number was the smaller change against a clock port that would have put a timer inside the adapter seam and handed every adapter a way to extend the lease it runs under; the heartbeat already distinguishes a working device from a gone one, so the cost is only that the reaper takes twice as long to notice a device that really stopped.
+   Landed in step 11c, and `tpts_theoretical_worst_case_submit_fits_inside_the_lease` now asserts the guarantee where it used to assert the defect.
 
 ## 9. Appendix: the findings
 

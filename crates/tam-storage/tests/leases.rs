@@ -9,14 +9,14 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{
-    Binding, FieldPolicies, FieldPolicy, ItemOperation, ItemOutcome, JobItemId, Mapping,
-    PublishMode, LEASE_TTL_SECS,
+    attempt_budget_spent, Binding, FieldPolicies, FieldPolicy, ItemOperation, ItemOutcome,
+    JobItemId, Mapping, PublishMode, LEASE_TTL_SECS,
 };
 use tam_marketplace::{
     IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_storage::{
-    revive_by_gap, revive_on, settle_if_complete, AttemptIntent, BudgetGrant, ClaimPolicy,
+    revive_by_gap, revive_on, settle_if_complete, AttemptIntent, BudgetGrant, Charged, ClaimPolicy,
     ConnectionAudit, DeviceClaim, DeviceRef, HaltCause, HaltRepo, ItemVerdict, JobReadRepo,
     JobRepo, LeaseRepo, LeasedItem, MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
     OutboxRepo, ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, REAUTH_REQUIRED,
@@ -2525,5 +2525,122 @@ async fn a_release_from_a_run_that_no_longer_holds_the_item_is_refused(app: PgPo
         matches!(leases.release(&stale).await, Err(StorageError::StaleLease)),
         "and a second release has nothing to release, which is the fence answering rather \
          than a write silently doing nothing"
+    );
+}
+
+/// The reaper's SQL rule and the per-item charge agree at the boundary.
+///
+/// They cannot share one spelling: `expire_and_steal` is a cross-tenant
+/// set-based scan and cannot call into Rust per row, so the threshold exists
+/// twice — once as `attempt_count + 1 >= $2` in its statement and once as
+/// `LeaseRepo::attempt_budget_spent`. This is what keeps the two honest: the
+/// same item, one attempt short of its budget, is requeued by both, and on its
+/// last attempt is settled failed by both.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_reaper_and_the_charge_agree_at_the_boundary(app: PgPool) {
+    const BUDGET: i32 = 3;
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC1, true).await;
+    enqueue_one(&engine, &tenant, 0xC2, 0xC3).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    // One attempt short of the budget: both dispositions hand it back.
+    sqlx::query("UPDATE job_item SET attempt_count = $1")
+        .bind(BUDGET - 2)
+        .execute(&engine)
+        .await
+        .expect("the item is set one short of its budget");
+    let held = claim(&app, tenant.org, "charging-device", 60)
+        .await
+        .expect("the item leases");
+    assert_eq!(
+        leases
+            .charge_and_requeue(
+                &held.lease_ref(),
+                BUDGET,
+                Some(FailureDetail("a preparation failure".to_owned())),
+                T0,
+            )
+            .await
+            .expect("the charge lands"),
+        Charged::Requeued,
+        "one attempt short of the budget, the charge hands the item back"
+    );
+    let (state, count): (String, i32) = sqlx::query_as("SELECT state, attempt_count FROM job_item")
+        .fetch_one(&engine)
+        .await
+        .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), count),
+        ("queued", BUDGET - 1),
+        "charged exactly one attempt and queued"
+    );
+
+    // And now it is on its last: the reaper would settle it here, and so does
+    // the charge.
+    let held = claim(&app, tenant.org, "charging-device", 60)
+        .await
+        .expect("the item leases again");
+    assert!(
+        attempt_budget_spent(BUDGET - 1, BUDGET),
+        "the one Rust spelling of the rule says this attempt is the last, which is what \
+         the reaper's SQL predicate says of the same numbers"
+    );
+    assert_eq!(
+        leases
+            .charge_and_requeue(
+                &held.lease_ref(),
+                BUDGET,
+                Some(FailureDetail("a preparation failure".to_owned())),
+                T0,
+            )
+            .await
+            .expect("the charge lands"),
+        Charged::Settled,
+        "on the last attempt it settles rather than queueing a run nothing would finish"
+    );
+    let (state, outcome): (String, Option<String>) =
+        sqlx::query_as("SELECT state, outcome FROM job_item")
+            .fetch_one(&engine)
+            .await
+            .expect("the item reads");
+    assert_eq!(
+        (state.as_str(), outcome.as_deref()),
+        ("settled", Some("failed")),
+        "which is the disposition the reaper's exhaust arm reaches for the same numbers"
+    );
+}
+
+/// A charge from a run that no longer holds the item is refused.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_charge_from_a_run_that_no_longer_holds_the_item_is_refused(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC4, true).await;
+    enqueue_one(&engine, &tenant, 0xC5, 0xC6).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let held = claim(&app, tenant.org, "losing-device", 60)
+        .await
+        .expect("the item leases");
+    let stale = held.lease_ref();
+
+    sqlx::query("UPDATE job_item SET lease_epoch = lease_epoch + 1")
+        .execute(&engine)
+        .await
+        .expect("another holder takes the item");
+
+    assert!(
+        matches!(
+            leases
+                .charge_and_requeue(
+                    &stale,
+                    5,
+                    Some(FailureDetail("a preparation failure".to_owned())),
+                    T0,
+                )
+                .await,
+            Err(StorageError::StaleLease)
+        ),
+        "a run that lost the item cannot charge an attempt against it, or a steal would \
+         cost the item two"
     );
 }
