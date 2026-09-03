@@ -29,6 +29,19 @@ export const PLATFORMS: Record<InventoryId, PlatformName> = {
 	Etsy: { acronym: 'Etsy', full: 'Etsy.com', region: null }
 };
 
+/** The shortest name that still tells one inventory from another.
+ *
+ * A total map rather than a derivation from `PLATFORMS`, because the three
+ * Tes sites differ only by region and a derived short name would render them
+ * identically on a strip whose whole job is telling them apart. */
+export const SHORT_NAME: Record<InventoryId, string> = {
+	Tpt: 'TPT',
+	TesGb: 'TES GB',
+	TesUs: 'TES US',
+	TesNz: 'TES NZ',
+	Etsy: 'Etsy'
+};
+
 export function platformTitle(inventory: InventoryId): string {
 	const name = PLATFORMS[inventory];
 	const head = `${name.acronym} (${name.full})`;

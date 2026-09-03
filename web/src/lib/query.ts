@@ -44,6 +44,11 @@ export const queryKeys = {
 	 *  form reads the subjects alone, and a second kind is a second entry
 	 *  rather than a refetch of this one. */
 	taxonomyTerms: (kind: string) => ['taxonomy-terms', kind] as const,
+	/** The newest runs' items, read so the inventory can say what is happening
+	 *  to one listing on one marketplace. Its own key rather than `activity`:
+	 *  that one holds job views, this one holds the items inside them, and one
+	 *  key under two shapes is a cache collision. */
+	inventoryWork: ['inventory-work'] as const,
 	mappings: ['mappings'] as const,
 	status: ['status'] as const,
 	org: ['org'] as const,

@@ -1,26 +1,38 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { allPages, api, ApiFailure, type MappingHead } from '$lib/api';
+	import { allPages, api, type MappingHead } from '$lib/api';
 	import { formatMetric } from '$lib/analytics-view';
+	import CrossListDialog from '$lib/CrossListDialog.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import {
-		badgesFor,
-		formatPrice,
-		matchesQuery,
-		metricsByProduct,
-		normaliseQuery,
-		rowStatus
-	} from '$lib/listings-view';
+		STATE_LABEL,
+		WORK_RUNS,
+		inventoryTally,
+		matchesFilters,
+		newestWork,
+		rowFor,
+		type Filters,
+		type InventoryRow,
+		type MarketplaceState,
+		type StandingFilter,
+		type WorkItem
+	} from '$lib/inventory';
+	import { formatPrice, metricsByProduct } from '$lib/listings-view';
+	import MarketplaceChips from '$lib/MarketplaceChips.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
 	import { visibleWindow } from '$lib/window';
+	import type { InventoryId } from '$lib/generated/vocab';
 
-	const ROW_HEIGHT = 52;
+	const ROW_HEIGHT = 60;
 	const COLUMNS = 8;
+
+	const queryClient = useQueryClient();
 
 	const catalogue = createQuery(() => ({
 		queryKey: queryKeys.products,
@@ -37,16 +49,40 @@
 		queryKey: queryKeys.analytics,
 		queryFn: () => api.analytics()
 	}));
+	const connections = createQuery(() => ({
+		queryKey: queryKeys.connections,
+		queryFn: () => api.connections().then((view) => view.connections)
+	}));
+	const halts = createQuery(() => ({
+		queryKey: queryKeys.status,
+		queryFn: () => api.status().then((view) => view.inventories)
+	}));
+	// What is happening to each mapping right now, which no endpoint answers
+	// directly: an item is reachable only through the run that holds it, so the
+	// newest runs are read and the newest item per mapping is kept.
+	const work = createQuery(() => ({
+		queryKey: queryKeys.inventoryWork,
+		queryFn: async () => {
+			const first = await api.jobs();
+			const heads = first.jobs.slice(0, WORK_RUNS);
+			const pages = await Promise.all(heads.map((head) => api.items(head.job)));
+			const items: WorkItem[] = heads.flatMap((head, index) =>
+				pages[index].items.map((item) => ({ job: head.job, item }))
+			);
+			return newestWork(items);
+		}
+	}));
 
 	let scrollTop = $state(0);
 	let viewport = $state(600);
 	let selected = $state<Set<string>>(new Set());
-	let pendingKey: string | null = null;
-	let syncing = $state(false);
+	let marketplace = $state<InventoryId | 'all'>('all');
+	let standing = $state<StandingFilter>('all');
+	let crossListing = $state(false);
 
 	const products = $derived(catalogue.data ?? []);
-	const query = $derived(normaliseQuery(page.url.searchParams.get('q')));
-	const shown = $derived(products.filter((product) => matchesQuery(product.title, query)));
+	const query = $derived(page.url.searchParams.get('q')?.trim() ?? '');
+	const filters = $derived<Filters>({ query, marketplace, standing });
 
 	const byProduct = $derived.by(() => {
 		const index = new Map<string, MappingHead[]>();
@@ -60,99 +96,184 @@
 		metricsByProduct(captured.data?.listings ?? [], mappings.data ?? [])
 	);
 
-	const rows = $derived.by(() => {
-		const now = Date.now();
-		return shown.map((product) => {
-			const owned = byProduct.get(product.id) ?? [];
-			const metrics = figures.get(product.id);
-			return {
+	const allRows = $derived(
+		products.map((product) =>
+			rowFor({
 				product,
-				badges: badgesFor(owned),
-				status: rowStatus(owned),
-				price: formatPrice(product.price),
+				mappings: byProduct.get(product.id) ?? [],
+				work: work.data ?? new Map(),
+				connections: connections.data ?? [],
+				statuses: halts.data ?? []
+			})
+		)
+	);
+
+	const rows = $derived(allRows.filter((row) => matchesFilters(row, filters)));
+	const tally = $derived(inventoryTally(allRows, rows));
+
+	const shown = $derived.by(() => {
+		const now = Date.now();
+		return rows.map((row) => {
+			const metrics = figures.get(row.product.id);
+			return {
+				row,
+				price: formatPrice(row.product.price),
 				views: formatMetric(metrics?.views ?? undefined),
 				sales: formatMetric(metrics?.sales ?? undefined),
-				updated: agoLabel(product.updated_at, now),
-				syncable: owned.find((mapping) => mapping.inventory === 'TesNz')
+				updated: agoLabel(row.product.updated_at, now)
 			};
 		});
 	});
 
-	const win = $derived(visibleWindow(rows.length, ROW_HEIGHT, scrollTop, viewport));
+	const win = $derived(visibleWindow(shown.length, ROW_HEIGHT, scrollTop, viewport));
 
-	function toggle(mapping: MappingHead) {
+	const chosen = $derived(allRows.filter((row) => selected.has(row.product.id)));
+	const allShownSelected = $derived(
+		shown.length > 0 && shown.every((entry) => selected.has(entry.row.product.id))
+	);
+
+	// Every state a chip can hold, in the order a seller reads them: what needs
+	// them first, then what is under way, then what is settled.
+	const STANDINGS: readonly { value: StandingFilter; label: string }[] = [
+		{ value: 'all', label: 'Any standing' },
+		{ value: 'attention', label: 'Needs attention' },
+		...(
+			[
+				'needs_signin',
+				'stranded',
+				'failed',
+				'blocked',
+				'in_flight',
+				'draft',
+				'listed',
+				'not_listed'
+			] as MarketplaceState[]
+		).map((value) => ({ value: value as StandingFilter, label: STATE_LABEL[value] }))
+	];
+
+	function toggle(product: string) {
 		const next = new Set(selected);
-		if (next.has(mapping.id)) {
-			next.delete(mapping.id);
+		if (next.has(product)) {
+			next.delete(product);
 		} else {
-			next.add(mapping.id);
+			next.add(product);
 		}
 		selected = next;
 	}
 
-	async function startSync() {
-		if (selected.size === 0) {
+	function toggleAll() {
+		selected = allShownSelected
+			? new Set()
+			: new Set(shown.map((entry) => entry.row.product.id));
+	}
+
+	function started(runs: { inventory: InventoryId; job: string }[]) {
+		crossListing = false;
+		selected = new Set();
+		void queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
+		void queryClient.invalidateQueries({ queryKey: queryKeys.inventoryWork });
+		if (runs.length === 0) {
 			return;
 		}
-		const chosen = (mappings.data ?? []).filter(
-			(mapping) => selected.has(mapping.id) && mapping.inventory === 'TesNz'
-		);
-		if (chosen.length !== selected.size) {
-			toast('error', 'A sync targets one inventory; only Tes NZ cells are selectable for now.');
+		if (runs.length === 1) {
+			toast('info', `Send started on ${platformTitle(runs[0].inventory)}.`);
+			void goto(`/sync/${runs[0].job}`);
 			return;
 		}
-		syncing = true;
-		// One key per intent: a retry after a failure reuses it, so the retry
-		// and the double-click are the same job on the server.
-		pendingKey ??= crypto.randomUUID();
-		try {
-			const created = await api.createJob(
-				'TesNz',
-				chosen.map((mapping) => mapping.id),
-				pendingKey
-			);
-			pendingKey = null;
-			selected = new Set();
-			toast('info', created.replay ? 'That sync already exists; showing it.' : 'Sync started.');
-			goto(`/sync/${created.job}`);
-		} catch (failure) {
-			if (failure instanceof ApiFailure && failure.code() === 'duplicate_sync_item') {
-				pendingKey = null;
-				toast(
-					'error',
-					'These files are already in the ledger unchanged; nothing needs re-uploading.'
-				);
-			} else {
-				toast('error', 'The sync did not start; retrying will not double it.');
-			}
-		} finally {
-			syncing = false;
-		}
+		toast('info', `Send started on ${runs.length} marketplaces.`);
+	}
+
+	/** The first thing on this row a person has to act on, or null. The row
+	 *  states one rather than every one: the item screen holds the rest, and a
+	 *  table row that lists four problems is read as none. */
+	function firstProblem(row: InventoryRow) {
+		return row.attention[0] ?? null;
 	}
 </script>
 
 <div class="page">
 	<PageHead
 		icon="▤"
-		title="Listings"
-		description="Every resource once — Teachouse keeps each marketplace matching it."
+		title="Your resources"
+		description="Every resource once, and what each marketplace is doing with it."
 	>
 		{#snippet aside()}
 			<span class="tag-note">
-				{#if query}
-					{rows.length} of {products.length} matching “{query}”
+				{#if rows.length === tally.total}
+					{tally.total} in the catalogue
 				{:else}
-					{products.length} in the catalogue
+					{rows.length} of {tally.total}
 				{/if}
 			</span>
-			<button class="btn" disabled={selected.size === 0 || syncing} onclick={startSync}>
-				{syncing ? 'Starting…' : `Sync ${selected.size} to Tes NZ`}
+			<button
+				class="btn"
+				type="button"
+				disabled={selected.size === 0}
+				onclick={() => (crossListing = true)}
+			>
+				{selected.size === 0 ? 'Cross-list…' : `Cross-list ${selected.size}…`}
 			</button>
-			<a class="cta" href="/listings/new">New listing</a>
+			<a class="cta" href="/listings/new">New resource</a>
 		{/snippet}
 	</PageHead>
 
+	{#if tally.attention > 0 && standing !== 'attention'}
+		<div class="attn warn">
+			<div class="t">
+				{tally.attention}
+				{tally.attention === 1 ? 'resource needs' : 'resources need'} you
+			</div>
+			<p>
+				A marketplace is waiting on a sign-in, holding a send, or reporting a failure. Work for
+				Tes and TPT runs on your own device, so nothing moves while that device is off.
+			</p>
+			<button class="act" type="button" onclick={() => (standing = 'attention')}>
+				Show only those
+			</button>
+		</div>
+	{/if}
+
 	<Panel>
+		<div class="filter-bar">
+			<select
+				aria-label="Filter by marketplace"
+				value={marketplace}
+				onchange={(event) =>
+					(marketplace = event.currentTarget.value as InventoryId | 'all')}
+			>
+				<option value="all">Any marketplace</option>
+				{#each AUTHORABLE_PLATFORMS as inventory (inventory)}
+					<option value={inventory}>{platformTitle(inventory)}</option>
+				{/each}
+			</select>
+			<select
+				aria-label="Filter by standing"
+				value={standing}
+				onchange={(event) => (standing = event.currentTarget.value as StandingFilter)}
+			>
+				{#each STANDINGS as option (option.value)}
+					<option value={option.value}>{option.label}</option>
+				{/each}
+			</select>
+			{#if marketplace !== 'all' || standing !== 'all'}
+				<button
+					class="btn small"
+					type="button"
+					onclick={() => {
+						marketplace = 'all';
+						standing = 'all';
+					}}
+				>
+					Clear filters
+				</button>
+			{/if}
+			<span class="grow"></span>
+			<span class="tag-note">
+				{tally.listedOn}
+				{tally.listedOn === 1 ? 'marketplace' : 'marketplaces'} carrying a live listing
+			</span>
+		</div>
+
 		{#if catalogue.isPending || mappings.isPending}
 			<p class="quiet">Loading the catalogue…</p>
 		{:else if catalogue.isError || mappings.isError}
@@ -160,20 +281,28 @@
 		{:else if products.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">▤</span>
-				<b>No products yet</b>
+				<b>No resources yet</b>
 				<p>
 					Author one here, or let an import bring your existing listings in. Once a resource is in
-					your catalogue it appears here, and sync keeps every marketplace matching it.
+					your catalogue it appears here, with what every marketplace is doing with it beside it.
 				</p>
 				<div class="actions" style="justify-content: center; margin-top: 14px">
-					<a class="cta" href="/listings/new">New listing</a>
+					<a class="cta" href="/listings/new">New resource</a>
 				</div>
 			</div>
 		{:else if rows.length === 0}
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">⌕</span>
-				<b>Nothing matches “{query}”</b>
-				<p>Search reads listing titles. Clear the box to see the whole catalogue again.</p>
+				<b>Nothing matches</b>
+				<p>
+					{#if query}
+						Search reads resource titles. Clear the box, or widen the filters, to see the whole
+						catalogue again.
+					{:else}
+						No resource is in that state on that marketplace. Clear the filters to see the whole
+						catalogue again.
+					{/if}
+				</p>
 			</div>
 		{:else}
 			<div
@@ -186,10 +315,17 @@
 				<table>
 					<thead>
 						<tr>
-							<th><span class="sr-only">Select for sync</span></th>
-							<th>Listing</th>
-							<th>Platforms</th>
-							<th>Status</th>
+							<th>
+								<input
+									type="checkbox"
+									aria-label="Select every resource shown"
+									checked={allShownSelected}
+									onchange={toggleAll}
+								/>
+							</th>
+							<th>Resource</th>
+							<th>Marketplaces</th>
+							<th>Needs you</th>
 							<th class="num">Price</th>
 							<th class="num">Views</th>
 							<th class="num">Sales</th>
@@ -200,38 +336,40 @@
 						{#if win.padTop > 0}
 							<tr style="height: {win.padTop}px"><td colspan={COLUMNS}></td></tr>
 						{/if}
-						{#each rows.slice(win.start, win.end) as row (row.product.id)}
+						{#each shown.slice(win.start, win.end) as entry (entry.row.product.id)}
+							{@const problem = firstProblem(entry.row)}
 							<tr style="height: {ROW_HEIGHT}px">
 								<td>
-									{#if row.syncable}
-										{@const cell = row.syncable}
-										<input
-											type="checkbox"
-											aria-label={`Select ${row.product.title} for a Tes NZ sync`}
-											checked={selected.has(cell.id)}
-											onchange={() => toggle(cell)}
-										/>
-									{/if}
+									<input
+										type="checkbox"
+										aria-label={`Select ${entry.row.product.title}`}
+										checked={selected.has(entry.row.product.id)}
+										onchange={() => toggle(entry.row.product.id)}
+									/>
 								</td>
 								<td class="title-cell">
-									<a class="t" href={`/listings/${row.product.id}`} title={row.product.title}>
-										{row.product.title}
+									<a
+										class="t"
+										href={`/listings/${entry.row.product.id}`}
+										title={entry.row.product.title}
+									>
+										{entry.row.product.title}
 									</a>
 								</td>
+								<td><MarketplaceChips chips={entry.row.chips} /></td>
 								<td>
-									{#each row.badges as badge (badge.inventory)}
-										<span class="badge {badge.live ? 'live' : ''}" title={badge.state}
-											>{badge.label}</span
-										>
-									{:else}
+									{#if problem === null}
 										<span class="s">—</span>
-									{/each}
+									{:else}
+										<a class="link" href={problem.action?.href ?? `/listings/${entry.row.product.id}`}>
+											{problem.detail}
+										</a>
+									{/if}
 								</td>
-								<td><span class="pill {row.status.tone}">{row.status.label}</span></td>
-								<td class="num">{row.price}</td>
-								<td class="num">{row.views}</td>
-								<td class="num">{row.sales}</td>
-								<td class="num">{row.updated}</td>
+								<td class="num">{entry.price}</td>
+								<td class="num">{entry.views}</td>
+								<td class="num">{entry.sales}</td>
+								<td class="num">{entry.updated}</td>
 							</tr>
 						{/each}
 						{#if win.padBottom > 0}
@@ -245,7 +383,18 @@
 				{#if captured.isError}
 					The capture could not be read just now, so both columns are blank rather than zero.
 				{/if}
+				{#if work.isError}
+					What each marketplace is doing right now could not be read, so the chips show the last
+					state recorded rather than a live one.
+				{/if}
 			</p>
 		{/if}
 	</Panel>
 </div>
+
+<CrossListDialog
+	open={crossListing}
+	rows={chosen}
+	onClose={() => (crossListing = false)}
+	onStarted={started}
+/>
