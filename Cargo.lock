@@ -5262,6 +5262,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tam-standards-crawl"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tam-marketplace",
+ "tam-marketplace-tpt",
+ "tam-standards",
+ "tokio",
+]
+
+[[package]]
 name = "tam-standards-fetch"
 version = "0.0.0"
 dependencies = [

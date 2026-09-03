@@ -21,6 +21,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bind;
+pub mod crawl;
 pub mod format;
 pub mod grades;
 pub mod model;
@@ -28,6 +30,14 @@ pub mod notices;
 pub mod search;
 pub mod tpt;
 
+pub use bind::{
+    bind_walk, BindOutcome, CatalogueIndex, CatalogueRow, JurisdictionScope, Residue, Unresolved,
+};
+pub use crawl::{
+    diff_capture, gate, is_utc_timestamp, normalise_statement, postable, statement_hash,
+    tpt_jurisdiction, tpt_jurisdiction_notation, CrawlDiff, CrawlWindow, CrawledStandard,
+    DriftedStatement, GateVerdict, MovedId, NotPostable,
+};
 pub use format::{
     content_hash, load_framework, parse_manifest, render_jsonl, FrameworkManifest, LoadError,
     Manifest, StandardsDocument, FORMAT,

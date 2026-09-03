@@ -12,15 +12,16 @@
 //! out of scope here. The structure exists now so that the ingest it joins
 //! against is shaped for it rather than retrofitted to it.
 //!
-//! Two fields exist for the risk the recon named rather than for the join. An
-//! id aliased as `sphinxId` is a search-index identifier, and search indexes
-//! get rebuilt; if the ids move, a posted edge tags the wrong standard
-//! silently. So a binding records the statement it was verified against and
-//! when, which is what lets a caller refuse to post an id outside the current
-//! crawl window and degrade to "standards not projected" rather than to a
-//! wrong tag. Nothing here repairs a mismatch: a code whose statement no
-//! longer hashes the same is a reconciliation item, not a value to correct in
-//! place.
+//! Three fields exist for the risk the recon named rather than for the join.
+//! An id aliased as `sphinxId` is a search-index identifier, and search
+//! indexes get rebuilt; if the ids move, a posted edge tags the wrong standard
+//! silently. So a binding records the name TPT gave the node, the statement it
+//! was verified against and when, which is what lets a caller refuse to post
+//! an id outside the current crawl window and degrade to "standards not
+//! projected" rather than to a wrong tag. Nothing here repairs a mismatch: a
+//! node whose name or statement no longer agrees is a reconciliation item, not
+//! a value to correct in place. `crate::crawl` is where those comparisons
+//! live.
 
 use std::collections::BTreeMap;
 
@@ -56,6 +57,13 @@ pub struct TptBinding {
     /// the key.
     pub code: String,
     pub tpt_node_id: TptNodeId,
+    /// The `name` TPT returned for this node at crawl time, which is what a
+    /// re-crawl's identity check reads. Recorded rather than derived from
+    /// `code`: TPT names the node `CCRA.L.1` where the mirror codes the same
+    /// standard `CCSS.ELA-Literacy.CCRA.L.1`, so whether an id still returns
+    /// the name it was bound under is only answerable against what TPT itself
+    /// said.
+    pub tpt_name: String,
     /// SHA-256 of the statement TPT returned for this node at crawl time.
     /// A later crawl that reads a different statement under the same id has
     /// found a moved id, not a corrected one.
@@ -140,9 +148,9 @@ pub fn load_tpt_node_ids(jsonl: &str) -> Result<TptNodeIdTable, LoadError> {
 mod tests {
     use super::*;
 
-    const BINDING: &str = r#"{"framework":"CCSS","subject":"Mathematics","code":"CCSS.Math.Content.8.F.B.5","source_guid":"A6F2D78E7F294A2EA04C158DD1A47EC4","tpt_node_id":91234,"statement_sha256":"00","verified_at":"2026-09-03T00:00:00Z"}"#;
-    const TEKS_MATH: &str = r#"{"framework":"TEKS","subject":"Mathematics (2012-)","code":"1.1.A","source_guid":"M1","tpt_node_id":11,"statement_sha256":"00","verified_at":"2026-09-03T00:00:00Z"}"#;
-    const TEKS_SCIENCE: &str = r#"{"framework":"TEKS","subject":"Science (2020-)","code":"1.1.A","source_guid":"S1","tpt_node_id":22,"statement_sha256":"00","verified_at":"2026-09-03T00:00:00Z"}"#;
+    const BINDING: &str = r#"{"framework":"CCSS","subject":"Mathematics","code":"CCSS.Math.Content.8.F.B.5","source_guid":"A6F2D78E7F294A2EA04C158DD1A47EC4","tpt_node_id":91234,"tpt_name":"8.F.B.5","statement_sha256":"00","verified_at":"2026-09-03T00:00:00Z"}"#;
+    const TEKS_MATH: &str = r#"{"framework":"TEKS","subject":"Mathematics (2012-)","code":"1.1.A","source_guid":"M1","tpt_node_id":11,"tpt_name":"1.1.A","statement_sha256":"00","verified_at":"2026-09-03T00:00:00Z"}"#;
+    const TEKS_SCIENCE: &str = r#"{"framework":"TEKS","subject":"Science (2020-)","code":"1.1.A","source_guid":"S1","tpt_node_id":22,"tpt_name":"1.1.A","statement_sha256":"00","verified_at":"2026-09-03T00:00:00Z"}"#;
 
     #[test]
     fn the_committed_table_is_empty_and_loads() {

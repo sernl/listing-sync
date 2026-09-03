@@ -44,6 +44,7 @@ pub mod live;
 pub mod read_model;
 pub mod s3;
 pub mod session;
+pub mod standards;
 pub mod upload;
 pub mod write_model;
 

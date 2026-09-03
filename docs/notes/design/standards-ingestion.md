@@ -304,3 +304,58 @@ None touches `crates/tam-engine`, `crates/tam-engine-driver` or `crates/tam-stor
 
 Steps 2, 3 and 4 share no files with step 1 or with each other and can run in parallel; step 5 depends on step 1.
 Step 4 is a new crate rather than a new dependency, which is the distinction that keeps it inside the enforcement rule rather than against it.
+
+## What steps 2, 3 and 4 landed
+
+Steps 2, 3 and 4 of the build order are built and green; steps 1 and 5 are not, and what they need is at the end of this section.
+
+Step 2 is `crates/tam-marketplace-tpt/src/standards.rs`.
+It shapes the two crawl operations, parses their nodes, and maps a resolved node id onto the create form's wire fields.
+The count field and the id parts come back as separate groups because the form posts them apart, the count early among the thumbnail fields and the parts late after the categories, so a caller splices each at its own recorded position.
+A caller holding no postable id gets a record naming what will not be carried and why, which is decision 6 on the wire.
+Two limits are worth stating rather than discovering.
+Neither operation appears in a HAR capture, so the query texts are reconstructed from the selection sets recorded at `docs/research/rethink/tpt-product-model.md:340` and the two `children` argument names are inferred from the recorded variable signature; the founder's first capture is what confirms them.
+And the module holds no dependency edge to `tam-standards`, so a node id reaches it as a local newtype: an adapter that could read the standards catalogue could resolve a code by itself, and that resolution belongs to the crawl.
+
+Step 3 is `crates/tam-standards/src/crawl.rs` for the capture and the gate, and `crates/tam-standards/src/bind.rs` beside it for the join, because walking TPT's tree and binding to the mirror are different responsibilities and only the crawl binary needs both.
+The join exists in this dispatch at all because writing `tpt-node-ids.jsonl` means writing rows keyed on the mirror's `source_guid`, which is ours rather than TPT's.
+
+The join binds a crawled node to every catalogue row whose code corresponds and whose statement agrees, and reports every other node as residue with its reason attached.
+Two invariants shape the result and they are not symmetric.
+One node binding many rows is allowed and expected: the mirror repeats a Common Core anchor standard across eleven grade sets, and each of those rows is a row a seller tags.
+One row bound by two nodes is refused, because a row bound twice has no answer to which id to post, so a contested row is dropped and both claimants are named in the residue.
+Scope is what keeps the second invariant reachable, since verbatim adoptions put one statement under more than one jurisdiction and TPT carries a tree for every state beside the Common Core one.
+Every candidate is therefore scoped twice over: the catalogue index a walk consults holds one framework's rows and no other, and a node whose own ancestor chain does not carry the walked root is refused before its code is read.
+The correspondence from a TPT subtree to a mirror jurisdiction is an input the caller supplies rather than something the join derives; the coarse one is the four roots the form offers, and a finer one, from a TPT subject or domain node to a mirror set, does not exist until a capture does.
+Code correspondence admits two spellings and no more, the existing `fold_code` equivalence and a namespace prefix the mirror carries and TPT does not, and the second is guarded so that `5.10.A` can never be named by `10.A`: the removed prefix must carry no digit, because TPT drops letters and never drops a numbered level.
+Statement agreement absorbs four differences and no more, whitespace, letter case, the Unicode quotation marks and dashes a publishing pipeline substitutes, and a single trailing full stop; anything wider is a real difference in what the two sides say a standard says, and it stays in the residue where a human reads it.
+
+Two things in step 3 depart from this note as written above, both because the committed data falsified a premise.
+
+`TptBinding` gained `tpt_name`, the name TPT itself returned for the node at crawl time.
+The kill-gate section says the identity check asks whether node id N still returns a `name` equal to the bound `code`, and those are not the same string: the mirror codes the anchor standard `CCSS.ELA-Literacy.CCRA.L.1`, TPT names the node `CCRA.L.1`, and the mirror's own `alt_code` is a third form, `CCR.L.1`.
+Re-deriving TPT's name from our code would have reported every Common Core binding as moved and killed the feature on an artefact of our own spelling, so the crawl records what TPT said and the identity check reads that.
+It costs nothing: the data file is committed empty, so no row migrates.
+
+And `gate` has a fourth verdict, `Inconclusive`, for a second capture that answered for none of the bindings in force.
+Folding that into "no moved ids means store and post" would let a walk that stopped short read as evidence that nothing moved, which is the one reading that makes the gate unsafe to trust.
+The three named verdicts and their thresholds are unchanged, and the arithmetic is integer cross-multiplication rather than a division.
+
+Step 4 is `crates/tam-standards-crawl/`, which the founder runs by hand and nothing else runs.
+It refuses to start without `--i-am-the-founder`, takes the crawl timestamp as an argument rather than reading a clock, reads the founder's own exported cookie jar the way this repo's supervised live examples do, and walks each jurisdiction the way the picker does — one level at the root, then each of its children whole — pausing between calls.
+It compiles the committed corpus in rather than reading it, so the join runs against the ingest the binary was built from.
+It writes the bindings sorted and newline-terminated, and prints a residue report naming every crawled node that bound nothing, because that report is what the founder reads before committing the file.
+Nothing the residue names is a defect in the file: an unbound node stays unbound, and a seller's tag for it is carried in our catalogue and omitted from a TPT publish with a visible loss record.
+
+None of the three is verified against a real TPT standards-tree response, because no capture of one exists in this repository.
+The founder's first capture is therefore also the first test of the request shaping and of the join, and statement transcription differences between the mirror and TPT will put some codes in the residue that a human would call the same standard.
+The ancestry scope has the same character: it reads `parentIds` as the full ancestor chain the research records, and a capture whose chain omitted the walked root would put every node in the residue under that one reason, which is a visible refusal to read in the report rather than a silent mis-scope.
+
+The kill gate has no runner, and that is the next step after step 4.
+`diff_capture` and `gate` decide the second capture's verdict and are tested against fixtures, but nothing takes the second capture and feeds it to them: the crawl binary writes the table and does not re-crawl against one already written.
+Decision 7 says the second capture runs before the standards feature is enabled for any seller, so the runner is needed before the feature ships and not before the table is filled.
+It is small — the same walk this binary already performs, against the committed bindings rather than against the catalogue — and it is named here so that the gap is a planned next step rather than something discovered when the gate is first needed.
+
+Step 1 needs `tam_standards::search` over the committed files for the handler body, and, for `StandardView.tpt_node_id`, `load_tpt_node_ids` with `crawl::postable` against a `CrawlWindow`, so an id no current capture vouches for is withheld rather than served.
+It should also read its four attribution strings from `notices::required_notices` rather than from the constant it now holds, which is a second copy of the same obligations.
+Step 5 needs the search response from step 1, and the loss record from step 2 rendered in the field diff before publish.
