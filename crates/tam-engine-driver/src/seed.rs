@@ -52,6 +52,7 @@ pub fn seed_from_projection<A: MarketplaceAdapter>(
     );
     Ok(MachineSeed {
         resume: None,
+        attestation: None,
         form: preparation.form,
         fields,
         intent_hash,
@@ -83,6 +84,7 @@ pub fn seed_for_removal(preparation: &ItemPreparation) -> MachineSeed {
     );
     MachineSeed {
         resume: None,
+        attestation: None,
         form: preparation.form,
         fields,
         intent_hash,

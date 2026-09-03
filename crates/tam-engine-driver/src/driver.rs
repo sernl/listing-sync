@@ -23,8 +23,8 @@ use tam_types::{
 
 use crate::ports::{Cancellation, IdSource, ItemLedger, ReconcileSource};
 use crate::vocabulary::{
-    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, GrantKind,
-    ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerError, NewAttempt,
+    AttemptIntent, AttemptRef, AttemptVerdict, Attestation, BindDisposition, BudgetGrant,
+    GrantKind, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerError, NewAttempt,
 };
 
 /// The clock seam: the binaries read the wall clock at this boundary
@@ -80,6 +80,14 @@ pub struct MachineSeed {
     /// executed. That matters because the first of them is the form
     /// assertion, which on Tes is a write.
     pub resume: Option<(WriteAttemptId, RecordedTitle)>,
+    /// The attestation this run's writes go out under, where the marketplace
+    /// requires one.
+    ///
+    /// Recorded in the attempt's intent body and deliberately not in the
+    /// intent hash: the hash feeds the idempotency key, so a re-attested
+    /// create whose fields are unchanged must stay the same create rather
+    /// than becoming a second listing.
+    pub attestation: Option<Attestation>,
     pub form: FormId,
     pub fields: FieldSet,
     pub intent_hash: ContentHash,
@@ -179,6 +187,35 @@ fn subject_as_json(subject: &RemoteListingId) -> serde_json::Value {
 /// it will post, as it always has, now tagged with the operation; a revise
 /// adds the listing it addresses and both ends of the transition; a removal
 /// carries no field set at all, because a removal describes nothing.
+/// The recorded intent, with the attestation the write goes out under.
+///
+/// The attestation joins the body and deliberately not the hash.
+/// `intent_hash` is computed from `intent_as_json` alone in the seed and feeds
+/// the idempotency key, so folding an attestation into it would make a
+/// re-attested create a different create — a second listing for the same
+/// product, which is the one failure that key exists to prevent. The body is
+/// the durable record of what a write went out under; the hash is the
+/// identity of what was written, and only one of them is about who attested.
+fn attested_intent(
+    operation: &ItemOperation,
+    fields: &FieldSet,
+    attestation: Option<&Attestation>,
+) -> serde_json::Value {
+    let mut body = intent_as_json(operation, fields);
+    let (Some(attestation), Some(object)) = (attestation, body.as_object_mut()) else {
+        return body;
+    };
+    object.insert(
+        "attested_by".to_owned(),
+        serde_json::Value::String(attestation.attested_by.clone()),
+    );
+    object.insert(
+        "attested_at_ms".to_owned(),
+        serde_json::Value::from(attestation.attested_at_ms),
+    );
+    body
+}
+
 pub fn intent_as_json(operation: &ItemOperation, fields: &FieldSet) -> serde_json::Value {
     let entries = serde_json::to_value(&fields.entries).unwrap_or(serde_json::Value::Null);
     let files = serde_json::to_value(&fields.files).unwrap_or(serde_json::Value::Null);
@@ -533,6 +570,7 @@ pub async fn run_item<
     // total functions of it, so all three read the same value.
     let operation = lease.operation.clone();
     let verify = seed.verify;
+    let seed_attestation = seed.attestation.clone();
     let mut transition = SyncMachine::initial(
         org,
         lease.inventory,
@@ -577,7 +615,67 @@ pub async fn run_item<
         // attempt, releasing the only fence against a second create while the
         // mapping is still unbound. Both arms return from the match below
         // instead, which is what the cancellation wanted in the first place.
-        if (ctx.cancel.is_cancelled() || now.0 >= wall_deadline)
+        let stopping = ctx.cancel.is_cancelled() || now.0 >= wall_deadline;
+        // Nothing has been attempted yet, so there is nothing to settle on.
+        // Returning here rather than stepping the machine is the whole of the
+        // rule: an item stopped before its first request is the seller's work
+        // left undone, not work this run learned anything about, and the
+        // reaper hands it to a device that can still do it. Settling it would
+        // drop a seller's queued item on the strength of this device's
+        // entitlement rather than on anything about the item.
+        if stopping {
+            // Split by whether a request can have gone out, which is what the
+            // machine's own state says and what `BudgetExhausted` does not
+            // distinguish. Stepping it from a state that has sent nothing
+            // settles the item terminally — `Skipped` before the attempt,
+            // `Ambiguous` after it — on the strength of this device stopping
+            // rather than of anything about the item. Neither halts anything:
+            // `exhaust_budget` emits `CaptureDiagnostics` alone, and the halt
+            // belongs to the ambiguous-submit row, which is a different
+            // situation reached a different way.
+            match transition.next.state {
+                // Nothing attempted and nothing to settle: hand the lease back
+                // and let the reaper give the work to a device that can do it.
+                SyncState::AwaitingPreflight | SyncState::PreflightAsserted { .. } => {
+                    return Ok(RunVerdict::Abandoned {
+                        reason: "stopped before the first request, with nothing attempted"
+                            .to_owned(),
+                    })
+                }
+                // The attempt is open and the write has not gone out. It has to
+                // be settled rather than left standing, or the fence it holds
+                // blocks every later lease on this mapping; abandoned rather
+                // than ambiguous, because an ambiguity is a claim that a write
+                // may have landed, and nothing was sent. The item would settle
+                // terminally on that claim and never run again, which is the
+                // seller's work lost to one device going away.
+                SyncState::IntentRecorded { attempt, .. } => {
+                    return rate_refused_before_the_write(
+                        ctx,
+                        &lease_ref,
+                        Abandonment {
+                            settling: AttemptRef {
+                                attempt: attempt.0,
+                                mapping: lease.mapping,
+                            },
+                            operation: &operation,
+                            at: now,
+                            reason: "stopped after the intent was recorded and before the \
+                                     write, having sent nothing",
+                        },
+                    )
+                    .await
+                }
+                // Something may already be on the wire, so stopping here is
+                // the backstop's ambiguity rather than an abandon, and the
+                // machine decides it.
+                SyncState::Submitted { .. }
+                | SyncState::AwaitingReadBack { .. }
+                | SyncState::Parked { .. }
+                | SyncState::Terminal(_) => {}
+            }
+        }
+        if stopping
             && !matches!(
                 transition.next.state,
                 SyncState::Terminal(_) | SyncState::Parked { .. }
@@ -599,6 +697,24 @@ pub async fn run_item<
                     // while the device was idle can be found — before the
                     // request rather than after it.
                     ctx.ledger.renew(&lease_ref).await?;
+                    // Charged like every other marketplace request, and it was
+                    // not before: the scrape went out against nobody's
+                    // allowance, so a seller's rate window under-counted by one
+                    // request per create. Nothing has been attempted at this
+                    // point, so an exhausted window abandons with nothing to
+                    // settle, which is the same shape stopping before the first
+                    // request takes.
+                    let grant = ctx
+                        .ledger
+                        .request_grant(&lease_ref, connection, GrantKind::FormRead, now)
+                        .await?;
+                    if grant == BudgetGrant::Exhausted {
+                        return Ok(RunVerdict::Abandoned {
+                            reason: "the rate window closed before the form scrape, with \
+                                     nothing attempted"
+                                .to_owned(),
+                        });
+                    }
                     let asserted = ctx.adapter.assert_form_schema(form).await;
                     pending = Some(match asserted {
                         Ok(fingerprint) => {
@@ -624,7 +740,11 @@ pub async fn run_item<
                                 attempt: minted,
                                 mapping: lease.mapping,
                                 intent: AttemptIntent {
-                                    body: intent_as_json(&operation, &next.fields),
+                                    body: attested_intent(
+                                        &operation,
+                                        &next.fields,
+                                        seed_attestation.as_ref(),
+                                    ),
                                     hash: intent_hash.0.to_vec(),
                                 },
                             },
@@ -684,12 +804,15 @@ pub async fn run_item<
                         return rate_refused_before_the_write(
                             ctx,
                             &lease_ref,
-                            AttemptRef {
-                                attempt: attempt.0,
-                                mapping: lease.mapping,
+                            Abandonment {
+                                settling: AttemptRef {
+                                    attempt: attempt.0,
+                                    mapping: lease.mapping,
+                                },
+                                operation: &operation,
+                                at: now,
+                                reason: "the per-connection rate window is exhausted",
                             },
-                            &operation,
-                            now,
                         )
                         .await;
                     }
@@ -709,12 +832,15 @@ pub async fn run_item<
                         return rate_refused_before_the_write(
                             ctx,
                             &lease_ref,
-                            AttemptRef {
-                                attempt: attempt.0,
-                                mapping: lease.mapping,
+                            Abandonment {
+                                settling: AttemptRef {
+                                    attempt: attempt.0,
+                                    mapping: lease.mapping,
+                                },
+                                operation: &operation,
+                                at: now,
+                                reason: "the per-connection rate window is exhausted",
                             },
-                            &operation,
-                            now,
                         )
                         .await;
                     }
@@ -743,12 +869,15 @@ pub async fn run_item<
                         return rate_refused_before_the_write(
                             ctx,
                             &lease_ref,
-                            AttemptRef {
-                                attempt: attempt.0,
-                                mapping: lease.mapping,
+                            Abandonment {
+                                settling: AttemptRef {
+                                    attempt: attempt.0,
+                                    mapping: lease.mapping,
+                                },
+                                operation: &operation,
+                                at: now,
+                                reason: "the per-connection rate window is exhausted",
                             },
-                            &operation,
-                            now,
                         )
                         .await;
                     }
@@ -1100,10 +1229,14 @@ async fn rate_refused_before_the_write(
         impl ReconcileSource,
     >,
     lease_ref: &LeaseRef,
-    settling: AttemptRef,
-    operation: &ItemOperation,
-    at: Timestamp,
+    abandonment: Abandonment<'_>,
 ) -> Result<RunVerdict, EngineError> {
+    let Abandonment {
+        settling,
+        operation,
+        at,
+        reason,
+    } = abandonment;
     let verdict = AttemptVerdict {
         state: "abandoned".to_owned(),
         failure_code: None,
@@ -1111,8 +1244,21 @@ async fn rate_refused_before_the_write(
     };
     settle_open_attempt(ctx, lease_ref, settling, &verdict, at).await?;
     Ok(RunVerdict::Abandoned {
-        reason: "the per-connection rate window is exhausted".to_owned(),
+        reason: reason.to_owned(),
     })
+}
+
+/// An open attempt settled without anything having been sent, and why.
+///
+/// Bundled rather than passed loose because the four travel together and the
+/// reason is the only one that differs between callers: a closed rate window
+/// and a stopped run reach the identical ledger state and would be
+/// indistinguishable in the item's history without it.
+struct Abandonment<'a> {
+    settling: AttemptRef,
+    operation: &'a ItemOperation,
+    at: Timestamp,
+    reason: &'a str,
 }
 
 /// The preflight answered something other than drift. While the item can
@@ -1524,11 +1670,68 @@ async fn notify(
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_anomaly, outcome_to_item};
-    use crate::vocabulary::BindDisposition;
-    use tam_domain::ItemOutcome;
-    use tam_marketplace::{Outcome, RemoteListingId};
-    use tam_types::{BindAnomaly, FailureCode, FailureDetail, MappingId, Uuid};
+    use super::{attested_intent, bind_anomaly, intent_as_json, outcome_to_item};
+    use crate::vocabulary::{Attestation, BindDisposition};
+    use tam_domain::{ItemOperation, ItemOutcome};
+    use tam_marketplace::{FieldSet, Outcome, RemoteListingId};
+    use tam_types::{
+        BindAnomaly, CopyFormat, FailureCode, FailureDetail, FieldKey, MappingId, Uuid,
+    };
+
+    /// The attestation reaches the recorded body and never the hashed intent.
+    ///
+    /// The hash feeds the idempotency key, so an attestation folded into it
+    /// would make a re-attested create a different create — a second listing
+    /// for the same product, which is the one failure that key exists to
+    /// prevent. This is the before-and-after hash in one body rather than a
+    /// pinned literal, so it fails on a change to either side.
+    #[test]
+    fn an_attestation_reaches_the_recorded_body_and_never_the_hashed_intent() {
+        let operation = ItemOperation::Create;
+        let fields = FieldSet {
+            entries: vec![(FieldKey::Title, "Fractions".to_owned())],
+            files: vec![],
+            body_format: Some(CopyFormat::Html),
+            appropriate_for_country: None,
+        };
+        let attestation = Attestation {
+            attested_by: "the seller".to_owned(),
+            attested_at_ms: 1_756_000_000_000,
+        };
+
+        let hashed = intent_as_json(&operation, &fields);
+        let recorded = attested_intent(&operation, &fields, Some(&attestation));
+        assert_eq!(
+            recorded
+                .get("attested_by")
+                .and_then(serde_json::Value::as_str),
+            Some("the seller"),
+            "the body records who attested, which is the whole point of carrying it"
+        );
+        assert!(
+            hashed.get("attested_by").is_none(),
+            "and the hashed intent does not, because the hash is the identity of what was \
+             written rather than of who said it was theirs"
+        );
+
+        let mut stripped = recorded;
+        let object = stripped
+            .as_object_mut()
+            .expect("the intent body is an object");
+        object.remove("attested_by");
+        object.remove("attested_at_ms");
+        assert_eq!(
+            blake3::hash(stripped.to_string().as_bytes()),
+            blake3::hash(hashed.to_string().as_bytes()),
+            "the body is the hashed intent plus the attestation and nothing else: this is the \
+             before-and-after hash, and it fails the moment either side moves"
+        );
+        assert_eq!(
+            attested_intent(&operation, &fields, None),
+            hashed,
+            "and a marketplace that asks for no attestation records exactly what it hashes"
+        );
+    }
 
     #[test]
     fn a_rejection_carries_its_detail_into_the_verdict() {

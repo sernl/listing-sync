@@ -869,16 +869,11 @@ async fn a_refused_create_settles_failed_not_green(pool: PgPool) {
 async fn an_exhausted_rate_window_settles_the_attempt_before_it_abandons(pool: PgPool) {
     provision(&pool).await;
     let engine = engine_pool(&pool).await;
-    let budgets = RateBudgetRepo::new(engine.clone());
-    let connection = tam_types::ConnectionId(Uuid([0x33; 16]));
-    let window = Timestamp(NOW.0 - NOW.0.rem_euclid(60_000));
-    let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
-    while budgets
-        .consume(ORG, connection, window, ceiling)
-        .await
-        .expect("the budget consumes")
-        != BudgetGrant::Exhausted
-    {}
+    // One: enough for the form scrape and nothing else, so the window is shut
+    // by the time the write is attempted. Closing it entirely would stop the
+    // run at the scrape, before any attempt exists, and this body is about
+    // what happens to an attempt that does.
+    exhaust_all_but(&engine, 1).await;
 
     let fake = FakeTes::new(None);
     let verdict = drive(&pool, &fake).await;
@@ -1000,10 +995,10 @@ async fn the_poll_consumes_one_grant_per_read_back_call(pool: PgPool) {
         .await
         .expect("the budget row reads");
     assert_eq!(
-        used, 5,
-        "one grant for the submit and one for each of the four reads; a poll placed \
-         outside the budget would leave this at 1 and spend the connection's ceiling \
-         invisibly"
+        used, 6,
+        "one grant for the form scrape, one for the submit and one for each of the four \
+         reads; a poll placed outside the budget would leave this at 2 and spend the \
+         connection's ceiling invisibly"
     );
 }
 
@@ -1018,21 +1013,28 @@ async fn the_poll_consumes_one_grant_per_read_back_call(pool: PgPool) {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn exhaust_all_but_one_grant(engine: &PgPool) {
+async fn exhaust_all_but(engine: &PgPool, spare: i32) {
     let budgets = RateBudgetRepo::new(engine.clone());
     let connection = tam_types::ConnectionId(Uuid([0x33; 16]));
     let window = Timestamp(NOW.0 - NOW.0.rem_euclid(60_000));
     let ceiling = i32::try_from(OUTBOUND_REQUESTS_PER_MINUTE_MAX.get()).unwrap_or(i32::MAX);
-    for _ in 1..ceiling {
+    for _ in spare..ceiling {
         assert_ne!(
             budgets
                 .consume(ORG, connection, window, ceiling)
                 .await
                 .expect("the budget consumes"),
             BudgetGrant::Exhausted,
-            "the fixture must leave exactly one grant for the write"
+            "the fixture must leave exactly the grants its caller asked to spare"
         );
     }
+}
+
+/// One grant left, which is the write's for an operation that makes no form
+/// scrape. A removal and a revise skip the preflight, so their first
+/// marketplace request is the write itself.
+async fn exhaust_all_but_one_grant(engine: &PgPool) {
+    exhaust_all_but(engine, 1).await;
 }
 
 /// Requeues the item the way `expire_and_steal` does behind a worker whose
@@ -1065,7 +1067,10 @@ async fn requeue(engine: &PgPool) {
 async fn a_rate_window_closing_mid_create_holds_the_duplicate_fence(pool: PgPool) {
     provision(&pool).await;
     let engine = engine_pool(&pool).await;
-    exhaust_all_but_one_grant(&engine).await;
+    // Two, because a create's first marketplace request is the form scrape and
+    // its second is the write. The window then closes on the read-back, which
+    // is the moment this body is about.
+    exhaust_all_but(&engine, 2).await;
 
     let fake = FakeTes::lagging(3);
     let verdict = drive(&pool, &fake).await;

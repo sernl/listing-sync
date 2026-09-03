@@ -26,6 +26,7 @@ use tam_marketplace::{
     RecordedTitle, RemoteListingId, WriteAttemptId,
 };
 use tam_marketplace_tes::TesAdapter;
+use tam_marketplace_tpt::write_model::AuthorshipDeclaration;
 use tam_marketplace_tpt::{listing_state_from_status, TptAdapter};
 use tam_types::{FailureCode, FailureDetail, Marketplace};
 
@@ -145,7 +146,7 @@ impl<P: DevicePlane> Marketplaces<P> for LiveMarketplaces {
                 Marketplace::Tpt => {
                     let transport = SessionTransport::new(TptLive, Arc::clone(&self.sessions))
                         .map_err(|why| refusal(&why))?;
-                    let adapter = TptAdapter::new(transport, payloads, SleepingPause);
+                    let adapter = tpt_adapter(transport, payloads, order);
                     interpret(&adapter, &TptCatalogue(&adapter), ledger, gate, order).await
                 }
                 Marketplace::Tes => {
@@ -303,6 +304,29 @@ fn refusal(why: &dyn core::fmt::Display) -> EngineError {
     })
 }
 
+/// The TPT adapter this order is to be run through, carrying the seller's own
+/// copyright declaration where the order supplies one.
+///
+/// A function rather than three lines at the call site because its absence was
+/// invisible: the adapter refuses every write without an attestation, which is
+/// right — the declaration is the seller's statement and not a constant this
+/// connector may make for them — and the device branch could not write to TPT
+/// at all while nothing here supplied it. Named, it can be asserted about.
+fn tpt_adapter<T: Transport, F: tam_marketplace::FileSource>(
+    transport: T,
+    files: F,
+    order: &WorkOrder,
+) -> tam_marketplace_tpt::TptAdapter<T, F, SleepingPause> {
+    let adapter = TptAdapter::new(transport, files, SleepingPause);
+    match order.attestation.as_ref() {
+        Some(attested) => adapter.attesting(AuthorshipDeclaration::attested(
+            attested.attested_by.clone(),
+            tam_types::Timestamp(attested.attested_at_ms),
+        )),
+        None => adapter,
+    }
+}
+
 /// What a work order says this run is resuming, where it says anything.
 ///
 /// The title comes off the order rather than out of the seed's own fields:
@@ -344,6 +368,7 @@ async fn interpret<A: MarketplaceAdapter, L: ItemLedger, R: ReconcileSource>(
         None => seed_for_removal(&order.preparation),
     };
     seed.resume = resume_from(order);
+    seed.attestation = order.attestation.clone();
     let clock = DeviceClock;
     let ids = DeviceIds;
     let pause = SleepingPause;
@@ -1009,6 +1034,85 @@ mod reconcile_tests {
         );
     }
 
+    /// An order carrying an attestation builds an adapter that gets past the
+    /// attestation check; one without does not.
+    ///
+    /// This is the assertion whose absence hid a live defect. The desktop
+    /// built its TPT adapter with no attestation at all, so every create,
+    /// revise, publish and removal from a seller's own device refused before
+    /// composing anything — on the branch D1 requires every TPT request to
+    /// originate from. Nothing caught it because the desktop's other tests
+    /// drive a scripted adapter rather than the real one.
+    ///
+    /// The two cases are told apart by which refusal comes back, and neither
+    /// reaches the transport. Without an attestation the adapter refuses on
+    /// the declaration, before it looks at the field set at all. With one it
+    /// gets past that check and refuses in `listing_from_field_set` instead,
+    /// on this fixture's deliberately bare field set — "the projection omitted
+    /// Price". Both are `UploadRejected`, so the assertions key on the
+    /// refusal's words; that second refusal, and how far it got, is the
+    /// evidence.
+    #[tokio::test]
+    async fn an_order_carrying_an_attestation_builds_an_adapter_that_can_write() {
+        use tam_engine_driver::vocabulary::Attestation;
+        use tam_marketplace::{FieldSet as Set, IdempotencyKey, MarketplaceAdapter};
+
+        let submission = |order: &super::WorkOrder| {
+            let adapter = super::tpt_adapter(
+                CassetteTransport::new(Cassette {
+                    interactions: Vec::new(),
+                }),
+                NoFiles,
+                order,
+            );
+            async move {
+                adapter
+                    .submit(
+                        IdempotencyKey(Uuid([0x11; 16])),
+                        Set {
+                            entries: vec![],
+                            files: vec![],
+                            body_format: None,
+                            appropriate_for_country: None,
+                        },
+                        tam_types::Timestamp(0),
+                    )
+                    .await
+            }
+        };
+
+        // Keyed on the refusal's own words rather than its code: both cases
+        // refuse `UploadRejected`, and which check refused is the whole
+        // question.
+        let attestation_refusal = |answer: &Result<_, AdapterError>| match answer {
+            Err(AdapterError::Rejected { detail, .. }) => {
+                detail.0.contains("authorship attestation")
+            }
+            _ => false,
+        };
+
+        let bare = super::tests::order();
+        let refused = submission(&bare).await;
+        assert!(
+            attestation_refusal(&refused),
+            "with no attestation the adapter refuses on the seller's declaration, before any \
+             request: {refused:?}"
+        );
+
+        let mut attested = super::tests::order();
+        attested.attestation = Some(Attestation {
+            attested_by: "the seller".to_owned(),
+            attested_at_ms: 1_756_000_000_000,
+        });
+        let reached = submission(&attested).await;
+        assert!(
+            !attestation_refusal(&reached),
+            "and with one it is past that check, refusing on the fixture's own bare field set \
+             instead — which is the only observable difference between an adapter that can \
+             write and one that cannot: {reached:?}"
+        );
+    }
+
     /// Neither source may answer absent to a search it cannot perform.
     #[tokio::test]
     async fn a_reconcile_source_refuses_a_locator_it_cannot_search() {
@@ -1095,6 +1199,7 @@ mod tests {
     pub(super) fn order() -> WorkOrder {
         WorkOrder {
             reconcile: None,
+            attestation: None,
             lease: LeasedItem {
                 org: OrgId(uuid(1)),
                 item: JobItemId(uuid(2)),
@@ -1503,28 +1608,20 @@ mod tests {
              under the seller's session after the revocation: {calls:?}"
         );
 
-        // Pinned as it behaves, and it is not what section 5 of
-        // `engine-driver-split.md` requires. That section says a failed
-        // entitlement check must produce the shape `BudgetGrant::Exhausted`
-        // produces -- the attempt settled abandoned and the run `Abandoned` --
-        // "never a new terminal outcome". What happens instead is that
-        // `SyncMachine::exhaust_budget` maps `AwaitingPreflight` to a terminal
-        // `Outcome::Skipped` (`crates/tam-domain/src/lib.rs:1198`), so the
-        // interpreter settles the item and the seller's queued work is dropped
-        // rather than left for the reaper to requeue on an entitled device.
-        // Reported; change this assertion when the machine changes, not before.
-        let settles = plane.settles().await;
-        assert_eq!(settles.len(), 1);
-        assert_eq!(
-            settles[0].verdict.outcome,
-            tam_domain::ItemOutcome::Skipped,
-            "current behaviour, and a divergence from the design note rather than an \
-             endorsement of it: a revocation settles the item terminally instead of abandoning \
-             the lease"
+        // The item is left for another device rather than settled here.
+        // Nothing was attempted, so there is no evidence to settle on: the
+        // run abandons, the lease expires, and the reaper hands the work to
+        // a device that is still entitled. Settling it terminally would drop
+        // the seller's queued work on the strength of this device's
+        // subscription rather than on anything about the item.
+        assert!(
+            plane.settles().await.is_empty(),
+            "a revocation before any request settles nothing: the item is the seller's and \
+             this device losing its entitlement is not evidence about it"
         );
         assert!(
-            matches!(events.last(), Some(WorkEvent::Settled { .. })),
-            "and the seller is shown that terminal settle: {events:?}"
+            !matches!(events.last(), Some(WorkEvent::Settled { .. })),
+            "and the seller is not shown a settle that did not happen: {events:?}"
         );
         drop(source);
         std::fs::remove_dir_all(&data_dir).ok();

@@ -80,6 +80,21 @@ pub struct NewAttempt {
     pub intent: AttemptIntent,
 }
 
+/// The seller's own statement that the work they are listing is theirs, as the
+/// wire carries it.
+///
+/// Optional because it is a fact of one marketplace rather than of every
+/// write: TPT's product form makes the seller declare it and Tes's does not,
+/// so an order for a Tes item carries none and that absence is not a missing
+/// value. The instant is the seller's own, carried from the link rather than
+/// minted here, because a minted one would be this system attesting on their
+/// behalf.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attestation {
+    pub attested_by: String,
+    pub attested_at_ms: i64,
+}
+
 /// The stranded create a reconcile is settling, and what identifies it.
 ///
 /// The title is the one that create recorded that it sent, read from its own
@@ -187,6 +202,17 @@ pub enum GrantKind {
     Write,
     /// One try of a verification read-back.
     VerifyRead,
+    /// One scrape of a marketplace's own create or edit form, which the
+    /// preflight makes before any write.
+    ///
+    /// Its own kind rather than either of the others because it is neither:
+    /// charging a scrape against the write allowance would make that
+    /// allowance wrong about how many listings a seller may touch, and
+    /// charging it as a verification read would report a read of a listing
+    /// that does not exist yet. Both existing kinds draw on the same window
+    /// today, so this changes what is reported before it changes what is
+    /// permitted.
+    FormRead,
 }
 
 /// The conditions the interpreter branches on, and nothing else.
@@ -293,6 +319,18 @@ pub struct WorkOrder {
     /// one as the ordinary order it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reconcile: Option<ReconcileSubject>,
+    /// The attestation this write goes out under, where the marketplace
+    /// requires one.
+    ///
+    /// It travels rather than being read on the device because it is the
+    /// seller's declaration held against their connection, and the device
+    /// holds no connection row. Absent for a marketplace that asks for none;
+    /// absent for one that does is a connection the seller has not attested
+    /// on, and the adapter refuses rather than supplying a constant on their
+    /// behalf. `default` so an order encoded before this field decodes as one
+    /// carrying no attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<Attestation>,
     pub server_now_ms: i64,
     pub server_deadline_ms: i64,
     pub next_poll_ms: u64,

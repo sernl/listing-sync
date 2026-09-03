@@ -207,6 +207,7 @@ fn leased() -> LeasedItem {
 fn the_whole_claim_view_round_trips() {
     let order = WorkOrder {
         reconcile: None,
+        attestation: None,
         lease: leased(),
         preparation: ItemPreparation {
             operation: revision(),
@@ -525,6 +526,7 @@ fn a_work_order_carries_a_reconcile_only_when_it_is_one() {
 fn order_fixture(reconcile: Option<ReconcileSubject>) -> WorkOrder {
     WorkOrder {
         reconcile,
+        attestation: None,
         lease: leased(),
         preparation: ItemPreparation {
             operation: revision(),

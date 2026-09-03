@@ -80,6 +80,7 @@ struct State {
     events: Vec<(JobItemId, String)>,
     /// Grants already issued in the current window, keyed by connection.
     grants: HashMap<ConnectionId, i32>,
+    stop_on_open_attempt: Option<std::sync::Arc<core::sync::atomic::AtomicBool>>,
     /// Mappings a run other than this one has already bound, which is what
     /// `open_attempt` refuses a create against.
     bound_mappings: Vec<MappingId>,
@@ -137,6 +138,20 @@ impl InMemoryLedger {
                 },
             );
         });
+    }
+
+    /// Trips the given flag the moment an attempt is opened.
+    ///
+    /// The one moment no adapter hook can reach: between the intent being
+    /// recorded and the write it authorises going out, the run touches only
+    /// the ledger. That is the window a device losing its entitlement lands
+    /// in, and it is the window in which stopping must abandon the attempt
+    /// rather than settle the item.
+    pub fn stopping_when_an_attempt_opens(
+        &self,
+        flag: std::sync::Arc<core::sync::atomic::AtomicBool>,
+    ) {
+        self.with(|state| state.stop_on_open_attempt = Some(flag));
     }
 
     /// Records that another run bound this mapping while ours was working.
@@ -316,6 +331,9 @@ impl ItemLedger for InMemoryLedger {
                 .is_some_and(|attempt| !attempt.settled)
             {
                 return Err(LedgerError::AttemptInFlight);
+            }
+            if let Some(flag) = state.stop_on_open_attempt.as_ref() {
+                flag.store(true, core::sync::atomic::Ordering::SeqCst);
             }
             // Admission's re-check as structure: a create whose mapping was
             // bound while the run was working has nothing left to make.

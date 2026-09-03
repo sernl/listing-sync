@@ -403,11 +403,11 @@ impl ItemLedger for PgLedger {
         kind: wire::GrantKind,
         at: Timestamp,
     ) -> Result<wire::BudgetGrant, wire::LedgerError> {
-        // Both kinds draw on the same per-connection window today. The
+        // Every kind draws on the same per-connection window today. The
         // distinction is carried so the ceiling can differ without the
         // interpreter learning what either ceiling is.
         let ceiling = match kind {
-            wire::GrantKind::Write | wire::GrantKind::VerifyRead => {
+            wire::GrantKind::Write | wire::GrantKind::VerifyRead | wire::GrantKind::FormRead => {
                 i32::try_from(tam_limits::marketplace::OUTBOUND_REQUESTS_PER_MINUTE_MAX.get())
                     .unwrap_or(i32::MAX)
             }

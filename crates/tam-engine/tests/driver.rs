@@ -338,6 +338,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
 fn seed_machine(strategy: CreateStrategy) -> MachineSeed {
     MachineSeed {
         resume: None,
+        attestation: None,
         form: FormId(Uuid([0x09; 16])),
         fields: FieldSet {
             entries: vec![(FieldKey::Title, "Fixture".to_owned())],

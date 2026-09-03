@@ -86,11 +86,19 @@ impl IdSource for SequentialIds {
 /// Cancellation a body drives itself, so the suspended-device paths are
 /// reachable without a runtime.
 #[derive(Default)]
-pub struct Switch(std::sync::atomic::AtomicBool);
+pub struct Switch(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl Switch {
     pub fn trip(&self) {
         self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// The same flag, for a fixture that has to trip it from somewhere the
+    /// adapter cannot reach — the ledger, whose calls are where a run sits
+    /// between recording an intent and sending the write it authorises.
+    #[must_use]
+    pub fn shared(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.0)
     }
 }
 
@@ -110,6 +118,7 @@ pub struct ScriptedAdapter<'a> {
     preflight_answers: Vec<Result<FormSchemaFingerprint, AdapterError>>,
     preflight_cursor: AtomicUsize,
     cancel: Option<&'a Switch>,
+    cancel_after_preflight: bool,
     cancel_after_submit: bool,
     cancel_after_read_back: bool,
 }
@@ -124,6 +133,7 @@ impl<'a> ScriptedAdapter<'a> {
             preflight_answers: vec![Ok(FormSchemaFingerprint(ContentHash([0x0F; 32])))],
             preflight_cursor: AtomicUsize::new(0),
             cancel: None,
+            cancel_after_preflight: false,
             cancel_after_submit: false,
             cancel_after_read_back: false,
         }
@@ -139,6 +149,15 @@ impl<'a> ScriptedAdapter<'a> {
     pub fn cancelling_after_submit(mut self, switch: &'a Switch) -> Self {
         self.cancel = Some(switch);
         self.cancel_after_submit = true;
+        self
+    }
+
+    /// Stops the run after the form scrape and before the write, which is the
+    /// window an entitlement lapsing mid-tick actually lands in.
+    #[must_use]
+    pub fn cancelling_after_preflight(mut self, switch: &'a Switch) -> Self {
+        self.cancel = Some(switch);
+        self.cancel_after_preflight = true;
         self
     }
 
@@ -169,6 +188,11 @@ impl MarketplaceAdapter for ScriptedAdapter<'_> {
         _form: FormId,
     ) -> Result<FormSchemaFingerprint, AdapterError> {
         let position = self.preflight_cursor.fetch_add(1, Ordering::SeqCst);
+        if self.cancel_after_preflight {
+            if let Some(switch) = self.cancel {
+                switch.trip();
+            }
+        }
         self.preflight_answers
             .get(position)
             .or_else(|| self.preflight_answers.last())
@@ -268,6 +292,7 @@ pub fn landed_evidence() -> SubmitEvidence {
 fn seed_machine() -> MachineSeed {
     MachineSeed {
         resume: None,
+        attestation: None,
         form: FormId(Uuid([0x09; 16])),
         fields: FieldSet {
             entries: vec![(FieldKey::Title, "Fixture".to_owned())],
@@ -672,6 +697,86 @@ pub async fn a_create_bound_elsewhere_settles_skipped<L: ItemLedger + LedgerInsp
         ledger.attempt(lease.mapping).await.is_none(),
         "and no attempt is left standing: the refusal happened before one was opened, so \
          there is no fence to release and none to leak"
+    );
+}
+
+/// A run stopped between the form scrape and the write abandons the attempt,
+/// and does not settle the item.
+///
+/// The loop-top guard steps `BudgetExhausted`, which from a state holding an
+/// open attempt settles the item `Ambiguous` — correct for a run killed after
+/// a write, and wrong for one stopped before it, where nothing was sent. An
+/// ambiguity is a claim that a write may have landed, so settling on it ends
+/// the item terminally and never runs it again: the seller's work lost to one
+/// device going away. Nothing halts on that path, and the halt assertion below
+/// is a guard rather than the point.
+pub async fn a_run_stopped_before_the_write_abandons_rather_than_settling_the_item(
+    ledger: &crate::memory::InMemoryLedger,
+    lease: &LeasedItem,
+) {
+    let switch = Switch::default();
+    // Stopped the moment the attempt opens, which is the only window an
+    // adapter hook cannot reach and the one this arm is about.
+    ledger.stopping_when_an_attempt_opens(switch.shared());
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
+    let verdict = drive(ledger, lease, &adapter, &switch).await;
+    assert!(
+        matches!(verdict, RunVerdict::Abandoned { .. }),
+        "nothing was sent, so the run hands the lease back rather than deciding the item: \
+         {verdict:?}"
+    );
+    assert_eq!(
+        ledger.halt_count(lease.org).await,
+        0,
+        "and the tenant's inventory is untouched: one device losing its entitlement is not \
+         evidence that this seller's automation has stopped being safe"
+    );
+    let attempt = ledger
+        .attempt(lease.mapping)
+        .await
+        .expect("the run opened a fencing attempt before it was stopped");
+    assert_eq!(
+        (attempt.state.as_str(), attempt.settled),
+        ("abandoned", true),
+        "the attempt it opened is settled abandoned rather than left in flight, so the next \
+         lease can open its own rather than colliding with this one"
+    );
+    let item = ledger.item(lease.item).await;
+    assert_ne!(
+        item.state, "settled",
+        "and the item itself is left for a device that can still do it"
+    );
+}
+
+/// An exhausted rate window stops the form scrape, before any attempt exists.
+///
+/// The scrape is a marketplace request and was drawing on nobody's allowance,
+/// so a seller's window under-counted by one request per create. Setting the
+/// ceiling to nothing proves the scrape now asks: the run stops before it,
+/// which means before `RecordIntent`, so no attempt is opened at all. While
+/// the scrape went out uncharged this run reached the write and opened one.
+pub async fn an_exhausted_window_stops_the_form_scrape_before_any_attempt<L>(
+    ledger: &L,
+    lease: &LeasedItem,
+) where
+    L: ItemLedger + LedgerInspector,
+{
+    let switch = Switch::default();
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()));
+    let verdict = drive(ledger, lease, &adapter, &switch).await;
+    assert!(
+        matches!(verdict, RunVerdict::Abandoned { .. }),
+        "an exhausted window abandons rather than settling: {verdict:?}"
+    );
+    assert!(
+        ledger.attempt(lease.mapping).await.is_none(),
+        "and it stops early enough that no fencing attempt is opened, which is only true if \
+         the scrape itself asked for a grant"
+    );
+    assert_eq!(
+        ledger.halt_count(lease.org).await,
+        0,
+        "a closed rate window is a wait rather than a fault, so nothing halts"
     );
 }
 

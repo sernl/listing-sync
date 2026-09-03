@@ -499,6 +499,40 @@ Proves the last concrete storage call on the driver's path is behind a port, and
 Verification: the driver crate compiling with no concrete preparation type in scope, and a ledger test asserting the attestation reaches the `write_attempt` row and not the intent hash.
 Kill gate: an attestation that changes the idempotency key, which would make a re-attested create a second listing.
 
+Landed. The gate now sits at the four network-bearing effects in the shape `BudgetGrant::Exhausted` already produces, and `AssertFormSchema` consumes a `GrantKind::FormRead` where it previously went out against nobody's allowance — a seller's window under-counted by one request per create.
+
+The revocation half was larger than the entry describes, and the per-effect check it names turned out to be dead code: the loop-top guard sees the same cancellation one iteration earlier, so a check at the effect can never fire.
+The guard now splits by whether a request can have gone out, which is the distinction `Input::BudgetExhausted` does not make.
+From `AwaitingPreflight` or `PreflightAsserted` the run abandons with nothing attempted and nothing settled, which is the requeue-able outcome this step was for.
+From `IntentRecorded` the open attempt is settled abandoned and the run abandons, where before it settled the item `Ambiguous` — terminally, on the claim that a write may have landed when nothing was sent, so the seller's item ended and never ran again because one device's entitlement lapsed.
+Nothing halted: `exhaust_budget` emits `CaptureDiagnostics` alone, and the inventory halt belongs to the ambiguous-submit row, which is a different situation reached a different way.
+An earlier draft of this entry said the tenant's inventory halted, and it was wrong; the defect is one item lost per lapse rather than a tenant stopped, which is smaller and still worth the arm.
+`exhaust_budget` is untouched, because refusing from the pre-attempt states would falsify `budget_exhaustion_is_terminal_in_one_transition`; the guard gives the invariant without breaking the property.
+
+Kill gate, asserted rather than reasoned about: `a_plan_lapsed_past_the_grace_claims_nothing` covers the claim's subscription filter and `abandoning_without_attempting_is_bounded_by_the_budget` runs the claim-abandon-reap cycle to termination.
+The terminator is not a final charge but the reaper's give-up arm, which takes an item whose next attempt would exceed the budget — so the last cycle settles rather than charging, and the test says so.
+A cycle that charged nothing would repeat for ever, which is how the stranded-create park arm differs and why it needed its own bound.
+
+Step 14, landed as two halves of unequal weight.
+
+The attestation is the substantial one, and the entry understates it. Before this change no TPT write could leave a device at all: the worker built its adapter with the seller's declaration off the connection and the desktop built it with none, and the adapter refuses without one — correctly, since the copyright declaration is the seller's statement and not a constant a connector may make for them.
+So the branch D1 requires every TPT request to originate from was the branch that could not make one, and nothing caught it because the desktop's tests drive a scripted adapter rather than the real one.
+The attestation now travels on the work order as an optional field, absent for a marketplace that asks for none, and reaches both the adapter and the recorded intent.
+It joins `AttemptIntent.body` and never the hash: the hash feeds the idempotency key, so folding an attestation into it would make a re-attested create a second listing for one product.
+
+The third port was not built.
+`Preparation` was to be justified by the driver compiling with no concrete storage type in scope, and `just purity` already asserts exactly that — no `tam-storage`, `sqlx`, `tokio` or `reqwest` in the interpreter's dependency tree — inside `just check`, so the proof exists and fails the build if it stops holding; the seam the trait would open is one section 3 deliberately keeps shut, which would leave it with one implementation for ever.
+
+A founder item this step raises and does not answer: what a seller sees when their connection carries no attestation.
+Today the run reaches the submit — preflight, `RecordIntent`, then the adapter's refusal — and that refusal is an `AdapterError::Rejected`, so the machine settles the attempt and the item `Failed`.
+That is terminal. The item spends an attempt, ends, and is never retried, so adding the attestation afterwards does not bring it back: the seller declares authorship and the work still does not happen, with nothing saying why.
+The earlier wording here said the item abandons, which would have left it for a later lease; it does not, and the difference is what raises this from a courtesy to something worth doing.
+Recommended: park the item on a gate naming the declaration, so the seller is asked for the one thing that would unblock it, in the same shape a lapsed session is asked for. It is a product decision about how they are asked rather than an engineering one, which is why it is here rather than in the step.
+
+Two observations from the engine review, both pre-existing and neither addressed here.
+`Effect::Reconcile` draws no rate grant: `find_listing` enumerates the seller's catalogue, which is as much a marketplace request as the scrape now charged for, and it is unbilled.
+And `tam-worker` still builds a server-side TPT adapter, which is the branch D1 says should not exist — the device now carries the attestation that lets it write, so the worker's TPT leg is interim rather than needed.
+
 Step 14 does not complete the split.
 The broker deletion, the exclusivity-claim lift with its pepper re-sited off the vault key, the four crate dispositions of open question 3, and D1's structural build-failing test are all held until the desktop runs the driver against a live marketplace.
 The broker deletion carries a predecessor that was not visible when it was scoped: `crates/tam-session-broker/src/vault.rs` holds the only writer of `connection.state = 'linked'` anywhere in the tree, and the device claim's candidate filter requires a linked connection, so deleting the crate stops every device claiming until a device-reported link exists to replace it.

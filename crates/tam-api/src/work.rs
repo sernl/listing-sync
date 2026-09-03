@@ -22,12 +22,13 @@ use tam_engine::seed::{
     Disposed, ItemPreparation,
 };
 use tam_engine_driver::vocabulary::{
-    AttemptRef, ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall, LedgerError,
-    PayloadManifest, ReconcileSubject, SettleEnvelope, WorkFilter, WorkOrder,
+    AttemptRef, Attestation, ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall,
+    LedgerError, PayloadManifest, ReconcileSubject, SettleEnvelope, WorkFilter, WorkOrder,
 };
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
-    describe_files, BlobRepo, Charged, ClaimPolicy, DeviceClaim, DeviceRef, LeaseRepo,
+    describe_files, BlobRepo, Charged, ClaimPolicy, ConnectionFactsRepo, DeviceClaim, DeviceRef,
+    LeaseRepo,
 };
 use tam_types::{FailureDetail, Timestamp};
 
@@ -201,8 +202,23 @@ async fn work_order(
             .collect(),
         None => Vec::new(),
     };
+    // The seller's own declaration, off the connection they linked. The device
+    // holds no connection row, so this is the only place it can come from, and
+    // without it the TPT adapter refuses every write — correctly, since the
+    // copyright declaration is the seller's statement and not a constant a
+    // connector may supply for them.
+    let attestation = ConnectionFactsRepo::new(state.pool.clone())
+        .authorship_for(org, leased.inventory.marketplace())
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?
+        .map(|record| Attestation {
+            attested_by: record.name,
+            attested_at_ms: record.attested_at.0,
+        });
+
     Ok(Some(WorkOrder {
         lease: driven,
+        attestation,
         // Set only where the claim took a stranded create out of its park.
         // Its presence is the whole of how a device tells a reconcile from an
         // ordinary run, because the operation cannot: a stranded create is

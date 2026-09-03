@@ -20,6 +20,12 @@ const CONNECTION: ConnectionId = ConnectionId(Uuid([0x44; 16]));
 const LEASE_EPOCH: i64 = 1;
 
 fn fixture() -> (InMemoryLedger, LeasedItem) {
+    fixture_with_ceiling(64)
+}
+
+/// The same fixture with the connection's rate window stated, for the one body
+/// that is about exhausting it.
+fn fixture_with_ceiling(rate_ceiling: i32) -> (InMemoryLedger, LeasedItem) {
     let seeded = Seeded {
         org: ORG,
         item: ITEM,
@@ -27,9 +33,7 @@ fn fixture() -> (InMemoryLedger, LeasedItem) {
         inventory: InventoryId::TesGb,
         connection: CONNECTION,
         lease_epoch: LEASE_EPOCH,
-        // Generous on purpose: a body that means to exhaust the window is the
-        // one that should say so, not every other body by accident.
-        rate_ceiling: 64,
+        rate_ceiling,
     };
     let lease = LeasedItem {
         org: ORG,
@@ -130,5 +134,27 @@ fn a_read_that_could_not_be_performed_leaves_it_stranded_too() {
             &lease,
             ScriptedReconcile::could_not_read("the session lapsed mid-walk"),
         ),
+    );
+}
+
+/// The two entitlement arms: a run stopped between the scrape and the write,
+/// and a window exhausted before the scrape.
+#[test]
+fn a_run_stopped_before_the_write_abandons_rather_than_settling_the_item() {
+    let (ledger, lease) = fixture();
+    futures::executor::block_on(
+        conformance::a_run_stopped_before_the_write_abandons_rather_than_settling_the_item(
+            &ledger, &lease,
+        ),
+    );
+}
+
+#[test]
+fn an_exhausted_window_stops_the_form_scrape_before_any_attempt() {
+    // Nothing at all, so the very first grant the run asks for is refused,
+    // and the first one it asks for is the scrape's.
+    let (ledger, lease) = fixture_with_ceiling(0);
+    futures::executor::block_on(
+        conformance::an_exhausted_window_stops_the_form_scrape_before_any_attempt(&ledger, &lease),
     );
 }

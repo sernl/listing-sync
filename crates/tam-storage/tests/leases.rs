@@ -3772,3 +3772,141 @@ async fn an_attempt_whose_intent_names_no_title_is_not_a_reconcile(app: PgPool) 
          not a reconcile and the device is not sent to search for one"
     );
 }
+
+/// A device that claims and abandons without attempting anything cannot loop
+/// for ever: every cycle is charged, and the budget ends it.
+///
+/// This is the kill gate the entitlement work opens. A run stopped before its
+/// first request now hands the lease back instead of settling the item, which
+/// is right — and a requeue with no terminator would be a seller's item
+/// claimed and dropped by an unentitled device on every poll, for ever. The
+/// terminator is not the loop's own: it is the reaper charging the steal, and
+/// the attempt budget settling the item once the charges reach the cap. The
+/// claim's subscription filter is the other half and is asserted separately by
+/// `a_plan_lapsed_past_the_grace_claims_nothing`; this half is the one that
+/// holds even for a device that is entitled and merely keeps stopping.
+#[sqlx::test(migrations = "./migrations")]
+async fn abandoning_without_attempting_is_bounded_by_the_budget(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x7D, true).await;
+    let item = enqueue_one(&engine, &tenant, 0x7E, 0x7F).await;
+    let leases = LeaseRepo::new(engine.clone());
+
+    let mut charged = Vec::new();
+    for cycle in 0..ATTEMPTS_MAX {
+        let leased = claim(&app, tenant.org, DEVICE, 60).await;
+        let Some(leased) = leased else {
+            panic!("cycle {cycle}: the item stopped being claimable before the budget ended it");
+        };
+        assert_eq!(leased.item, item, "the same item comes back each cycle");
+        // The device stops before its first request: no attempt is opened and
+        // nothing is settled, which is exactly what the driver now does when a
+        // run is stopped before the form scrape.
+        sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+            .execute(&engine)
+            .await
+            .expect("the lease ages");
+        leases
+            .expire_and_steal(Timestamp(T0.0 + 61_000), ATTEMPTS_MAX)
+            .await
+            .expect("the reaper runs");
+        let (_, _, attempts, _, _) = item_disposition(&engine, tenant.org, item).await;
+        charged.push(attempts);
+    }
+
+    let (last, climbing) = charged.split_last().expect("the loop ran");
+    assert_eq!(
+        climbing,
+        (1..ATTEMPTS_MAX).collect::<Vec<_>>(),
+        "every cycle but the last charged exactly one attempt, which is what bounds the loop: \
+         a cycle that charged nothing would repeat for ever, and that is how a stranded \
+         create's park arm differs from this one"
+    );
+    assert_eq!(
+        *last,
+        ATTEMPTS_MAX - 1,
+        "and the last charges nothing because it settles instead: the reaper's give-up arm \
+         takes an item whose next attempt would exceed the budget, so the terminator is the \
+         settle rather than one more charge"
+    );
+    let (state, _, _, _, outcome) = item_disposition(&engine, tenant.org, item).await;
+    assert_eq!(
+        (state.as_str(), outcome.as_deref()),
+        ("settled", Some("failed")),
+        "and the budget ended it rather than the loop noticing anything itself"
+    );
+    assert!(
+        claim(&app, tenant.org, DEVICE, 60).await.is_none(),
+        "a settled item is not claimable, so the cycle cannot start again"
+    );
+}
+
+/// An attested intent is recorded whole, and its hash is stored as given
+/// rather than derived from what was recorded.
+///
+/// The ledger is the durable record of what a write went out under, and it has
+/// to be, because the crate that supplies the attestation today is scheduled
+/// for deletion. This is the storage half of that: the body arrives with the
+/// declaration in it and the hash is carried, not recomputed. That the hash
+/// excludes the attestation is the driver's property and is asserted there, by
+/// `an_attestation_reaches_the_recorded_body_and_never_the_hashed_intent`,
+/// which can hash because that crate has the hasher; the two together are the
+/// guarantee, and the dangerous half is the hash, since it feeds the
+/// idempotency key and a re-attested create must not become a second listing.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_attested_intent_is_recorded_whole_with_its_hash_carried_not_recomputed(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x80, true).await;
+    enqueue_one(&engine, &tenant, 0x81, 0x82).await;
+    let lease = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the item leases");
+
+    let mut body = serde_json::json!({
+        "operation": "create",
+        "entries": recorded_entries(),
+        "files": [],
+    });
+    let object = body.as_object_mut().expect("the intent body is an object");
+    object.insert("attested_by".to_owned(), "the seller".into());
+    object.insert("attested_at_ms".to_owned(), 1_756_000_000_000_i64.into());
+    // Deliberately unrelated to the body's bytes, so a store that recomputed
+    // the hash from what it was given could not accidentally match it.
+    let hash = vec![0xA7; 32];
+
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &lease.lease_ref(),
+            Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &AttemptIntent {
+                    body: body.clone(),
+                    hash: hash.clone(),
+                },
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the attested attempt opens");
+
+    let (stored_body, stored_hash): (serde_json::Value, Vec<u8>) =
+        sqlx::query_as("SELECT intent, intent_hash FROM write_attempt WHERE org_id = $1")
+            .bind(db_uuid(tenant.org.0))
+            .fetch_one(&engine)
+            .await
+            .expect("the attempt row reads");
+    assert_eq!(
+        stored_body, body,
+        "the row records the intent whole, attestation included: this row is written before \
+         the click and is what survives the deletion of the crate that supplies it"
+    );
+    assert_eq!(
+        stored_hash, hash,
+        "and the hash is carried rather than recomputed from the body, which is what keeps \
+         the idempotency key an identity of what was written rather than of who attested"
+    );
+}
