@@ -73,6 +73,66 @@
             cargoExtraArgs = "--locked --workspace --exclude tam-desktop";
           };
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+          # D2's second surface. A separate nixpkgs import rather than a
+          # `config` on the one above, because the Android SDK is unfree and
+          # its licence has to be accepted, and neither belongs on the shell
+          # every other lane uses. Acceptance is the attribute rather than the
+          # `NIXPKGS_ACCEPT_ANDROID_SDK_LICENSE` environment variable, because
+          # androidenv reads `config.android_sdk.accept_license` first and only
+          # falls back to the impure `getEnv` when it is absent
+          # (nixpkgs `pkgs/development/mobile/androidenv/license.nix`).
+          pkgsAndroid = import inputs.nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+              android_sdk.accept_license = true;
+            };
+          };
+          # The two versions the generated Gradle project and the workflow both
+          # name, bound once here so a bump is one edit rather than four.
+          #
+          # 35.0.0 rather than the latest, and the pin is not cosmetic: the
+          # Android Gradle Plugin the generated project carries is 8.11.0,
+          # whose default build-tools is 35.0.0, and a Gradle that wants a
+          # version the SDK does not hold tries to install it into the Nix
+          # store and fails with "The SDK directory is not writable". The
+          # generated `app/build.gradle.kts` names the same version back, so
+          # the two cannot drift into that failure again.
+          androidBuildToolsVersion = "35.0.0";
+          androidNdkVersion = "29.0.14206865";
+          # Every version is pinned. `latest` in this composition resolves
+          # through nixpkgs' `repo.json`, so an input bump would silently move
+          # the SDK a build was proven against; naming them makes that a diff.
+          androidComposition = pkgsAndroid.androidenv.composeAndroidPackages {
+            cmdLineToolsVersion = "19.0";
+            platformToolsVersion = "37.0.1";
+            buildToolsVersions = [ androidBuildToolsVersion ];
+            # 36 is `compileSdk` and `targetSdk` in the generated project.
+            platformVersions = [ "36" ];
+            includeNDK = true;
+            ndkVersions = [ androidNdkVersion ];
+            # Nothing here builds C++ through CMake -- Tauri drives cargo from
+            # a Gradle task -- and the emulator and its system images are
+            # gigabytes we do not need to compile an APK.
+            includeCmake = false;
+            includeEmulator = false;
+            includeSystemImages = false;
+          };
+          androidSdkRoot = "${androidComposition.androidsdk}/libexec/android-sdk";
+          androidNdkRoot = "${androidSdkRoot}/ndk/${androidNdkVersion}";
+          # rust-toolchain.toml carries one Android triple, because
+          # `just check-portable` proves one per surface rather than one per
+          # ABI. A bundle needs all four, so this shell's toolchain widens the
+          # same file's channel rather than pinning a second version.
+          androidRustToolchain = rustToolchain.override {
+            targets = [
+              "aarch64-linux-android"
+              "armv7-linux-androideabi"
+              "i686-linux-android"
+              "x86_64-linux-android"
+            ];
+          };
           bin = craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; });
         in
         {
@@ -251,6 +311,33 @@
               pkgs.lld
               pkgs.llvmPackages.llvm
             ];
+          };
+
+          # D29's Android route: the SDK, the NDK and a JDK from androidenv
+          # rather than from an Android Studio install, which the Tauri
+          # prerequisites page is otherwise the only documented way to get.
+          # Deliberately not `craneLib.devShell`: this shell builds for a
+          # foreign target through cargo-ndk and Gradle, and crane's host-target
+          # environment is not what that wants.
+          devShells.android = pkgsAndroid.mkShell {
+            packages = [
+              androidRustToolchain
+              androidComposition.androidsdk
+              pkgs.cargo-tauri
+              pkgs.jdk17
+              pkgs.just
+              pkgs.nodejs_22
+            ];
+            ANDROID_HOME = androidSdkRoot;
+            ANDROID_SDK_ROOT = androidSdkRoot;
+            ANDROID_NDK_ROOT = androidNdkRoot;
+            NDK_HOME = androidNdkRoot;
+            JAVA_HOME = pkgs.jdk17.home;
+            # The Android Gradle Plugin resolves aapt2 from Maven by default,
+            # and that copy is an unpatched ELF binary a NixOS host cannot
+            # execute. Pointing it at the SDK's own, which androidenv has
+            # patched, is the nixpkgs-documented override.
+            GRADLE_OPTS = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${androidSdkRoot}/build-tools/${androidBuildToolsVersion}/aapt2";
           };
 
           formatter = pkgs.nixfmt-rfc-style;

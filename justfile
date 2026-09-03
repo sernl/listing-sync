@@ -337,6 +337,44 @@ desktop-build-windows:
     cd web && npm run build
     cd apps/desktop && env -u CC -u CXX -u NIX_CFLAGS_COMPILE -u NIX_LDFLAGS PATH="$TAURI_WINDOWS_TOOLCHAIN_BIN:$PATH" cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis
 
+# The Android client (D2's second surface). Every recipe below needs the
+# Android shell rather than the default one -- `nix develop .#android` -- which
+# carries the SDK, the NDK, a JDK and all four Android rust targets. D3 limits
+# a phone to work the seller starts, so nothing here schedules anything.
+#
+# The generated tree is committed rather than regenerated, because the release
+# signing config lives in its build.gradle.kts and a build that patched that
+# file on the fly would emit an unsigned release rather than an error.
+#
+# Regenerate gen/android, after a bundle identifier or application name change
+android-init:
+    cd apps/desktop && cargo tauri android init
+
+# arm64 only: this is the founder's own phone, and every further ABI is a full
+# rebuild of the crate graph.
+#
+# The debug APK
+android-build-debug:
+    cd web && npm run build
+    cd apps/desktop && cargo tauri android build --apk --debug --ci --target aarch64
+
+# Signed when gen/android/keystore.properties is present and unsigned when it
+# is not, which is Gradle's own behaviour rather than something this recipe
+# decides. arm64 and armv7 rather than all four: the two x86 ABIs are emulator
+# and Chromebook targets, and adding one is a word here when a seller needs it.
+#
+# The release APK
+android-build:
+    cd web && npm run build
+    cd apps/desktop && cargo tauri android build --apk --ci --target aarch64 --target armv7
+
+# Universal rather than per-ABI, because Play splits it itself.
+#
+# The Play bundle
+android-build-aab:
+    cd web && npm run build
+    cd apps/desktop && cargo tauri android build --aab --ci
+
 # Refuse a release the updater could never serve. Checks that the two version
 # fields agree, that an optional tag agrees with them, and that the updater
 # public key and endpoint are no longer placeholders. The desktop-release

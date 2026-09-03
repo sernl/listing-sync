@@ -1,0 +1,183 @@
+# The Android client
+
+Phase D2's second surface: the same Tauri v2 application, the same SvelteKit console, built for a phone, where D3 limits it to work the seller starts.
+
+- date: 2026-09-03
+- status: the shell, the generated Gradle project, the recipes and the workflow are in the tree and the shell is exercised; no APK has been produced, nothing is signed, and nothing has been uploaded anywhere
+- decisions it implements: D2 (Windows desktop first, then Android, all Tauri v2), D3 (a phone runs user-initiated work only for the no-API branch), D12 (the webview login probe), D14 (per-surface login and the device registry), D29 (Android builds from NixOS through `androidenv`, and the first Play upload is by hand)
+- companions: `docs/notes/design/desktop-client.md` is the client this one is a build of, and `docs/notes/design/desktop-distribution.md` is the Windows pipeline this one parallels
+
+Every claim below names the source it was read from and the date it was read.
+Where a source in this repository disagrees with what the code now says, both are quoted and the disagreement is stated rather than resolved silently.
+
+## What Tauri v2 Android needs
+
+Four rust targets, not one: `aarch64-linux-android`, `armv7-linux-androideabi`, `i686-linux-android` and `x86_64-linux-android`.
+Source: <https://v2.tauri.app/start/prerequisites/>, fetched 2026-09-03.
+`rust-toolchain.toml` carries only the first of the four today, because `just check-portable` proves one triple per surface rather than one per ABI; a build needs all four, or an explicit `--target` list narrowing the bundle.
+
+A JDK, an Android SDK platform, the SDK build-tools, the platform-tools, the command-line tools and an NDK, reached through `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME`.
+The prerequisites page routes all of that through an Android Studio install and its bundled JetBrains Runtime, and offers no command-line-only alternative for Android the way it does for macOS desktop work.
+D29 rules that out here and routes it through `androidenv` instead, which is the same set of packages without the IDE.
+
+A `cdylib` from the library crate, and a mobile entry point.
+`apps/desktop/src-tauri/Cargo.toml` declares `[lib] name = "tam_desktop"` with no `crate-type`, so it builds an rlib and nothing an Android `System.loadLibrary` could open.
+The entry point is `tauri::mobile_entry_point`, which exists in `tauri-macros` 2.6.3 and is re-exported from `tauri` 2.11.5 (`src/lib.rs:79`), and is applied as `#[cfg_attr(mobile, tauri::mobile_entry_point)]` on `run`; that half is done.
+The `crate-type` half is one additive line in the crate's manifest, `crate-type = ["staticlib", "cdylib", "rlib"]`, and without it Gradle has no `libtam_desktop.so` to package and there is no APK at all.
+
+`cargo tauri android init`, which writes `apps/desktop/src-tauri/gen/android`: a Gradle project, an `AndroidManifest.xml`, the `WryActivity` subclass and the `build.gradle.kts` the signing config is edited into.
+The minimum supported Android version is 7.0, SDK 24, raisable through `bundle.android.minSdkVersion` in `tauri.conf.json`, and the version code is derived as `major*1000000 + minor*1000 + patch` from the configuration's `version` unless `bundle.android.versionCode` overrides it.
+Source: <https://v2.tauri.app/distribute/google-play/>, fetched 2026-09-03.
+
+## What the desktop code assumes that a phone lacks
+
+Four assumptions, and they are not equally hard.
+One is already false, one is a founder-gated dependency, one is a product rule rather than a technical gap, and one is very likely fine.
+
+### The login webview, which is the one that turns out to work
+
+`docs/notes/design/desktop-client.md` records under "What is stubbed" that the mobile targets "additionally need a hand-written Tauri plugin for Android cookie access".
+That is no longer true of the versions this tree resolves, and the correction matters because it is the difference between a fortnight of Kotlin and nothing at all.
+`wry` 0.55.1 implements `cookies_for_url` on Android by sending `WebViewMessage::GetCookies` to the main pipe (`src/android/mod.rs:423`), which calls the Kotlin method `RustWebView.getCookies(url)` (`src/android/main_pipe.rs:457`), whose whole body is `CookieManager.getInstance().getCookie(url)` (`src/android/kotlin/RustWebView.kt:90`).
+That is the platform's own cookie store, so the string it returns is the `Cookie` header the WebView would send, HttpOnly cookies included — which is exactly the property `connect.rs` depends on and `document.cookie` cannot give.
+Read from the vendored crate sources at `~/.cargo/registry`, 2026-09-03.
+
+Three limits come with it, and each has a consequence here.
+`cookies()`, the all-URLs read, returns an empty `Vec` on Android and `tauri` 2.11.5 documents it as unsupported there (`src/webview/mod.rs:2170`); nothing in this crate calls it, so nothing is lost.
+`set_cookie` and `delete_cookie` are no-ops on Android (`src/android/mod.rs:432` and `:437`), so a revocation wipe can clear our own keychain entry but cannot clear the WebView's copy; `clear_all_browsing_data` is the only lever, and it is all-or-nothing across every origin the app has visited.
+`CookieManager` is process-global rather than per-webview, so on Android there is one cookie store shared by the console and by any marketplace page the app loads, and `cookies_for_url` returns the same answer whichever webview is asked.
+
+That last property is what makes the second window unnecessary.
+`commands::connect_marketplace` builds a second `WebviewWindowBuilder` today, and Tauri's mobile surface is a single Activity; rather than gamble on a second window existing, the Android path navigates the one webview to the login page, polls `cookies_for_url` against the marketplace origin, and navigates back to the console when the logged-in condition holds.
+Whether a second window would in fact build on Android is left open rather than asserted, because settling it needs a device and settling it changes nothing about the design above.
+
+### The OS keychain, which Stronghold replaces
+
+`keyring` 3.6.3 has no Android backend.
+Its platform blocks cover Linux, FreeBSD, OpenBSD, macOS, iOS and Windows and stop there (`src/lib.rs:207` to `:293`), and `Cargo.toml` here declares `keyring` only under those same three target predicates, so on `*-linux-android` the crate is not a dependency at all and `session/keychain.rs` does not compile.
+`SessionStore` is already a trait with two implementations, so the seam exists; what is missing is a third implementation and the dependency that backs it.
+
+Three candidates, and the recommendation is the second.
+A Kotlin plugin over `androidx.security.crypto`'s `EncryptedSharedPreferences`, which is the platform-blessed route and is a hand-written Tauri plugin, a Gradle dependency and a JNI surface to keep true.
+`tauri-plugin-stronghold`, which is an official Tauri plugin, pure Rust, encrypted at rest with a password-derived key, and works identically on every platform this product targets, at the cost of one more crate and one more decision about where the password comes from.
+The app's own private files directory with no encryption at all, which on a non-rooted device is already unreadable by other applications and is what `payload.rs` and `device.json` will use regardless.
+
+Decided 2026-09-03 by founder decision: Stronghold, as recommended.
+The plugin asserts the support itself rather than leaving it to be inferred — `tauri-plugin-stronghold` 2.3.2 declares `android = { level = "full" }` in the same `[package.metadata.platforms.support]` table where `tauri-plugin-updater` declares `"none"` — and it exposes a Rust API, `stronghold::Stronghold::new(path, password)` with `save`, `inner` and a `Deref` to `iota_stronghold::Stronghold`.
+That last fact is what keeps the shape right: the store is plain Rust behind the `SessionStore` trait the other two implementations already satisfy, with no IPC, no capability entry and no JavaScript surface, so the jar stays on the same side of the line the desktop keeps it on.
+
+The password is not typed by the seller.
+It is a thirty-two-byte secret generated once, wrapped with an AES-GCM key held in the Android Keystore, and persisted as a wrapped blob in the application's private files directory; Stronghold's own argon2 derivation runs over that, with its salt beside the snapshot.
+The Keystore call is one Kotlin class registered from this crate through `PluginApi::register_android_plugin` and reached with `PluginHandle::run_mobile_plugin` (tauri 2.11.5, `src/plugin/mobile.rs:208` and `:324`), which needs no separate plugin crate, no Gradle module and no direct `jni` dependency, because Tauri's own does the work.
+
+Three parameters on that Keystore key, and the reasoning for each is worth keeping.
+`setUnlockedDeviceRequired(true)` where the API level allows it, which is 28 and up and therefore behind a version check, because the seller's device being unlocked is already the condition under which any of this runs.
+StrongBox requested with a fallback, because a device with a hardware security module should use it and a device without one must still work.
+And `setUserAuthenticationRequired` deliberately left off: D3 already makes every run on a phone something the seller starts on an unlocked device, so a fingerprint or PIN prompt in front of every sync buys little and costs the seller every time.
+That last one is a single flag and a founder-flippable option: turning it on tightens the key to a per-use authentication without changing anything else in this design.
+
+What happens at the edges, stated rather than left to be discovered.
+A fresh install has neither a wrapped blob nor a snapshot, so a new secret is generated and the seller signs in to each marketplace again.
+An uninstall or an application wipe destroys the Keystore key, which leaves any surviving copy of the snapshot undecryptable rather than merely deleted.
+Signing out is the existing `SessionStore::forget` path and the heartbeat's revocation wipe, unchanged, with the one Android limit recorded above: `delete_cookie` is a no-op there, so the WebView's own copy of the cookie needs `clear_all_browsing_data`.
+
+### The background scheduler, which D3 settles as a product rule
+
+The rethink memo's §5.2 reading stands: Android's Doze stops `JobScheduler` and therefore `WorkManager`, and the battery-optimisation exemption that would evade it is barred by Play policy.
+D3 does not try to engineer around that; it narrows the product instead, so a phone runs work the seller starts and nothing else, and full parity remains for an API-branch marketplace because the server schedules that one and the phone never had to originate the request.
+
+The code consequence is specific.
+`run_schedule` in `lib.rs` opens a `tokio::time::interval` that ticks for the life of the process, and `Scheduler::hourly_over_seller_device_marketplaces` names the cadence; on Android that loop is compiled out and replaced by a command the console's own button calls.
+The check-in is the half that cannot simply be dropped, because it is how a revoked device learns it was revoked, so on Android it runs on application resume and again before every user-initiated run rather than on a timer.
+The rule the interface must carry is that the app never claims a schedule it cannot keep: no "syncing hourly" copy on a phone, and the device page says what this device actually does.
+
+### The payload cache, which is very likely fine
+
+`payload.rs` writes the bytes an upload needs into a directory under `app_data_dir` and removes them when the item settles.
+On Android `PathResolver::app_data_dir` resolves through the platform plugin's `getDataDir` (`tauri` 2.11.5, `src/path/android.rs:137`), which is the application's own private storage, so the directory exists and is private without a permission.
+What differs is that Android may reclaim that storage under pressure and may kill the process at any point, which the start-up sweep already covers.
+
+## What is built here
+
+The Android shell is `nix develop .#android`, added to `flake.nix` beside the default one rather than folded into it.
+A second `nixpkgs` import backs it, because the Android SDK is unfree and its licence has to be accepted, and neither `allowUnfree` nor the licence flag belongs on the shell every other lane uses.
+Acceptance is `config.android_sdk.accept_license = true` rather than the `NIXPKGS_ACCEPT_ANDROID_SDK_LICENSE` environment variable: `androidenv`'s `license.nix` reads the attribute first and only falls back to an impure `getEnv` when it is absent, so the attribute is the route that survives a pure evaluation.
+Every version in the composition is named rather than left at `latest`, because `latest` resolves through nixpkgs' own `repo.json` and an input bump would otherwise move the SDK out from under a build that had been proven against it.
+
+Measured in that shell on 2026-09-03: OpenJDK 17.0.20, `cmdline-tools` 19.0, `platform-tools` 37.0.1, `build-tools` 36.0.0, platform 36, NDK 29.0.14206865, and all four Android rust targets present under the channel `rust-toolchain.toml` pins.
+The emulator, the system images and CMake are all off, which is several gigabytes not downloaded to compile an APK.
+
+`cargo tauri android init` generated `apps/desktop/src-tauri/gen/android`, 512K, with `compileSdk` and `targetSdk` at 36, `minSdk` at 24 and Gradle 8.14.3 through the wrapper.
+That tree is committed rather than regenerated, because the release signing configuration has to live in its `app/build.gradle.kts` and a build that patched that file on the fly would emit an unsigned release on a failed patch rather than an error.
+The `signingConfigs` block added there is guarded, which Tauri's own snippet is not: theirs reads `keystore.properties` unconditionally and throws on a machine that has none, which is every machine here, so ours applies the configuration only when the file exists and lets Gradle name the output `app-<abi>-release-unsigned.apk` when it does not.
+
+Three code changes carry the platform difference, and each is narrow.
+`session/keychain.rs` is compiled only on the three platforms `keyring` supports, and `session/unavailable.rs` stands in on Android: it refuses a capture rather than accepting one it cannot keep.
+The in-memory store was the obvious stand-in and is deliberately not used, for the reason its own documentation gives — a session that silently stopped being persisted looks identical to one that was — so an Android build today cannot hold a marketplace session, and says so, until the store question above is answered.
+`tauri-plugin-updater` is registered under `#[cfg(desktop)]` only, because registering a plugin that declares no Android support would give the console an update surface that answers nothing.
+And the hourly timer is `#[cfg(desktop)]`: on a phone the cycle runs once at start-up and again on every `RunEvent::Resumed`, which is what D3 leaves in place of a schedule and is the only moment a device signed out elsewhere can learn it.
+
+The recipes are `just android-init`, `android-build-debug`, `android-build` and `android-build-aab`, all of them inside that shell.
+The debug recipe builds arm64 alone, because it is a device to install on rather than a release; the release recipe builds arm64 and armv7, which are the two ABIs a phone runs, and adding either x86 ABI for a Chromebook or an emulator is one word.
+
+`.github/workflows/android-build.yml` is run by hand, with one `profile` input choosing the debug APK or the release APK, and it keeps the result as a workflow artefact beside a `SHA256SUMS.txt` and publishes nothing.
+Neither a push to `main` nor a version tag starts it, for two separate reasons: an NDK-and-Rust build is twenty minutes of a finite Actions budget and is the wrong default for every commit, and the desktop's own `v*.*.*` tag must not start an Android job that cannot yet produce anything usable, because the session store is undecided and no signing secret exists.
+A red Android run sitting beside the founder's first desktop release would cost more than the trigger is worth; it returns when the client reaches beta.
+It runs on `ubuntu-latest`, pins the same NDK the flake does and fails by name if `setup-android` did not put it there, and pins every third-party action to a full commit SHA.
+When the keystore secret is absent it says so in the log as a warning and lets the unsigned filename say it again.
+
+## Signing and distribution
+
+The release keystore is a JKS made with `keytool`, and Tauri's page gives the command as `keytool -genkey -v -keystore ~/upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload`.
+Its location and password reach Gradle through `gen/android/keystore.properties`, holding `password`, `keyAlias` and `storeFile`, and the page's own warning is that neither the keystore nor that properties file goes into source control.
+The build reads it through a `signingConfigs` block added to `gen/android/app/build.gradle.kts`, with `import java.io.FileInputStream` at the top and `signingConfig = signingConfigs.getByName("release")` inside `buildTypes`.
+Source: <https://v2.tauri.app/distribute/sign/android/>, fetched 2026-09-03.
+
+Because those edits live in a generated directory, `gen/android` is committed rather than regenerated, the same way the Windows bundle's icons and configuration are.
+The alternative — regenerate on every build and patch the Gradle file from the workflow — puts a `sed` between us and a signed artefact, and a failed patch would produce an unsigned release rather than an error.
+
+The build commands are `cargo tauri android build --apk` and `cargo tauri android build --aab`, with `--split-per-abi` for per-architecture APKs and `--target` to narrow the ABI set.
+The AAB lands at `gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab`.
+Source: <https://v2.tauri.app/distribute/google-play/>, fetched 2026-09-03.
+
+Play or sideload, and the recommendation is both, in that order of eventual importance and the reverse order of urgency.
+A Play Console developer account costs "US$25 one-time registration fee" (<https://support.google.com/googleplay/android-developer/answer/6112435>, fetched 2026-09-03), and Play's internal testing track is the cheapest way to put a build on the founder's own phone and on a handful of teachers' phones without a public listing.
+Tauri does not automate any of it: "The first upload must be made manually in the website so it can verify your app signature and bundle identifier", and "Tauri currently does not offer a way to automate the process of creating Android releases", which is what D29 already recorded.
+A directly-downloaded APK needs no account and no review and is the right beta channel for the first weeks, at the cost of the seller having to allow installation from an unknown source.
+
+CrabNebula Cloud does not distribute Android in the sense the Windows client uses it.
+Its CI guidance mentions Android only as a build target — "If your application targets Android and iOS, we recommend defining separate jobs per platform so your workflow is easier to read" (<https://docs.crabnebula.dev/cloud/ci/tauri-v2-workflow/>, fetched 2026-09-03) — and its supported application types are Tauri v1, Tauri v2, `cargo-packager` and "Other: Any generic app/asset" (<https://docs.crabnebula.dev/cloud/>, fetched 2026-09-03).
+The decisive fact is on our side of the wire rather than theirs: `tauri-plugin-updater` declares `platforms.support.android.level = "none"` in its own manifest (tauri-plugin-updater 2.11.0, `Cargo.toml`), so there is no in-app updater on Android to point at an endpoint at all.
+The Cloud can therefore host an APK as a generic asset for the sideload channel, which is worth doing because it is free and already in the pipeline, but Android updates ship through Play, exactly as the rethink memo said at line 507.
+
+The workflow runs on `ubuntu-latest`, which is the cheap half of the tree.
+GitHub prices a Linux 2-core runner at $0.006 a minute against a Windows 2-core runner's $0.010, and a private repository on the Free plan includes 2,000 minutes a month (<https://docs.github.com/en/billing/concepts/product-billing/github-actions>, fetched 2026-09-03).
+Against the quota rather than the overage price, Linux counts at one minute per minute and Windows at two, so an Android job is the cheapest thing this repository can run on a runner and a debug-APK-per-push cadence is affordable in a way the Windows release job would not be.
+
+## What the founder must do
+
+The session-store question that used to head this list was answered on 2026-09-03 and is recorded above.
+Of what remains, the upload keystore has been generated and nothing else has: no account was created and nothing was uploaded anywhere.
+
+Create a Google Play Console developer account and pay the US$25 one-time fee, if the Play internal-testing track is wanted for the beta; the direct-APK channel needs neither.
+
+The upload keystore is generated and waiting at `~/.tauri/android/teachouse-upload.p12`, mode 600, with its password in `teachouse-upload.password` beside it at mode 600 and the directory itself at 700.
+It is PKCS12 rather than JKS — the JDK 17 default, which avoids `keytool`'s legacy-format warning — with alias `upload`, RSA 2048, ten thousand days of validity and a subject of `CN=Teachouse` alone, because the subject is permanent and no country or organisation was known to put in it.
+Back both files up somewhere that survives losing the machine, and copy the password into the password manager.
+This key is as irreplaceable as the updater key and for a different reason: Play binds an application's identity to its signing key, and losing it means the listing can never be updated again.
+
+Then set the GitHub secrets the signing step reads, whose names Tauri's own CI example fixes: `ANDROID_KEY_ALIAS` (`upload`), `ANDROID_KEY_PASSWORD` (the contents of the password file), and `ANDROID_KEY_BASE64` (`base64 -i ~/.tauri/android/teachouse-upload.p12`).
+
+Supply a launcher icon before a public listing.
+`tauri android init` generated the Tauri placeholder `ic_launcher` set, the same placeholder the desktop bundle carries, and it is what a phone would show on its home screen today.
+The application's own name is already right — `Teachouse`, taken from `productName` — and only the artwork is missing.
+
+## Sources
+
+`docs/notes/design/vendoo-for-teachers-rethink.md`, decisions D2, D3, D12, D14 and D29, and its §5.1 and §5.2 readings of mobile session capture and mobile scheduling.
+`docs/notes/design/desktop-client.md`, whose "What is stubbed" section this note corrects on Android cookie access.
+`docs/notes/design/desktop-distribution.md`, for the pipeline shape this one parallels.
+<https://v2.tauri.app/start/prerequisites/>, <https://v2.tauri.app/develop/>, <https://v2.tauri.app/distribute/sign/android/> and <https://v2.tauri.app/distribute/google-play/>, all fetched 2026-09-03.
+The nixpkgs Android manual section and `pkgs/development/mobile/androidenv`, read at nixpkgs `56c02bc0`, the revision `flake.lock` pins, 2026-09-03.
+`wry` 0.55.1, `tauri` 2.11.5, `tauri-plugin-updater` 2.11.0 and `keyring` 3.6.3, read from the vendored crate sources, 2026-09-03.
+`tauri-plugin-stronghold` 2.3.2 and `BiometricPlugin.kt`, read from `~/ghq/github.com/tauri-apps/plugins-workspace`, 2026-09-03.
