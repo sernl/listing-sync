@@ -12,6 +12,7 @@ pub mod listing;
 pub mod native_labels;
 pub mod project;
 pub mod provenance;
+pub mod resource_types;
 pub mod subjects;
 pub mod tes;
 pub mod tpt_form;
@@ -25,6 +26,9 @@ pub use project::{
     GradeIngest, TermsOutcome,
 };
 pub use provenance::{check_native_ids, ForeignNativeId, ForeignNativeIds};
+pub use resource_types::{
+    derive_resource_type_crosswalk, ResourceTypeCrosswalk, ResourceTypeError,
+};
 pub use subjects::{
     derive_subject_crosswalk, SubjectCrosswalk, SubjectError, SubjectMismatch,
     SubjectMismatchReason, SubjectResidue,

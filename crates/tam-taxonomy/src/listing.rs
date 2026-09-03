@@ -35,15 +35,21 @@ use crate::project::{ingest, ingest_grades, project_axis, AxisRequest};
 /// The axes this projection routes, and the reason the list is shorter than
 /// the registry's.
 ///
-/// `Licence` joins now that the election queue exists to hold the question:
+/// `Licence` joined when the election queue existed to hold the question:
 /// Tes declares it required, so a product whose rights are unstated raises a
 /// `Supply` election rather than being published under a grant nobody chose.
-/// `ResourceType` stays absent because its crosswalk is unseeded -- routing it
-/// would ask a question no vocabulary can answer -- and the wire omits the
-/// field rather than sending a placeholder for it.
-const ROUTED_AXES: [TermKind; 4] = [
+///
+/// `ResourceType` joins now that `resource_types.rs` seeds its crosswalk. It
+/// reaches Tes and not the reverse, and that is a property of the relation
+/// rather than of this list: every Tes-side edge on the axis is `Broader`, so
+/// no Tes `mainType` value ingests to a canonical term, so a Tes-sourced
+/// product carries no resource type into a TPT create. D13 denies a
+/// Type-of-Resource control on that route, and
+/// `no_tes_resource_type_value_ingests_to_a_canonical_term` is what holds it.
+const ROUTED_AXES: [TermKind; 5] = [
     TermKind::Subject,
     TermKind::Topic,
+    TermKind::ResourceType,
     TermKind::Phase,
     TermKind::Licence,
 ];

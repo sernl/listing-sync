@@ -186,6 +186,11 @@ That makes the TPT vocabulary and the authored pairing required arguments where 
 The optional form existed for a run that seeded the subject and topic crosswalk alone, and it is gone deliberately: with TPT as the base, such a run seeds a relation in which no TPT facet resolves, which is a half-seeded hub rather than a smaller one.
 The market-to-market residue the seeder printed before is not lost, because `derive_subject_crosswalk` returns it unchanged on `tes_residue`, and both residues now print side by side.
 
+The figures the seeder prints therefore change, which is the visible part of the switch and is recorded here rather than left to be noticed.
+Its subject and topic line read 496 terms and 986 edges on a fresh database and named no absences at all, because the Tes-to-Tes derivation emitted none for these two axes.
+It now reads 601 terms, 1,146 edges and 443 absences, and gains a second residue line for the TPT base beside the market-to-market one, whose own figures are unchanged at 2 GB-only, 0 NZ-only and 4 mismatched.
+The grade and licence lines are untouched.
+
 Idempotency holds, against a database created fresh for the purpose rather than by resetting the shared dev volume.
 The first run inserted 601 terms, 1,146 edges and 443 absences with nothing existing; the second inserted nothing and reported every one of them as existing, which is the property that fails if an id moved.
 The grade and licence halves behave the same way: 40 terms, 180 edges and 30 absences, then 7 terms and 21 edges, all existing on the second pass.
@@ -197,3 +202,27 @@ And the seeder's own ambiguity count, which is a `GROUP BY` over the stored rela
 
 The eight withdrawal rows print individually rather than only as a count, because the pairing table is authored and awaiting founder confirmation, and each row is a claim one row made that another overrode.
 They are the evidence to send with the table: Drama and Music withdrawn from `performing-arts`, Geography, Economics and Psychology from `social-studies`, and Biology, Chemistry and Physics from `science`.
+
+## Step 3: routing resource type, and the half of it that cannot be done as written
+
+Seventy-one TPT `Type-of-Resource` facets now reach the nine writable Tes `mainType` values.
+Every facet mints its own canonical term holding an `Exact` edge into TPT and a `Broader` edge into each of the three Tes inventories, because seventy-one onto nine can only be many-to-one and many-to-one is legal through `Broader` alone.
+The authored half is `docs/design/data/tpt-tes-resource-type-pairs.json`, twenty-one rows rather than seventy-one: ten roots, eleven child overrides, and fifty children that inherit their root.
+A child is named only where inheriting would file it under a value Tes distinguishes from the right one, which is why `games` is named and `posters` is not.
+The hidden facet `independent-work` seeds nothing, on the rule ruling C set.
+`TermKind::ResourceType` joins `ROUTED_AXES`, and the seeder gains the derivation and a seventh argument.
+
+The figures: 70 terms and 280 edges, 70 `Exact` into TPT and 210 `Broader` into Tes, inserted on the first run and all existing on the second.
+Tes `Assembly` (99001) is reached by no TPT facet, which is a real absence rather than a defect and is printed as one.
+
+The verification the design named passes.
+A product carrying four resource-type facets that resolve to four different Tes values raises exactly one `ElectOne` election with all four as candidates and an empty resolved set, so no partially narrowed value is publishable.
+Its companion tells the two apart: four facets that broaden onto one Tes value resolve to that value with no election and one merged loss naming all four terms it broadened away, which shows the election is a property of the resolved set rather than of the number of terms carried.
+
+What could not be done as written is the read-only declaration.
+The design says TPT's own binding is declared `FieldDirection::ReadOnly`, but `FieldDirection` is a field of `NativeField` rather than of `AxisBinding` (`crates/tam-domain/src/registry/mod.rs:108-117`, `:190-199`), and TPT binds all four of its axes — subject, topic, resource type and phase — to the single native field `taxonomyTags`, currently `Both`.
+Setting that field read-only would stop TPT writing subjects, topics and grades too, and `AxisBinding` has nowhere to record a direction for one axis alone.
+So the declaration is not made, and the fact D13 wants is instead a property of the relation: inbound resolution follows `Exact` edges alone, no canonical term claims a Tes `mainType` path as `Exact`, and therefore a Tes-sourced product ingests no resource-type term and carries none into a TPT create.
+`no_tes_resource_type_value_ingests_to_a_canonical_term` holds that over every edge the derivation emits.
+This is weaker than the design intended in one specific way, and the difference is worth naming: the property is enforced by the shape of the data rather than declared in the registry, so a future edge authored through the reconciliation queue could break it without any registry check objecting.
+Closing that gap means adding a per-axis direction to `AxisBinding`, which touches `registry/mod.rs` and every `AxisBinding` literal in every registry file, and is a founder decision rather than an implementation detail.

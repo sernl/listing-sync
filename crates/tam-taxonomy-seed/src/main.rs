@@ -12,7 +12,7 @@
 //! resolution writes one from the API, and runs the same check on it there.
 //!
 //! Usage: tam-taxonomy-seed <db-url> <gb.json> <nz.json> <tpt-vocab.json>
-//! <tes-vocab.json> <subject-pairs.json>
+//! <tes-vocab.json> <subject-pairs.json> <resource-type-pairs.json>
 //!
 //! Every argument is required. The TPT vocabulary and the authored pairing
 //! were optional while the canonical subject and topic axes were minted from
@@ -28,6 +28,7 @@ use tam_storage::TaxonomyRepo;
 use tam_taxonomy::grades::derive_grade_crosswalk;
 use tam_taxonomy::licences::derive_licence_crosswalk;
 use tam_taxonomy::provenance::check_native_ids;
+use tam_taxonomy::resource_types::derive_resource_type_crosswalk;
 use tam_taxonomy::subjects::derive_subject_crosswalk;
 use tam_taxonomy::tes::parse_tree;
 use tam_types::Timestamp;
@@ -59,6 +60,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tpt_json = read_file(arguments.get(3).ok_or("missing TPT vocabulary path")?)?;
     let tes_json = read_file(arguments.get(4).ok_or("missing Tes vocabulary path")?)?;
     let pairs_json = read_file(arguments.get(5).ok_or("missing subject pairing path")?)?;
+    let resource_pairs_json = read_file(
+        arguments
+            .get(6)
+            .ok_or("missing resource-type pairing path")?,
+    )?;
 
     let gb = parse_tree(&read_file(gb_path)?)?;
     let nz = parse_tree(&read_file(nz_path)?)?;
@@ -144,11 +150,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let licences = derive_licence_crosswalk(&tes_json, at)?;
     check_native_ids(&licences.edges)?;
     let seeded = repo.seed(&licences.terms, &licences.edges).await?;
-    let ambiguous = seeded.ambiguous_terms;
     eprintln!(
         "licences: {} terms inserted, {} existing; {} edges inserted, {} existing",
         seeded.terms_inserted, seeded.terms_existing, seeded.edges_inserted, seeded.edges_existing,
     );
+
+    let resources = derive_resource_type_crosswalk(&tpt_json, &tes_json, &resource_pairs_json, at)?;
+    check_native_ids(&resources.edges)?;
+    let seeded = repo.seed(&resources.terms, &resources.edges).await?;
+    let ambiguous = seeded.ambiguous_terms;
+    eprintln!(
+        "resource types: {} terms inserted, {} existing; {} edges inserted, {} existing",
+        seeded.terms_inserted, seeded.terms_existing, seeded.edges_inserted, seeded.edges_existing,
+    );
+    eprintln!(
+        "resource types: {} facets reach no Tes value, {} hidden facets seeded neither way, \
+         {} Tes values no facet reaches",
+        resources.unreached.len(),
+        resources.skipped_hidden.len(),
+        resources.unclaimed_targets.len(),
+    );
+    for target in &resources.unclaimed_targets {
+        eprintln!(
+            "resource types: Tes mainType {} ({}) is reached by no TPT facet",
+            target.native_id, target.description,
+        );
+    }
 
     // A defect figure rather than an outcome: a term the relation projects two
     // ways is a question no product can answer, and the kill gate reads it as

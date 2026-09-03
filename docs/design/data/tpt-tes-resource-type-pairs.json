@@ -1,0 +1,315 @@
+{
+  "_source": "Authored against docs/design/data/tpt-vocabulary.json (taxonomyTags, category Type-of-Resource, polled 2026-09-03) and docs/design/data/tes-vocabulary.json (resourceTypes, the nine values the uploader's type select admits). No network contact.",
+  "_status": "DRAFT awaiting founder confirmation, drafted 2026-09-03. Twenty-one authored rows cover all 71 facets: ten roots, eleven child overrides, and 50 children that inherit their root.",
+  "kindMeaning": {
+    "narrower": "The facet is narrower than the one named Tes value, so the facet's own canonical term holds a Broader edge into the Tes path. Every row here is narrower, because Tes carries nine values against TPT's seventy-one: the relation is many-to-one, which is legal only through Broader (docs/design/taxonomy-projection.md:36-37).",
+    "null": "Hidden. It seeds neither term nor edge, on ruling C."
+  },
+  "inheritance": "A child not named below takes its root's value. Fifty of the sixty-one children inherit; the eleven that do not are named because inheriting would file them under a value Tes distinguishes from the right one.",
+  "counts": {
+    "tptFacets": 71,
+    "tptRoots": 10,
+    "tptChildren": 61,
+    "authoredRows": 21,
+    "inheritingChildren": 50,
+    "tesValues": 9,
+    "tesValuesReached": 8
+  },
+  "tesValuesNoFacetReaches": [
+    {
+      "id": 99001,
+      "description": "Assembly"
+    }
+  ],
+  "pairs": [
+    {
+      "tpt": "classroom-decor",
+      "tptName": "Classroom Decor",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99008,
+          "description": "Visual aid/Display"
+        }
+      ],
+      "rationale": "Bulletin boards, posters and word walls are display material, which is what `Visual aid/Display` names."
+    },
+    {
+      "tpt": "clip-art",
+      "tptName": "Clip Art",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99008,
+          "description": "Visual aid/Display"
+        }
+      ],
+      "rationale": "A graphic asset the seller drops into their own material; Tes files it as display rather than as an activity."
+    },
+    {
+      "tpt": "forms",
+      "tptName": "Forms",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99006,
+          "description": "Other"
+        }
+      ],
+      "rationale": "Proposals, nurse documents and council paperwork answer to no Tes type, and `Other` is the value Tes offers for exactly that."
+    },
+    {
+      "tpt": "hands-on-activities",
+      "tptName": "Hands-on Activities",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99009,
+          "description": "Worksheet/Activity"
+        }
+      ],
+      "rationale": "`Worksheet/Activity` carries the word; the members that are genuinely games or audio override below."
+    },
+    {
+      "tpt": "independent-work",
+      "tptName": "Independent Work",
+      "tptParent": null,
+      "tptHidden": true,
+      "kind": null,
+      "tes": [],
+      "rationale": "Hidden, so it seeds no edge and arrives as an unrecognised slug retained verbatim, on the same rule as a hidden subject facet."
+    },
+    {
+      "tpt": "instruction",
+      "tptName": "Instruction",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99005,
+          "description": "Lesson (complete)"
+        }
+      ],
+      "rationale": "Handouts, scaffolded notes and guided readers are the material of a taught lesson."
+    },
+    {
+      "tpt": "printables",
+      "tptName": "Printables",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99009,
+          "description": "Worksheet/Activity"
+        }
+      ],
+      "rationale": "The printable is the worksheet, and Tes names them with one value."
+    },
+    {
+      "tpt": "student-assessment",
+      "tptName": "Student Assessment",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99002,
+          "description": "Assessment and revision"
+        }
+      ],
+      "rationale": "`Assessment and revision` is the same category under a different name."
+    },
+    {
+      "tpt": "student-practice",
+      "tptName": "Student Practice",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99009,
+          "description": "Worksheet/Activity"
+        }
+      ],
+      "rationale": "Homework, task cards and workbooks are activity material rather than a taught lesson."
+    },
+    {
+      "tpt": "teacher-tools",
+      "tptName": "Teacher Tools",
+      "tptParent": null,
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99006,
+          "description": "Other"
+        }
+      ],
+      "rationale": "The root is genuinely mixed -- planners, rubrics, syllabi and unit plans -- so it takes `Other` and its members override where Tes has a real value for them."
+    },
+    {
+      "tpt": "games",
+      "tptName": "Games",
+      "tptParent": "hands-on-activities",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99003,
+          "description": "Game/puzzle/quiz"
+        }
+      ],
+      "rationale": "A game is the one thing `Game/puzzle/quiz` names, and inheriting `Worksheet/Activity` would file it under the wrong one of two values Tes distinguishes."
+    },
+    {
+      "tpt": "escape-rooms",
+      "tptName": "Escape Rooms",
+      "tptParent": "hands-on-activities",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99003,
+          "description": "Game/puzzle/quiz"
+        }
+      ],
+      "rationale": "An escape room is a puzzle, and Tes separates puzzles from worksheets."
+    },
+    {
+      "tpt": "songs",
+      "tptName": "Songs",
+      "tptParent": "hands-on-activities",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99004,
+          "description": "Audio, music & video"
+        }
+      ],
+      "rationale": "Audio material, which Tes carries as `Audio, music & video` and nowhere else."
+    },
+    {
+      "tpt": "unit-plans",
+      "tptName": "Unit Plans",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99007,
+          "description": "Unit of work"
+        }
+      ],
+      "rationale": "`Unit of work` is Tes's name for the same artefact."
+    },
+    {
+      "tpt": "thematic-unit-plans",
+      "tptName": "Thematic Unit Plans",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99007,
+          "description": "Unit of work"
+        }
+      ],
+      "rationale": "A unit of work with a theme is still a unit of work."
+    },
+    {
+      "tpt": "yearlong-curriculum",
+      "tptName": "Yearlong Curriculum",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99007,
+          "description": "Unit of work"
+        }
+      ],
+      "rationale": "A year of planned work is a unit of work at its largest, and Tes offers no coarser value."
+    },
+    {
+      "tpt": "homeschool-curricula",
+      "tptName": "Homeschool Curricula",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99007,
+          "description": "Unit of work"
+        }
+      ],
+      "rationale": "A curriculum is planned work rather than a teacher's tool."
+    },
+    {
+      "tpt": "syllabi",
+      "tptName": "Syllabi",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99007,
+          "description": "Unit of work"
+        }
+      ],
+      "rationale": "A syllabus states the planned work for a course."
+    },
+    {
+      "tpt": "lessons",
+      "tptName": "Lessons",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99005,
+          "description": "Lesson (complete)"
+        }
+      ],
+      "rationale": "`Lesson (complete)` is the value, and inheriting `Other` from the root would discard an exact match Tes offers."
+    },
+    {
+      "tpt": "lectures",
+      "tptName": "Lectures",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99005,
+          "description": "Lesson (complete)"
+        }
+      ],
+      "rationale": "A lecture is the delivered form of a complete lesson."
+    },
+    {
+      "tpt": "rubrics",
+      "tptName": "Rubrics",
+      "tptParent": "teacher-tools",
+      "tptHidden": false,
+      "kind": "narrower",
+      "tes": [
+        {
+          "id": 99002,
+          "description": "Assessment and revision"
+        }
+      ],
+      "rationale": "A rubric is assessment material, which Tes carries under `Assessment and revision`."
+    }
+  ]
+}
