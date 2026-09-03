@@ -1,6 +1,6 @@
 [package]
 name        = "tam-desktop"
-version     = "0.1.0"
+version     = "0.1.1"
 edition     = "2021"
 publish     = false
 description = "The Teachouse desktop client: the seller's device, where every no-API marketplace request originates"
@@ -89,6 +89,14 @@ reqwest = { version = "0.13", default-features = false, features = [
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 tam-types = { path = "../../../crates/tam-types" }
+
+# The AEAD the Android session store seals the jar with. A workspace crate
+# rather than a cipher of our own: it already wraps a per-record data key
+# under a caller-supplied 32-byte key-encryption key, with XChaCha20-Poly1305
+# and a random nonce at both layers, so no two records share a key and there
+# is no nonce-reuse question as marketplaces are added. Adds no package --
+# chacha20poly1305 and aead are already in the lock through it.
+tam-secrets = { path = "../../../crates/tam-secrets" }
 
 # The data plane. D1 puts every request to a no-API marketplace on this
 # machine, so the adapters that compose those requests are compiled into this

@@ -5019,7 +5019,7 @@ dependencies = [
 
 [[package]]
 name = "tam-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "jsonwebtoken",
@@ -5034,6 +5034,7 @@ dependencies = [
  "tam-marketplace",
  "tam-marketplace-tes",
  "tam-marketplace-tpt",
+ "tam-secrets",
  "tam-types",
  "tauri",
  "tauri-build",

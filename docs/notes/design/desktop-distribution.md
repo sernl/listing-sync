@@ -3,7 +3,7 @@
 How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
 
 - date: 2026-09-03
-- status: pipeline written and lint-clean; nothing has been tagged, built on a runner, uploaded or released
+- status: `v0.1.0` was tagged and built both Windows bundles on a runner, then failed to upload them; the upload step is fixed and the tree is bumped to `0.1.1`, which will be the first published release
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 
@@ -158,7 +158,9 @@ It is deliberately not part of `just check` or `just pre-push`: it fails on toda
 
 ## What the founder must do
 
-Nothing below can be inferred, and none of it was performed here: no key was generated, no account was created, nothing was tagged, uploaded or published.
+Nothing below can be inferred.
+As of 2026-09-03 the updater keypair, the CrabNebula organisation and application, and the API key all exist, and the first tag has been cut; run 33730896941 is the evidence.
+The Azure signing account does not exist, so every Artifact Signing item below is still outstanding and releases carry no Authenticode signature until it is done.
 
 Generate the updater keypair, on the founder's own machine, and never let the private half into the repository.
 
@@ -225,17 +227,39 @@ Check the checksum against the `SHA256SUMS.txt` artefact.
 Then check the update path, which is the one that silently breaks: install the previous version on a clean Windows machine, launch it, and confirm it offers and applies the new one.
 Do this on every release where the updater configuration changed, and at least once against a real previous version before announcing the product, because an updater that cannot verify is indistinguishable from one that has no update to offer.
 
+### The first tag, and why it produced no release
+
+`v0.1.0` was cut on 2026-09-03 and did not release.
+In run 33730896941 the verify, draft and console jobs passed, the Windows runner built both bundles and signed each with the updater key, and the collect step assembled them with their checksums; the upload to CrabNebula Cloud then failed in 120 ms with `Could not find Tauri bundle path`.
+
+The cause was `--framework tauri` on `cn release upload`.
+That flag makes the CLI "[a]utomatically determine the release version from the framework's configuration file and the files to upload from the framework's output bundles", and it looks for those bundles beneath the Tauri configuration it read — here `apps/desktop/src-tauri/target/release/bundle`.
+This crate is a member of the root Cargo workspace, so cargo wrote them to the workspace root instead, at `target/release/bundle`, which is where the collect step had already found them.
+Read from `cn release upload --help` (cn 0.13.4) and <https://docs.crabnebula.dev/cloud/cli/upload-assets/>, both consulted 2026-09-03.
+The action cannot correct this: its only inputs are `command`, `api-key`, `path` — the directory the `cn` binary downloads into, not a bundle path — and `working-directory`, and no working directory holds both the configuration and the bundles.
+Read from <https://github.com/crabnebula-dev/cloud-release/blob/1a8803698ba41de6b23e42abc5dcc3721308233c/action.yml>, the revision this workflow pins.
+
+The fix drops `--framework` from the upload and names each file: `--file`, the version positional the verify job already computed, and the platform identifiers the CLI documents.
+The NSIS installer uploads as `--public-platform nsis-x86_64 --update-platform windows-x86_64` with its `.sig`, and the MSI as `--public-platform wix-x86_64` alone, because only one artefact can be the update for a platform and the NSIS installer is the one Tauri's Windows `installMode` drives without an elevation prompt.
+Naming the files also retires the hazard the CLI's own help warns of, that `--framework` "uploads all discovered artifacts to the release, so make sure there is no older bundles mixed in the framework's output directories" — a live risk with a cached target directory.
+`draft` and `publish` keep `--framework tauri`, because neither reads a bundle and it is what stops the Cloud's version and the tree's from disagreeing.
+
+`v0.1.0` is a spent tag rather than a release.
+It exists on the repository, no GitHub release was ever created for it, and a pushed tag cannot be moved without rewriting what others have already fetched, so the next release is `v0.1.1` and it will be the first published one.
+That run did leave a `0.1.0` draft on CrabNebula Cloud, unpublished by design; `cn release purge` removes it, and purging it before tagging keeps an orphan out of the account.
+
 ## What could not be verified here
 
-No account exists, so nothing that requires one was exercised: the CrabNebula draft, upload and publish verbs were read from documentation and never run, the API key was never minted, and no Azure resource was created.
-No key was generated, so the signing steps have never been executed against a real key, and `createUpdaterArtifacts` has never been true in any build.
-No GitHub runner has executed this workflow, so what evidence exists is local and partial, and it is worth being precise about which half it covers.
+This section recorded the state before any tag existed, and run 33730896941 superseded most of it on 2026-09-03.
+The CrabNebula organisation, application and API key now exist and the `draft` verb ran successfully against them; `upload` and `publish` have still never completed.
+The updater keypair exists, `createUpdaterArtifacts` was true in that build, and a `.sig` was produced beside each installer.
+No Azure resource was created, so `AZURE_CLIENT_ID` was unset, every Artifact Signing step was skipped, and the bundles carry no Authenticode signature.
+What follows is the local evidence that existed before that run.
 
 The workflow is clean under `actionlint` 1.7.12, which found and cost two real defects: `secrets` is not a context a step-level `if:` may read, and one glob parsed `ls` output.
 `release-check.sh` is clean under `shellcheck`, and was exercised on four paths against a fixture tree — matching tag, wrong tag, mismatched manifest version, and the real tree, which fails today naming both placeholders.
 The console job's command sequence was run end to end inside the dev shell and produced `web/build`, and the collect step's find, checksum, glob and manifest logic was run against a fixture bundle tree, producing a `latest.json` carrying the three fields Tauri documents as required.
 
-That covers everything the pipeline does on Linux and nothing it does on Windows.
-Unexercised: the Windows build itself, the bundling of NSIS and MSI, every signing step, and all four CrabNebula verbs.
-The first tag will therefore be the first execution of that half, and the first failure it finds will most likely be a path or an environment detail on the Windows runner rather than a logic error.
-Cut the first tag as a `--channel beta` release, which costs one repository variable and keeps a first failure off the production channel entirely.
+That covered everything the pipeline does on Linux and nothing it does on Windows, and its own prediction — that the first failure would be a path or an environment detail on the Windows runner rather than a logic error — is exactly what the first tag found.
+Run 33730896941 has since exercised the Windows build, the NSIS and MSI bundling, the updater signing and the `draft` verb, all on a `--channel beta` release, which is what kept that failure off the production channel.
+Still unexercised: `upload` and `publish`, every Azure signing step, and the installed-base update path.

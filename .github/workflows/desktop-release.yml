@@ -2,9 +2,11 @@
 # runner because that is where the MSI and signtool are native (D29), and
 # distributed through CrabNebula Cloud.
 #
-# Nothing here has ever been executed: the first tag will be the first run.
-# What each step does and why, and what the founder must supply before a tag
-# can succeed, is docs/notes/design/desktop-distribution.md.
+# The first tag, v0.1.0, ran as far as collecting the artefacts and then
+# failed uploading them, so the upload and publish steps have never succeeded.
+# What each step does and why, what that run got wrong, and what the founder
+# must supply before a tag can succeed, is
+# docs/notes/design/desktop-distribution.md.
 name: desktop-release
 
 # A tag on this repository is the only trigger. There is no workflow_dispatch,
@@ -299,14 +301,57 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: upload the bundles to CrabNebula Cloud
+      # `--framework tauri` reads the version from the Tauri config and then
+      # looks for the bundles beneath that config. This crate is a member of
+      # the root Cargo workspace, so cargo writes them to the workspace root
+      # instead and the discovery finds nothing (run 33730896941). Naming each
+      # file is also what the CLI documents as the way to avoid uploading a
+      # stale bundle a cached target directory left behind. The version
+      # positional replaces what `--framework` would have read, and the verify
+      # job has already checked it against the tag and against the config.
+      - name: resolve the bundle paths for the upload
+        id: bundles
+        env:
+          DIR: ${{ steps.collect.outputs.dir }}
+        run: |
+          set -euo pipefail
+          set -- "$DIR"/*-setup.exe
+          if [ ! -f "$1" ]; then
+            echo "no NSIS installer in $DIR" >&2
+            exit 1
+          fi
+          printf 'nsis=%s\n' "$1" >> "$GITHUB_OUTPUT"
+          printf 'nsis_signature=%s\n' "$1.sig" >> "$GITHUB_OUTPUT"
+          set -- "$DIR"/*.msi
+          if [ ! -f "$1" ]; then
+            echo "no MSI installer in $DIR" >&2
+            exit 1
+          fi
+          printf 'msi=%s\n' "$1" >> "$GITHUB_OUTPUT"
+
+      # The NSIS installer is the update payload, so it alone carries an
+      # update platform and a signature; the MSI is a download only.
+      - name: upload the NSIS installer to CrabNebula Cloud
         uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
         with:
           command: >-
-            release upload ${{ vars.CN_APPLICATION }} --framework tauri
+            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
+            --file ${{ steps.bundles.outputs.nsis }}
+            --signature ${{ steps.bundles.outputs.nsis_signature }}
+            --update-platform windows-x86_64 --public-platform nsis-x86_64
             ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
           api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: apps/desktop
+          working-directory: .
+
+      - name: upload the MSI installer to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
+            --file ${{ steps.bundles.outputs.msi }} --public-platform wix-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
 
   # A draft nobody published serves no update, so this is the step that makes
   # the release real. A failed run leaves the draft unpublished on purpose;
