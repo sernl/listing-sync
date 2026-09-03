@@ -1,0 +1,80 @@
+---
+import Base from '../layouts/Base.astro';
+import { supportEmail } from '../site.js';
+---
+
+<Base
+	title="Privacy — Teachouse"
+	description="Placeholder for the Teachouse privacy policy, pending review by counsel."
+>
+	<section class="section">
+		<div class="wrap prose">
+			<p><span class="pill draft">Draft placeholder</span></p>
+			<h1>Privacy</h1>
+			<p class="notice">
+				<strong>This is not the privacy policy.</strong> It is a placeholder recording what the
+				policy will have to cover, so that counsel can draft it against how the product actually
+				works. Nothing on this page is a commitment, and it will be replaced in full before
+				Teachouse takes an account.
+			</p>
+
+			<h2>What counsel needs to know about the product</h2>
+			<p>
+				The facts below are true of the system as built, and are set down here as briefing
+				material rather than as policy language.
+			</p>
+			<ul>
+				<li>
+					An account is identified by a name, an email address and a credential, which may be a
+					password, a passkey, or a sign-in through a social provider.
+				</li>
+				<li>
+					For marketplaces with no official API, the seller's marketplace session lives on the
+					seller's own device. Teachouse's servers do not hold the credential for those
+					marketplaces and do not open a session on them.
+				</li>
+				<li>
+					For marketplaces that publish an official API, Teachouse holds a token issued for that
+					purpose and uses it from its own servers.
+				</li>
+				<li>
+					Teachouse's servers hold the seller's catalogue: titles, descriptions, prices,
+					mapping decisions, and the record of what was published where and when.
+				</li>
+				<li>
+					Resource files for the no-API marketplaces stay on the seller's device, because the
+					upload is itself a request that originates there.
+				</li>
+				<li>
+					Sales and view figures read back from a marketplace are stored so that they can be
+					shown over time.
+				</li>
+				<li>
+					Payment is taken through a third-party merchant of record, which handles the card
+					details; Teachouse does not see them.
+				</li>
+				<li>
+					A device registry records which of the seller's devices are signed in, so that the
+					seller can sign one out.
+				</li>
+				<li>The site itself carries no analytics and loads nothing from a third party.</li>
+			</ul>
+
+			<h2>Questions this document must answer</h2>
+			<ul>
+				<li>Which jurisdiction's law governs, and which regimes the product must satisfy.</li>
+				<li>How long each class of record is kept, and what deletion does.</li>
+				<li>How a seller exports or deletes their catalogue.</li>
+				<li>Which processors are used, and what each one receives.</li>
+				<li>How a change to this document is notified.</li>
+			</ul>
+
+			<h2>Contact</h2>
+			<p>
+				Until this page is replaced, questions go to <a class="link" href={`mailto:${supportEmail}`}
+					>{supportEmail}</a
+				>.
+			</p>
+		</div>
+	</section>
+</Base>

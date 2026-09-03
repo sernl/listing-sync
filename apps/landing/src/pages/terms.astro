@@ -1,0 +1,72 @@
+---
+import Base from '../layouts/Base.astro';
+import { supportEmail } from '../site.js';
+---
+
+<Base
+	title="Terms — Teachouse"
+	description="Placeholder for the Teachouse terms of service, pending review by counsel."
+>
+	<section class="section">
+		<div class="wrap prose">
+			<p><span class="pill draft">Draft placeholder</span></p>
+			<h1>Terms</h1>
+			<p class="notice">
+				<strong>These are not the terms of service.</strong> This page records what the terms
+				will have to settle, so that counsel can draft them against how the product actually
+				works. Nothing here binds anyone, and it will be replaced in full before Teachouse takes
+				an account.
+			</p>
+
+			<h2>What counsel needs to know about the product</h2>
+			<ul>
+				<li>
+					Teachouse is an independent tool. It is not affiliated with, and not endorsed by, any
+					marketplace it connects to.
+				</li>
+				<li>
+					The seller keeps their own relationship with each marketplace, including that
+					marketplace's own terms, and Teachouse acts within the seller's own account.
+				</li>
+				<li>
+					For marketplaces with no official API, the request that reaches the marketplace comes
+					from the seller's device under the seller's login.
+				</li>
+				<li>
+					For marketplaces with an official API, Teachouse acts under a token that marketplace
+					issued for the purpose.
+				</li>
+				<li>
+					Subscription is metered by connected marketplaces, with a cap on catalogue size at the
+					entry tier, and is billed through a third-party merchant of record.
+				</li>
+				<li>
+					Some marketplace rules are enforced as a step the seller must clear before publishing
+					rather than as a warning; a pricing rule that a marketplace imposes on its sellers is
+					the example.
+				</li>
+				<li>
+					The seller decides matters the marketplace makes theirs to decide, such as a tax
+					designation or a copyright assertion; Teachouse never fills one in on their behalf.
+				</li>
+			</ul>
+
+			<h2>Questions this document must answer</h2>
+			<ul>
+				<li>Which jurisdiction's law governs, and where disputes are heard.</li>
+				<li>What is promised about availability, and what is not.</li>
+				<li>Where liability sits when a marketplace changes and a publish fails.</li>
+				<li>How a subscription is cancelled, and what happens to the catalogue afterwards.</li>
+				<li>What happens if a marketplace objects to the tool.</li>
+				<li>How a change to these terms is notified and takes effect.</li>
+			</ul>
+
+			<h2>Contact</h2>
+			<p>
+				Until this page is replaced, questions go to <a class="link" href={`mailto:${supportEmail}`}
+					>{supportEmail}</a
+				>.
+			</p>
+		</div>
+	</section>
+</Base>

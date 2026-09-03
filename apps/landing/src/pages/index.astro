@@ -1,0 +1,187 @@
+---
+import Base from '../layouts/Base.astro';
+import { availability, marketplaces, signUpUrl, tiers, transportWording } from '../site.js';
+
+const title = 'Teachouse — one catalogue, every marketplace you sell on';
+const description =
+	'Teachouse holds your teaching resources once and keeps TeachersPayTeachers, Tes and other marketplaces matching it, with the marketplace work running from your own computer under your own login.';
+---
+
+<Base title={title} description={description}>
+	<section class="hero">
+		<div class="wrap">
+			<p class="eyebrow">For teacher-resource sellers</p>
+			<h1>One catalogue. Every marketplace you sell on.</h1>
+			<p class="sell">
+				Teachouse holds each of your teaching resources once, then keeps TeachersPayTeachers,
+				Tes and other marketplaces matching it — and the marketplace work runs from your own
+				computer, under your own login.
+			</p>
+			<div class="actions">
+				<a class="cta large" href={signUpUrl}>Create an account</a>
+				<a class="btn large" href="#how">See how it works</a>
+			</div>
+			<p class="under">{availability}</p>
+		</div>
+	</section>
+
+	<section class="section" id="how">
+		<div class="wrap">
+			<h2>How it works</h2>
+			<p class="lede">Three steps, and the third one is the one that saves the evenings.</p>
+			<div class="grid-3">
+				<div class="panel step">
+					<span class="n" aria-hidden="true">1</span>
+					<h3>Bring your catalogue in</h3>
+					<p>
+						Import what you already sell, or write a resource once in Teachouse. Your title,
+						description, price, preview and files live in one place that no marketplace owns.
+					</p>
+				</div>
+				<div class="panel step">
+					<span class="n" aria-hidden="true">2</span>
+					<h3>Map it once</h3>
+					<p>
+						Every marketplace wants its own subjects, year levels, resource types and licence
+						wording. Teachouse translates yours into each one, and asks you rather than guessing
+						when the answer is genuinely yours to give.
+					</p>
+				</div>
+				<div class="panel step">
+					<span class="n" aria-hidden="true">3</span>
+					<h3>Publish, and keep it matching</h3>
+					<p>
+						Change a price or upload a new version once. Teachouse works out what each
+						marketplace needs, does it on a schedule, and reports each marketplace's result on
+						its own rather than as one number.
+					</p>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<section class="section" id="where">
+		<div class="wrap">
+			<h2>Your login never leaves your device</h2>
+			<p class="lede">
+				This is the part most cross-listing tools get wrong, so it is worth being exact about.
+			</p>
+			<div class="grid-2">
+				<div class="panel">
+					<h3 style="margin:0 0 8px;font-size:16px">Marketplaces with no official API</h3>
+					<p style="margin:0 0 12px;color:var(--muted)">
+						TeachersPayTeachers and Tes are in this group today. Every request Teachouse makes
+						to them leaves from your own computer, signed in as you, in your own session.
+					</p>
+					<p style="margin:0;color:var(--muted)">
+						We never hold your marketplace password, and our servers never open a session on a
+						marketplace on your behalf. What our side holds is your catalogue, your mapping
+						decisions and the record of what was done.
+					</p>
+				</div>
+				<div class="panel">
+					<h3 style="margin:0 0 8px;font-size:16px">Marketplaces with an official API</h3>
+					<p style="margin:0 0 12px;color:var(--muted)">
+						Etsy is in this group. Where a marketplace publishes an interface for tools like
+						this one and issues a token for the purpose, that work runs on our servers over
+						that interface, on the schedule you set.
+					</p>
+					<p style="margin:0;color:var(--muted)">
+						Which group a marketplace is in is recorded in the product and shown on the
+						marketplace itself, so you can always see where a piece of work runs.
+					</p>
+				</div>
+			</div>
+			<p class="under" style="margin-top:16px;color:var(--faint);font-size:13.5px">
+				This split is our design choice about where a request should come from. It is not
+				required by any law, and we do not present it as one.
+			</p>
+		</div>
+	</section>
+
+	<section class="section" id="marketplaces">
+		<div class="wrap">
+			<h2>Marketplaces</h2>
+			<p class="lede">
+				What Teachouse connects to, and where the work runs for each one.
+			</p>
+			<div class="panel">
+				<div class="rows">
+					{
+						marketplaces.map((m) => (
+							<div class="row">
+								<span class="who">{m.name}</span>
+								<span class="how">{transportWording[m.transport]}</span>
+								<span class={m.status === 'Working today' ? 'pill ok' : 'pill mut'}>
+									{m.status}
+								</span>
+							</div>
+						))
+					}
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<section class="section" id="pricing">
+		<div class="wrap">
+			<h2>Pricing</h2>
+			<p class="lede">
+				You are charged for the marketplaces you connect, never for the resources you add in a
+				month. Adding a resource to your own catalogue costs nothing.
+			</p>
+			<p class="notice">
+				<strong>The amounts below are not set yet.</strong> This page is a draft: no price here is
+				an offer, and every figure will be replaced before accounts can be paid for.
+			</p>
+			<div class="grid-3">
+				{
+					tiers.map((tier) => (
+						<div class="panel tier">
+							<h3>{tier.name}</h3>
+							<p class="for">{tier.who}</p>
+							{tier.amount === null ? (
+								<>
+									<div class="amount">
+										<span>$—</span>
+										<span class="per">{tier.period}</span>
+									</div>
+									<p class="unset">
+										<span class="pill draft">Price not set</span>
+									</p>
+								</>
+							) : (
+								<div class="amount">
+									<span>{tier.amount}</span>
+									<span class="per">{tier.period}</span>
+								</div>
+							)}
+							<ul>
+								{tier.features.map((feature) => (
+									<li>{feature}</li>
+								))}
+							</ul>
+							<div class="tail">
+								<a class="btn" href={signUpUrl}>Create an account</a>
+							</div>
+						</div>
+					))
+				}
+			</div>
+		</div>
+	</section>
+
+	<section class="section" id="start">
+		<div class="wrap">
+			<h2>Start with one resource</h2>
+			<p class="lede">
+				Connect one marketplace, bring one resource across, and see what it does before you move
+				the rest.
+			</p>
+			<div class="actions">
+				<a class="cta large" href={signUpUrl}>Create an account</a>
+			</div>
+			<p class="under">{availability}</p>
+		</div>
+	</section>
+</Base>

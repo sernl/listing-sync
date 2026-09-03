@@ -296,6 +296,21 @@ web-check: web-wasm
 web-dev: web-wasm
     cd web && npm run dev
 
+# The public site at teachouse.io, which is a separate Astro build rather than
+# a console route: the console's root layout turns off both server rendering
+# and prerendering, which SvelteKit's own documentation calls a large negative
+# for performance and search, and the marketing page is the one surface where
+# that matters (D28).
+#
+# The landing lane: lockfile install, then the static build
+landing-check:
+    cd apps/landing && npm ci --no-audit --no-fund
+    cd apps/landing && npm run build
+
+# The landing-page dev server
+landing-dev:
+    cd apps/landing && npm run dev
+
 # The desktop client (Tauri v2, D2), which hosts this same console and owns the
 # seller's marketplace sessions on the seller's own device. The console comes
 # from the SvelteKit dev server, so `just web-dev` must already be running.
