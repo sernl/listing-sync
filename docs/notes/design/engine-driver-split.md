@@ -166,6 +166,11 @@ Corrected 2026-09-04: the derivation is not the broker's and does not go with th
 What the deletion removes is the process that holds the key the pepper is derived from, not the derivation, so the re-siting below is a decision about custody of that key rather than about code that goes with the file.
 Re-site the pepper in a server-held key that outlives the vault, bump `key_version` and re-claim rather than attempting a re-keying migration, because the account reference preimage is deliberately never stored.
 
+Recorded 2026-09-04, because the lift did not happen and the deletion went ahead: the exclusivity claim is presently unenforced.
+Nothing populates `connection.platform_account_digest` — the only writer in the tree is `crates/tam-storage/tests/exclusivity.rs`'s own fixture — `tam_secrets::account_digest` has no caller outside its own tests, and `ConnectionFactsRepo::account_claim_pending`, which its doc calls the guard on the claim backfill, has no caller at all now that `claim_account` has gone with `broker_client.rs`.
+So `connection_platform_account_exclusive` is intact and would still refuse a collision, and it guards a column nothing writes, which means two organisations can currently link the same marketplace account.
+The lift is its own item: it writes through `tam_app`, which is the only writer of `connection` left, with the digest's pepper re-sited off the vault key per the correction above.
+
 ## 6. The correctness defects to fix as part of or before the split
 
 Eight defects survived adversarial refutation, and each of them is a stall or a duplicate that today needs a worker crash and after relocation needs a closed lid.
@@ -749,6 +754,8 @@ The floors are untouched and every count is still well above them.
    What is not gated is the half the rule is actually about: whether a server binary holds a live transport for a `SellerDevice` marketplace. That is expressible the way `just purity` already expresses its bans, as a `cargo tree -e normal` assertion over the crates that produce a binary, and it is the only form that fails a build rather than describing an intention.
    It cannot land with the broker deletion, because two binaries still hold one and neither is the broker's: `crates/tam-canary/src/main.rs:65` builds a Tes adapter over `tam_marketplace_tes::ReqwestTransport` from a cookie-jar path, and `crates/tam-import/src/main.rs` builds a Tpt one over `TAM_TPT_COOKIE_JAR` for the operator manifest drain. A check written before those go would have to be committed red or written weaker than its own name, and a gate that is weaker than its name is worse than the absence it replaces.
    Recommended: land it with the `tam-import` device move, which is slice S3 of `docs/notes/design/migration-file-routing.md`, and the `tam-canary` disposition question 3 already books, so the check and the last thing it would catch arrive together.
+
+10. Move the pg-gated compile outside the database lane, so an occupancy is seconds of test execution rather than minutes of compilation and a compile that dies costs nothing shared: `cargo nextest run --no-run` over the pg-gated set needs no `DATABASE_URL`, and `just db-test-all` then runs against a warm cache. Parked 2026-09-04 rather than taken, because the lane recipes are a shared gate.
 
 Open questions 3 and 4 are designed out in `docs/notes/design/migration-file-routing.md`, which routes the Tes read leg and the file bytes to the device, keeps the sync worker's enqueue half, and states full client-side ingest as the arrangement rather than the interim.
 

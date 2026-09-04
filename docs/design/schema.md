@@ -341,6 +341,11 @@ Under the assumption that one Tes author login reaches both inventories, that me
 
 `connection` holds one row per tenant per marketplace under that same assumption, which is recorded as an assumption in the design specification's open questions.
 `connection_secret` holds the wrapped data-encryption key, nonce, ciphertext and AAD context keyed by tenant, connection and key version, and only the session broker's database role may select from it.
+Amended 2026-09-04: no role may select from it.
+`tam_broker` was the only one that could, and migration 0051 revokes every privilege it held on every database it is applied to, because D1 leaves no server-side seller session for a no-API marketplace and so nothing to unseal a credential for.
+The role is dropped in production by the operator step in `docs/notes/runbooks/retire-tam-broker-role.md`, and survives in dev and CI as a name with no privileges, because migrations 0010, 0017 and 0032 grant to it and a replay of a frozen migration cannot name a role that does not exist.
+It is also inert as a login wherever `db/init/01-app-role.sql` has run since that date, which creates it `NOLOGIN` with no password and no `BYPASSRLS` and converges an existing one to the same; a dev data directory older than the change keeps its login until `just db-reset` re-initialises it or the runbook's first step alters it, and holds no privilege either way.
+The table and its rows stay: they are the only copy of what was sealed before this, and disposing of them is a later founder call rather than a consequence of the role going.
 
 `field_audit` records intended value, observed value before and after, the mismatch class and the normaliser version that made the comparison.
 It is append-only: the application role holds insert and select and neither update nor delete, and rows ship off-box continuously.

@@ -6,9 +6,9 @@
 -- devshell path re-runs every file in it on every start.
 --
 -- tam_backoffice is deliberately neither a superuser nor BYPASSRLS, which is
--- where it parts company with tam_engine and tam_broker. Those two cross
--- tenants through a cluster-level attribute that no migration can scope: once
--- granted, it applies to every table the role is ever granted a privilege on.
+-- where it parts company with tam_engine. That role crosses tenants through a
+-- cluster-level attribute that no migration can scope: once granted, it
+-- applies to every table the role is ever granted a privilege on.
 -- This role's crossing is enumerated per table instead, in the grant list and
 -- the read policies of migration 0037, so a table absent from either list
 -- stays invisible to it even if the other list later names it. It holds no

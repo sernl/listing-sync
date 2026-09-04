@@ -40,8 +40,8 @@ sources are under `docs/design/`.
   tokens it issues. It owns no domain data, performs no marketplace request,
   and holds no marketplace credential. It reaches Postgres only as the
   `tam_auth` role, whose grants are confined to the `auth` schema; it never
-  reads or writes a table in `public`, never sets `app.current_org`, and
-  never contacts the session broker. Authorisation — which organisation a
+  reads or writes a table in `public` and never sets `app.current_org`.
+  Authorisation — which organisation a
   request speaks for and what it may do there — is decided in Rust from
   Postgres, and is never asserted by a token claim. The sole exception is the
   client entitlement token, which transports a decision Postgres already made
@@ -94,10 +94,39 @@ nix flake check    # everything
 The active milestone plan is the newest file in `docs/design/plans/`.
 Progress against it is recorded in the jj log; the working tree stays green under `just check`.
 
-Four database roles, deliberately: `tam_app` (the API path, forced RLS,
-cannot read `connection_secret`), `tam_engine` (the cross-tenant lease scan,
-BYPASSRLS), `tam_broker` (the only role that reads the credential vault), and
-`tam_auth` (platform identity; confined to the `auth` schema, holding no
-privilege on any table in `public` and not BYPASSRLS). The dev database is
-created by `db/init/01-app-role.sql` and `db/init/02-auth-role.sql`; `just
-db-setup` prepares rootless podman once per machine.
+Four database roles that can log in, deliberately: `tam_app` (the API path,
+forced RLS, cannot read `connection_secret`), `tam_engine` (the cross-tenant
+lease scan, BYPASSRLS), `tam_auth` (platform identity; confined to the `auth`
+schema, holding no privilege on any table in `public` and not BYPASSRLS), and
+`tam_backoffice` (the operator admin surface's cross-tenant reads, enumerated
+per table in migration 0037 rather than granted as BYPASSRLS). The dev database
+is created by `db/init/01-app-role.sql`, `db/init/02-auth-role.sql` and
+`db/init/03-backoffice-role.sql`; `just db-setup` prepares rootless podman once
+per machine.
+
+Amended 2026-09-04: there were five that could log in. `tam_broker`, the only
+role that read the credential vault, is retired with the session broker itself,
+because D1 leaves no server-side seller session for a no-API marketplace and
+therefore no vault for a role to be the sole reader of. Migration 0051 revokes
+everything it held.
+
+The role itself does not go everywhere at once, and the reason is the
+frozen-migration rule. Migrations 0010, 0017 and 0032 grant to it by name, they
+are applied and frozen, and Postgres errors on a `GRANT` naming a role that
+does not exist — so a cluster that replays the migration set needs the name to
+exist or it fails at 0010, in every `sqlx::test` database rather than in the
+tests that care. In dev and CI it is therefore kept by
+`db/init/01-app-role.sql`, which creates it inert on a fresh cluster and
+converges an existing one — `NOLOGIN`, no password, no BYPASSRLS — every time
+that file runs: every start on the ephemeral devshell path, but only at initdb
+on the compose path, so a data directory older than this change keeps its login
+and BYPASSRLS until `just db-reset` re-initialises it or the runbook's first
+step alters it. Migration 0051 attempts the same convergence and skips it in
+dev and CI, because migrations run there as `tam_app`, which may not alter a
+role. Production drops the role outright, by the operator step in
+`docs/notes/runbooks/retire-tam-broker-role.md`, which is safe there because
+production applies migrations incrementally and never replays 0010 against a
+fresh database. So dev names five roles and four of them can log in.
+
+`connection_secret` stays standing: its rows are the only copy of the
+credentials already sealed, and disposing of them is a later founder call.

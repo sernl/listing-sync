@@ -25,11 +25,12 @@ Every other tenant table is fenced.
 `pin_org` sets `app.current_org` as a transaction-local setting (`crates/tam-storage/src/lib.rs:97-106`), and twenty-nine tables carry enabled and forced row-level security with a policy keyed on that setting (`crates/tam-storage/tests/rls_matrix.rs:13-41`, `:95-113`).
 That test also asserts a closed world: every table in the `public` schema must appear in exactly one classification list, so an unclassified table is a test failure rather than a review oversight (`crates/tam-storage/tests/rls_matrix.rs:1-5`, `:75-84`).
 
-Three database roles carry the privilege boundary (`db/init/01-app-role.sql:6-29`).
+Three database roles carry the privilege boundary (`db/init/01-app-role.sql:6-51`).
 `tam_app` is the API path and is deliberately not a superuser, because superusers bypass row-level security (`:1-9`).
 `tam_engine` has `BYPASSRLS` for the cross-tenant lease scan (`:11-19`).
-`tam_broker` has `BYPASSRLS` and is the only role that may read `connection_secret`, running inside `tam-session-broker`, the sole process holding the key-encryption key (`:20-27`, `crates/tam-session-broker/src/main.rs:1-10`).
-The broker exposes one narrow unix-socket surface and hands out authenticating gateway endpoints, never secret material, so a compromised automation worker can use the connections it leased and cannot exfiltrate the vault (`crates/tam-session-broker/src/main.rs:3-9`).
+Amended 2026-09-04: `tam_broker` read `connection_secret` inside `tam-session-broker`, and D1 retired both.
+Migration 0051 revokes every privilege the role held, so no role may read `connection_secret` at all, and `db/init/01-app-role.sql:20-49` keeps the name inert — `NOLOGIN`, no password, no `BYPASSRLS` — only because migrations 0010, 0017 and 0032 grant to it and a frozen grant cannot name a role that does not exist (`crates/tam-storage/migrations/0051_retire_tam_broker_grants.sql`).
+Production drops the role by the operator step in `docs/notes/runbooks/retire-tam-broker-role.md`.
 
 Login today is an operator one-shot.
 `tam-mint-session` finds or creates a user for an email under an organisation, mints a session, and prints the cookie token exactly once (`crates/tam-mint-session/src/main.rs:1-6`); `just dev-session` wraps it (`justfile:156-158`).
@@ -261,21 +262,19 @@ That is who the human is, whether they have proven control of an email address o
 It also holds the private half of the token-signing key pair, encrypted under its own secret (`packages/better-auth/src/plugins/jwt/schema.ts:10-13`, `packages/better-auth/src/plugins/jwt/sign.ts:215-226`), which is inherent to issuing tokens the API trusts.
 
 It must never touch the following, and under this design cannot, because `tam_auth` holds no privilege in `public`.
-The credential vault and `connection_secret`, readable only by `tam_broker` (`db/init/01-app-role.sql:20-27`).
-The key-encryption key, held by `tam-session-broker` alone (`crates/tam-session-broker/src/main.rs:3-9`).
-The broker's unix socket and its link, lease, revoke and health surface.
+The credential vault and `connection_secret`, which since the broker's retirement no role may read (`crates/tam-storage/migrations/0051_retire_tam_broker_grants.sql`, `docs/notes/runbooks/retire-tam-broker-role.md`).
 Any tenant table, and therefore `app.current_org`.
 Any domain read or write, any marketplace request, any part of the engine, worker or transport path.
 
 The crown-jewel invariant is preserved, and it is worth stating what the blast radius actually is rather than asserting safety in general.
-Marketplace credentials never leave the Rust custody path: they are encrypted with per-tenant data-encryption keys, readable by one role in one process, and the broker returns authenticating gateway endpoints rather than secret material (`crates/tam-session-broker/src/main.rs:3-9`, `docs/design/decisions.md:35-38`).
+Marketplace credentials never leave the Rust custody path: they are encrypted with per-tenant data-encryption keys, and since the broker's retirement no role holds a grant on `connection_secret` at all, so no server-side process unseals one (`crates/tam-storage/migrations/0051_retire_tam_broker_grants.sql`, `docs/notes/runbooks/retire-tam-broker-role.md`).
 An attacker with full control of `tam-auth` holds the signing key and can therefore mint a valid token for any subject, and so can act as any seller through the API.
 They still cannot read a credential, because the API path itself cannot read one — `tam_app` is denied `connection_secret` by grant.
 That is the same blast radius an attacker who could write `user_session` rows has today, so this design moves the credential for platform identity without widening what compromising it yields.
 
 One consequence deserves an explicit note.
 `tam-auth` needs its own Postgres connection string and its own secret, and those are new operational secrets with a new process to hold them.
-They must not be co-located with the key-encryption key, and `tam-auth` must not be given the broker socket path, on the general principle that a process which cannot reach a capability cannot leak it.
+They must not be co-located with any key material that would unseal `connection_secret`, on the general principle that a process which cannot reach a capability cannot leak it.
 
 ## The TypeScript boundary, amended
 
@@ -290,13 +289,16 @@ Proposed wording, bounded so that ratifying it does not ratify anything further.
 > TypeScript is for the user interface, and for one bounded identity service.
 > That service is better-auth, running as `tam-auth`, and it owns platform-user identity and browser session only: registration, sign-in, social and passkey credentials, email verification, password reset, and the keys for the tokens it issues.
 > It owns no domain data, performs no marketplace request, and holds no marketplace credential.
-> It reaches Postgres only as the `tam_auth` role, whose grants are confined to the `auth` schema; it never reads or writes a table in `public`, never sets `app.current_org`, and never contacts the session broker.
+> It reaches Postgres only as the `tam_auth` role, whose grants are confined to the `auth` schema; it never reads or writes a table in `public` and never sets `app.current_org`.
 > Authorisation — which organisation a request speaks for and what it may do there — is decided in Rust from Postgres, and is never asserted by a token claim.
 > Any extension of this service beyond identity and session is a new founder decision, not an application of this one.
 
 The last two sentences are the ones doing the work.
 The second-to-last states the property that keeps the amendment safe; the last blocks the amendment from being read as a general licence.
 The amendment is also mechanically checkable in the way the charter prefers (`docs/design/engineering-charter.md:11`): the grant list on `tam_auth` is a test, and `crates/tam-storage/tests/rls_matrix.rs` already fails if a table appears in `public` without a tenancy decision.
+
+Amended 2026-09-04: the quote now reads as ratified in `CLAUDE.md`'s non-negotiables, which drop the proposal's closing clause on never contacting the session broker, because D1 retired the broker itself; what stood behind that clause is the grant list, and `docs/notes/runbooks/retire-tam-broker-role.md` retires the role in production.
+The ratified text also carries one sentence this quote does not, exempting the client entitlement token (D10 in `docs/notes/design/vendoo-for-teachers-rethink.md`).
 
 An unrelated staleness surfaced while reading.
 `docs/design/engineering-charter.md:16` states "the web client is React and TypeScript", and `:116` repeats it.

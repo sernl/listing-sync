@@ -6,10 +6,11 @@
 -- path re-runs it on every start.
 --
 -- tam_auth is deliberately neither a superuser nor BYPASSRLS. A superuser
--- bypasses row-level security and BYPASSRLS is exactly the crossing
--- tam_engine and tam_broker were each given for one narrow reason; the
--- identity service has no such reason, because it never reads a tenant row at
--- all.
+-- bypasses row-level security and BYPASSRLS is the crossing tam_engine was
+-- given for one narrow reason -- and the only one held on any cluster
+-- 01-app-role.sql has run against since the broker's retirement, which is what
+-- converges a cluster built before it. The identity service has no such
+-- reason, because it never reads a tenant row at all.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tam_auth') THEN
