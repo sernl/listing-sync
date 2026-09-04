@@ -26,7 +26,6 @@ export type APIErrorCode =
   | "sync_mappings_invalid"
   | "duplicate_sync_item"
   | "resource_missing"
-  | "broker_unavailable"
   | "backoffice_unavailable"
   | "platform_account_already_linked"
   | "blob_store_unavailable"

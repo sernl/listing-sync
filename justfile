@@ -13,7 +13,7 @@ auth_db_url := "postgres://tam_auth:tam_auth_dev@127.0.0.1:5433/tam"
 
 # The pg-gated crates and the feature spelled per crate, shared by the two
 # database-backed lanes so a crate cannot be added to one and missed by the other
-pg_tests := "-p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-session-broker --features tam-session-broker/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests"
+pg_tests := "-p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests"
 
 default:
     @just --list

@@ -4,36 +4,27 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
-# The capture library drives an adapter and returns rows; nothing in it reaches
-# a database. The binary beside it owns the pool, the schedule and the clock,
-# so those edges are optional and the binary names them as required features.
-# That is what keeps `sqlx` and `tam-storage` out of the library's dependency
-# graph rather than merely unused within it, which is the difference that lets
-# the capture run on a seller's own device.
+# A library and nothing else. The capture drives an adapter and returns rows;
+# nothing in it reaches a database, and the binary that owned the pool, the
+# schedule and the clock is gone — D1 makes the capture a device-pulled read
+# served by `crates/tam-api/src/analytics.rs`, so there is no server-side
+# process to hold those edges. With the binary went the `server` feature and
+# every optional dependency it gated, which is what now keeps `sqlx` and
+# `tam-storage` out of the dependency graph rather than merely unused within
+# it.
 #
 # It does reach a runtime: `tokio` arrives transitively through
 # `tam-marketplace-tpt`'s transport, as it does for every client that speaks to
 # a marketplace, so the claim here is about the database edges alone.
-[features]
-server = ["dep:sqlx", "dep:tam-engine", "dep:tam-storage", "dep:tokio", "tam-marketplace-tpt/live"]
-
 [dependencies]
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"], optional = true }
-tam-engine = { path = "../tam-engine", optional = true }
 tam-engine-driver = { path = "../tam-engine-driver" }
 tam-marketplace = { path = "../tam-marketplace" }
-# Default features off:  is that crate's reqwest transport, which the
-# capture library never builds — it takes a reader. The binary needs one, so
-# the server feature turns it back on for the binary alone. Without this the
-# library drags a native HTTP stack into every client target.
+# Default features off: what that drops is the crate's reqwest transport, which
+# the capture library never builds — it takes a reader. Nothing here turns it
+# back on any more, because the binary that needed one is gone; without this
+# the library would drag a native HTTP stack into every client target.
 tam-marketplace-tpt = { path = "../tam-marketplace-tpt", default-features = false }
-tam-storage = { path = "../tam-storage", optional = true }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
-
-[[bin]]
-name              = "tam-analytics"
-required-features = ["server"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

@@ -92,6 +92,11 @@ The research adds a third, acquisition on the seller's own device by a small hel
 Order them by exculpability rather than by cryptography: a delegated-access grant is best, because the password never exists on this side and the marketplace itself holds the record of the grant; acquisition on the seller's own device is next, because the password provably never transits this infrastructure; and an interactive remote browser is last, because the keystrokes do transit it and no log or policy this project holds can afterwards demonstrate that they were not captured.
 The seam is a real boundary rather than a comment: nothing outside the credential crate constructs a credential, nothing outside the broker decrypts one, and adding an implementation is a new type in that crate rather than an edit to any caller.
 
+Retired 2026-09-04 by founder decision D1, and this section is kept as the record of what was built rather than as a description of what runs.
+There is no session-broker unit and no component on the serving host that reaches a key-encryption key, because there is no longer a server-side seller session for a no-API marketplace to hold a credential for: every TeachersPayTeachers and Tes request originates on the seller's own device under the seller's own session.
+What the section decided still stands and is what D1 chose. It ordered the three acquisition options by exculpability and put acquisition on the seller's own device second only to a delegated-access grant; the architecture went to that option outright rather than to the interactive remote browser it ranked last.
+The systemd unit, the TPM-bound credential delivery and the escrow drill they require apply to whatever server-side secret the sanctioned-token branch comes to hold, and to nothing running today. `connection_secret` keeps its rows, which are the only copy of what was sealed before this, and disposing of them is a later founder call.
+
 ## 10. Backup, restore, and a rehearsed restore drill
 
 One box, no failover, and paying customers whose income-producing files are on it: every previous section is about not shipping a bug, and this one is about the case where the bug has already shipped, or the disk has already failed, and the only question left is how much is gone and how long until it is back.

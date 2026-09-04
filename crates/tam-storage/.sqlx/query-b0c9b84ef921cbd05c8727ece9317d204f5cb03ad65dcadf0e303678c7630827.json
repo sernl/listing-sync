@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE connection SET state = 'revoked', updated_at = now() WHERE org_id = $1 AND id = $2 AND state <> 'revoked' RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b0c9b84ef921cbd05c8727ece9317d204f5cb03ad65dcadf0e303678c7630827"
+}

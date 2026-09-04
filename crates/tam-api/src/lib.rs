@@ -63,9 +63,6 @@ pub use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
     pub disclosure: Disclosure,
-    /// The credential broker's unix socket; revocation answers 503 without
-    /// it rather than pretending.
-    pub broker_socket: Option<std::path::PathBuf>,
     /// Paddle's notification-webhook secret, which is the only thing that
     /// authenticates the billing webhook. Absent, that route answers 503:
     /// there is no unauthenticated mode of it to fall back to.

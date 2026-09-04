@@ -5,7 +5,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--broker-socket <path>] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -29,10 +29,6 @@ const DEFAULT_BIND: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)
 /// `debug-assertions = true` in release, so no `cfg` can tell production
 /// apart; redaction is the default in every build.
 const DISCLOSE_FLAG: &str = "--disclose-internals";
-
-/// The credential broker's unix socket; without it the revoke endpoint
-/// answers 503 rather than pretending.
-const BROKER_FLAG: &str = "--broker-socket";
 
 /// The engine-role url the service loops run on. They cross tenants — the
 /// drainer claims every organisation's due messages and one prune pass covers
@@ -354,11 +350,6 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
             config.disclosure = Disclosure::Full;
-        } else if argument == BROKER_FLAG {
-            let path = arguments
-                .next()
-                .ok_or("--broker-socket needs a path argument")?;
-            config.broker_socket = Some(std::path::PathBuf::from(path));
         } else if argument == ENGINE_DB_FLAG {
             engine_db_url = Some(
                 arguments

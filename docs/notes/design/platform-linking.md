@@ -84,7 +84,13 @@ Tpt's is `author { id }` on the `Store` type, present in every committed cassett
 Tes's is not wired: `identity_source(Tes)` is `Unavailable` (`crates/tam-session-broker/src/vault.rs:46-51`) and `Vault::claim` refuses outright, so a Tes link takes no lock and Tes exclusivity is not enforced today.
 The value exists — an authenticated `GET /api/tier/gmv/me` returns a `userId`, captured in `probes/local/tes-upload.har` — and turning it on needs three edits, one of which adds `/api/tier` to the gateway allow-list (`crates/tam-session-broker/src/gateway.rs:39-46`); that allow-list is a security surface, so it is question Q5 rather than an implementation detail.
 
-What the seller sees on collision: a refusal naming the marketplace and nothing else, carried by the closed-set code `PlatformAccountAlreadyLinked` (`crates/tam-session-broker/src/protocol.rs:105-110`, `crates/tam-api/src/error.rs:71`), deliberately carrying no hint of who holds it so the constraint never becomes a directory of the platform's sellers.
+Unenforced as of 2026-09-04, and this section describes a behaviour the tree cannot currently exhibit.
+The session broker is deleted, and with it every writer of `connection.platform_account_digest`: `account_digest` in `tam-secrets` has no caller outside its own tests, `ConnectionFactsRepo::account_claim_pending` has none at all, and `PlatformAccountAlreadyLinked` has no raiser anywhere.
+The unique index survives intact and would still refuse a collision, so what is lost is the claim being taken rather than the constraint holding it — which means two organisations can link the same marketplace account today and neither is refused.
+Section 5 of `engine-driver-split.md` books the lift that restores it: it writes through `tam_app`, the only writer of `connection` left, with the digest's pepper re-sited off the vault key.
+Everything below describes what the broker did and what the lift must restore, and the file paths in it name a crate that no longer exists.
+
+What the seller sees on collision: a refusal naming the marketplace and nothing else, carried by the closed-set code `PlatformAccountAlreadyLinked` (`crates/tam-api/src/error.rs`), deliberately carrying no hint of who holds it so the constraint never becomes a directory of the platform's sellers.
 The losing connection is moved to `needs_reauth` rather than left linked, because it holds a credential for a storefront another organisation owns (`crates/tam-session-broker/src/vault.rs:356-366`), and that reads `disconnected` on the page.
 The residual disclosure is an existence oracle reachable only by someone who already supplied a working session for that account, and the support path is a person, not a self-service override.
 

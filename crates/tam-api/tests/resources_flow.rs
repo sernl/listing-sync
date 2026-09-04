@@ -1,7 +1,7 @@
 //! Catalogue, connections and reconciliation over the wire: the product
-//! page and aggregate view, the connections listing, revocation through an
-//! in-process fake broker socket, and the founder's drain workflow driven
-//! entirely through the API.
+//! page and aggregate view, the connections listing with its transport
+//! badge, revocation as a write on the connection row, and the founder's
+//! drain workflow driven entirely through the API.
 
 #![cfg(feature = "pg-tests")]
 
@@ -14,7 +14,7 @@ use sqlx::PgPool;
 use tam_api::resources::{
     ConnectionsView, DecisionsView, ProductView, ProductsPage, QueueView, RevokedView, StatsView,
 };
-use tam_api::{router, APIError, APIErrorCode, AppState, Config, SESSION_COOKIE};
+use tam_api::{router, APIError, AppState, Config, SESSION_COOKIE};
 use tam_domain::equivalence::{Election, ElectionTrigger, Loss, PricingBranch};
 use tam_domain::{
     Binding, CanonicalTerm, EdgeKind, FieldPolicies, FieldPolicy, Mapping, PublishMode, TermKind,
@@ -209,8 +209,17 @@ async fn the_catalogue_lists_and_the_aggregate_reads_back(pool: PgPool) {
     assert_eq!(view.grades.source, "seller");
 }
 
+/// What this proves ends at the route: the connection reads back revoked, a
+/// second revocation moves nothing, and exactly one audit row is written.
+///
+/// It deliberately does not assert that a check-in cannot lift a revoked
+/// connection. That belongs to the beat route and is proved through it by
+/// `a_check_in_never_lifts_a_revoked_connection` in `devices_flow.rs`. An
+/// assertion here could only restate the guard's SQL by hand, which would stay
+/// green if the real statement were loosened — worse than no assertion, because
+/// it reads as coverage.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn connections_list_and_revocation_travels_the_broker_socket(pool: PgPool) {
+async fn a_listed_connection_carries_its_transport_badge_and_revoking_it_is_terminal(pool: PgPool) {
     provision(&pool).await;
     let connection = Uuid([0x33; 16]);
     let mut tx = pool.begin().await.expect("tx begins");
@@ -251,52 +260,59 @@ async fn connections_list_and_revocation_travels_the_broker_socket(pool: PgPool)
         "Tes publishes no official API, so its row carries the seller-device badge"
     );
 
-    // Revocation without a configured socket refuses honestly.
+    // The revocation is a write on the row, with no socket anywhere.
     let path = format!("/v1/connections/{}/revoke", connection.to_hyphenated());
     let (status, body) = call(pool.clone(), Config::default(), Method::POST, &path, None).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    let error: APIError = parse(&body);
-    assert_eq!(error.errors[0].code, Some(APIErrorCode::BrokerUnavailable));
-
-    // With a fake broker on the socket, the wire round-trips.
-    let socket = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("broker-{}.sock", std::process::id()));
-    let _removed = std::fs::remove_file(&socket);
-    let listener =
-        tokio::net::UnixListener::bind(&socket).expect("the fake broker binds its socket");
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "an in-test fake broker; the spawn ban targets production fire-and-forget"
-    )]
-    {
-        tokio::spawn(async move {
-            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-            let (stream, _addr) = listener.accept().await.expect("the fake broker accepts");
-            let (read_half, mut write_half) = stream.into_split();
-            let mut line = String::new();
-            BufReader::new(read_half)
-                .read_line(&mut line)
-                .await
-                .expect("the request line reads");
-            assert!(
-                line.contains("\"op\":\"revoke\"")
-                    && line.contains("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-                "the wire request names the op and the tenant: {line}"
-            );
-            write_half
-                .write_all(b"{\"status\":\"revoked\",\"connections\":1,\"elapsed_ms\":5}\n")
-                .await
-                .expect("the answer writes");
-        });
-    }
-    let config = Config {
-        broker_socket: Some(socket),
-        ..Config::default()
-    };
-    let (status, body) = call(pool, config, Method::POST, &path, None).await;
     assert_eq!(status, StatusCode::OK);
     let revoked: RevokedView = parse(&body);
-    assert_eq!(revoked.connections, 1, "the broker's answer passes through");
+    assert_eq!(revoked.connections, 1, "the row moved, so the count is one");
+
+    let (status, body) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        "/v1/connections",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ConnectionsView = parse(&body);
+    assert_eq!(
+        view.connections[0].state.as_str(),
+        "revoked",
+        "the connection reads revoked afterwards"
+    );
+
+    // Revoking again moves nothing, which is what stops a second audit row.
+    let (status, body) = call(pool.clone(), Config::default(), Method::POST, &path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let again: RevokedView = parse(&body);
+    assert_eq!(again.connections, 0, "a second revocation moves no row");
+
+    // One audit row, not two. The count above is derived from the same boolean
+    // that gates the audit write, so it cannot tell "no second row" from "the
+    // write is unconditional and the count happens to be right"; this asks the
+    // table instead.
+    let mut tx = pool.begin().await.expect("tx begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM connection_audit \
+         WHERE org_id = $1 AND connection_id = $2 AND event = 'revoked'",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(connection.0))
+    .fetch_one(&mut *tx)
+    .await
+    .expect("the audit count reads");
+    tx.commit().await.expect("the transaction commits");
+    assert_eq!(
+        events, 1,
+        "two revocations leave one audit row: the second moved nothing, so it recorded nothing"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

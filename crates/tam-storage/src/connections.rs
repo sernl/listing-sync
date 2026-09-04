@@ -2,11 +2,11 @@
 //! client's connections page renders, the four-state status derived from
 //! them, and the lifecycle audit's writer.
 //!
-//! Revocation itself travels through the broker — the only role that can
-//! tombstone the vault — so no connection write lives here. The audit is the
-//! exception and only half of one: this is the writer the application and
-//! engine roles use, and the broker writes its own rows with its own role
-//! rather than depending on this crate across the privilege boundary.
+//! Revocation is a control-plane write and lives here. It used to travel
+//! through the session broker, which held the credential vault and was the
+//! only role that could tombstone it; D1 removed the vault along with every
+//! server-side seller session, so what is left to revoke is the connection
+//! row itself and the application role owns it.
 
 use sqlx::PgPool;
 use sqlx::{Postgres, Transaction};
@@ -89,6 +89,61 @@ impl ConnectionRepo {
                 })
             })
             .collect()
+    }
+
+    /// Marks one connection revoked, answering whether a row moved.
+    ///
+    /// The guard makes a second revocation a no-op rather than a second audit
+    /// row, and it is what lets a caller report a count without reading the
+    /// row back. A connection the tenant does not have also answers `false`,
+    /// because the pin means this statement cannot see another tenant's row
+    /// and must not distinguish one from a row that is not there.
+    ///
+    /// Terminal by construction rather than by convention. The guard is on the
+    /// check-in's *upgrade*, not its downgrade: `derive_link` lifts a
+    /// connection to `linked` through an `ON CONFLICT ... DO UPDATE` whose
+    /// `WHERE connection.state IN ('unlinked', 'linking', 'needs_reauth')`
+    /// does not name `revoked`, so no live session a seller's machines report
+    /// can restore it. The downgrade is guarded too, but only ever writes
+    /// `needs_reauth` and so could not have lifted anything anyway.
+    ///
+    /// `ConnectionEvent::Revoked` is documented as a stored credential being
+    /// tombstoned and nothing is tombstoned here, so the detail carries the
+    /// distinction the vocabulary cannot — the same arrangement `derive_link`
+    /// makes for `Linked`.
+    pub async fn revoke(
+        &self,
+        org: OrgId,
+        connection: ConnectionId,
+        stamp: Stamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let moved = sqlx::query_scalar!(
+            "UPDATE connection SET state = 'revoked', updated_at = now() \
+             WHERE org_id = $1 AND id = $2 AND state <> 'revoked' \
+             RETURNING id",
+            uuid_to_db(org.0),
+            uuid_to_db(connection.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+        if moved {
+            record_connection_event(
+                &mut tx,
+                &ConnectionEventRecord {
+                    org,
+                    connection,
+                    event: ConnectionEvent::Revoked,
+                    detail: Some("seller-requested"),
+                    stamp,
+                },
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(moved)
     }
 }
 

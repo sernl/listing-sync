@@ -143,9 +143,22 @@ impl Marketplace {
 /// `docs/notes/design/vendoo-for-teachers-rethink.md`.
 ///
 /// D1 also requires a test that fails the build if a no-API marketplace gains
-/// a server transport. That test is deliberately not here yet: the server
-/// still drives both seller-device marketplaces through `tam-session-broker`,
-/// so a structural check would fail until that path is removed.
+/// a server transport, and half of that exists.
+///
+/// The declaration is gated in four places, so re-pointing a marketplace at
+/// the other branch fails whichever one is reached first: the transport-class
+/// test in `tam-domain`'s registry, the literal pair pinned in this module's
+/// own tests, `marketplace_inventory.transport_class` from migration 0043,
+/// and the two tests in `tam-storage`'s lease suite that hold that column and
+/// this function to each other so a SQL statement cannot route around the
+/// Rust.
+///
+/// What is owed is the other half: nothing checks that no server binary holds
+/// a live transport for a `SellerDevice` marketplace. Two do today, each from
+/// a cookie jar rather than through a broker — `tam-canary` for Tes and
+/// `tam-import` for Tpt — so the check is booked against their dispositions
+/// rather than written now, as open question 9 of
+/// `docs/notes/design/engine-driver-split.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransportClass {
     /// The marketplace publishes an official API and issues a token for the

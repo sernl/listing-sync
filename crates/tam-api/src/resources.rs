@@ -1,8 +1,8 @@
 //! The catalogue, connections and reconciliation surfaces: what M1i's
 //! client renders and the founder's drain workflow drives. Connection
-//! revocation travels through the broker's unix socket — the only role that
-//! can tombstone the vault — and a deployment without the socket answers
-//! 503 rather than pretending to revoke.
+//! revocation is a control-plane write on the connection row: the vault it
+//! used to tombstone through the session broker went with D1, along with
+//! every server-side seller session, so there is no socket to be without.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -23,10 +23,10 @@ use tam_storage::{
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
-    CanonicalTermId, ConnectionId, ConnectionStatus, CopyFormat, InventoryId, MappingId,
-    Marketplace, OrgId, PriceIntent, ProductId, ScanOutcome, Timestamp, TransportClass, Uuid,
+    Actor, CanonicalTermId, ConnectionId, ConnectionStatus, CopyFormat, InventoryId, MappingId,
+    Marketplace, OrgId, PriceIntent, ProductId, ScanOutcome, Stamp, Timestamp, TransportClass,
+    Uuid,
 };
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::jobs::{decode_cursor, encode_cursor};
@@ -480,116 +480,46 @@ pub(crate) async fn list_connections(
     }))
 }
 
+/// What a revocation did, in the shape the broker's own answer had.
+///
+/// `connections` counted what the broker tombstoned and now counts what this
+/// call moved, which is one or zero; the shape is kept because re-pointing
+/// the route should not make the client's reading of it change.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RevokedView {
     pub connections: u32,
     pub elapsed_ms: i64,
 }
 
-/// The wire request the broker's protocol module defines; re-encoded here
-/// because that module is deliberately private to the privilege boundary.
-#[derive(Serialize)]
-struct BrokerRevoke<'a> {
-    op: &'a str,
-    org: OrgId,
-    connection: ConnectionId,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum BrokerAnswer {
-    Revoked {
-        connections: u32,
-        elapsed_ms: i64,
-    },
-    Error {
-        detail: String,
-        #[serde(default)]
-        code: Option<BrokerErrorCode>,
-    },
-    #[serde(other)]
-    Unexpected,
-}
-
-/// The machine-readable half of a broker error, mirrored from the broker's
-/// own protocol module because that module is private to the privilege
-/// boundary.
+/// Revokes one connection, which is now a write on the row rather than a
+/// round trip to a process holding a credential.
 ///
-/// `Unrecognised` is the point of the type: a broker newer than this build
-/// must be able to name a fault this build does not know, and the answer to
-/// one is the internal path rather than a deserialisation failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum BrokerErrorCode {
-    PlatformAccountAlreadyLinked,
-    #[serde(other)]
-    Unrecognised,
-}
-
-/// The API code a broker fault surfaces as.
-///
-/// Only faults the seller can act on cross as themselves; everything else
-/// stays internal, because the broker's own words describe a privilege
-/// boundary the client has no business reading.
-fn broker_fault(state: &AppState, detail: &str, code: Option<BrokerErrorCode>) -> APIError {
-    match code {
-        Some(BrokerErrorCode::PlatformAccountAlreadyLinked) => APIError::new(
-            StatusCode::CONFLICT,
-            APIErrorEntry::new(detail)
-                .code(APIErrorCode::PlatformAccountAlreadyLinked)
-                .kind(APIErrorKind::Validation),
-        ),
-        Some(BrokerErrorCode::Unrecognised) | None => state.internal(detail),
-    }
-}
-
+/// The revocation is terminal without needing anything else to enforce it: the
+/// device check-in lifts a connection to `linked` only from `unlinked`,
+/// `linking` or `needs_reauth`, so a seller's machines can go on reporting
+/// live sessions and none of them restores a revoked one.
 pub(crate) async fn revoke_connection(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, connection)): Path<(String, String)>,
 ) -> Result<Json<RevokedView>, APIError> {
     let connection = ConnectionId(parse_id(&connection)?);
-    let Some(socket) = state.config.broker_socket.clone() else {
-        return Err(APIError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            APIErrorEntry::new("the credential broker is not configured; nothing was revoked")
-                .code(APIErrorCode::BrokerUnavailable)
-                .kind(APIErrorKind::Internal),
-        ));
-    };
-    let request = serde_json::to_string(&BrokerRevoke {
-        op: "revoke",
-        org: context.org,
-        connection,
-    })
-    .map_err(|error| state.internal(&error.to_string()))?;
-
-    let stream = tokio::net::UnixStream::connect(&socket)
+    let now = (state.wall)();
+    let revoked = ConnectionRepo::new(state.pool.clone())
+        .revoke(
+            context.org,
+            connection,
+            Stamp {
+                at: now,
+                actor: Actor::Person(context.user),
+            },
+        )
         .await
-        .map_err(|error| state.internal(&format!("broker socket: {error}")))?;
-    let (read_half, mut write_half) = stream.into_split();
-    write_half
-        .write_all(format!("{request}\n").as_bytes())
-        .await
-        .map_err(|error| state.internal(&format!("broker write: {error}")))?;
-    let mut line = String::new();
-    BufReader::new(read_half)
-        .read_line(&mut line)
-        .await
-        .map_err(|error| state.internal(&format!("broker read: {error}")))?;
-    match serde_json::from_str(&line) {
-        Ok(BrokerAnswer::Revoked {
-            connections,
-            elapsed_ms,
-        }) => Ok(Json(RevokedView {
-            connections,
-            elapsed_ms,
-        })),
-        Ok(BrokerAnswer::Error { detail, code }) => Err(broker_fault(&state, &detail, code)),
-        Ok(BrokerAnswer::Unexpected) | Err(_) => {
-            Err(state.internal("the broker answered something unexpected"))
-        }
-    }
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(RevokedView {
+        connections: u32::from(revoked),
+        elapsed_ms: ((state.wall)().0 - now.0).max(0),
+    }))
 }
 
 // ----------------------------------------------------------- reconciliation

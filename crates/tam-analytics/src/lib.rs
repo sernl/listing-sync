@@ -4,8 +4,10 @@
 //!
 //! Everything here is driven by a caller that supplies the reader, the
 //! listings and the instant, so the whole orchestration is exercisable without
-//! a socket. The binary beside it owns the pools, the broker lease and the
-//! clock, which is the only part that cannot be.
+//! a socket. The binary that owned the pools, the broker lease and the clock is
+//! gone: D1 makes the capture a device-pulled read served by
+//! `crates/tam-api/src/analytics.rs`, so no server-side process holds those
+//! edges any more.
 
 #![forbid(unsafe_code)]
 

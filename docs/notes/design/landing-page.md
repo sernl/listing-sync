@@ -137,10 +137,13 @@ The site states where the marketplace work runs as what Teachouse is built to do
 No sentence claims that our servers never hold a marketplace login or never open a marketplace session, and no sentence says the desktop app is the only thing that reaches a marketplace, because both would be false today.
 Two paths run at once, for different traffic.
 On the device, `apps/desktop/src-tauri/src/work.rs` composes and issues marketplace requests on the seller's machine, under the session the login webview filed in the operating system's keychain.
-On our side, `crates/tam-sync-worker` reaches Tes through the broker's gateway with the seller cookie injected server-side, for the source reads that canonicalisation needs, taking a broker lease per request under `LeasePurpose::Drain`.
+On our side, two binaries still reach a no-API marketplace under a seller's session.
+Corrected 2026-09-04: `crates/tam-sync-worker` is no longer one of them and the gateway is no longer the shape.
+Its Tes read leg moved to the seller's device under D1, leaving the crate the enqueue half with no marketplace edge and no poll loop.
+What remains is a cookie jar rather than a broker lease: `crates/tam-canary` builds a Tes adapter over a direct transport from a cookie-jar path, and `crates/tam-import` builds a Tpt one over `TAM_TPT_COOKIE_JAR` for the operator manifest drain.
 So the positive claim is true, and neither the absolute nor an exclusivity claim is.
 The absolute wording, including D30's "your login never leaves your device" as a heading, returns only when no server-side path reaches a marketplace under a seller's session, and this paragraph is the reminder so nobody has to hold it in their head.
-Check the claim against the tree rather than against this paragraph: the question is which processes still construct a marketplace adapter over a broker gateway.
+Check the claim against the tree rather than against this paragraph, and check it wider than the gateway, because the gateway going away is not the same as the paths going away: the question is which processes construct a marketplace adapter for a no-API marketplace at all, whether the session arrives over a broker lease or out of a cookie jar on our own disk.
 
 Body text set in `--muted` does not clear the WCAG AA contrast minimum for normal text.
 Measured on this palette, `--muted` is 3.90:1 on `--card` and 3.65:1 on `--ground` against a 4.5:1 requirement, and it is used for the section ledes (`.section .lede`), the hero's opening sell line (`.hero p.sell`), the install aside under "How it works" (`.aside`), the step copy (`.step p`), the marketplace transport column (`.row .how`), the FAQ answers (`.faq dd`), the screenshot captions (`.shot figcaption`), the footer and its navigation (`.site-foot`, `.site-nav a`) and the muted status pill (`.pill.mut`).

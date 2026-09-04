@@ -2166,9 +2166,10 @@ async fn a_check_in_never_lifts_a_revoked_connection(pool: PgPool) {
     register(&pool, &TOKEN_A, LAPTOP, "laptop").await;
     beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t0).await;
 
-    // What the console's revoke does, written directly: that route goes through
-    // the credential broker's socket, which no test configures, so this is the
-    // only way to put the row in the state under test.
+    // What the console's revoke does, written directly. The route is a plain
+    // write now that the broker is gone, so a test could call it; this stays
+    // direct because the subject here is the beat, and reaching the state
+    // through another route would put that route's behaviour in the way of it.
     let mut tx = pool.begin().await.expect("transaction begins");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
         .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
