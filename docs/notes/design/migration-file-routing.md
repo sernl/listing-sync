@@ -34,19 +34,34 @@ TPT generates its own thumbnails from the product file — `data[Item][generate_
 
 ### The locator
 
-A source locator is a per-file row saying which marketplace resource the bytes live in.
+A source locator says which marketplace resource a file's bytes live in.
 It never holds bytes and it never holds a url that could be fetched without the seller's session.
 
-    product_file_source(
-      org_id, file_id references product_file,
-      marketplace, connection_id,
-      resource_locator, entry_path null,
-      file_name, content_type,
-      observed_hash null, observed_byte_len null, observed_kind null,
-      observed_at, observed_by_device
+This note first drew it as a side table, `product_file_source`, keyed on the file it describes.
+It landed as columns on `product_file` itself, in migration 0052, and the change is recorded here rather than quietly rewritten because the reason generalises to any side table describing a row that is constrained on write.
+`product_payload_nonempty`, a deferred trigger in `0003_catalogue.sql`, requires a product and its first payload in one transaction, and `product_file_blob_or_source` is a row CHECK evaluated per statement.
+A side table cannot be written by the statement that writes the row it completes, so the file row would exist for one statement as neither blob-backed nor sourced, which is precisely the state that CHECK exists to refuse.
+Columns on the row make that state unconstructible rather than merely rejected, and `insert_sourced_file` (`crates/tam-storage/src/product.rs:587`) writes the whole group in one statement.
+
+    product_file(
+      org_id, id, product_id, position, role, kind,
+      hash null, scan_state null,            -- the blob-backed arm, unchanged
+      source_marketplace, source_connection,
+      source_resource, source_entry null,
+      payload_file_name, payload_content_type,
+      observed_hash, observed_byte_len,
+      asserted_scan_state, asserted_scan_signature,
+      asserted_scan_failure_code, asserted_scanned_at,
+      observed_by_device, observed_at, recorded_at
     )
 
-Two existing behaviours are what make this a real change rather than a column.
+One part did stay a table of its own, for a reason the column form cannot serve.
+`product_file_observation` is append-only and holds every observation, while the file's own source group records the first and is never overwritten by a later one.
+So a second device reporting a different digest for the same resource is a disagreement the item view derives from more than one distinct `observed_hash` there, rather than a write refused or a value silently replaced.
+`observed_at` is the device's own instant and `recorded_at` is our receipt of it, two facts rather than one.
+Both columns are created by 0052; what 0045 established is the discipline they follow, for ledger calls, and 0052's own comment cites it as though it created them.
+
+Two existing behaviours are what make this a real change rather than a handful of nullable columns nobody reads.
 `describe_files` (`crates/tam-storage/src/blobs.rs:313`) joins `blob` on the hash to find a length, so a file with no blob row is invisible to the manifest builder.
 `POST /{version}/products` refuses a file handle whose hash the tenant has never stored (`crates/tam-api/src/catalogue.rs:629-657`), which is a deliberate guard against a fabricated hash minting a row that points at no object.
 Both are correct for an uploaded file and both must fork for a sourced one.
@@ -191,8 +206,11 @@ Recorded 2026-09-04, ahead of that slice and owed to it: the operator import's `
 Until one exists, the founder's `measure` kill-gate number — the drain coverage when the originals are not on the box — cannot be taken, and re-pointing it at the device-side import described here is the follow-up.
 
 Everything else is reused unchanged, and it is the great majority and every hard part: `inbound_subjects` over the source vocabulary's edges, the verbatim grade declaration with its age-range labels and derived interval, `resolve_price`, `rights_from`, `residue_of`, the canonical product construction, the product and mapping inserts with their field policies and price rule, the immediate projection with the seller's overrides, `record_losses`, the taxonomy raise, and the whole row report.
-What is new is a `product_file_source` row written beside each `product_file`, from the device's observation.
-`ImportRun` shrinks to a pool, an organisation, a source, a target and an instant, and `tam-import` drops its dependencies on `tam-pipeline`, `tam-secrets` and the adapter crates.
+What is new is the source group written on each `product_file` from the device's observation, and the `product_file_observation` row that records the same observation as its own fact.
+`ImportRun` shrinks to a pool, an organisation, a source, a target and an instant, and the apply half names no pipeline, no key, no object store and no adapter.
+The crate keeps those dependencies, and an earlier draft of this line was wrong to say it drops them.
+`crates/tam-import/src/main.rs` is the founder's operator import and stays: it reads a TPT listing through its own adapter and ingests the manifest's files from the operator's disk, so `tam-pipeline`, `tam-secrets` and `tam-marketplace-tpt` are the binary's edges rather than the library's.
+That is the whole point of the split — one apply half serving a caller that holds bytes and a caller that never sees them — so the dependency staying is the design working rather than a leftover.
 
 `tam-sync-worker` exists to hold the broker socket for the Tes read.
 With the read on the device, its canonicalisation leg goes and its enqueue half stays, because minting the create and removal jobs, lowering the intent and deriving the idempotency key are pure ledger work.
@@ -310,7 +328,9 @@ A marketplace source emits neither old field, and that is chosen rather than fal
 No value would let a 0.1.3 client succeed with one: it has no marketplace fetcher, and our object store holds no bytes for that file, so a synthesised hash would only send it to a payload route answering 404 — failing later, after a round trip, in a shape that reads as our server being broken rather than as a client being too old.
 Failing at the envelope is louder and truer, and the cost is real: that item stays leased until its lease expires.
 The window therefore has an end condition rather than a hope.
-It closes when every registered device reports an `app_version` at or past this change, which `device` rows carry at registration and at every check-in, and nothing may emit a marketplace source until it does — which is a gate on S3 rather than on S2, since S2 constructs none.
+It closes when every registered device reports an `app_version` at or past this change, which `device` rows carry at registration and at every check-in.
+That fleet-wide condition is what retires the shim, and this line previously read it as the condition for emitting a source at all, which contradicted the per-device rule stated under the five requirements above and is corrected here rather than quietly dropped.
+Emitting is gated per claiming device: the manifest builder already emits a marketplace source for a sourced file, no import has yet written a sourced row for it to describe, and C6 decides which device is offered such an item, so a machine below the shim is passed over rather than handed an envelope it cannot decode.
 
 S2, the marketplace-backed file source, built.
 The marketplace arm driving the bundle download under the seller's own session, the single-entry unwrap, and the source-session and source-entitlement refusals — post-claim in `DeviceWork::execute` rather than in the tick, for the reason recorded above.

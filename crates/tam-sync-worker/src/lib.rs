@@ -23,7 +23,7 @@
 use tam_domain::{Binding, ItemOperation, JobItemId, Mapping, PublishMode, Verification};
 use tam_import::ImportRun;
 use tam_marketplace::idempotency::derive_idempotency_key;
-use tam_marketplace::{FirstPartyExport, ListingState, RemoteLifecycle, RemoteListingId};
+use tam_marketplace::{ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
     job_request_key, lower, requires_bound_on, Disposition, Enqueued, JobReadRepo, JobRepo,
     LoweringRefusal, MappingRepo, NewJob, NewJobItem, StorageError, SyncIntent, SyncRequestRecord,
@@ -76,14 +76,11 @@ impl From<StorageError> for DrainError {
 /// the canonicalisation is the device's and arrives a page at a time: a
 /// resource an earlier page finished is skipped here and its removal item is
 /// still built, from the breadcrumb `sync_request_resource` carries.
-pub async fn drain_request<A>(
+pub async fn drain_request(
     requests: &SyncRequestRepo,
-    run: &ImportRun<'_, A>,
+    run: &ImportRun,
     request: Uuid,
-) -> Result<DrainReport, DrainError>
-where
-    A: FirstPartyExport,
-{
+) -> Result<DrainReport, DrainError> {
     let record = requests
         .get(run.org, request)
         .await?
@@ -212,14 +209,11 @@ struct Canonicalisation {
 /// who asked for a live listing with a draft, a request that settled
 /// `enqueued` and a job that settled succeeded, with nothing anywhere saying
 /// the listing is not live.
-async fn enqueue_create<A>(
-    run: &ImportRun<'_, A>,
+async fn enqueue_create(
+    run: &ImportRun,
     record: &SyncRequestRecord,
     mappings: &[tam_types::MappingId],
-) -> Result<Uuid, DrainError>
-where
-    A: FirstPartyExport,
-{
+) -> Result<Uuid, DrainError> {
     let seeds = JobReadRepo::new(run.pool.clone())
         .mapping_seeds(run.org, record.target, mappings)
         .await?;
@@ -291,14 +285,11 @@ where
 /// request done naming a job that will never remove anything. The migrate
 /// would degrade into a plain sync and say nothing, which is exactly what the
 /// request key was split in two to prevent.
-async fn enqueue_removal<A>(
-    run: &ImportRun<'_, A>,
+async fn enqueue_removal(
+    run: &ImportRun,
     record: &SyncRequestRecord,
     canonicalised: &[Canonicalisation],
-) -> Result<Uuid, DrainError>
-where
-    A: FirstPartyExport,
-{
+) -> Result<Uuid, DrainError> {
     if canonicalised.is_empty() {
         return Err(DrainError::Locator(
             "a migrate's removal leg carries no resources, so the source listings would \

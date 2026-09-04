@@ -1,7 +1,8 @@
 //! The operator import: the founder's catalogue in, canonical products and
 //! their target mappings out, with the drain report printed per row and in
-//! total. The file bytes come from disk and no marketplace read happens here,
-//! so this process holds no marketplace session for a source it reads.
+//! total. Each listing is read from the marketplace under the operator's own
+//! session; every file byte comes from the operator's disk, so no byte this
+//! process stores was fetched from a marketplace.
 //!
 //! Usage: tam-import <db-url> <org-hex> <kek-path> <store-root> <manifest.json>
 //!
@@ -12,7 +13,8 @@
 //! needed to run one — and a TPT source needs `TAM_TPT_COOKIE_JAR`.
 //!
 //! TPT is the only source this path serves, because it carries one adapter and
-//! reads no marketplace. A source whose catalogue has to be read is read on the
+//! one session, and it downloads no file. A source whose catalogue has to be
+//! enumerated, rather than named row by row in a manifest, is enumerated on the
 //! seller's own device under D1, which is where
 //! `docs/notes/design/migration-file-routing.md` routes it.
 
@@ -22,12 +24,20 @@ use std::io::Read as _;
 
 use serde::Deserialize;
 use tam_import::{
-    import_one, record_drain_report, DrainTotals, ImportEntry, ImportRun, NamedBytes, NoImportFiles,
+    import_one, record_drain_report, AppliedResource, DrainTotals, HeldFile, ImportRun,
+    ImportedFile,
 };
-use tam_marketplace::{FirstPartyExport, InstantPause};
+use tam_marketplace::{FetchReason, FirstPartyExport, InstantPause};
 use tam_marketplace_tpt::{ReqwestTransport, TptAdapter, TptSession};
+use tam_pipeline::archive::ExtractBudget;
+use tam_pipeline::pipeline::{ingest, ArchiveMode, IngestContext};
+use tam_pipeline::scan::EicarScanner;
+use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
-use tam_types::{InventoryId, Marketplace, OrgId, Timestamp, Uuid};
+use tam_storage::{BlobRepo, TenantBlobSink};
+use tam_types::{
+    FileBytes, FileKind, InventoryId, Marketplace, OrgId, ScanOutcome, Timestamp, Uuid,
+};
 
 #[derive(Deserialize)]
 struct ManifestRow {
@@ -62,10 +72,40 @@ fn tpt_session() -> Result<TptSession, Box<dyn std::error::Error>> {
     Ok(TptSession::from_netscape_jar(&jar)?)
 }
 
-/// The manifest drain, over the adapter the route named. Generic because the
-/// loop asks nothing of the adapter beyond what `import_one` already does.
+/// The adapter this path builds reads and never writes, so the file source it
+/// is constructed with is a refusal.
+///
+/// Here rather than in the library because the library no longer takes an
+/// adapter at all: it applies what a caller observed, and this is the caller.
+struct NoImportFiles;
+
+impl tam_marketplace::FileSource for NoImportFiles {
+    fn fetch(
+        &self,
+        file: tam_types::FileId,
+    ) -> impl core::future::Future<
+        Output = Result<tam_marketplace::FileContent, tam_marketplace::FileSourceError>,
+    > + Send {
+        core::future::ready(Err(tam_marketplace::FileSourceError::Unreadable {
+            file,
+            detail: "the import reads listings and never uploads files".to_owned(),
+        }))
+    }
+}
+
+/// The manifest drain: read the listing, ingest the files from disk, and hand
+/// the apply half a resource whose files are already decided.
+///
+/// The ingest lives here rather than in `import_one` because this is the
+/// caller that has the bytes. The apply half reads no marketplace and stores
+/// nothing, which is what lets one of it serve both this path and the device
+/// import, where the bytes are the seller's and never reach us at all. Here
+/// they are ours the moment they are read off the operator's disk, so they are
+/// `Held`.
 async fn drain_manifest<A: FirstPartyExport>(
-    run: &ImportRun<'_, A>,
+    run: &ImportRun,
+    adapter: &A,
+    blobs: &BlobRepo<LocalObjectStore>,
     rows: &[ManifestRow],
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -74,20 +114,92 @@ where
 {
     let mut totals = DrainTotals::default();
     for row in rows {
-        let mut files = Vec::new();
-        for path in &row.files {
-            files.push(NamedBytes {
-                name: path.clone(),
-                bytes: read_bytes(path)?,
-            });
-        }
-        let entry = ImportEntry {
-            resource: row.resource,
-            files,
+        let applied = match prepare(run, adapter, blobs, row).await {
+            Ok(applied) => applied,
+            Err(why) => {
+                eprintln!("{} → skipped: {why}", row.resource);
+                continue;
+            }
         };
-        import_and_report(run, &entry, &mut totals).await;
+        import_and_report(run, &applied, &mut totals).await;
     }
     record_and_report(run, totals).await
+}
+
+/// One manifest row, read and ingested into files this import can apply.
+async fn prepare<A: FirstPartyExport>(
+    run: &ImportRun,
+    adapter: &A,
+    blobs: &BlobRepo<LocalObjectStore>,
+    row: &ManifestRow,
+) -> Result<AppliedResource, Box<dyn std::error::Error>>
+where
+    A::Resource: TryFrom<i64>,
+    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
+{
+    let resource = A::Resource::try_from(row.resource)
+        .map_err(|error| format!("{}: {error}", row.resource))?;
+    let listing = adapter
+        .fetch_for_import(
+            &FetchReason::FirstPartyExport {
+                inventory: run.source,
+            },
+            resource,
+        )
+        .await
+        .map_err(|error| format!("{}: {error:?}", row.resource))?;
+
+    let sink = TenantBlobSink {
+        repo: blobs,
+        org: run.org,
+        at: run.now,
+    };
+    let mut payload: Vec<ImportedFile> = Vec::new();
+    let mut cover: Option<HeldFile> = None;
+    for path in &row.files {
+        let ingested = ingest(
+            &read_bytes(path)?,
+            &EicarScanner,
+            &sink,
+            IngestContext {
+                budget: ExtractBudget::default(),
+                now: run.now,
+                // An import mirrors what the seller uploaded to the source
+                // marketplace, and the source's own bundle is an archive of
+                // separately listed files.
+                archives: ArchiveMode::Explode,
+            },
+        )
+        .await?;
+        for stored in &ingested.payload {
+            payload.push(ImportedFile {
+                kind: stored.kind,
+                bytes: FileBytes::Held {
+                    hash: stored.hash,
+                    byte_len: stored.byte_len,
+                    scan: ScanOutcome::Clean { at: run.now },
+                },
+            });
+        }
+        if cover.is_none() {
+            cover = Some(HeldFile {
+                kind: FileKind::Image,
+                hash: ingested.cover.hash,
+                byte_len: ingested.cover.byte_len,
+                scan: ScanOutcome::Clean { at: run.now },
+            });
+        }
+    }
+    let cover = cover.ok_or("the row names no files, so no cover could be made")?;
+    if payload.is_empty() {
+        return Err("the row's files hold nothing this import recognises".into());
+    }
+    Ok(AppliedResource {
+        resource: row.resource,
+        listing,
+        payload,
+        cover,
+    })
 }
 
 fn read_bytes(path: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -123,15 +235,8 @@ fn wall_now() -> Result<Timestamp, Box<dyn std::error::Error>> {
 
 /// One entry through the import, absorbed into the run's totals and reported
 /// on the way past.
-async fn import_and_report<A: FirstPartyExport>(
-    run: &ImportRun<'_, A>,
-    entry: &ImportEntry,
-    totals: &mut DrainTotals,
-) where
-    A::Resource: TryFrom<i64>,
-    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
-{
-    match import_one(run, entry).await {
+async fn import_and_report(run: &ImportRun, applied: &AppliedResource, totals: &mut DrainTotals) {
+    match import_one(run, applied).await {
         Ok(report) => {
             totals.absorb(&report);
             eprintln!(
@@ -155,12 +260,12 @@ async fn import_and_report<A: FirstPartyExport>(
                 eprintln!("    curriculum tags: {:?}", report.curriculum);
             }
         }
-        Err(error) => eprintln!("{} FAILED: {error}", entry.resource),
+        Err(error) => eprintln!("{} FAILED: {error}", applied.resource),
     }
 }
 
-async fn record_and_report<A: FirstPartyExport>(
-    run: &ImportRun<'_, A>,
+async fn record_and_report(
+    run: &ImportRun,
     totals: DrainTotals,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let job = record_drain_report(run, totals).await?;
@@ -192,10 +297,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if source.marketplace() != Marketplace::Tpt {
         return Err(format!(
             "this path takes a TPT source and {source:?} is not one. It carries one \
-             adapter and reads no marketplace: the bytes come from the manifest's own \
-             files. A source whose catalogue has to be read is read on the seller's \
-             device instead, which is where docs/notes/design/migration-file-routing.md \
-             routes it."
+             adapter and one session, and it downloads no file: the bytes come from \
+             the manifest's own paths on this machine. A source whose catalogue has to \
+             be enumerated is enumerated on the seller's device instead, which is where \
+             docs/notes/design/migration-file-routing.md routes it."
         )
         .into());
     }
@@ -210,15 +315,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         NoImportFiles,
         InstantPause,
     );
+    let blobs = BlobRepo::new(
+        pool.clone(),
+        LocalObjectStore::new(std::path::PathBuf::from(store_root)),
+        kek,
+    );
     let run = ImportRun {
         pool,
-        kek,
-        store_root: std::path::PathBuf::from(store_root),
-        adapter: &adapter,
         org,
         source,
         target,
         now: wall_now()?,
     };
-    drain_manifest(&run, &manifest.rows).await
+    drain_manifest(&run, &adapter, &blobs, &manifest.rows).await
 }

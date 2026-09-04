@@ -8,24 +8,32 @@
 use sqlx::PgPool;
 use tam_domain::equivalence::{NewProjectionOverride, OverrideKind, ProjectionOverride};
 use tam_domain::{
-    CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath,
+    CanonicalTerm, Decider, EdgeKind, NoCounterpart, ProjectionEdge, TermKind, VocabularyId,
+    VocabularyPath,
 };
 use tam_import::{
-    import_one, measure_one, record_drain_report, DrainTotals, ImportEntry, ImportRun,
-    MeasureTotals, NamedBytes, NoImportFiles,
+    import_one, measure_one, record_drain_report, AppliedResource, DrainTotals, HeldFile,
+    ImportRun, ImportedFile, MeasureTotals,
 };
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
 use tam_marketplace::transport::{HttpRequest, HttpResponse};
-use tam_marketplace::FetchReason;
+use tam_marketplace::{FetchReason, ListingState, RemoteListingId};
 use tam_marketplace_tes::{endpoints as tes, DraftId, TesAdapter};
+use tam_pipeline::archive::ExtractBudget;
+use tam_pipeline::pipeline::{ingest, ArchiveMode, IngestContext};
+use tam_pipeline::scan::EicarScanner;
+use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
-use tam_storage::{JobReadRepo, OverrideRepo, ProductRepo, TaxonomyRepo};
+use tam_storage::{BlobRepo, JobReadRepo, OverrideRepo, ProductRepo, TaxonomyRepo, TenantBlobSink};
 use tam_taxonomy::licences::derive_licence_crosswalk;
 use tam_types::{
-    CanonicalTermId, FileKind, InventoryId, OrgId, PriceIntent, Timestamp, UserId, Uuid,
+    CanonicalTermId, ConnectionId, ContentHash, FileBytes, FileKind, InventoryId, Marketplace,
+    Observation, OrgId, PriceIntent, ScanOutcome, Timestamp, UserId, Uuid,
 };
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
+/// A device identifier in the shape the registry stores one.
+const DEVICE: &str = "11112222333344445555666677778888";
 /// A second tenant on the same global relation, so a test about one seller's
 /// decision can show it is one seller's.
 const OTHER_ORG: OrgId = OrgId(Uuid([0xAB; 16]));
@@ -194,34 +202,229 @@ fn pdf() -> Vec<u8> {
     bytes
 }
 
-fn run_for(
-    pool: PgPool,
-    adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
-    store_root: std::path::PathBuf,
-) -> ImportRun<'_, TesAdapter<CassetteTransport, NoImportFiles>> {
-    run_for_org(pool, adapter, store_root, ORG)
+/// The adapter this suite builds reads and never writes, so the file source it
+/// takes is a refusal. Local to the tests because the library no longer takes
+/// an adapter at all.
+pub struct NoImportFiles;
+
+impl tam_marketplace::FileSource for NoImportFiles {
+    fn fetch(
+        &self,
+        file: tam_types::FileId,
+    ) -> impl core::future::Future<
+        Output = Result<tam_marketplace::FileContent, tam_marketplace::FileSourceError>,
+    > + Send {
+        core::future::ready(Err(tam_marketplace::FileSourceError::Unreadable {
+            file,
+            detail: "the import reads listings and never uploads files".to_owned(),
+        }))
+    }
+}
+
+/// The run, for a tenant.
+fn run_for(pool: PgPool) -> ImportRun {
+    run_for_org(pool, ORG)
 }
 
 /// The same run for a stated tenant.
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
-)]
-fn run_for_org(
-    pool: PgPool,
-    adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
-    store_root: std::path::PathBuf,
-    org: OrgId,
-) -> ImportRun<'_, TesAdapter<CassetteTransport, NoImportFiles>> {
+fn run_for_org(pool: PgPool, org: OrgId) -> ImportRun {
     ImportRun {
         pool,
-        kek: Kek::from_bytes(&[0x11; 32]).expect("a well-formed kek"),
-        store_root,
-        adapter,
         org,
         source: InventoryId::TesGb,
         target: InventoryId::TesNz,
         now: NOW,
+    }
+}
+
+/// One count, read under a tenant pin.
+///
+/// Not a convenience. `blob` and `product_file` carry forced row-level
+/// security, so an unpinned count returns zero whatever the table holds — and
+/// a test asserting "no bytes were stored" against an unpinned read passes
+/// because it can see nothing, not because nothing is there. That is the trap
+/// `engine-driver-split.md` records from step 11's fixture, and this helper
+/// exists so no assertion in this file falls into it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn pinned_count(pool: &PgPool, org: OrgId, sql: &str) -> i64 {
+    let mut tx = pool.begin().await.expect("the count opens a transaction");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    let count: i64 = sqlx::query_scalar(sql)
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the count reads");
+    count
+}
+
+/// The listing a cassette answers, for the paths that need it without files.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn listing_of(
+    adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
+    resource: i64,
+) -> tam_marketplace::ImportedListing {
+    adapter
+        .fetch_for_import(
+            &FetchReason::FirstPartyExport {
+                inventory: InventoryId::TesGb,
+            },
+            DraftId(resource),
+        )
+        .await
+        .expect("the fixture listing reads")
+}
+
+/// One resource, read from the cassette and ingested from the fixture bytes,
+/// exactly as the operator import does it.
+///
+/// The suite keeps driving `Held` files through the same pipeline the operator
+/// path uses, which is what makes every existing assertion below a golden test
+/// of the split: the apply half stopped fetching and stopped ingesting, and
+/// each of these still reports what it reported before.
+async fn applied_held(
+    pool: &PgPool,
+    store_root: std::path::PathBuf,
+    adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
+    resource: i64,
+) -> AppliedResource {
+    applied_fixture(Fixture {
+        pool,
+        store_root,
+        adapter,
+        resource,
+        bytes: pdf(),
+        org: ORG,
+    })
+    .await
+}
+
+/// The same, for a stated tenant, because a blob belongs to one.
+async fn applied_held_for(
+    pool: &PgPool,
+    store_root: std::path::PathBuf,
+    adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
+    resource: i64,
+    org: OrgId,
+) -> AppliedResource {
+    applied_fixture(Fixture {
+        pool,
+        store_root,
+        adapter,
+        resource,
+        bytes: pdf(),
+        org,
+    })
+    .await
+}
+
+/// The same, from stated bytes rather than the standard fixture, for the paths
+/// that download a real bundle.
+async fn applied_bytes(
+    pool: &PgPool,
+    store_root: std::path::PathBuf,
+    adapter: &TesAdapter<CassetteTransport, NoImportFiles>,
+    resource: i64,
+    bytes: Vec<u8>,
+) -> AppliedResource {
+    applied_fixture(Fixture {
+        pool,
+        store_root,
+        adapter,
+        resource,
+        bytes,
+        org: ORG,
+    })
+    .await
+}
+
+/// One fixture resource: where its blobs land, whose they are, which cassette
+/// answers its listing, and what its bytes say. Bundled because the arity
+/// would otherwise exceed the workspace argument limit, which is a shared gate
+/// rather than something to widen for a test helper.
+struct Fixture<'a> {
+    pool: &'a PgPool,
+    store_root: std::path::PathBuf,
+    adapter: &'a TesAdapter<CassetteTransport, NoImportFiles>,
+    resource: i64,
+    bytes: Vec<u8>,
+    org: OrgId,
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn applied_fixture(fixture: Fixture<'_>) -> AppliedResource {
+    let Fixture {
+        pool,
+        store_root,
+        adapter,
+        resource,
+        bytes,
+        org,
+    } = fixture;
+    let listing = adapter
+        .fetch_for_import(
+            &FetchReason::FirstPartyExport {
+                inventory: InventoryId::TesGb,
+            },
+            DraftId(resource),
+        )
+        .await
+        .expect("the fixture listing reads");
+    let repo = BlobRepo::new(
+        pool.clone(),
+        LocalObjectStore::new(store_root),
+        Kek::from_bytes(&[0x11; 32]).expect("a well-formed kek"),
+    );
+    let sink = TenantBlobSink {
+        repo: &repo,
+        org,
+        at: NOW,
+    };
+    let ingested = ingest(
+        &bytes,
+        &EicarScanner,
+        &sink,
+        IngestContext {
+            budget: ExtractBudget::default(),
+            now: NOW,
+            archives: ArchiveMode::Explode,
+        },
+    )
+    .await
+    .expect("the fixture ingests");
+    AppliedResource {
+        resource,
+        listing,
+        payload: ingested
+            .payload
+            .iter()
+            .map(|stored| ImportedFile {
+                kind: stored.kind,
+                bytes: FileBytes::Held {
+                    hash: stored.hash,
+                    byte_len: stored.byte_len,
+                    scan: ScanOutcome::Clean { at: NOW },
+                },
+            })
+            .collect(),
+        cover: HeldFile {
+            kind: FileKind::Image,
+            hash: ingested.cover.hash,
+            byte_len: ingested.cover.byte_len,
+            scan: ScanOutcome::Clean { at: NOW },
+        },
     }
 }
 
@@ -234,14 +437,9 @@ fn store_root(tag: &str) -> std::path::PathBuf {
 async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
     seed(&pool, true).await;
     let adapter = adapter_for(13_549_794);
-    let run = run_for(pool.clone(), &adapter, store_root("mapped"));
-    let entry = ImportEntry {
-        resource: 13_549_794,
-        files: vec![NamedBytes {
-            name: "worksheet.pdf".to_owned(),
-            bytes: pdf(),
-        }],
-    };
+    let run = run_for(pool.clone());
+
+    let entry = applied_held(&pool, store_root("mapped"), &adapter, 13_549_794).await;
     let report = import_one(&run, &entry).await.expect("the import runs");
 
     assert_eq!(
@@ -314,6 +512,70 @@ async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
     );
 }
 
+/// The whole row report for one covered listing, unchanged by the split.
+///
+/// The apply half stopped reading the marketplace and stopped ingesting, and
+/// `ImportRowReport` gained `terms_uncovered`; nothing else about what a
+/// resource becomes was meant to move. Most values below are ones this file
+/// already asserted before the split — the counts, the projection verdict and
+/// the curriculum column from `a_mapped_catalogue_row_imports_and_projects`,
+/// the zero unmapped ids from the drain event's `terms_unmapped` — gathered
+/// onto one listing, so a field that quietly changed fails here rather than
+/// nowhere. Three are pinned here for the first time and are not golden in
+/// that sense: `terms_uncovered`, which the split added, and `source` and
+/// `source_state`, which the row report already carried but which nothing in
+/// this suite asserted. The two minted identifiers are the only fields not
+/// pinned at all, because they are fresh per run by design.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_row_report_for_a_covered_listing_is_what_it_was_before_the_split(pool: PgPool) {
+    seed(&pool, true).await;
+    let adapter = adapter_for(13_549_794);
+    let run = run_for(pool.clone());
+
+    let entry = applied_held(&pool, store_root("golden"), &adapter, 13_549_794).await;
+    let report = import_one(&run, &entry).await.expect("the import runs");
+
+    assert_eq!(report.resource, 13_549_794);
+    assert_eq!(report.title, "Fractions practice");
+    assert_eq!(
+        (
+            report.terms_seen,
+            report.terms_mapped,
+            report.terms_uncovered
+        ),
+        (2, 2, 0),
+        "both categories map inbound over the Tes relation and both reach an NZ counterpart"
+    );
+    assert!(
+        report.unmapped_native_ids.is_empty(),
+        "every native id the read carried on the subject axis reached a canonical term"
+    );
+    assert_eq!(report.curriculum, vec!["English".to_owned()]);
+    assert_eq!(
+        (report.raised.new, report.raised.already_open),
+        (0, 0),
+        "a covered catalogue raises nothing"
+    );
+    assert_eq!(
+        (report.projectable, report.blocked_by.as_deref()),
+        (true, None)
+    );
+    assert_eq!(
+        report.source,
+        RemoteListingId::Tes {
+            url: "https://www.tes.com/teaching-resource/-13549794".to_owned(),
+        },
+        "a migrate's removal names the source from the read that produced this row, so the \
+         row carries it rather than a second read recovering it"
+    );
+    assert_eq!(
+        report.source_state,
+        Some(ListingState::Live),
+        "the fixture carries no `draft` key, which the Tes read takes as live rather than \
+         leaving the lifecycle unobserved"
+    );
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_three_licences_the_import_used_to_refuse_now_import(pool: PgPool) {
     seed(&pool, true).await;
@@ -345,18 +607,15 @@ async fn the_three_licences_the_import_used_to_refuse_now_import(pool: PgPool) {
         ),
     ] {
         let adapter = adapter_licensed(resource, licence, price);
-        let run = run_for(
-            pool.clone(),
-            &adapter,
+        let run = run_for(pool.clone());
+
+        let entry = applied_held(
+            &pool,
             store_root(&format!("lic-{licence}")),
-        );
-        let entry = ImportEntry {
+            &adapter,
             resource,
-            files: vec![NamedBytes {
-                name: "worksheet.pdf".to_owned(),
-                bytes: pdf(),
-            }],
-        };
+        )
+        .await;
         let report = import_one(&run, &entry)
             .await
             .unwrap_or_else(|error| panic!("{licence} imports rather than being dropped: {error}"));
@@ -384,8 +643,9 @@ async fn the_three_licences_the_import_used_to_refuse_now_import(pool: PgPool) {
 async fn measure_reports_a_covered_catalogue_as_zero_uncovered_without_files(pool: PgPool) {
     seed(&pool, true).await;
     let adapter = adapter_for(13_549_794);
-    let run = run_for(pool.clone(), &adapter, store_root("measure-covered"));
-    let report = measure_one(&run, 13_549_794)
+    let run = run_for(pool.clone());
+    let listing = listing_of(&adapter, 13_549_794).await;
+    let report = measure_one(&run, 13_549_794, &listing)
         .await
         .expect("the measure runs with no files");
     assert_eq!(
@@ -416,8 +676,9 @@ async fn measure_reports_a_covered_catalogue_as_zero_uncovered_without_files(poo
 async fn measure_counts_the_uncovered_terms_a_full_import_would_raise(pool: PgPool) {
     seed(&pool, false).await;
     let adapter = adapter_for(13_549_794);
-    let run = run_for(pool.clone(), &adapter, store_root("measure-gap"));
-    let report = measure_one(&run, 13_549_794)
+    let run = run_for(pool.clone());
+    let listing = listing_of(&adapter, 13_549_794).await;
+    let report = measure_one(&run, 13_549_794, &listing)
         .await
         .expect("the measure runs");
     assert_eq!(
@@ -447,14 +708,9 @@ async fn measure_counts_the_uncovered_terms_a_full_import_would_raise(pool: PgPo
 async fn a_gap_blocks_the_projection_and_raises_exactly_once(pool: PgPool) {
     seed(&pool, false).await;
     let adapter = adapter_for(13_549_794);
-    let run = run_for(pool.clone(), &adapter, store_root("gap"));
-    let entry = ImportEntry {
-        resource: 13_549_794,
-        files: vec![NamedBytes {
-            name: "worksheet.pdf".to_owned(),
-            bytes: pdf(),
-        }],
-    };
+    let run = run_for(pool.clone());
+
+    let entry = applied_held(&pool, store_root("gap"), &adapter, 13_549_794).await;
     let report = import_one(&run, &entry).await.expect("the import runs");
     assert_eq!(
         (report.projectable, report.blocked_by.as_deref()),
@@ -513,8 +769,8 @@ async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
 
     let adapter = adapter_for(13_549_794);
     let mine = import_one(
-        &run_for_org(pool.clone(), &adapter, store_root("override-mine"), ORG),
-        &entry_for(13_549_794),
+        &run_for_org(pool.clone(), ORG),
+        &applied_held(&pool, store_root("override-mine"), &adapter, 13_549_794).await,
     )
     .await
     .expect("the import runs for the org that decided");
@@ -527,13 +783,15 @@ async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
 
     let other_adapter = adapter_for(13_549_794);
     let theirs = import_one(
-        &run_for_org(
-            pool.clone(),
-            &other_adapter,
+        &run_for_org(pool.clone(), OTHER_ORG),
+        &applied_held_for(
+            &pool,
             store_root("override-theirs"),
+            &other_adapter,
+            13_549_794,
             OTHER_ORG,
-        ),
-        &entry_for(13_549_794),
+        )
+        .await,
     )
     .await
     .expect("the import runs for the org that decided nothing");
@@ -544,29 +802,304 @@ async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
     );
 }
 
-/// One catalogue row with a file, which every import body needs.
-fn entry_for(resource: i64) -> ImportEntry {
-    ImportEntry {
-        resource,
-        files: vec![NamedBytes {
-            name: "worksheet.pdf".to_owned(),
-            bytes: pdf(),
+/// A marketplace-sourced resource imports, and no blob of it is stored.
+///
+/// D27's property on the server side, and the mirror of the device's own
+/// assertion that no payload bytes reach the wire: mine says none are sent,
+/// this says none are kept. The cover is `Held` because Q-c allows a derived
+/// thumbnail; the payload is `Sourced` and must leave the object store empty
+/// of anything but that cover.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_sourced_payload_imports_and_stores_no_bytes_of_it(pool: PgPool) {
+    seed(&pool, true).await;
+    let adapter = adapter_for(13_549_794);
+    let run = run_for(pool.clone());
+
+    // The cover alone goes through the pipeline, exactly as the device's
+    // import does it: the seller's own file is named, never stored.
+    let held = applied_held(&pool, store_root("sourced"), &adapter, 13_549_794).await;
+    let blobs_after_cover =
+        pinned_count(&pool, ORG, "SELECT count(*) FROM blob WHERE org_id = $1").await;
+    assert!(
+        blobs_after_cover > 0,
+        "the cover must actually be stored, or the comparison below is between two zeroes \
+         and proves nothing"
+    );
+
+    // A real connection, because a sourced file names the one that can fetch
+    // it and the schema holds it to that.
+    // Written under a tenant pin, because `connection` carries forced
+    // row-level security: an unpinned write is refused rather than silently
+    // misfiled, which is the same rail the device write paths run under.
+    let connection = ConnectionId(Uuid([0x44; 16]));
+    let mut tx = pool.begin().await.expect("the fixture opens a transaction");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+         VALUES ($1, $2, 'tes', 'linked', $3, $3)",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(connection.0 .0))
+    .bind(sqlx::types::chrono::DateTime::from_timestamp_millis(NOW.0).expect("a valid instant"))
+    .execute(&mut *tx)
+    .await
+    .expect("the connection seeds");
+    // And the device that observed it, for the same reason: a sourced file
+    // records which machine saw it, and the schema holds it to a real one.
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, first_seen_at, \
+         last_seen_at) VALUES ($1, $2, 'a test machine', 'linux', 'x86_64', '0.2.0', $3, $3)",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(DEVICE)
+    .bind(sqlx::types::chrono::DateTime::from_timestamp_millis(NOW.0).expect("a valid instant"))
+    .execute(&mut *tx)
+    .await
+    .expect("the device seeds");
+    tx.commit().await.expect("the fixture commits");
+
+    let applied = AppliedResource {
+        resource: 13_549_794,
+        listing: held.listing.clone(),
+        payload: vec![ImportedFile {
+            kind: FileKind::Pdf,
+            bytes: FileBytes::Sourced {
+                marketplace: Marketplace::Tes,
+                connection,
+                resource: "13549794".to_owned(),
+                entry: None,
+                payload_file_name: "13549794-bundle.zip".to_owned(),
+                payload_content_type: "application/zip".to_owned(),
+                observed: Observation {
+                    device: DEVICE.to_owned(),
+                    hash: ContentHash([0x5A; 32]),
+                    byte_len: 4_096,
+                    scan: ScanOutcome::Clean { at: NOW },
+                    observed_at: NOW,
+                },
+            },
         }],
-    }
+        cover: held.cover,
+    };
+
+    let report = import_one(&run, &applied)
+        .await
+        .expect("a sourced payload imports");
+    assert_eq!(report.resource, 13_549_794);
+
+    let blobs_after = pinned_count(&pool, ORG, "SELECT count(*) FROM blob WHERE org_id = $1").await;
+    assert_eq!(
+        blobs_after, blobs_after_cover,
+        "importing a marketplace-sourced payload stored bytes. The cover is ours to keep and \
+         is already counted; anything beyond it is the seller's file on our servers, which is \
+         the one thing D27 forbids"
+    );
+
+    let sourced = pinned_count(
+        &pool,
+        ORG,
+        "SELECT count(*) FROM product_file WHERE org_id = $1 AND hash IS NULL",
+    )
+    .await;
+    assert_eq!(
+        sourced, 1,
+        "and the payload row exists, named rather than held, so this is an import that \
+         happened rather than one that quietly did nothing"
+    );
+    let held_rows = pinned_count(
+        &pool,
+        ORG,
+        "SELECT count(*) FROM product_file WHERE org_id = $1 AND hash IS NOT NULL",
+    )
+    .await;
+    assert_eq!(
+        held_rows, 1,
+        "the cover is blob-backed and the same pinned read finds it, so the count above is \
+         one row seen and not two rows missed"
+    );
+
+    // The assertion the whole test is for, and its twin. A sourced file's
+    // bytes are the seller's, so nothing in `blob` may carry the digest the
+    // device reported for them. The twin runs the identical join against the
+    // cover's own hash, which must find its blob: without it a pin that
+    // returned nothing, a join written against the wrong columns, or a table
+    // the reader cannot see would all pass the first assertion by seeing
+    // nothing at all.
+    let sourced_blobs = pinned_count(
+        &pool,
+        ORG,
+        "SELECT count(*) FROM blob b \
+         JOIN product_file f ON f.org_id = b.org_id AND f.observed_hash = b.hash \
+         WHERE f.org_id = $1 AND f.hash IS NULL",
+    )
+    .await;
+    assert_eq!(
+        sourced_blobs, 0,
+        "a blob carries the digest the device reported for the seller's own file, which is \
+         those bytes on our servers under the one name D27 forbids them to have"
+    );
+    let cover_blobs = pinned_count(
+        &pool,
+        ORG,
+        "SELECT count(*) FROM blob b \
+         JOIN product_file f ON f.org_id = b.org_id AND f.hash = b.hash \
+         WHERE f.org_id = $1 AND f.hash IS NOT NULL",
+    )
+    .await;
+    assert_eq!(
+        cover_blobs, 1,
+        "the same join finds the cover's blob, so the zero above is an absence this read \
+         could have seen rather than one it was blind to"
+    );
+}
+
+/// The import's coverage number is the measurement's, exactly.
+///
+/// This pins the definition rather than a fixture, and it is the pin that
+/// matters: the founder compares this number across a series of migrations, so
+/// the two callers must compute one quantity rather than two that agree today.
+/// The near neighbour it would drift into is the listing projection's own
+/// gaps, which count over five routed axes rather than two, count per
+/// term-and-target rather than per distinct term, and report nothing at all
+/// when a listing blocks for a reason that is not a term — a currency nobody
+/// measured, a missing cover, an unanswered election. Any of those three
+/// divergences breaks this equality.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_imports_coverage_number_is_the_measurements(pool: PgPool) {
+    // Seeded without the NZ edges, so there is genuinely something uncovered
+    // and the equality is not satisfied by both sides being zero.
+    seed(&pool, false).await;
+    let run = run_for(pool.clone());
+
+    // One cassette per read, because a cassette answers each recorded
+    // interaction once and both halves of this equality read the same draft.
+    let measured_adapter = adapter_for(13_549_794);
+    let listing = listing_of(&measured_adapter, 13_549_794).await;
+    let measured = measure_one(&run, 13_549_794, &listing)
+        .await
+        .expect("the measurement runs");
+
+    let adapter = adapter_for(13_549_794);
+    let entry = applied_held(&pool, store_root("uncovered-agree"), &adapter, 13_549_794).await;
+    let imported = import_one(&run, &entry).await.expect("the import runs");
+
+    assert!(
+        measured.terms_uncovered > 0,
+        "the fixture must have something uncovered, or this equality proves nothing"
+    );
+    assert_eq!(
+        imported.terms_uncovered, measured.terms_uncovered,
+        "the import and the measurement must report one number. They differ, which means the \
+         import is counting something else — most likely the projection's first blocker, \
+         which is a different quantity over different axes"
+    );
+}
+
+/// What the coverage number counts, pinned against the two readings it would
+/// otherwise drift into.
+///
+/// The founder compares this number across a series of migrations, so it has
+/// to mean one thing over time, and both near neighbours are one plausible
+/// edit away.
+///
+/// The first is the listing projection's own gaps. Etsy declares no
+/// equivalence axis at all, so the projection visits none, raises no term
+/// cause, and blocks at the currency gate instead — an outcome that says
+/// nothing whatever about coverage. A report reading the projection's causes
+/// would call this resource fully covered while both of its terms have
+/// nowhere in Etsy to go. The number is taken from the mapped terms before
+/// the projection runs, which is exactly why it survives a blocker that is
+/// not a term.
+///
+/// The second is counting a recorded no-counterpart. Somebody decided that
+/// axis does not cross, and a decision is not a gap; the second half records
+/// two and watches the same fixture fall to zero.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_coverage_number_counts_terms_and_not_the_projections_blocker(pool: PgPool) {
+    seed(&pool, true).await;
+    // Paid, because the currency gate applies to a price and reaching a
+    // blocker that is not a term is the whole point of the fixture.
+    let adapter = adapter_licensed(13_549_794, "TES-PAID-SCHOOL", serde_json::json!(4.5));
+    let run = ImportRun {
+        pool: pool.clone(),
+        org: ORG,
+        source: InventoryId::TesGb,
+        target: InventoryId::Etsy,
+        now: NOW,
+    };
+
+    let entry = applied_held(&pool, store_root("etsy-coverage"), &adapter, 13_549_794).await;
+    let report = import_one(&run, &entry).await.expect("the import runs");
+    assert_eq!(
+        report.blocked_by.as_deref(),
+        Some("currency_unknown"),
+        "Etsy denominates per seller and no seller's is measured, so a paid listing blocks \
+         there rather than on any term"
+    );
+    assert_eq!(
+        (report.raised.new, report.raised.already_open),
+        (0, 0),
+        "and that arm raises nothing at all, which is precisely the zero a report reading \
+         the projection's causes would publish as coverage"
+    );
+    assert_eq!(
+        (report.terms_mapped, report.terms_uncovered),
+        (2, 2),
+        "both terms mapped inbound and neither has anywhere declared to go in Etsy, so the \
+         count is two: taken from the terms rather than from what stopped the projection"
+    );
+
+    TaxonomyRepo::new(pool.clone())
+        .seed_no_counterparts(&[
+            NoCounterpart {
+                term: SUBJECT,
+                target: VocabularyId(InventoryId::Etsy, TermKind::Subject),
+                decided_by: Decider::Imported {
+                    source: "test fixture".to_owned(),
+                },
+                decided_at: NOW,
+            },
+            NoCounterpart {
+                term: TOPIC,
+                target: VocabularyId(InventoryId::Etsy, TermKind::Topic),
+                decided_by: Decider::Imported {
+                    source: "test fixture".to_owned(),
+                },
+                decided_at: NOW,
+            },
+        ])
+        .await
+        .expect("the no-counterpart decisions record");
+
+    let again = adapter_licensed(13_549_794, "TES-PAID-SCHOOL", serde_json::json!(4.5));
+    let entry = applied_held(&pool, store_root("etsy-coverage"), &again, 13_549_794).await;
+    let decided = import_one(&run, &entry)
+        .await
+        .expect("the import runs again");
+    assert_eq!(
+        decided.blocked_by.as_deref(),
+        Some("currency_unknown"),
+        "nothing about the currency changed, so the same blocker stands"
+    );
+    assert_eq!(
+        (decided.terms_mapped, decided.terms_uncovered),
+        (2, 0),
+        "the same two terms map and neither is uncovered now: a recorded no-counterpart is \
+         omitted from the number rather than counted as a gap"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_drain_report_lands_as_a_job_event_the_client_can_read(pool: PgPool) {
     seed(&pool, false).await;
     let adapter = adapter_for(13_549_794);
-    let run = run_for(pool.clone(), &adapter, store_root("drain"));
-    let entry = ImportEntry {
-        resource: 13_549_794,
-        files: vec![NamedBytes {
-            name: "worksheet.pdf".to_owned(),
-            bytes: pdf(),
-        }],
-    };
+    let run = run_for(pool.clone());
+
+    let entry = applied_held(&pool, store_root("drain"), &adapter, 13_549_794).await;
     let report = import_one(&run, &entry).await.expect("the import runs");
     let mut totals = DrainTotals::default();
     totals.absorb(&report);
@@ -761,7 +1294,7 @@ fn discover_adapter(
 async fn discover_lists_downloads_and_imports_with_no_file_on_disk(pool: PgPool) {
     seed(&pool, true).await;
     let adapter = discover_adapter(13_549_794, zip_of(&[("worksheet.pdf", pdf())]));
-    let run = run_for(pool.clone(), &adapter, store_root("discover"));
+    let run = run_for(pool.clone());
     let reason = FetchReason::FirstPartyExport {
         inventory: InventoryId::TesGb,
     };
@@ -784,13 +1317,14 @@ async fn discover_lists_downloads_and_imports_with_no_file_on_disk(pool: PgPool)
         .download_resource_bundle(&reason, DraftId(published[0].id))
         .await
         .expect("the published bundle downloads");
-    let entry = ImportEntry {
-        resource: published[0].id,
-        files: vec![NamedBytes {
-            name: format!("{}-bundle.zip", published[0].id),
-            bytes: bundle,
-        }],
-    };
+    let entry = applied_bytes(
+        &pool,
+        store_root("discover"),
+        &adapter,
+        published[0].id,
+        bundle,
+    )
+    .await;
     let report = import_one(&run, &entry)
         .await
         .expect("the downloaded bundle imports");
@@ -848,7 +1382,7 @@ async fn a_bundle_wrapping_an_inner_zip_keeps_it_as_one_archive_payload(pool: Pg
     let inner = zip_of(&[("slides.pdf", pdf())]);
     let bundle = zip_of(&[("worksheet.pdf", pdf()), ("extras.zip", inner)]);
     let adapter = discover_adapter(13_549_794, bundle);
-    let run = run_for(pool.clone(), &adapter, store_root("discover-nested"));
+    let run = run_for(pool.clone());
     let reason = FetchReason::FirstPartyExport {
         inventory: InventoryId::TesGb,
     };
@@ -861,13 +1395,15 @@ async fn a_bundle_wrapping_an_inner_zip_keeps_it_as_one_archive_payload(pool: Pg
         .download_resource_bundle(&reason, DraftId(catalogue[0].id))
         .await
         .expect("the bundle downloads");
-    let entry = ImportEntry {
-        resource: catalogue[0].id,
-        files: vec![NamedBytes {
-            name: "13549794-bundle.zip".to_owned(),
-            bytes: downloaded,
-        }],
-    };
+
+    let entry = applied_bytes(
+        &pool,
+        store_root("discover-nested"),
+        &adapter,
+        catalogue[0].id,
+        downloaded,
+    )
+    .await;
     let report = import_one(&run, &entry)
         .await
         .expect("the nested bundle imports");

@@ -13,18 +13,10 @@
 
 use sqlx::PgPool;
 use tam_domain::registry::{registry, NativeVocabulary};
-use tam_marketplace::{
-    AdapterError, FetchReason, FileContent, FileSource, FileSourceError, FirstPartyExport,
-    ListingState, RemoteListingId,
-};
-use tam_pipeline::archive::ExtractBudget;
-use tam_pipeline::pipeline::{ingest, IngestContext, IngestError, Ingested};
-use tam_pipeline::scan::EicarScanner;
-use tam_pipeline::store::LocalObjectStore;
-use tam_secrets::Kek;
+use tam_marketplace::{ImportedListing, ListingState, RemoteListingId};
 use tam_storage::{
-    BlobRepo, ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob, OverrideRepo, ProductRepo,
-    RaiseReport, RaiseScope, StorageError, TaxonomyRepo, TenantBlobSink,
+    ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob, OverrideRepo, ProductRepo, RaiseReport,
+    RaiseScope, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing_with_overrides, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
@@ -36,47 +28,59 @@ use tam_types::{
     SystemComponent, TermKind, Timestamp, Title, Uuid,
 };
 
-/// The import never uploads, so its adapter's file source is a refusal.
-pub struct NoImportFiles;
-
-impl FileSource for NoImportFiles {
-    fn fetch(
-        &self,
-        file: FileId,
-    ) -> impl core::future::Future<Output = Result<FileContent, FileSourceError>> + Send {
-        core::future::ready(Err(FileSourceError::Unreadable {
-            file,
-            detail: "the import reads listings and never uploads files".to_owned(),
-        }))
-    }
-}
-
-/// One manifest row: the seller's resource and its file bytes from disk.
-pub struct ImportEntry {
-    pub resource: i64,
-    pub files: Vec<NamedBytes>,
-}
-
-pub struct NamedBytes {
-    pub name: String,
-    pub bytes: Vec<u8>,
-}
-
-/// Everything an import run holds constant across entries. The adapter seam
-/// is the capability — the run reads through `FirstPartyExport` rather than
-/// one marketplace's client — and the run's own vocabulary now is too: the
-/// adapter states its own price intent, its own rights and its own axis
-/// tagging, and the run consumes `ImportedListing` without knowing which
-/// marketplace filled it.
+/// One file, as the caller has already decided it.
 ///
-/// Resources are addressed numerically through `A::Resource: TryFrom<i64>`,
-/// fallibly because TPT's product handle is unsigned and a catalogue row
-/// whose id will not fit is a named failure rather than a panic.
-pub struct ImportRun<'a, A: FirstPartyExport> {
+/// The kind travels beside the bytes because it is probed rather than
+/// declared, and whoever probed it is the one who had the bytes.
+pub struct ImportedFile {
+    pub kind: FileKind,
+    pub bytes: FileBytes,
+}
+
+/// One file whose bytes we hold, as the caller has already decided them.
+///
+/// The cover is one of these rather than an [`ImportedFile`], and that is a
+/// guarantee rather than a convenience. Q-c has the device render the cover
+/// itself and send it with the page, so a cover is always bytes we hold; a
+/// marketplace-sourced cover would be an image the console cannot render,
+/// pointing at a resource whose bytes are the seller's payload rather than a
+/// thumbnail. Nothing downstream checks for it — `insert_file` writes what it
+/// is handed — so the type refuses it instead, which is the same reason
+/// `FileBytes` has two arms rather than nullable fields.
+pub struct HeldFile {
+    pub kind: FileKind,
+    pub hash: ContentHash,
+    pub byte_len: u64,
+    pub scan: ScanOutcome,
+}
+
+/// One resource, ready to be applied.
+///
+/// Everything about where the bytes came from is already settled by the time
+/// this exists, which is the point of the shape: this crate applies a listing
+/// and no longer decides anything about files. The operator import ingests
+/// from disk and hands over `Held` files; the device import hands over a
+/// `Sourced` one it observed on the seller's own machine. Both are ordinary
+/// here, and neither is a special case of the other.
+pub struct AppliedResource {
+    pub resource: i64,
+    /// The listing as the source stated it, read by whoever held the session.
+    pub listing: ImportedListing,
+    /// At least one, because a product with nothing to sell cannot be listed
+    /// and `PayloadSet` says so; an empty list is a named failure rather than
+    /// a product with no payload.
+    pub payload: Vec<ImportedFile>,
+    pub cover: HeldFile,
+}
+
+/// Everything an import run holds constant across resources.
+///
+/// No adapter, no key and no object store: this crate reads no marketplace and
+/// stores no bytes. It applies what a caller observed, which is what lets one
+/// apply half serve both an operator importing from disk and a device
+/// importing under the seller's own session.
+pub struct ImportRun {
     pub pool: PgPool,
-    pub kek: Kek,
-    pub store_root: std::path::PathBuf,
-    pub adapter: &'a A,
     pub org: OrgId,
     pub source: InventoryId,
     pub target: InventoryId,
@@ -92,6 +96,17 @@ pub struct ImportRowReport {
     pub title: String,
     pub terms_seen: usize,
     pub terms_mapped: usize,
+    /// Of the terms that mapped inbound, how many have nowhere declared to go
+    /// in the target.
+    ///
+    /// The drain the kill gate reads, and it is deliberately the quantity
+    /// `measure_one` has always computed rather than the listing projection's
+    /// first blocker: Subject and Topic only, distinct terms, and a recorded
+    /// no-counterpart excluded because that is a decision somebody took rather
+    /// than a gap. Both callers get it from one helper so the definition
+    /// cannot drift between them, which matters because the founder compares
+    /// this number across a series of migrations.
+    pub terms_uncovered: usize,
     pub unmapped_native_ids: Vec<String>,
     pub curriculum: Vec<String>,
     pub raised: RaiseReport,
@@ -110,16 +125,9 @@ pub struct ImportRowReport {
 
 #[derive(Debug)]
 pub enum ImportError {
-    Adapter(AdapterError),
-    Ingest(IngestError),
     Storage(StorageError),
     NoPayload,
     Price(String),
-    /// A catalogue row whose numeric id this marketplace's own resource
-    /// handle cannot hold. TPT addresses a product by an unsigned id, so the
-    /// conversion is fallible and the failure names the row rather than
-    /// panicking on it.
-    Resource(String),
     /// A paid listing on an inventory whose currency nobody has measured.
     /// Named apart from `Price` because it is not a malformed number: the
     /// source states an amount and renders a symbol, and reading that symbol
@@ -135,12 +143,9 @@ pub enum ImportError {
 impl core::fmt::Display for ImportError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Adapter(error) => write!(f, "adapter: {error:?}"),
-            Self::Ingest(error) => write!(f, "ingest: {error}"),
             Self::Storage(error) => write!(f, "storage: {error}"),
             Self::NoPayload => f.write_str("the entry carried no ingestable payload"),
             Self::Price(detail) => write!(f, "price: {detail}"),
-            Self::Resource(detail) => write!(f, "resource: {detail}"),
             Self::CurrencyUnknown { inventory } => write!(
                 f,
                 "currency: {inventory:?} denominates prices per seller and none is measured"
@@ -150,18 +155,6 @@ impl core::fmt::Display for ImportError {
 }
 
 impl core::error::Error for ImportError {}
-
-impl From<AdapterError> for ImportError {
-    fn from(error: AdapterError) -> Self {
-        Self::Adapter(error)
-    }
-}
-
-impl From<IngestError> for ImportError {
-    fn from(error: IngestError) -> Self {
-        Self::Ingest(error)
-    }
-}
 
 impl From<StorageError> for ImportError {
     fn from(error: StorageError) -> Self {
@@ -211,8 +204,8 @@ fn wire(count: u64) -> u32 {
 /// inventory is the source, the one the run's marketplace reads addressed;
 /// the target travels in the payload, because the event stream carries the
 /// body without its job row.
-pub async fn record_drain_report<A: FirstPartyExport>(
-    run: &ImportRun<'_, A>,
+pub async fn record_drain_report(
+    run: &ImportRun,
     totals: DrainTotals,
 ) -> Result<JobId, ImportError> {
     let job = JobId(fresh_uuid());
@@ -308,67 +301,17 @@ impl MeasureTotals {
 /// Reads one resource and runs the taxonomy gate, without its files, its
 /// product, or any persistence. The full import raises the reconciliation
 /// items and settles a product; this only counts them.
-pub async fn measure_one<A: FirstPartyExport>(
-    run: &ImportRun<'_, A>,
+pub async fn measure_one(
+    run: &ImportRun,
     resource: i64,
-) -> Result<MeasureReport, ImportError>
-where
-    A::Resource: TryFrom<i64>,
-    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
-{
-    let listing = run
-        .adapter
-        .fetch_for_import(
-            &FetchReason::FirstPartyExport {
-                inventory: run.source,
-            },
-            resource
-                .try_into()
-                .map_err(|error| ImportError::Resource(format!("{resource}: {error}")))?,
-        )
-        .await?;
+    listing: &ImportedListing,
+) -> Result<MeasureReport, ImportError> {
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
-    let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, &listing).await?;
+    let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, listing).await?;
     let terms_seen = listing.native_ids(TermKind::Subject).len();
     let terms_mapped = subjects.len();
 
-    let terms = taxonomy.terms().await?;
-    let kinds: std::collections::HashMap<CanonicalTermId, tam_domain::TermKind> =
-        terms.iter().map(|term| (term.id, term.kind)).collect();
-    let target_edges = taxonomy
-        .edges_into_all(&tam_taxonomy::routed_vocabularies(run.target))
-        .await?;
-    let no_counterparts = taxonomy.no_counterparts_into(run.target).await?;
-
-    let mut uncovered: Vec<CanonicalTermId> = Vec::new();
-    for kind in [tam_domain::TermKind::Subject, tam_domain::TermKind::Topic] {
-        let of_kind: Vec<CanonicalTermId> = subjects
-            .iter()
-            .copied()
-            .filter(|term| kinds.get(term) == Some(&kind))
-            .collect();
-        if of_kind.is_empty() {
-            continue;
-        }
-        let outcome = tam_taxonomy::project::project_terms(
-            &of_kind,
-            tam_domain::VocabularyId(run.target, kind),
-            &target_edges,
-            &no_counterparts,
-        );
-        for blocked in outcome.blocked {
-            if !uncovered.contains(&blocked.term) {
-                uncovered.push(blocked.term);
-            }
-        }
-    }
-    // A term the catalogue does not classify raises its own item, matching
-    // project_listing's fail-closed reading of an impossible input.
-    for term in &subjects {
-        if !kinds.contains_key(term) && !uncovered.contains(term) {
-            uncovered.push(*term);
-        }
-    }
+    let uncovered = uncovered_terms(&taxonomy, run.target, &subjects, &COVERAGE_AXES).await?;
 
     Ok(MeasureReport {
         resource,
@@ -419,80 +362,107 @@ async fn inbound_subjects(
     Ok((subjects, unmapped))
 }
 
-pub async fn import_one<A: FirstPartyExport>(
-    run: &ImportRun<'_, A>,
-    entry: &ImportEntry,
-) -> Result<ImportRowReport, ImportError>
-where
-    A::Resource: TryFrom<i64>,
-    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
-{
-    let listing =
-        run.adapter
-            .fetch_for_import(
-                &FetchReason::FirstPartyExport {
-                    inventory: run.source,
-                },
-                entry.resource.try_into().map_err(|error| {
-                    ImportError::Resource(format!("{}: {error}", entry.resource))
-                })?,
-            )
-            .await?;
+/// The axes the coverage number is measured over.
+///
+/// An explicit argument to [`uncovered_terms`] rather than an ambient constant,
+/// and a named one rather than a literal at each call, because the founder
+/// compares this number across a series of migrations: widening the routed
+/// axes elsewhere in the tree must not silently redefine what the gate counts.
+/// Changing this list is a deliberate change to the measurement.
+pub const COVERAGE_AXES: [tam_domain::TermKind; 2] =
+    [tam_domain::TermKind::Subject, tam_domain::TermKind::Topic];
 
-    // Files through the pipeline: every guard M1f built applies to an import
-    // exactly as to an upload. The first entry's cover becomes the product's.
-    let blob_repo = BlobRepo::new(
-        run.pool.clone(),
-        LocalObjectStore::new(run.store_root.clone()),
-        run.kek.clone(),
-    );
-    let sink = TenantBlobSink {
-        repo: &blob_repo,
-        org: run.org,
-        at: run.now,
-    };
-    let mut payloads: Vec<ProductFile> = Vec::new();
-    let mut cover: Option<ProductFile> = None;
-    for file in &entry.files {
-        let ingested: Ingested = ingest(
-            &file.bytes,
-            &EicarScanner,
-            &sink,
-            IngestContext {
-                budget: ExtractBudget::default(),
-                now: run.now,
-                // An import mirrors what the seller uploaded to the source
-                // marketplace, and the source's own bundle is an archive of
-                // separately listed files.
-                archives: tam_pipeline::pipeline::ArchiveMode::Explode,
-            },
-        )
+/// Of the terms that mapped inbound, the ones with nowhere declared to go.
+///
+/// One definition, called by both the measurement and the import, because two
+/// copies of a number somebody compares over time is how a definition drifts.
+///
+/// What counts as uncovered is narrower than "the projection refused", and the
+/// difference is the whole value of the number. A term with a recorded
+/// no-counterpart is omitted rather than blocked, because somebody decided that
+/// axis does not cross and a decision is not a gap. A listing blocked for a
+/// reason that is not a term at all — an unanswered election, an unmeasured
+/// currency, a missing cover — contributes nothing here, because none of those
+/// says anything about coverage. And a term the catalogue does not classify is
+/// counted, matching the projection's fail-closed reading of an input it cannot
+/// place.
+pub async fn uncovered_terms(
+    taxonomy: &TaxonomyRepo,
+    target: InventoryId,
+    subjects: &[CanonicalTermId],
+    axes: &[tam_domain::TermKind],
+) -> Result<Vec<CanonicalTermId>, ImportError> {
+    let terms = taxonomy.terms().await?;
+    let kinds: std::collections::HashMap<CanonicalTermId, tam_domain::TermKind> =
+        terms.iter().map(|term| (term.id, term.kind)).collect();
+    let target_edges = taxonomy
+        .edges_into_all(&tam_taxonomy::routed_vocabularies(target))
         .await?;
-        for stored in &ingested.payload {
-            payloads.push(ProductFile {
-                id: FileId(fresh_uuid()),
-                role: FileRole::Payload,
-                kind: stored.kind,
-                bytes: FileBytes::Held {
-                    hash: stored.hash,
-                    byte_len: stored.byte_len,
-                    scan: ScanOutcome::Clean { at: run.now },
-                },
-            });
+    let no_counterparts = taxonomy.no_counterparts_into(target).await?;
+
+    let mut uncovered: Vec<CanonicalTermId> = Vec::new();
+    for kind in axes.iter().copied() {
+        let of_kind: Vec<CanonicalTermId> = subjects
+            .iter()
+            .copied()
+            .filter(|term| kinds.get(term) == Some(&kind))
+            .collect();
+        if of_kind.is_empty() {
+            continue;
         }
-        if cover.is_none() {
-            cover = Some(ProductFile {
-                id: FileId(fresh_uuid()),
-                role: FileRole::Cover,
-                kind: FileKind::Image,
-                bytes: FileBytes::Held {
-                    hash: ingested.cover.hash,
-                    byte_len: ingested.cover.byte_len,
-                    scan: ScanOutcome::Clean { at: run.now },
-                },
-            });
+        let outcome = tam_taxonomy::project::project_terms(
+            &of_kind,
+            tam_domain::VocabularyId(target, kind),
+            &target_edges,
+            &no_counterparts,
+        );
+        for blocked in outcome.blocked {
+            if !uncovered.contains(&blocked.term) {
+                uncovered.push(blocked.term);
+            }
         }
     }
+    for term in subjects {
+        if !kinds.contains_key(term) && !uncovered.contains(term) {
+            uncovered.push(*term);
+        }
+    }
+    Ok(uncovered)
+}
+
+/// Applies one resource to the catalogue: a canonical product, its target
+/// mapping, and one projection so every gap raises its queue item on the spot.
+///
+/// It reads no marketplace and stores no bytes. Everything about where the
+/// files came from is settled before this is called, which is what lets one
+/// apply half serve an operator importing from disk and a device importing
+/// under the seller's own session.
+pub async fn import_one(
+    run: &ImportRun,
+    applied: &AppliedResource,
+) -> Result<ImportRowReport, ImportError> {
+    let listing = applied.listing.clone();
+
+    let payloads: Vec<ProductFile> = applied
+        .payload
+        .iter()
+        .map(|file| ProductFile {
+            id: FileId(fresh_uuid()),
+            role: FileRole::Payload,
+            kind: file.kind,
+            bytes: file.bytes.clone(),
+        })
+        .collect();
+    let cover = Some(ProductFile {
+        id: FileId(fresh_uuid()),
+        role: FileRole::Cover,
+        kind: applied.cover.kind,
+        bytes: FileBytes::Held {
+            hash: applied.cover.hash,
+            byte_len: applied.cover.byte_len,
+            scan: applied.cover.scan.clone(),
+        },
+    });
     let mut payload_iter = payloads.into_iter();
     let head = payload_iter.next().ok_or(ImportError::NoPayload)?;
     let payload = PayloadSet::new(head, payload_iter.collect());
@@ -503,6 +473,13 @@ where
     // below covers every term that does.
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
     let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, &listing).await?;
+    // The coverage number, from the one helper the measurement also uses, and
+    // taken here while the mapped terms are still in hand rather than after
+    // the product has consumed them. It runs on those terms rather than on the
+    // projection's outcome, so a listing blocked on a currency or a cover still
+    // reports a truthful count instead of a zero produced by never reaching
+    // the taxonomy.
+    let uncovered = uncovered_terms(&taxonomy, run.target, &subjects, &COVERAGE_AXES).await?;
     let terms_seen = listing.native_ids(TermKind::Subject).len();
     let terms_mapped = subjects.len();
 
@@ -693,12 +670,13 @@ where
     };
 
     Ok(ImportRowReport {
-        resource: entry.resource,
+        resource: applied.resource,
         product: product_id,
         mapping: mapping_id,
         title: listing.title.clone(),
         terms_seen,
         terms_mapped,
+        terms_uncovered: uncovered.len(),
         unmapped_native_ids: unmapped,
         curriculum: curriculum_of(&listing),
         raised,
@@ -813,8 +791,8 @@ fn listing_inventory(listing: &tam_marketplace::ImportedListing) -> InventoryId 
 /// drain measurement; the losses that projection measured belong to the same
 /// record, so a Tes-to-TPT licence drop is visible from the moment the product
 /// exists rather than only after a sync run has leased it.
-async fn record_losses<A: FirstPartyExport>(
-    run: &ImportRun<'_, A>,
+async fn record_losses(
+    run: &ImportRun,
     mapping: MappingId,
     losses: &[tam_domain::equivalence::Loss],
 ) -> Result<(), ImportError> {
@@ -839,10 +817,6 @@ async fn record_losses<A: FirstPartyExport>(
 fn fresh_uuid() -> Uuid {
     Uuid(*uuid::Uuid::new_v4().as_bytes())
 }
-
-/// The blake3 content hash type is re-exported for the binary's manifest
-/// handling; nothing else here is marketplace-shaped.
-pub type PayloadHash = ContentHash;
 
 #[cfg(test)]
 mod tests {

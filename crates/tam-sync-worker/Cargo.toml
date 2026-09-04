@@ -18,9 +18,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tam-marketplace = { path = "../tam-marketplace" }
-# The fixture builds an `ImportRun`, which still carries a key-encryption key
-# until that struct shrinks; the library itself never names one.
-tam-secrets = { path = "../tam-secrets" }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 uuid = { version = "1", features = ["v4"] }

@@ -14,11 +14,7 @@ use tam_domain::{
     Binding, CanonicalProduct, DeclarationSource, FieldPolicies, FieldPolicy, GradeDeclaration,
     Mapping, PublishMode, RightsDeclaration,
 };
-use tam_marketplace::{
-    AdapterError, FetchReason, FirstPartyExport, ImportedListing, ListingState, RemoteLifecycle,
-    RemoteListingId,
-};
-use tam_secrets::Kek;
+use tam_marketplace::{ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
     Canonicalised, Disposition, ItemsPageParams, JobReadRepo, MappingRepo, NewSyncRequest,
     ProductRepo, SyncIntent, SyncRequestRepo,
@@ -35,40 +31,6 @@ const REQUEST: Uuid = Uuid([0x71; 16]);
 const NOW: Timestamp = Timestamp(1_756_000_000_000);
 const SOURCE: InventoryId = InventoryId::TesGb;
 const TARGET: InventoryId = InventoryId::TesNz;
-
-/// An adapter this test never reaches. Every resource is already
-/// canonicalised, so the drain takes the skip branch for all of them and the
-/// removal leg is built entirely from breadcrumbs — which is the point: built
-/// from the current pass's work it would be empty.
-struct NeverRead;
-
-impl FirstPartyExport for NeverRead {
-    type CatalogueEntry = ();
-    type Resource = i64;
-
-    fn list_own_resources(
-        &self,
-        _reason: &FetchReason,
-    ) -> impl core::future::Future<Output = Result<Vec<()>, AdapterError>> + Send {
-        core::future::ready(Err(AdapterError::SessionExpired))
-    }
-
-    fn download_resource_bundle(
-        &self,
-        _reason: &FetchReason,
-        _id: i64,
-    ) -> impl core::future::Future<Output = Result<Vec<u8>, AdapterError>> + Send {
-        core::future::ready(Err(AdapterError::SessionExpired))
-    }
-
-    fn fetch_for_import(
-        &self,
-        _reason: &FetchReason,
-        _id: i64,
-    ) -> impl core::future::Future<Output = Result<ImportedListing, AdapterError>> + Send {
-        core::future::ready(Err(AdapterError::SessionExpired))
-    }
-}
 
 #[expect(
     clippy::expect_used,
@@ -206,12 +168,8 @@ async fn a_resumed_migrate_removes_every_source_it_canonicalised(pool: PgPool) {
             .expect("the breadcrumb writes");
     }
 
-    let adapter = NeverRead;
     let run = tam_import::ImportRun {
         pool: pool.clone(),
-        kek: Kek::from_bytes(&[0x11; 32]).expect("a well-formed kek"),
-        store_root: std::path::PathBuf::from("/nonexistent"),
-        adapter: &adapter,
         org: ORG,
         source: SOURCE,
         target: TARGET,
@@ -313,12 +271,8 @@ async fn a_live_sync_enqueues_the_create_and_the_publish_it_gates(pool: PgPool) 
         .await
         .expect("the breadcrumb writes");
 
-    let adapter = NeverRead;
     let run = tam_import::ImportRun {
         pool: pool.clone(),
-        kek: Kek::from_bytes(&[0x11; 32]).expect("a well-formed kek"),
-        store_root: std::path::PathBuf::from("/nonexistent"),
-        adapter: &adapter,
         org: ORG,
         source: SOURCE,
         target: TARGET,
