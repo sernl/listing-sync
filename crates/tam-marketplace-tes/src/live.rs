@@ -23,6 +23,7 @@ use tam_marketplace::transport::{
 };
 use tam_marketplace::ConnectFailure;
 
+use crate::endpoints::host_of;
 use crate::session::TesSession;
 
 /// The only host a Tes session may reach.
@@ -35,6 +36,7 @@ const S3_HOST_SUFFIX: &str = ".s3.amazonaws.com";
 pub struct ReqwestTransport {
     session: reqwest::Client,
     bare: reqwest::Client,
+    redirected: reqwest::Client,
 }
 
 #[derive(Debug)]
@@ -171,11 +173,12 @@ fn session_client(session: &TesSession) -> Result<reqwest::Client, TransportBuil
     build_client(session_headers(session)?, same_host_only())
 }
 
-/// The client that carries no credential of ours.
+/// The client that carries no credential of ours as client state: what it
+/// carries is the presigned S3 upload, authorised by the form fields it posts.
 ///
-/// It follows redirects, and that discloses nothing: the signed CDN url the
-/// bundle download lands on is fetched here and may redirect again within its
-/// own CDN.
+/// It follows redirects, at reqwest's own cap. The bundle download's signed
+/// CDN url is not fetched here — that is [`redirected_client`], which follows
+/// nothing.
 fn bare_client() -> Result<reqwest::Client, TransportBuildError> {
     build_client(
         bare_headers(),
@@ -183,12 +186,40 @@ fn bare_client() -> Result<reqwest::Client, TransportBuildError> {
     )
 }
 
+/// The client a marketplace-named hop rides, and it follows nothing.
+///
+/// `Policy::none()` is the whole of "one hop", and without it the phrase is
+/// prose rather than behaviour. Every shape rule this transport applies is
+/// checked once, in [`route`], against the url the flow was handed; a client
+/// that followed a further redirect would carry the request past all of them
+/// to a destination nothing asserted on, and the flow's own second-3xx
+/// refusal would never be reached, because the client would have consumed the
+/// 3xx before the flow saw it.
+fn redirected_client() -> Result<reqwest::Client, TransportBuildError> {
+    build_client(bare_headers(), reqwest::redirect::Policy::none())
+}
+
 impl ReqwestTransport {
     pub fn new(session: &TesSession) -> Result<Self, TransportBuildError> {
         Ok(Self {
             session: session_client(session)?,
             bare: bare_client()?,
+            redirected: redirected_client()?,
         })
+    }
+
+    /// Which client a route rides.
+    ///
+    /// Its own function so the join is assertable. Each end of it is proved
+    /// on its own — `route` returns the variant, each client keeps its policy
+    /// — and a test of either stays green if this mapping hands a
+    /// marketplace-named hop to a client that follows redirects.
+    fn client_for(&self, route: Route) -> &reqwest::Client {
+        match route {
+            Route::Session => &self.session,
+            Route::Bare => &self.bare,
+            Route::Redirected => &self.redirected,
+        }
     }
 }
 
@@ -197,18 +228,8 @@ impl ReqwestTransport {
 enum Route {
     Session,
     Bare,
-}
-
-/// The host of an absolute http(s) url, without userinfo or port. `None` for
-/// anything else, which the caller turns into a refusal: a request whose
-/// destination cannot be named is not one to send.
-fn host_of(url: &str) -> Option<&str> {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit('@').next()?;
-    host.split(':').next()
+    /// A destination the marketplace named.
+    Redirected,
 }
 
 /// The host assertion. A request's declared authentication and its
@@ -220,14 +241,21 @@ fn route(request: &HttpRequest) -> Result<Route, TransportError> {
     let permitted = match request.auth {
         RequestAuth::Session => host == SESSION_HOST,
         RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => host.ends_with(S3_HOST_SUFFIX),
+        // Any host but ours, and https only. The destination was named by the
+        // marketplace rather than chosen here, so there is no constant to
+        // assert it against; what is asserted instead is that it is not the
+        // session origin, which keeps the two routes disjoint and stops a
+        // redirect being used to replay a credential-free request back into
+        // Tes as though the session client had sent it.
+        RequestAuth::Redirected => host != SESSION_HOST && request.url.starts_with("https://"),
     };
     if !permitted {
         return Err(TransportError::NotSent(ConnectFailure::NoRouteToHost));
     }
-    Ok(if request.auth.is_session() {
-        Route::Session
-    } else {
-        Route::Bare
+    Ok(match request.auth {
+        RequestAuth::Session => Route::Session,
+        RequestAuth::Redirected => Route::Redirected,
+        RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => Route::Bare,
     })
 }
 
@@ -263,10 +291,7 @@ fn classify_reqwest(error: &reqwest::Error) -> TransportError {
 
 impl Transport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
-        let client = match route(&request)? {
-            Route::Session => &self.session,
-            Route::Bare => &self.bare,
-        };
+        let client = self.client_for(route(&request)?);
         send_over(client, request).await
     }
 }
@@ -275,7 +300,7 @@ impl Transport for ReqwestTransport {
 /// no client-wide header, so it cannot outlive the one request it signs.
 fn apply_auth(builder: reqwest::RequestBuilder, auth: &RequestAuth) -> reqwest::RequestBuilder {
     match auth {
-        RequestAuth::Session | RequestAuth::Anonymous => builder,
+        RequestAuth::Session | RequestAuth::Anonymous | RequestAuth::Redirected => builder,
         RequestAuth::S3SigV2 {
             access_key_id,
             signature,
@@ -337,6 +362,20 @@ async fn send_over(
     client: &reqwest::Client,
     request: HttpRequest,
 ) -> Result<HttpResponse, TransportError> {
+    send_over_capped(client, request, REDIRECTED_BODY_MAX).await
+}
+
+/// The same path with the bound named, and every shipping caller passes
+/// [`REDIRECTED_BODY_MAX`]. A parameter because the shipping value is a
+/// gigabyte: a test driving this call site at the real ceiling would have to
+/// allocate a gigabyte to fail it, so nothing would assert that a
+/// `Redirected` body is read under a bound at all.
+async fn send_over_capped(
+    client: &reqwest::Client,
+    request: HttpRequest,
+    cap: u64,
+) -> Result<HttpResponse, TransportError> {
+    let bounded = matches!(request.auth, RequestAuth::Redirected);
     let builder = match request.method {
         Method::Get => client.get(&request.url),
         Method::Post => client.post(&request.url),
@@ -353,17 +392,67 @@ async fn send_over(
     let headers = project_headers(response.headers());
     // `.bytes()` not `.text()`: text decodes lossily and would silently
     // corrupt every download bundle.
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| TransportError::AfterSend {
-            detail: error.to_string(),
-        })?;
+    let body = if bounded {
+        bounded_body(response, cap).await?
+    } else {
+        response
+            .bytes()
+            .await
+            .map_err(|error| TransportError::AfterSend {
+                detail: error.to_string(),
+            })?
+            .to_vec()
+    };
     Ok(HttpResponse {
         status,
-        body: body.to_vec(),
+        body,
         headers,
     })
+}
+
+/// The largest body a marketplace-named hop may return.
+///
+/// The archive budget rather than a per-file ceiling, because what comes back
+/// is a bundle and a bundle may hold several files. A per-file number would
+/// refuse a legitimate multi-file resource, and this migration's premise is
+/// that size does not block it. `tam-limits` already owns the largest archive
+/// this system will process, so this names that rather than inventing a second
+/// number to disagree with it.
+const REDIRECTED_BODY_MAX: u64 = tam_limits::ingest::ARCHIVE_UNCOMPRESSED_BYTES_MAX;
+
+/// Reads a body in chunks, refusing once it passes the cap.
+///
+/// Chunked rather than `bytes()` with a length check afterwards, because a
+/// check applied to bytes already in memory is not a bound: by the time it
+/// fails, whatever was sent has been allocated. `Content-Length` is not
+/// consulted for the same reason it is not consulted anywhere else here — it
+/// is the sender's claim about the sender's own body.
+async fn bounded_body(response: reqwest::Response, cap: u64) -> Result<Vec<u8>, TransportError> {
+    let mut response = response;
+    let mut body: Vec<u8> = Vec::new();
+    loop {
+        let chunk = response
+            .chunk()
+            .await
+            .map_err(|error| TransportError::AfterSend {
+                detail: error.to_string(),
+            })?;
+        let Some(chunk) = chunk else { break };
+        let so_far = u64::try_from(body.len().saturating_add(chunk.len())).unwrap_or(u64::MAX);
+        if so_far > cap {
+            // `Refused`, not `AfterSend`: the response arrived and we declined
+            // it. `AfterSend` means the outcome is unknown, which classifies
+            // as an ambiguity, which halts the tenant and asks an operator to
+            // decide something already decided here.
+            return Err(TransportError::Refused {
+                detail: format!(
+                    "the redirected hop returned more than {cap} bytes, past the largest archive this system will process"
+                ),
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Projects the real header map through the seam's allow-list.
@@ -436,7 +525,8 @@ mod tests {
     use tam_marketplace::transport::{HttpRequest, RequestAuth, ResponseHeader, TransportError};
 
     use super::{
-        bare_client, route, send_over, session_client, Route, MAX_REDIRECTS, SESSION_HOST,
+        bare_client, bounded_body, route, send_over, send_over_capped, session_client,
+        ReqwestTransport, Route, MAX_REDIRECTS, SESSION_HOST,
     };
     use crate::session::TesSession;
 
@@ -530,6 +620,83 @@ mod tests {
                 tam_marketplace::ConnectFailure::DnsFailure
             )),
             "a url whose destination cannot be named fails closed"
+        );
+    }
+
+    /// Where a marketplace-named hop may and may not go.
+    ///
+    /// It carries nothing of ours, so its destination is genuinely the
+    /// marketplace's business and no host constant is asserted — a content
+    /// network's host is one the marketplace can re-point without telling
+    /// anybody. What is asserted is the request's shape, and the session-host
+    /// refusal is the load-bearing half: without it a `Location` pointing back
+    /// at Tes would let a credential-free request be replayed into the
+    /// marketplace as though the session client had sent it.
+    #[test]
+    fn a_redirected_hop_may_reach_a_content_network_but_never_our_own_origin() {
+        let redirected = |url: &str| HttpRequest {
+            method: tam_marketplace::transport::Method::Get,
+            url: url.to_owned(),
+            body: tam_marketplace::transport::RequestBody::Empty,
+            auth: RequestAuth::Redirected,
+        };
+
+        assert_eq!(
+            route(&redirected(
+                "https://d111111abcdef8.cloudfront.net/bundle?Signature=abc"
+            )),
+            Ok(Route::Redirected),
+            "a signed url on a content network rides the client that carries nothing and \
+             follows nothing"
+        );
+        // Host comparison rather than byte comparison. Both of these are the
+        // session origin to DNS and to the marketplace, and both passed the
+        // not-our-origin test while it was a string equality — which is a way
+        // back into the session origin chosen by a `Location` rather than by
+        // us.
+        for spelling in [
+            "https://WWW.TES.COM/api/v2/resources/1",
+            "https://www.tes.com./api/v2/resources/1",
+        ] {
+            assert_eq!(
+                route(&redirected(spelling)),
+                Err(TransportError::NotSent(
+                    tam_marketplace::ConnectFailure::NoRouteToHost
+                )),
+                "{spelling} is the session origin however it is spelled"
+            );
+        }
+        assert_eq!(
+            route(&redirected("https://www.tes.com/api/v2/resources/1")),
+            Err(TransportError::NotSent(
+                tam_marketplace::ConnectFailure::NoRouteToHost
+            )),
+            "a location pointing back at the marketplace is refused, or a redirect becomes a \
+             way to replay a credential-free request into the session origin"
+        );
+        assert_eq!(
+            route(&redirected("http://d111111abcdef8.cloudfront.net/bundle")),
+            Err(TransportError::NotSent(
+                tam_marketplace::ConnectFailure::NoRouteToHost
+            )),
+            "https only: the seller's file is not fetched in the clear because a marketplace \
+             named a plaintext url"
+        );
+        // A `Location` may name an address rather than a name, and a bracketed
+        // IPv6 authority is the spelling a naive parse reads as a host called
+        // `[`: its port is not behind the first colon.
+        assert_eq!(
+            route(&redirected("https://[2606:4700:4700::1111]:443/bundle")),
+            Ok(Route::Redirected),
+            "a bracketed IPv6 literal is a host like any other"
+        );
+        assert_eq!(
+            route(&redirected("https://[::1/bundle")),
+            Err(TransportError::NotSent(
+                tam_marketplace::ConnectFailure::DnsFailure
+            )),
+            "an authority no parser can read is not a destination: fail closed rather than \
+             route on whatever the first colon left behind"
         );
     }
 
@@ -729,6 +896,144 @@ mod tests {
              loop, so there is no Location worth handing back. Got: {refused:?}"
         );
         server.join().expect("the probe server finishes");
+    }
+
+    /// One hop, proved against a client rather than against a cassette, and
+    /// against the client the transport itself selects for the route.
+    ///
+    /// The flow's second-3xx refusal is unreachable live unless the client
+    /// declines to follow: a following client consumes the redirect itself and
+    /// the flow never sees one. So this asserts the client, and it fails under
+    /// the policy the bare client uses, which is what the redirected leg had
+    /// before this fold. Reached through `client_for` rather than through
+    /// `redirected_client` directly, so the same assertion also fails if
+    /// `Route::Redirected` is ever mapped to a following client.
+    #[tokio::test]
+    async fn the_redirected_client_follows_nothing() {
+        let transport = ReqwestTransport::new(&a_session()).expect("the transport builds");
+        let (url, server) = redirecting(|port| format!("http://127.0.0.1:{port}/second"));
+        let answer = send_over(
+            transport.client_for(Route::Redirected),
+            HttpRequest {
+                method: tam_marketplace::transport::Method::Get,
+                url,
+                body: tam_marketplace::transport::RequestBody::Empty,
+                auth: RequestAuth::Redirected,
+            },
+        )
+        .await
+        .expect("the redirect comes back rather than failing");
+
+        assert_eq!(
+            answer.status, 302,
+            "the hop is handed back for the flow to refuse; a 200 here means the client \
+             followed it and every shape rule was checked against a url that is no longer \
+             where the request went"
+        );
+        let heads = server.join().expect("the probe server finishes");
+        assert_eq!(
+            heads.len(),
+            1,
+            "and the second destination was never contacted, same-host though it is"
+        );
+    }
+
+    /// The bound is a bound, not a check after the fact.
+    ///
+    /// Driven at a tiny cap rather than the shipping one, because asserting a
+    /// gigabyte ceiling would mean allocating a gigabyte to fail it. What is
+    /// under test is the comparison and the class of error it raises, and
+    /// neither depends on the number.
+    #[tokio::test]
+    async fn a_body_past_its_cap_is_refused_rather_than_reported_as_lost() {
+        let body = b"0123456789";
+        let (url, server) = serving(body);
+        let at_limit = bounded_body(
+            bare_client()
+                .expect("the bare client builds")
+                .get(&url)
+                .send()
+                .await
+                .expect("the probe server answers"),
+            body.len() as u64,
+        )
+        .await
+        .expect("a body exactly at the cap is not past it");
+        assert_eq!(at_limit, body, "the whole body arrives at the limit");
+        server.join().expect("the probe server finishes");
+
+        let (url, server) = serving(body);
+        let over = bounded_body(
+            bare_client()
+                .expect("the bare client builds")
+                .get(&url)
+                .send()
+                .await
+                .expect("the probe server answers"),
+            (body.len() - 1) as u64,
+        )
+        .await
+        .expect_err("a body one byte past the cap is refused");
+        assert!(
+            matches!(over, TransportError::Refused { .. }),
+            "refused rather than lost: `AfterSend` would classify as an ambiguity and halt a \
+             tenant over a decision already taken here. Got: {over:?}"
+        );
+        server.join().expect("the probe server finishes");
+    }
+
+    /// The bound is applied where the read is issued, not merely written
+    /// there.
+    ///
+    /// `bounded_body` is proved as a function above; this proves that a
+    /// `Redirected` request is read through it, on the client the route
+    /// selects. Driven at a tiny cap for the same reason as that test: the
+    /// shipping ceiling is a gigabyte and asserting it would mean allocating
+    /// one.
+    #[tokio::test]
+    async fn a_redirected_read_is_bounded_where_it_is_issued() {
+        let transport = ReqwestTransport::new(&a_session()).expect("the transport builds");
+        let (url, server) = serving(b"0123456789");
+        let refused = send_over_capped(
+            transport.client_for(Route::Redirected),
+            HttpRequest {
+                method: tam_marketplace::transport::Method::Get,
+                url,
+                body: tam_marketplace::transport::RequestBody::Empty,
+                auth: RequestAuth::Redirected,
+            },
+            4,
+        )
+        .await
+        .expect_err("a body past the cap is not a response");
+        assert!(
+            matches!(refused, TransportError::Refused { .. }),
+            "an unbounded read here hands the body back and nothing else notices. Got: \
+             {refused:?}"
+        );
+        server.join().expect("the probe server finishes");
+    }
+
+    /// A loopback server answering one 200 with a fixed body.
+    fn serving(body: &'static [u8]) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback binds");
+        let port = listener
+            .local_addr()
+            .expect("the listener has an address")
+            .port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("the client connects");
+            read_head(&stream);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(head.as_bytes())
+                .expect("the head goes out");
+            stream.write_all(body).expect("the body goes out");
+        });
+        (format!("http://127.0.0.1:{port}/body"), handle)
     }
 
     /// The custody assertion this whole policy exists for.

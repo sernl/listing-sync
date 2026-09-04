@@ -551,7 +551,10 @@ fn a_payload_over_the_part_size_signs_and_puts_each_part_under_its_own_digest() 
                 content_md5: Some(ref digest),
                 ..
             } => Some(digest.as_str()),
-            RequestAuth::Session | RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => None,
+            RequestAuth::Session
+            | RequestAuth::Anonymous
+            | RequestAuth::Redirected
+            | RequestAuth::S3SigV2 { .. } => None,
         })
         .collect();
     assert_eq!(

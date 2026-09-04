@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tam_marketplace::transport::{HttpResponse, Transport};
+use tam_marketplace::transport::{HttpResponse, ResponseHeader, Transport};
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
     FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, ListingState,
@@ -91,6 +91,14 @@ pub const fn route_name(state: ListingState) -> &'static str {
         ListingState::Live => "published resource",
     }
 }
+
+/// What a bundle starts with.
+///
+/// Four bytes rather than a dependency on the ingest pipeline: this crate
+/// asks only whether the signed url answered a file or a page, and adding an
+/// edge to `tam-pipeline` to learn that would be a dependency decision for a
+/// question this size.
+const BUNDLE_MAGIC: &[u8] = b"PK\x03\x04";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotATesInventory(pub InventoryId);
@@ -934,26 +942,92 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             },
         })?;
         let bundle = self.send(endpoints::download_bundle_request(&path)).await?;
-        // The bundle hop answers a 302 to a signed CDN url on another host,
-        // and the live transport declines to follow it so the seller's session
-        // cookie cannot travel there. Named here rather than left to the
-        // classifier's catch-all, which would make it `Ambiguous` — and an
-        // ambiguous read is the arm that halts a tenant's inventory and waits
-        // for an operator. A declined hop is an expected, permanent condition
-        // until the re-issue on the credential-free client is built, so it
-        // must read as the refusal it is.
-        if (300..400).contains(&bundle.status) {
+        // The bundle hop answers a redirect to a signed url on a content
+        // network, and the session transport declines to follow it, so what
+        // arrives here is the 3xx itself. Re-issuing it is deliberate rather
+        // than automatic: the destination was named by the marketplace.
+        if !(300..400).contains(&bundle.status) {
+            return classify_read_bytes(&bundle).map(<[u8]>::to_vec);
+        }
+        let Some(location) = bundle.header(ResponseHeader::Location) else {
             return Err(AdapterError::Rejected {
                 code: FailureCode::Other,
                 detail: FailureDetail(format!(
-                    "the bundle for resource {} redirects off this origin, and the hop is not \
-                     followed because it would carry the seller's session to another host; \
-                     re-issuing it without the session is not built yet",
+                    "the bundle for resource {} answered {} with no location to follow",
+                    id.0, bundle.status
+                )),
+            });
+        };
+        // The destination is the marketplace's choice rather than ours, so its
+        // shape is examined before a request goes to it. The transport asserts
+        // scheme and origin again on the way out, but only as a `NotSent`,
+        // which is the class documented as safe to retry; refused here, a
+        // permanent condition is named as one. The private-address rule
+        // exists nowhere else at all.
+        if let Err(why) = endpoints::check_redirect_target(location) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::UnexpectedOrigin,
+                detail: FailureDetail(format!(
+                    "the bundle for resource {} redirects somewhere this download will not \
+                     follow: {why}",
                     id.0
                 )),
             });
         }
-        classify_read_bytes(&bundle).map(<[u8]>::to_vec)
+        let followed = self
+            .send(endpoints::redirected_bundle_request(location.to_owned()))
+            .await?;
+        // One hop, and the second 3xx is where that is enforced. Re-issuing
+        // again would be this crate following a chain the marketplace controls,
+        // which is the thing the session client's policy exists to stop being
+        // automatic.
+        if (300..400).contains(&followed.status) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(format!(
+                    "the signed url for resource {} redirected again, and one hop is all this \
+                     download re-issues",
+                    id.0
+                )),
+            });
+        }
+        // What comes back must be a bundle, and that is decided before the
+        // shared classifier sees it, for two reasons that are both about
+        // ending up in the halt-the-tenant arm over a condition we can name.
+        //
+        // A content network's own 5xx would classify as an ambiguous read,
+        // which halts a tenant's inventory and waits for an operator; but this
+        // hop wrote nothing and its failure is a fetch we can simply describe,
+        // so it is a refusal.
+        //
+        // And an expired signature answers 200 with a page rather than a file.
+        // If that page happens to contain the word the session-expiry sniffer
+        // looks for — an error page saying "log in" would — the classifier
+        // reports `SessionExpired` and the run parks on a session that is
+        // perfectly good. Checking the magic first means the bytes decide what
+        // they are before anything reads them for what they might say.
+        if !(200..300).contains(&followed.status) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(format!(
+                    "the signed url for resource {} answered {}; the hop wrote nothing, so \
+                     this is a fetch that failed rather than an outcome nobody can determine",
+                    id.0, followed.status
+                )),
+            });
+        }
+        if !followed.body.starts_with(BUNDLE_MAGIC) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(format!(
+                    "the signed url for resource {} answered {} bytes that are not an archive; \
+                     a signed url that has expired answers a page rather than a file",
+                    id.0,
+                    followed.body.len()
+                )),
+            });
+        }
+        classify_read_bytes(&followed).map(<[u8]>::to_vec)
     }
 
     /// The first-party import read: the seller's own listing, verbatim, for

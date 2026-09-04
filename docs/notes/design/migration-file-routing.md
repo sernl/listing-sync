@@ -3,7 +3,7 @@
 How a seller's Tes catalogue reaches TeachersPayTeachers with no file upload by the seller, and where the bytes are at every moment.
 
 - date: 2026-09-04
-- status: design accepted as the plan of record. S1, the redirect fix and S2 are built; S3 and S4 are unblocked. Every founder decision in the last section is taken: Q-c to Q-h adopted by silence on 2026-09-04, Q-a and Q-b decided on 2026-09-04
+- status: design accepted as the plan of record. S1, the redirect fix with its re-issued hop, and S2 are built; S3 and S4 are unblocked. Every founder decision in the last section is taken: Q-c to Q-h adopted by silence on 2026-09-04, Q-a and Q-b decided on 2026-09-04
 - decisions it implements: D1 (the seller's device is the only thing that opens a connection to a no-API marketplace), D27 (file ingest moves to the device so the bytes are on the seller's machine at upload time and never on our servers)
 - what it continues: `desktop-data-plane.md`'s interim payload fetch, which this ends; `engine-driver-split.md` steps 10a, 10b, 14 and 15; `tpt-vocabulary-rebase.md`, whose mapping work this consumes unchanged
 
@@ -268,15 +268,18 @@ S2, the marketplace-backed file source, built.
 The marketplace arm driving the bundle download under the seller's own session, the single-entry unwrap, and the source-session and source-entitlement refusals — post-claim in `DeviceWork::execute` rather than in the tick, for the reason recorded above.
 Verified by the seller's bytes coming from the marketplace with our control plane asked for nothing, which is D27's own property; by a marketplace refusal named as itself rather than read as our failure; by a manifest with no attached source refusing before any transfer; by an uncommitted first observation being accepted rather than checked against an invented value; and by the marketplaces holding an order's files being named once each.
 
-One leg of it is deliberately not finished, and it fails closed rather than quietly.
-The bundle hop answers a 302 to a signed url on another host, and the session client declines to follow it, so the download cannot complete until that hop is re-issued on a client carrying nothing.
-Re-issuing it needs a decision the founder's redirect probe supplies — whether the destination is named by a fourth request-authentication variant or by a host constant — and taking it before the probe would be inventing the fact.
+The leg that was left unfinished is now built, and how that decision was taken is worth recording rather than smoothing over.
+The bundle hop answers a redirect to a signed url on a content network, the session client declines to follow it, and the hop is re-issued on a client that carries nothing and follows nothing.
+This note previously said the choice between a fourth request-authentication variant and a named host constant waited on the founder's redirect probe.
+It did not wait: it was taken as the variant, before the probe, on the team lead's decision under the founder's direction to build the seller's path now.
+The reasoning stands on its own and the probe would not have overturned it — a host constant has to be maintained against a host the marketplace can re-point without telling anybody, and fails closed in a way that reads as an outage, while the variant names what the request is rather than where it goes.
+What the probe now supplies is confirmation rather than a decision, and the first live run is the probe: every way the hop can disappoint us fails closed with a distinct sentence naming which, so what comes back is a diagnosis rather than a failure.
 What matters until then is that a declined hop is a named refusal and never an ambiguity, and that is a defect avoided rather than a detail.
 `classify_read_bytes` has no 3xx arm, so a declined hop fell to its catch-all and became `AdapterError::Ambiguous`, which is the arm that halts a tenant's inventory and waits for an operator.
 The first seller whose migration reached a bundle download would have had their whole inventory halted by a hop we deliberately decline, on a condition that is expected and permanent until the re-issue exists.
 The named refusal lives in the download flow rather than in the shared classifier, because a 3xx is legitimate elsewhere on this adapter — the draft manifest's same-origin redirect to `?error=notfound` is followed by the client and never reaches a classifier — so a blanket arm would be a claim about routes nobody has measured.
 The shape is worth remembering past this slice: when the re-issue lands, a failure of the *second* hop reaches the same catch-all by the same route, and the same halt is available to be walked into again.
-Gated on that founder probe: the redirect leg on their own Windows machine, one published resource, read-only, recording the location's host and scheme, whether the signed url fetches with no cookies, and the byte count against the known size.
+Still owed a founder run, though no longer a gate on a decision: the redirect leg on their own Windows machine, one published resource, read-only, recording the location's host and scheme, whether the signed url fetches with no cookies, and the byte count against the known size.
 
 S3, the device imports the catalogue, two and a half to four days, and the first slice a seller can feel.
 The desktop pass with its discarding sink and its screen, the import route, the import split, the locator migration, serde on the imported listing, and the console mirror.

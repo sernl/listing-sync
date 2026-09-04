@@ -5149,6 +5149,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tam-limits",
  "tam-marketplace",
  "tam-types",
  "tokio",

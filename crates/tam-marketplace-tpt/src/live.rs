@@ -191,6 +191,14 @@ fn route(request: &HttpRequest) -> Result<Route, TransportError> {
     let permitted = match request.auth {
         RequestAuth::Session => host == SESSION_HOST,
         RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => is_s3_host(host),
+        // Refused outright here, unlike on the Tes adapter, and the asymmetry
+        // is the honest state rather than an omission. A redirected hop is a
+        // destination a marketplace named, and this adapter has no flow that
+        // re-issues one: TPT's own-file download is uncaptured, so nothing
+        // here has ever seen the redirect that would produce such a request.
+        // Admitting it on the strength of the other adapter's capture would be
+        // asserting a shape nobody has measured on this one.
+        RequestAuth::Redirected => false,
     };
     if !permitted {
         return Err(TransportError::NotSent(ConnectFailure::NoRouteToHost));
@@ -355,7 +363,7 @@ fn classify_reqwest(error: &reqwest::Error) -> TransportError {
 /// no client-wide header, so it cannot outlive the one request it signs.
 fn apply_auth(builder: reqwest::RequestBuilder, auth: &RequestAuth) -> reqwest::RequestBuilder {
     match auth {
-        RequestAuth::Session | RequestAuth::Anonymous => builder,
+        RequestAuth::Session | RequestAuth::Anonymous | RequestAuth::Redirected => builder,
         RequestAuth::S3SigV2 {
             access_key_id,
             signature,
@@ -578,6 +586,34 @@ mod tests {
     use tam_marketplace::transport::{
         HttpRequest, Method, RequestAuth, RequestBody, ResponseHeader, TransportError,
     };
+
+    /// This adapter refuses a marketplace-named hop rather than routing one.
+    ///
+    /// The arm exists because a new `RequestAuth` variant is a compile error
+    /// in every exhaustive match, and without a test it only compiles. The
+    /// refusal is deliberate rather than an omission: TPT's own-file download
+    /// is uncaptured, so nothing here has ever seen the redirect that would
+    /// produce such a request, and admitting it on the strength of the other
+    /// adapter's capture would assert a shape nobody has measured on this
+    /// marketplace.
+    #[test]
+    fn a_redirected_hop_is_refused_because_no_capture_produces_one_here() {
+        for url in [
+            "https://d111111abcdef8.cloudfront.net/bundle?Signature=abc",
+            "https://www.teacherspayteachers.com/Product/1",
+        ] {
+            let request = HttpRequest {
+                method: Method::Get,
+                url: (*url).to_owned(),
+                body: RequestBody::Empty,
+                auth: RequestAuth::Redirected,
+            };
+            assert!(
+                super::route(&request).is_err(),
+                "{url} must be refused: this adapter has no flow that re-issues a hop"
+            );
+        }
+    }
 
     use super::{
         bare_headers, build_client, envelope, hop, project_headers, route, session_headers,

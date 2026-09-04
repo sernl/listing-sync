@@ -5,7 +5,7 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
-use tam_marketplace::transport::{FilePart, HttpResponse, RequestBody};
+use tam_marketplace::transport::{FilePart, HttpResponse, RequestBody, ResponseHeader};
 use tam_marketplace::{
     AdapterError, AgeSpan, AmbiguityCause, CanaryGrant, FetchReason, FieldDiffReport, FieldSet,
     FileContent, FileSource, FileSourceError, FormId, LifecycleTransition, ListingLocator,
@@ -1873,18 +1873,61 @@ fn a_published_resource_downloads_its_bundle_byte_for_byte() {
     );
 }
 
-/// The hop the live transport declines, seen from the adapter.
+/// The whole download, including the hop the marketplace named.
 ///
-/// The session client stops at a cross-host redirect so the seller's cookie
-/// cannot travel to the signed CDN url, which means the bundle hop comes back
-/// as the 302 itself. What matters is not only that this refuses but that it
-/// refuses *as a rejection*: the classifier's catch-all would make a 3xx
-/// `Ambiguous`, and an ambiguous read is the arm that halts a tenant's
-/// inventory and waits for an operator. A declined hop is expected and
-/// permanent until the credential-free re-issue is built, so halting on it
-/// would take a seller's whole inventory down for a condition we chose.
+/// Three requests: the manifest, the bundle route that answers a redirect, and
+/// the signed url re-issued carrying nothing of ours. The third is the one
+/// this test exists for — that it is made at all, and that it is made as
+/// `Redirected` rather than under the session, since the transport's routing
+/// rule is what keeps the seller's cookie off a host the marketplace chose.
 #[test]
-fn a_bundle_hop_that_redirects_off_origin_refuses_by_name_rather_than_halting() {
+fn a_redirected_bundle_hop_is_re_issued_carrying_nothing_of_ours() {
+    let manifest = json!({ "zipUrls": { DRAFT.0.to_string(): { "url": BUNDLE_PATH } } });
+    let bundle = b"PK\x03\x04 the seller's own archive".to_vec();
+    let signed = "https://d111111abcdef8.cloudfront.net/bundle?Signature=abc";
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&manifest),
+            },
+            Interaction {
+                request: endpoints::download_bundle_request(BUNDLE_PATH),
+                response: HttpResponse {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![(ResponseHeader::Location, signed.to_owned())],
+                },
+            },
+            Interaction {
+                request: endpoints::redirected_bundle_request(signed.to_owned()),
+                response: HttpResponse::plain(200, bundle.clone()),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let downloaded = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect("the re-issued hop returns the bundle");
+
+    assert_eq!(
+        downloaded, bundle,
+        "the bytes are the archive the signed url served, byte for byte"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "three requests and no more: the manifest, the redirect, and the one hop it named"
+    );
+}
+
+/// A redirect with nowhere to go is a refusal, not an ambiguity.
+#[test]
+fn a_bundle_redirect_with_no_location_refuses_by_name() {
     let manifest = json!({ "zipUrls": { DRAFT.0.to_string(): { "url": BUNDLE_PATH } } });
     let cassette = Cassette {
         interactions: vec![
@@ -1905,21 +1948,193 @@ fn a_bundle_hop_that_redirects_off_origin_refuses_by_name_rather_than_halting() 
         },
         DRAFT,
     ))
-    .expect_err("a hop the transport declined is not bytes");
+    .expect_err("a redirect naming nowhere is not bytes");
 
     assert!(
         !matches!(refused, AdapterError::Ambiguous(_)),
-        "a declined hop must never be ambiguous: that is the arm that halts the tenant's \
-         inventory, and this condition is one we chose and will keep choosing until the \
-         re-issue exists. Got: {refused:?}"
+        "never ambiguous: that is the arm that halts a tenant's inventory, and this is a \
+         condition the adapter can name exactly. Got: {refused:?}"
     );
     let AdapterError::Rejected { detail, .. } = &refused else {
-        panic!("a declined hop is a rejection naming itself, and got: {refused:?}");
+        panic!("a redirect with no location is a rejection, and got: {refused:?}");
     };
     assert!(
-        detail.0.contains("session") && detail.0.contains("another host"),
-        "the refusal says why the hop was declined, so an operator reading it does not go \
-         looking for an outage: {detail:?}"
+        detail.0.contains("no location"),
+        "the refusal says what was missing: {detail:?}"
+    );
+}
+
+/// A `Location` naming the marketplace's own origin is refused by name.
+///
+/// Live it arrives in the trailing-dot spelling, which reqwest's policy reads
+/// as a host change and hands back rather than following. Unrefused here it
+/// reaches the transport, which declines it as `NotSent` — the class the seam
+/// documents as the only one safe to retry — so a permanent condition would be
+/// retried against a marketplace that keeps answering the same thing.
+#[test]
+fn a_bundle_redirect_back_into_the_session_origin_refuses_by_name() {
+    let manifest = json!({ "zipUrls": { DRAFT.0.to_string(): { "url": BUNDLE_PATH } } });
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&manifest),
+            },
+            Interaction {
+                request: endpoints::download_bundle_request(BUNDLE_PATH),
+                response: HttpResponse {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![(
+                        ResponseHeader::Location,
+                        "https://www.tes.com./api/v2/resources/9001".to_owned(),
+                    )],
+                },
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect_err("a hop back into the session origin is not bytes");
+
+    assert!(
+        !matches!(
+            refused,
+            AdapterError::Ambiguous(_) | AdapterError::NotSent(_)
+        ),
+        "neither halted nor retried: this is permanent and the adapter can name it. Got: \
+         {refused:?}"
+    );
+    let AdapterError::Rejected { code, detail } = &refused else {
+        panic!("a hop back into our own origin is a rejection, and got: {refused:?}");
+    };
+    assert_eq!(
+        *code,
+        FailureCode::UnexpectedOrigin,
+        "what failed is where the location pointed"
+    );
+    assert!(
+        detail.0.contains("own origin"),
+        "the refusal says the location named us: {detail:?}"
+    );
+}
+
+/// An expired signed url answers a page, and a page is not the seller's file.
+///
+/// This is the one that would otherwise be silent: the hop succeeds with 200,
+/// the bytes are HTML, and without this check they would be uploaded to the
+/// seller's other marketplace under their own name as their resource.
+#[test]
+fn a_signed_url_that_answers_a_page_rather_than_an_archive_is_refused() {
+    let manifest = json!({ "zipUrls": { DRAFT.0.to_string(): { "url": BUNDLE_PATH } } });
+    let signed = "https://d111111abcdef8.cloudfront.net/bundle?Signature=expired";
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&manifest),
+            },
+            Interaction {
+                request: endpoints::download_bundle_request(BUNDLE_PATH),
+                response: HttpResponse {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![(ResponseHeader::Location, signed.to_owned())],
+                },
+            },
+            Interaction {
+                request: endpoints::redirected_bundle_request(signed.to_owned()),
+                // Deliberately a page carrying the word the session-expiry
+                // sniffer looks for. An expired signature answers exactly
+                // this shape, and if the shared classifier saw it first the
+                // run would park on a session that is perfectly good.
+                response: HttpResponse::plain(
+                    200,
+                    b"<html><body>Please login to continue</body></html>".to_vec(),
+                ),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect_err("a page is not a bundle");
+
+    assert!(
+        !matches!(refused, AdapterError::SessionExpired),
+        "the bytes decide what they are before anything reads them for what they say: a page \
+         containing the word the sniffer looks for must not park the run on a good session"
+    );
+    let AdapterError::Rejected { code, detail } = &refused else {
+        panic!("an expired signature is a rejection, and got: {refused:?}");
+    };
+    assert_eq!(
+        *code,
+        tam_types::FailureCode::VerificationMismatch,
+        "what failed is that the bytes are not what they must be"
+    );
+    assert!(
+        detail.0.contains("not an archive"),
+        "the refusal says the bytes are wrong rather than that the request failed: {detail:?}"
+    );
+}
+
+/// One hop, and the second redirect is where that is enforced.
+#[test]
+fn a_signed_url_that_redirects_again_is_refused_rather_than_followed() {
+    let manifest = json!({ "zipUrls": { DRAFT.0.to_string(): { "url": BUNDLE_PATH } } });
+    let signed = "https://d111111abcdef8.cloudfront.net/bundle?Signature=abc";
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&manifest),
+            },
+            Interaction {
+                request: endpoints::download_bundle_request(BUNDLE_PATH),
+                response: HttpResponse {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![(ResponseHeader::Location, signed.to_owned())],
+                },
+            },
+            Interaction {
+                request: endpoints::redirected_bundle_request(signed.to_owned()),
+                response: HttpResponse {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![(
+                        ResponseHeader::Location,
+                        "https://elsewhere.example/again".to_owned(),
+                    )],
+                },
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect_err("a chain this crate does not follow is not bytes");
+
+    let AdapterError::Rejected { detail, .. } = &refused else {
+        panic!("a second redirect is a rejection, and got: {refused:?}");
+    };
+    assert!(
+        detail.0.contains("one hop"),
+        "the refusal says the limit it hit, so nobody reads it as an outage: {detail:?}"
     );
 }
 

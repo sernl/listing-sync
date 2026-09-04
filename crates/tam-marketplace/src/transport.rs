@@ -60,6 +60,24 @@ pub enum RequestAuth {
     /// POST-policy upload, where the policy and its signature are form
     /// fields. It must reach the network without our session attached.
     Anonymous,
+    /// A hop the marketplace named rather than the caller: the destination of
+    /// a redirect, re-issued deliberately.
+    ///
+    /// What separates it from [`Self::Anonymous`] is not the credential —
+    /// neither carries one — but who chose the destination. An anonymous
+    /// request goes where this crate decided to send it, so its host can be
+    /// asserted against a constant. This one goes where a marketplace's
+    /// `Location` pointed, which is a signed url on a content network whose
+    /// host that marketplace may change without telling anybody, so no
+    /// constant can be maintained for it and the rule has to be about the
+    /// request's shape instead: https, one hop, nothing of ours attached, and
+    /// a bound on what may come back.
+    ///
+    /// It exists because a session client must not follow a cross-host
+    /// redirect — every default header it carries would follow with it — while
+    /// the bytes behind that redirect are still the seller's own and still
+    /// wanted. Re-issuing the hop here is what keeps both true.
+    Redirected,
     S3SigV2 {
         access_key_id: String,
         signature: String,
@@ -267,6 +285,16 @@ pub enum TransportError {
     /// back; the write state is unknown and the caller classifies it as
     /// ambiguous, never as failed.
     AfterSend { detail: String },
+    /// The response arrived whole and this transport refused it.
+    ///
+    /// Distinct from [`Self::AfterSend`], and the distinction is what a caller
+    /// does next. `AfterSend` means the outcome is unknown, so a write is
+    /// classified ambiguous and an operator is asked. This means the outcome
+    /// is known and we declined it — a body past the bound we read it under,
+    /// say — so there is nothing uncertain to escalate and the sentence
+    /// explaining it must survive to the caller rather than being flattened
+    /// into a lost response.
+    Refused { detail: String },
     /// Produced only by the cassette transport when a flow diverges from the
     /// recording; a live transport never returns it.
     Harness { detail: String },
@@ -279,6 +307,7 @@ impl core::fmt::Display for TransportError {
             Self::AfterSend { detail } => {
                 write!(f, "response lost after send, state unknown: {detail}")
             }
+            Self::Refused { detail } => write!(f, "the transport refused the response: {detail}"),
             Self::Harness { detail } => write!(f, "cassette divergence: {detail}"),
         }
     }

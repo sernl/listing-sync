@@ -41,6 +41,14 @@ pub fn classify_transport(error: TransportError) -> AdapterError {
         TransportError::AfterSend { .. } => {
             AdapterError::Ambiguous(AmbiguityCause::ResponseEventLost)
         }
+        // Known and declined rather than unknown. A refusal carries the reason
+        // the transport declined the response, and flattening it into an
+        // ambiguity would halt a tenant over a condition with nothing for an
+        // operator to decide.
+        TransportError::Refused { detail } => AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(detail),
+        },
         TransportError::Harness { detail } => harness(&detail),
     }
 }
@@ -64,6 +72,14 @@ pub fn classify_pre_write_transport(error: TransportError) -> AdapterError {
     match error {
         TransportError::NotSent(cause) => AdapterError::NotSent(cause),
         TransportError::AfterSend { .. } => AdapterError::NotSent(ConnectFailure::NoRouteToHost),
+        // Not `NotSent`, even on a pre-write hop: the request did leave and a
+        // response did arrive, and `NotSent` is documented as the one class
+        // that is safe to retry. Retrying a response we declined would just
+        // decline it again.
+        TransportError::Refused { detail } => AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(detail),
+        },
         TransportError::Harness { detail } => harness(&detail),
     }
 }

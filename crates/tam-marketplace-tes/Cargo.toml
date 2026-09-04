@@ -23,6 +23,11 @@ reqwest = { version = "0.12", optional = true, default-features = false, feature
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2.workspace = true
+# The one place this crate needs a system-wide bound: the largest archive we
+# will process, which is what a marketplace-named hop's body is read against.
+# A leaf with no dependencies of its own, which is the property its own module
+# doc names so that any crate can take this edge without acquiring another.
+tam-limits = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-types = { path = "../tam-types" }
 

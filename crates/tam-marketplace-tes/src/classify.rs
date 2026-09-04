@@ -70,6 +70,13 @@ pub fn classify_transport(error: TransportError) -> AdapterError {
         TransportError::AfterSend { .. } => {
             AdapterError::Ambiguous(AmbiguityCause::ResponseEventLost)
         }
+        // Known and declined rather than unknown: the sentence travels and the
+        // item fails on it, instead of becoming an ambiguity that halts a
+        // tenant and waits for an operator who has nothing to decide.
+        TransportError::Refused { detail } => AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(detail),
+        },
         TransportError::Harness { detail } => AdapterError::Rejected {
             code: FailureCode::Other,
             detail: FailureDetail(format!("cassette divergence: {detail}")),

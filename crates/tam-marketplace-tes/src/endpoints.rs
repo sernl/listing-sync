@@ -6,7 +6,7 @@
 
 use base64::Engine;
 use serde_json::{json, Value};
-use tam_marketplace::transport::{FilePart, HttpRequest, RequestAuth};
+use tam_marketplace::transport::{FilePart, HttpRequest, Method, RequestAuth, RequestBody};
 use tam_marketplace::RemoteListingId;
 use tam_types::{CopyFormat, InventoryId};
 
@@ -873,6 +873,171 @@ pub fn download_bundle_request(path: &str) -> HttpRequest {
     HttpRequest::get(format!("{ORIGIN}{path}"))
 }
 
+/// Why a `Location` is not a destination this crate will re-issue to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RedirectTargetError {
+    /// Relative, or a scheme other than https.
+    NotAbsoluteHttps,
+    /// Carries userinfo, which is a credential in a url and a way to make one
+    /// host's request look like another's.
+    CarriesUserinfo,
+    /// Resolves inside the machine or its network rather than out on the
+    /// internet.
+    NotPublic(String),
+    /// The marketplace's own origin. The transport refuses this too, but
+    /// there it is a `NotSent`, the class documented as the only one safe to
+    /// retry, and a `Location` pointing back at Tes is permanent rather than
+    /// a connectivity fault. Refusing it here names it instead.
+    OurOwnOrigin,
+}
+
+impl core::fmt::Display for RedirectTargetError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotAbsoluteHttps => f.write_str("the location is not an absolute https url"),
+            Self::CarriesUserinfo => f.write_str("the location carries userinfo"),
+            Self::NotPublic(host) => {
+                write!(f, "the location names {host}, which is not a public host")
+            }
+            Self::OurOwnOrigin => f.write_str(
+                "the location names the marketplace's own origin, which a credential-free \
+                 re-issue will not replay into",
+            ),
+        }
+    }
+}
+
+impl core::error::Error for RedirectTargetError {}
+
+/// Whether a `Location` a marketplace named is somewhere we will follow it.
+///
+/// The destination is chosen by the marketplace rather than by us, so this is
+/// the only place its shape is examined before a request goes to it. The
+/// private-network refusals are the reason this exists rather than the https
+/// check: a `Location` is attacker-influenceable input the moment a
+/// marketplace is compromised or simply wrong, and a fetch that follows one to
+/// `127.0.0.1` or `169.254.169.254` is asking a machine on our side of the
+/// network — or the seller's — to answer a request on the marketplace's
+/// behalf. The device runs this on the seller's own machine, where the loopback
+/// and link-local addresses are theirs.
+pub fn check_redirect_target(url: &str) -> Result<(), RedirectTargetError> {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return Err(RedirectTargetError::NotAbsoluteHttps);
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return Err(RedirectTargetError::CarriesUserinfo);
+    }
+    let Some(host) = host_of_authority(authority) else {
+        return Err(RedirectTargetError::NotAbsoluteHttps);
+    };
+    if host_of(ORIGIN).is_some_and(|ours| ours == host) {
+        return Err(RedirectTargetError::OurOwnOrigin);
+    }
+    if is_private_host(&host) {
+        return Err(RedirectTargetError::NotPublic(host));
+    }
+    Ok(())
+}
+
+/// The host of an absolute http(s) url, as the transport's routing reads one.
+///
+/// One parser, because this question is asked twice — here for a `Location`'s
+/// address and in the transport for its not-our-origin test — and two
+/// spellings of "host" answered it differently. Both halves of that mattered:
+/// a byte comparison is not a host comparison, and the session arm failed
+/// closed on `WWW.TES.COM` while the not-our-origin arm failed open on it,
+/// which is a route back into the session origin chosen by a `Location`
+/// rather than by us.
+///
+/// `None` when the url names no host this code can read, which every caller
+/// turns into a refusal: a request whose destination cannot be named is not
+/// one to send.
+pub(crate) fn host_of(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    host_of_authority(rest.split(['/', '?', '#']).next()?)
+}
+
+/// Userinfo stripped, port stripped, trailing dot stripped, lowercased, and
+/// an IPv6 literal handed back without its brackets so it parses as the
+/// address it is.
+///
+/// An IPv6 literal is bracketed and full of colons, so the port cannot be
+/// split off by the first one. Getting this wrong reads `[::1]` as a host
+/// named `[`, which parses as no address at all and therefore passes every
+/// private-address test — the loopback case sails through precisely because
+/// it is the awkward one to parse.
+fn host_of_authority(authority: &str) -> Option<String> {
+    let after_userinfo = authority.rsplit('@').next()?;
+    let host = match after_userinfo.strip_prefix('[') {
+        Some(literal) => literal.split_once(']')?.0,
+        None => after_userinfo.split(':').next()?,
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
+/// Hosts a redirect may not name.
+///
+/// Literal addresses only, deliberately. A name that resolves to a private
+/// address defeats this and no string test can close that — the closing move
+/// is at connection time and this crate opens no sockets. What it does stop is
+/// the direct form, which is the one a `Location` actually carries, and it
+/// stops it without a DNS lookup that would itself be a request to something
+/// the marketplace named.
+fn is_private_host(host: &str) -> bool {
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    let Ok(address) = host.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    match address {
+        std::net::IpAddr::V4(v4) => is_private_v4(v4),
+        // `fe80::/10` link-local, `fc00::/7` unique-local — the range every
+        // home and corporate network actually numbers itself out of — and
+        // then the same address written as IPv6: the kernel routes an
+        // IPv4-mapped destination to the IPv4 address it names, so
+        // `::ffff:127.0.0.1` reaches the loopback that `127.0.0.1` does and
+        // the IPv4 predicate is the one that decides it.
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.segments()[0] & 0xffc0 == 0xfe80
+                || v6.segments()[0] & 0xfe00 == 0xfc00
+                || v6.to_ipv4_mapped().is_some_and(is_private_v4)
+        }
+    }
+}
+
+fn is_private_v4(v4: std::net::Ipv4Addr) -> bool {
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || v4.is_broadcast()
+        || v4.octets()[0] == 0
+}
+
+/// The hop the bundle route named, re-issued carrying nothing of ours.
+///
+/// The url is the marketplace's own `Location` rather than anything composed
+/// here, which is exactly why it travels as [`RequestAuth::Redirected`]: the
+/// transport's rule for it is about the request's shape — https, not our
+/// origin, bounded body — because no host constant can be maintained for a
+/// content network the marketplace may re-point.
+#[must_use]
+pub fn redirected_bundle_request(url: String) -> HttpRequest {
+    HttpRequest {
+        method: Method::Get,
+        url,
+        body: RequestBody::Empty,
+        auth: RequestAuth::Redirected,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadManifestError {
     /// No bundle for this resource — the shape a draft produces.
@@ -925,6 +1090,74 @@ mod tests {
         DownloadManifestError, DraftId, FreeLicence, NotAPrice, PresignParseError, ReadLicence,
         TesAges, TesLicence, TesListing, TesPrice, TesPricing,
     };
+
+    #[test]
+    fn a_redirect_target_is_public_https_and_carries_no_credential() {
+        use super::{check_redirect_target, RedirectTargetError};
+        assert_eq!(
+            check_redirect_target("https://d111111abcdef8.cloudfront.net/b?Signature=a"),
+            Ok(())
+        );
+        for bad in ["/relative/path", "http://cdn.example/bundle", "https://"] {
+            assert_eq!(
+                check_redirect_target(bad),
+                Err(RedirectTargetError::NotAbsoluteHttps),
+                "{bad} is not an absolute https destination"
+            );
+        }
+        // Our own origin, however it is spelled. The trailing-dot form is the
+        // one that reaches here live: reqwest's policy calls it a host change
+        // and hands the hop back, and it resolves to the session the flow is
+        // already holding. Refused by name rather than left to the transport,
+        // where it is a `NotSent` and therefore reported as safe to retry.
+        for ours in [
+            "https://www.tes.com/api/v2/resources/1",
+            "https://WWW.TES.COM/api/v2/resources/1",
+            "https://www.tes.com./api/v2/resources/1",
+        ] {
+            assert_eq!(
+                check_redirect_target(ours),
+                Err(RedirectTargetError::OurOwnOrigin),
+                "{ours} is the marketplace's own origin however it is spelled"
+            );
+        }
+        assert_eq!(
+            check_redirect_target("https://user:pass@cdn.example/bundle"),
+            Err(RedirectTargetError::CarriesUserinfo),
+            "a credential in a url is a credential, and it also makes one host's request \
+             look like another's"
+        );
+        // The reason this function exists. Following a marketplace-named
+        // location to any of these asks a machine on the seller's own side of
+        // the network to answer a request the marketplace chose.
+        for inside in [
+            "https://127.0.0.1/bundle",
+            "https://localhost/bundle",
+            "https://10.0.0.5/bundle",
+            "https://192.168.1.1/bundle",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://[::1]/bundle",
+            // The same machines addressed in IPv6. An IPv4-mapped address is
+            // routed to the IPv4 address it names, so a predicate that reads
+            // these as unfamiliar IPv6 refuses none of them, and unique-local
+            // is the range a home or corporate network actually uses.
+            "https://[::ffff:127.0.0.1]/bundle",
+            "https://[0:0:0:0:0:ffff:7f00:1]/bundle",
+            "https://[::ffff:10.0.0.5]/bundle",
+            "https://[::ffff:169.254.169.254]/latest/meta-data/",
+            "https://[fc00::1]/bundle",
+            "https://[fd00::1]/bundle",
+        ] {
+            assert!(
+                matches!(
+                    check_redirect_target(inside),
+                    Err(RedirectTargetError::NotPublic(_))
+                ),
+                "{inside} is inside the machine or its network and must be refused"
+            );
+        }
+    }
+
     use base64::Engine;
     use tam_types::CopyFormat;
 
