@@ -5036,6 +5036,7 @@ dependencies = [
  "tam-marketplace",
  "tam-marketplace-tes",
  "tam-marketplace-tpt",
+ "tam-pipeline",
  "tam-secrets",
  "tam-types",
  "tauri",
@@ -5311,10 +5312,8 @@ version = "0.0.0"
 dependencies = [
  "sqlx",
  "tam-domain",
- "tam-engine",
  "tam-import",
  "tam-marketplace",
- "tam-marketplace-tes",
  "tam-secrets",
  "tam-storage",
  "tam-types",

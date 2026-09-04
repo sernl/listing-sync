@@ -173,6 +173,10 @@ The `ingest` call with its `BlobRepo`, `TenantBlobSink`, `LocalObjectStore` and 
 `ImportEntry` and `NamedBytes` go, because no bytes travel on the wire.
 `NoImportFiles` goes, because there is nothing left for it to refuse.
 
+Recorded 2026-09-04, ahead of that slice and owed to it: the operator import's `discover` and `measure` paths went with the Tes adapter when the broker's gateway left `crates/tam-import/src/main.rs`, because both reached the marketplace through it and the binary now takes a TPT source and a manifest only.
+`measure_one` and `MeasureTotals` are still exported and still covered by `crates/tam-import/tests/import.rs`, so what is owed is a caller rather than the function.
+Until one exists, the founder's `measure` kill-gate number — the drain coverage when the originals are not on the box — cannot be taken, and re-pointing it at the device-side import described here is the follow-up.
+
 Everything else is reused unchanged, and it is the great majority and every hard part: `inbound_subjects` over the source vocabulary's edges, the verbatim grade declaration with its age-range labels and derived interval, `resolve_price`, `rights_from`, `residue_of`, the canonical product construction, the product and mapping inserts with their field policies and price rule, the immediate projection with the seller's overrides, `record_losses`, the taxonomy raise, and the whole row report.
 What is new is a `product_file_source` row written beside each `product_file`, from the device's observation.
 `ImportRun` shrinks to a pool, an organisation, a source, a target and an instant, and `tam-import` drops its dependencies on `tam-pipeline`, `tam-secrets` and the adapter crates.

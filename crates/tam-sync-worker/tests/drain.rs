@@ -215,17 +215,12 @@ async fn a_resumed_migrate_removes_every_source_it_canonicalised(pool: PgPool) {
         target: TARGET,
         now: NOW,
     };
-    let report = drain_request(
-        &requests,
-        &run,
-        REQUEST,
-        &FetchReason::FirstPartyExport { inventory: SOURCE },
-    )
-    .await
-    .expect("the resumed drain runs without reading the source again");
+    let report = drain_request(&requests, &run, REQUEST)
+        .await
+        .expect("the resumed drain runs without reading the source again");
     assert_eq!(
-        (report.canonicalised, report.skipped, report.failed),
-        (0, 2, 0),
+        (report.skipped, report.failed),
+        (2, 0),
         "the whole request was already canonicalised, which is exactly the resume case"
     );
     let remove_job = report.remove_job.expect("a migrate mints a removal job");
@@ -327,14 +322,9 @@ async fn a_live_sync_enqueues_the_create_and_the_publish_it_gates(pool: PgPool) 
         target: TARGET,
         now: NOW,
     };
-    let report = drain_request(
-        &requests,
-        &run,
-        REQUEST,
-        &FetchReason::FirstPartyExport { inventory: SOURCE },
-    )
-    .await
-    .expect("the drain runs");
+    let report = drain_request(&requests, &run, REQUEST)
+        .await
+        .expect("the drain runs");
     let create_job = report.create_job.expect("a sync mints a write job");
 
     // Pinned, because `job_item` carries FORCE ROW LEVEL SECURITY and the

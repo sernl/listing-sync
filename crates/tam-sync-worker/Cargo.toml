@@ -4,21 +4,23 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+# No marketplace edge and no runtime of its own. The read leg this crate used
+# to hold runs on the seller's device under D1, so the adapter, the credential
+# and the poll loop went with it and what is left mints jobs from rows.
 [dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-domain = { path = "../tam-domain" }
-tam-engine = { path = "../tam-engine" }
 tam-import = { path = "../tam-import" }
 tam-marketplace = { path = "../tam-marketplace" }
-tam-marketplace-tes = { path = "../tam-marketplace-tes" }
-tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tam-marketplace = { path = "../tam-marketplace" }
+# The fixture builds an `ImportRun`, which still carries a key-encryption key
+# until that struct shrinks; the library itself never names one.
+tam-secrets = { path = "../tam-secrets" }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 uuid = { version = "1", features = ["v4"] }

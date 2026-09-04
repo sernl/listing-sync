@@ -160,7 +160,10 @@ Add a `Device` component carrying the device id from D14's registry, and record 
 
 The authorship attestation's only writer is inside the crate being deleted (`crates/tam-session-broker/src/vault.rs:234`), and the attestation is per connection while TPT's copyright declaration is a per-listing radio group.
 Carry `attested_by` and `attested_at` into `AttemptIntent.body` at `RecordIntent`, so the `write_attempt` row is the immutable record of the attestation the write went out under, and leave `intent_hash` alone because it feeds the idempotency key.
-The exclusivity claim needs the same care from the other side: its identity read becomes client-asserted, which is the seller-typed value `claim_account` documents as a denial-of-service primitive, and its digest pepper is derived from the key-encryption key that goes with the vault.
+The exclusivity claim needs the same care from the other side: its identity read becomes client-asserted, which is the seller-typed value `claim_account` documents as a denial-of-service primitive, and its digest pepper is derived from the key-encryption key the vault holds.
+Corrected 2026-09-04: the derivation is not the broker's and does not go with the crate.
+`account_digest` derives the pepper at `crates/tam-secrets/src/lib.rs:428`, under its own label `ACCOUNT_DIGEST_LABEL` and no other use of the key, and the broker only calls it.
+What the deletion removes is the process that holds the key the pepper is derived from, not the derivation, so the re-siting below is a decision about custody of that key rather than about code that goes with the file.
 Re-site the pepper in a server-held key that outlives the vault, bump `key_version` and re-claim rather than attempting a re-keying migration, because the account reference preimage is deliberately never stored.
 
 ## 6. The correctness defects to fix as part of or before the split

@@ -1,40 +1,41 @@
-//! The canonicalisation drain: a sync's read leg, run outside the item pump
-//! and under the tenant's own role.
+//! A sync's enqueue half: the write jobs a canonicalised request has earned,
+//! minted under the tenant's own role.
 //!
 //! Phase A of a sync reads the source marketplace, builds a canonical product
-//! and projects it at the target. It writes the catalogue and no marketplace.
-//! Phase B is an ordinary create item, which is the item pump's. The two are
-//! split here because `prepare_item` is deliberately adapter-free -- an item
-//! that cannot run never costs a gateway session -- and because a job carries
-//! one inventory, so a job holding both legs is not expressible.
+//! and projects it at the target. That read runs on the seller's own device
+//! under D1, so nothing here reaches a marketplace; this crate takes the
+//! breadcrumbs the device wrote and mints the jobs. Phase B is an ordinary
+//! create item, which is the item pump's. The two are split because a job
+//! carries one inventory, so a job holding both legs is not expressible.
 //!
-//! The role is the point. `tam_app` has forced RLS, so this drain pins one
+//! The role is the point. `tam_app` has forced RLS, so this pins one
 //! organisation per request and cannot read two tenants' rows in one
 //! statement; the item pump's BYPASSRLS scan cannot make that promise.
 //! Nothing here is granted to `tam_engine`, and `sync_request` has no engine
 //! grant at all.
+//!
+//! There is no binary. A poller that found work it could not service would be
+//! worse than none, so `POST /{v}/sync` queues the rows and the enqueue below
+//! is folded into the device's own import route.
 
 #![forbid(unsafe_code)]
 
 use tam_domain::{Binding, ItemOperation, JobItemId, Mapping, PublishMode, Verification};
-use tam_import::{import_one, ImportEntry, ImportError, ImportRun, NamedBytes};
+use tam_import::ImportRun;
 use tam_marketplace::idempotency::derive_idempotency_key;
-use tam_marketplace::{
-    FetchReason, FirstPartyExport, ListingState, RemoteLifecycle, RemoteListingId,
-};
+use tam_marketplace::{FirstPartyExport, ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
-    job_request_key, lower, requires_bound_on, Canonicalised, Disposition, Enqueued, JobReadRepo,
-    JobRepo, LoweringRefusal, MappingRepo, NewJob, NewJobItem, StorageError, SyncIntent,
-    SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
+    job_request_key, lower, requires_bound_on, Disposition, Enqueued, JobReadRepo, JobRepo,
+    LoweringRefusal, MappingRepo, NewJob, NewJobItem, StorageError, SyncIntent, SyncRequestRecord,
+    SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
 };
-use tam_types::{Actor, InventoryId, JobId, MappingId, OrgId, Stamp, SystemComponent, Uuid};
+use tam_types::{Actor, JobId, MappingId, OrgId, Stamp, SystemComponent, Uuid};
 
 /// What one request's drain produced, so a caller reports it rather than
 /// reading it back out of the row it just wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainReport {
     pub request: Uuid,
-    pub canonicalised: usize,
     pub skipped: usize,
     pub failed: usize,
     pub create_job: Option<Uuid>,
@@ -44,7 +45,6 @@ pub struct DrainReport {
 #[derive(Debug)]
 pub enum DrainError {
     Storage(StorageError),
-    Import(ImportError),
     /// The seller addressed a listing in a way the source cannot resolve.
     Locator(String),
     /// The request's stated intent has no lowering against the mapping the
@@ -56,7 +56,6 @@ impl core::fmt::Display for DrainError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Storage(error) => write!(f, "storage: {error}"),
-            Self::Import(error) => write!(f, "import: {error:?}"),
             Self::Locator(detail) => write!(f, "locator: {detail}"),
             Self::Lowering(refusal) => write!(f, "lowering: {refusal}"),
         }
@@ -71,24 +70,19 @@ impl From<StorageError> for DrainError {
     }
 }
 
-/// Canonicalise one request whole, then mint the write jobs it earned.
+/// Mint the write jobs a canonicalised request has earned.
 ///
-/// Resumable per resource rather than per request. `import_one` commits four
-/// times internally and mints a fresh `ProductId` on every pass, and
-/// `mapping_one_per_inventory` is keyed on the product, so a second pass over
-/// an already-canonicalised resource inserts a duplicate no index refuses.
-/// The breadcrumb on `sync_request_resource` is what makes the skip possible,
-/// and it is written in the same transaction that marks the row done.
+/// Keyed on the per-resource breadcrumb rather than on the request, because
+/// the canonicalisation is the device's and arrives a page at a time: a
+/// resource an earlier page finished is skipped here and its removal item is
+/// still built, from the breadcrumb `sync_request_resource` carries.
 pub async fn drain_request<A>(
     requests: &SyncRequestRepo,
     run: &ImportRun<'_, A>,
     request: Uuid,
-    reason: &FetchReason,
 ) -> Result<DrainReport, DrainError>
 where
     A: FirstPartyExport,
-    A::Resource: TryFrom<i64> + Copy,
-    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
 {
     let record = requests
         .get(run.org, request)
@@ -98,7 +92,6 @@ where
 
     let mut report = DrainReport {
         request,
-        canonicalised: 0,
         skipped: 0,
         failed: 0,
         create_job: None,
@@ -122,35 +115,21 @@ where
             }
             continue;
         }
-        match canonicalise_one(run, &resource.locator, reason).await {
-            Ok(row) => {
-                requests
-                    .record_canonicalised(
-                        run.org,
-                        &Canonicalised {
-                            request,
-                            ordinal: resource.ordinal,
-                            product: row.product,
-                            mapping: row.mapping,
-                            source: row.source.clone(),
-                            source_state: row.source_state,
-                        },
-                    )
-                    .await?;
-                mappings.push(row.mapping);
-                canonicalised.push(row);
-                report.canonicalised += 1;
-            }
-            Err(error) => {
-                // One unreadable resource does not abandon the others: the
-                // seller asked for a batch and gets a per-row account of it,
-                // which is what the drain's own totals concealed before.
-                requests
-                    .record_resource_failure(run.org, request, resource.ordinal, &error.to_string())
-                    .await?;
-                report.failed += 1;
-            }
-        }
+        // Recorded rather than skipped. One uncanonicalised resource does not
+        // abandon the others -- the seller asked for a batch and gets a
+        // per-row account of it -- but it must not pass silently either, or
+        // `enqueue_create` mints a short list against a request the seller
+        // asked to be whole and `record_enqueued` marks it done.
+        requests
+            .record_resource_failure(
+                run.org,
+                request,
+                resource.ordinal,
+                "no canonicalisation was reported for this resource; the source read runs \
+                 on the seller's own device",
+            )
+            .await?;
+        report.failed += 1;
     }
 
     if mappings.is_empty() {
@@ -215,42 +194,6 @@ struct Canonicalisation {
     mapping: tam_types::MappingId,
     source: RemoteListingId,
     source_state: Option<ListingState>,
-}
-
-async fn canonicalise_one<A>(
-    run: &ImportRun<'_, A>,
-    locator: &str,
-    reason: &FetchReason,
-) -> Result<Canonicalisation, DrainError>
-where
-    A: FirstPartyExport,
-    A::Resource: TryFrom<i64> + Copy,
-    <A::Resource as TryFrom<i64>>::Error: core::fmt::Display,
-{
-    let numeric: i64 = locator
-        .parse()
-        .map_err(|_| DrainError::Locator(format!("{locator:?} is not a resource id")))?;
-    let resource = A::Resource::try_from(numeric)
-        .map_err(|error| DrainError::Locator(format!("{locator:?}: {error}")))?;
-    let bundle = run
-        .adapter
-        .download_resource_bundle(reason, resource)
-        .await
-        .map_err(|error| DrainError::Import(ImportError::Adapter(error)))?;
-    let entry = ImportEntry {
-        resource: numeric,
-        files: vec![NamedBytes {
-            name: format!("{numeric}-bundle.zip"),
-            bytes: bundle,
-        }],
-    };
-    let row = import_one(run, &entry).await.map_err(DrainError::Import)?;
-    Ok(Canonicalisation {
-        product: row.product,
-        mapping: row.mapping,
-        source: row.source,
-        source_state: row.source_state,
-    })
 }
 
 /// The write leg, minted with a key derived from the request rather than with
@@ -369,7 +312,8 @@ where
     for row in canonicalised {
         let Some(state) = row.source_state else {
             return Err(DrainError::Locator(
-                "the source read carried no lifecycle, so its removal would state one                  nobody observed"
+                "the source read carried no lifecycle, so its removal would state one \
+                 nobody observed"
                     .to_owned(),
             ));
         };
@@ -481,13 +425,6 @@ pub async fn pending_work(
         }
     }
     Ok(out)
-}
-
-/// The read the drain declares itself as. Every marketplace read in this
-/// process is a first-party export of the seller's own catalogue.
-#[must_use]
-pub const fn reason_for(source: InventoryId) -> FetchReason {
-    FetchReason::FirstPartyExport { inventory: source }
 }
 
 /// The intent version the ledger's keys are minted under, restated here for
