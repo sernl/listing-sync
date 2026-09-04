@@ -1,9 +1,10 @@
 # The teachouse.io landing page
 
-The public site a teacher-seller reaches before signing up, and the surface that gates the live billing switch.
+The public site a teacher-seller reaches before signing up.
 
 - date: 2026-09-03
-- status: built and building green under `just landing-check`; every price, the legal text and the support address are placeholders the founder must replace before the site goes live
+- status: built and building green under `just landing-check`, which now runs inside `just pre-push`; amended 2026-09-04 to remove the pricing section and stand a waitlist in its place, by founder decision to park payments
+- placeholders: the legal text, the support and waitlist addresses, the console origin and the desktop download URL are all still placeholders the founder must replace before the site goes live
 - paths: `apps/landing/`, and the `landing-check` and `landing-dev` recipes in the justfile
 
 ## What it is, and why it is a separate build
@@ -17,18 +18,20 @@ The reason for keeping it out of the console is the console's own shape.
 `web/src/routes/+layout.ts` turns off both server rendering and prerendering, which SvelteKit's documentation calls a large negative for performance and search.
 That is the right trade for a logged-in dashboard and the wrong one for the page that has to rank and convert.
 
-The whole home page is 9 KB of HTML and 7 KB of CSS, plus two self-hosted font files.
+The whole home page is 10 KB of HTML and 7 KB of CSS, plus two self-hosted font files.
 
 ## Structure
 
 The site is three pages.
 
-The home page carries a hero, then four sections that the header and footer link to by anchor: how it works, where the work happens, marketplaces, and pricing, closing on a second call to action.
-The hero states in one sentence what the product does and where the work runs, offers "Create an account", and prints the availability sentence underneath so no visitor infers a general release from a marketing page.
-"How it works" is three steps: bring the catalogue in, map it once, publish and keep it matching.
+The home page carries a hero, then five sections that the header and footer link to by anchor: how it works, what you will be looking at, where the work happens, marketplaces, and questions, closing on the waitlist.
+The hero states in one sentence what the product does and where the work runs, asks to be told when it opens, and prints the availability sentence underneath so no visitor infers a general release from a marketing page.
+"How it works" is three steps — bring the catalogue in, map it once, publish and keep it matching — followed by the sentence naming the Windows app that TeachersPayTeachers and Tes work needs, and the download link beside it.
+"What you will be looking at" is three placeholder frames captioned with the screen each will hold; they carry no image, and the caption says the pictures go in when there is a real catalogue to photograph.
 "Where the work happens" is the D1 and D30 section, and is described on its own below.
 "Marketplaces" is a row per marketplace naming where its work runs and what its status is, driven from the same transport split the registry encodes.
-"Pricing" is the D4 shape with every amount unset.
+"Questions" is six question-and-answer pairs, rendered open rather than collapsed, because this is the page that has to rank and a collapsed answer is worth less to a search engine than an open one.
+The closing section is the waitlist, and it is the only call to action on the page.
 
 `/privacy` and `/terms` are placeholder pages, described below.
 
@@ -50,14 +53,26 @@ Nothing on the site is a number that has not been measured, which for a product 
 
 The availability sentence is the only claim on the site about whether a seller can use it today, and it is one editable string, so the founder can move it from private testing to general release in one place.
 
+There is no pricing on the site and no checkout, because payments are parked.
+The site asks to be told rather than asking to be paid, and the waitlist is a `mailto:` rather than a posted form: a form needs a backend that does not exist, and a hosted form service would put a seller's address with a third party and break the page's property of making no third-party request at all.
+The waitlist copy says what the seller will hear about and when, and it states that pricing will be known before anything is charged for, which is a promise the parked decision can actually keep.
+
+The site says that TeachersPayTeachers and Tes work needs a Windows app installed once.
+It is said in "How it works" rather than buried, because a seller who learns it after signing up learns it as a surprise, and because the device story the site tells is not credible without it.
+The download link is driven from one value that is null today, so the sentence stands and the link reads "Download link to come" rather than pointing at nothing.
+
+Every answer in "Questions" is checked against the code rather than written from the design notes.
+The claim that a change edits the listing already there rather than deleting and recreating it rests on the connector contract's `revise`, which addresses an existing `RemoteListingId`, and on the absence of any delist-and-relist path anywhere in `crates/`; removal is a separate verb that a ledger row has to authorise.
+
 The status pill on a marketplace row is green only for the two marketplaces whose full create, publish and revise path has been proven live.
 Etsy reads "Next" rather than "Working", because its connect path is designed and not built.
 
 ## Where the code holds each decision
 
 Everything the founder replaces lives in `apps/landing/src/site.js`, and nowhere else.
-That file holds the console origin, the sign-up and sign-in URLs, the support address, the availability sentence, the three pricing tiers and the marketplace list with its transport class.
-Each tier carries `amount: null`, and a null amount renders as an unset price with a "Price not set" pill rather than as a number, so a draft figure cannot be shipped by forgetting to change it.
+That file holds the console origin, the sign-in URL, the support address, the waitlist address, the desktop download URL, the availability sentence and the marketplace list with its transport class.
+`downloadUrl` is null, and a null renders as "Download link to come" rather than as a link, so no broken download can ship by being forgotten.
+`waitlistHref` is the one value to change when the waitlist stops being a `mailto:`; nothing else on the site knows how a waitlist entry travels.
 The marketplace transport wording matches `InventoryId::transport_class` in `crates/tam-domain/src/registry/mod.rs`, where TeachersPayTeachers and Tes are `SellerDevice` and Etsy is `OfficialApi`; if a marketplace's class changes there, this file changes with it.
 
 `apps/landing/src/styles/site.css` transcribes the console's design tokens from `web/src/app.css` unchanged — the same ground, ink, accent, line and state colours, and the same Fraunces and Instrument Sans pairing — so the two surfaces read as one product.
@@ -69,17 +84,21 @@ The page therefore makes no third-party request at all.
 
 ## Placeholders the founder must replace
 
-Nine items, all but two of them in `apps/landing/src/site.js`.
+Seven items, all but two of them in `apps/landing/src/site.js`.
 
-1. The three tier prices, in `tiers[].amount`. D4 fixes the metering axis — connected marketplaces, with a catalogue cap on the entry tier, never new items per month — and names no amount, so none is invented here. Setting an amount to a string such as `'$19'` replaces the unset rendering automatically.
-2. The catalogue cap for each tier, which currently reads "Catalogue cap: to be set" in `tiers[].features`.
-3. The marketplace count on the middle tier, which currently reads "Up to a set number of connected marketplaces".
-4. `consoleOrigin`, which assumes `https://app.teachouse.io`. The console's host has not been settled anywhere in the repository, and this is the only guess on the site.
-5. `supportEmail`, which assumes `hello@teachouse.io`, and which appears in the footer and on both legal pages.
-6. `availability`, the one sentence about whether a seller can use Teachouse today.
-7. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
-8. The whole of `/terms`, which is a placeholder for counsel and not terms.
-9. The pricing section's draft banner, which says the amounts are not set and that no price is an offer, and which comes out when the prices go in.
+1. `waitlistEmail`, which assumes `hello@teachouse.io`. This is where every waitlist entry lands, so it wants an address the founder actually reads. Replacing the `mailto:` with a posted form means changing `waitlistHref` and nothing else.
+2. `downloadUrl`, which is null. No public download page URL exists yet: releases go to CrabNebula Cloud on the `beta` channel, and CrabNebula's own documentation says a channelled release is not listed on an application's public page, while the GitHub releases beside them are in a private repository. Either publish a release to the unchannelled production stream, whose public page can then be linked, or host a download page of our own.
+3. `consoleOrigin`, which assumes `https://app.teachouse.io`. The console's host has not been settled anywhere in the repository, and this is the only guess on the site.
+4. `supportEmail`, which assumes `hello@teachouse.io`, and which appears in the footer and on both legal pages.
+5. `availability`, the one sentence about whether a seller can use Teachouse today.
+6. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
+7. The whole of `/terms`, which is a placeholder for counsel and not terms.
+
+The three placeholder frames under "What you will be looking at" are not in this list because they are not a value to replace: they come out when there are real screenshots to put in, which needs the console running against a seeded catalogue.
+
+Pricing is not in this list either.
+It was removed rather than left unset, so there is no draft figure anywhere on the site to forget about.
+When payments are decided, the pricing section is written fresh against whatever D4 has become by then.
 
 ## The two legal pages
 
@@ -114,8 +133,22 @@ The `site` value in `apps/landing/astro.config.mjs` is `https://teachouse.io`, a
 
 ## Open items, each a founder decision
 
-`landing-check` is not wired into `pre-push`, because that line of the justfile is outside this work's scope.
-Adding it costs one word and about twenty seconds per push.
+The site states where the marketplace work runs as what Teachouse is built to do, not as an absolute.
+No sentence claims that our servers never hold a marketplace login or never open a marketplace session, and no sentence says the desktop app is the only thing that reaches a marketplace, because both would be false today.
+Two paths run at once, for different traffic.
+On the device, `apps/desktop/src-tauri/src/work.rs` composes and issues marketplace requests on the seller's machine, under the session the login webview filed in the operating system's keychain.
+On our side, `crates/tam-sync-worker` reaches Tes through the broker's gateway with the seller cookie injected server-side, for the source reads that canonicalisation needs, taking a broker lease per request under `LeasePurpose::Drain`.
+So the positive claim is true, and neither the absolute nor an exclusivity claim is.
+The absolute wording, including D30's "your login never leaves your device" as a heading, returns only when no server-side path reaches a marketplace under a seller's session, and this paragraph is the reminder so nobody has to hold it in their head.
+Check the claim against the tree rather than against this paragraph: the question is which processes still construct a marketplace adapter over a broker gateway.
+
+Body text set in `--muted` does not clear the WCAG AA contrast minimum for normal text.
+Measured on this palette, `--muted` is 3.90:1 on `--card` and 3.65:1 on `--ground` against a 4.5:1 requirement, and it is used for the section ledes (`.section .lede`), the hero's opening sell line (`.hero p.sell`), the install aside under "How it works" (`.aside`), the step copy (`.step p`), the marketplace transport column (`.row .how`), the FAQ answers (`.faq dd`), the screenshot captions (`.shot figcaption`), the footer and its navigation (`.site-foot`, `.site-nav a`) and the muted status pill (`.pill.mut`).
+It is left alone here because these tokens are transcribed unchanged from `web/src/app.css` and diverging on the marketing site would break the one-product reading the transcription buys; the fix belongs in the console's palette, where a token between `--muted` and `--ink` would serve both surfaces.
+The `--faint` uses were not left alone, because at 2.28:1 they were carrying the availability sentence, the marketplace-independence disclaimer and the D30 design-choice line, and a disclosure nobody can read is not a disclosure; those are now `--ink`.
+
+The `/terms` placeholder still records the D4 metering shape as briefing material for counsel, and that is deliberate: the metering axis is a design decision that survives payments being parked, and the page is a brief rather than a public offer.
+It is named here so that a later reader does not mistake it for pricing that escaped the removal.
 
 There is no type-check step, only the build.
 `astro check` would require `@astrojs/check` and `typescript` as dependencies, and the standing instruction is to report a dependency beyond the framework itself rather than add it; the build already fails on a template or import error, and the site has no application logic for a type checker to find a fault in.

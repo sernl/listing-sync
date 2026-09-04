@@ -223,7 +223,7 @@ db-test-all: db-wait db-verify
 # vocabulary diff, and a Rust enum that moved leaves vocab.ts stale without
 # failing anything in `check` -- cheaper to learn that before the database
 # lane than after it.
-pre-push: check web-check db-verify db-test-all check-portable
+pre-push: check web-check landing-check db-verify db-test-all check-portable
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:

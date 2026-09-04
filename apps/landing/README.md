@@ -3,11 +3,14 @@
 The public site a seller reaches before signing up.
 It is a separate Astro build rather than a console route, because the console's root layout turns off both server rendering and prerendering (D28).
 
-`just landing-check` installs from the lockfile and builds; `just landing-dev` serves it locally.
+`just landing-check` installs from the lockfile and builds, and runs as part of `just pre-push`; `just landing-dev` serves it locally.
 The site ships no JavaScript, loads nothing from a third party, and self-hosts its two fonts from `public/fonts/`.
 
-Every value the founder must supply is in `src/site.js` and nowhere else: the console origin, the support address, the availability sentence, the pricing tiers and the marketplace list.
-A tier whose `amount` is `null` renders as an unset price with a "Price not set" pill, so a draft figure cannot ship by being forgotten.
+Payments are parked, so the site carries no pricing and no checkout.
+The call to action is a waitlist, and it is a `mailto:` rather than a form, which is what keeps the page free of any third-party request.
+
+Every value the founder must supply is in `src/site.js` and nowhere else: the console origin, the support address, the waitlist address, the desktop download URL and the availability sentence.
+`downloadUrl` is `null` and renders as "Download link to come" rather than as a broken link, because no public download page URL exists yet.
 
 `/privacy` and `/terms` are placeholders for counsel, not legal text, and must be replaced in full rather than edited.
 

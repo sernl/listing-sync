@@ -289,7 +289,7 @@ main {
 
 .hero .under {
 	font-size: 13.5px;
-	color: var(--faint);
+	color: var(--ink);
 	margin: 16px 0 0;
 }
 
@@ -415,8 +415,6 @@ main {
 	color: var(--warn);
 }
 
-/* Pricing */
-
 .notice {
 	border: 1px solid color-mix(in srgb, var(--warn) 34%, var(--line));
 	background: var(--warn-soft);
@@ -431,67 +429,83 @@ main {
 	font-weight: 600;
 }
 
-.tier {
-	display: flex;
-	flex-direction: column;
-}
-
-.tier h3 {
-	margin: 0 0 4px;
-	font-size: 16px;
-	font-weight: 600;
-}
-
-.tier .for {
-	color: var(--muted);
-	font-size: 13.5px;
-	margin: 0 0 16px;
-}
-
-.tier .amount {
-	font-family: var(--serif);
-	font-size: 32px;
-	font-weight: 600;
-	letter-spacing: -0.01em;
-	line-height: 1.1;
-	color: var(--faint);
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-}
-
-.tier .amount .per {
-	font-family: var(--sans);
-	font-size: 13px;
-	font-weight: 500;
-	color: var(--muted);
-}
-
-.tier .unset {
-	margin: 8px 0 16px;
-}
-
-.tier ul {
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
+.aside {
+	margin: 20px 0 0;
+	padding: 14px 16px;
+	background: var(--card);
+	border: 1px solid var(--line);
+	border-radius: 10px;
 	font-size: 14.5px;
+	color: var(--muted);
+}
+
+.pending {
+	color: var(--ink);
+	white-space: nowrap;
+}
+
+/* Placeholder frames, standing in for console screenshots. */
+
+.shot {
+	margin: 0;
+}
+
+.shot .frame {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	aspect-ratio: 4 / 3;
+	background: var(--card);
+	border: 1px dashed var(--line);
+	border-radius: 12px;
+	overflow: hidden;
+}
+
+.shot .bar {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 26px;
+	background: var(--hover);
+	border-bottom: 1px solid var(--line);
+}
+
+.shot .label {
+	font-family: var(--serif);
+	font-size: 17px;
 	color: var(--ink);
 }
 
-.tier li::before {
-	content: '·';
-	color: var(--accent);
-	font-weight: 700;
-	margin-right: 8px;
+.shot figcaption {
+	margin-top: 10px;
+	font-size: 13.5px;
+	color: var(--muted);
 }
 
-.tier .tail {
-	margin-top: auto;
+/* Questions */
+
+.faq {
+	margin: 0;
+}
+
+.qa + .qa {
+	margin-top: 18px;
 	padding-top: 18px;
+	border-top: 1px solid var(--line);
+}
+
+.faq dt {
+	font-weight: 600;
+	font-size: 15.5px;
+}
+
+.faq dd {
+	margin: 6px 0 0;
+	color: var(--muted);
+	font-size: 14.5px;
+	max-width: 76ch;
 }
 
 /* Prose pages */
@@ -564,7 +578,7 @@ main {
 
 .site-foot .fine {
 	margin: 22px 0 0;
-	color: var(--faint);
+	color: var(--ink);
 	font-size: 12.5px;
 	max-width: 76ch;
 }

@@ -1,20 +1,41 @@
 /**
  * Every value the founder must supply before this site goes live is here, and
- * nowhere else. `placeholder: true` renders the amount as unset rather than as
- * a number, so no draft price can be mistaken for an offer.
- *
- * The list of what still needs replacing is in
+ * nowhere else. The list of what still needs replacing is in
  * `docs/notes/design/landing-page.md` under "Placeholders".
  */
 
 /** Where the console is served. Replace when the console's host is settled. */
 export const consoleOrigin = 'https://app.teachouse.io';
 
-export const signUpUrl = `${consoleOrigin}/signup`;
 export const signInUrl = `${consoleOrigin}/login`;
 
 /** Replace with the address the founder actually monitors. */
 export const supportEmail = 'hello@teachouse.io';
+
+/**
+ * Where a waitlist entry goes. Payments are not decided, so the site asks to
+ * be told rather than asking to be paid. A `mailto:` stands in because it
+ * needs no backend and keeps the site's property of making no third-party
+ * request; replacing it with a posted form means changing `waitlistHref` and
+ * nothing else on the site.
+ */
+export const waitlistEmail = 'hello@teachouse.io';
+
+export const waitlistHref = `mailto:${waitlistEmail}?subject=${encodeURIComponent(
+	'Teachouse waitlist'
+)}`;
+
+/**
+ * The public download for the desktop client, which a seller needs before
+ * TeachersPayTeachers or Tes work can run. Null renders as "Download link to
+ * come" rather than as a broken link.
+ *
+ * There is no URL to put here yet. Releases go to CrabNebula Cloud on the
+ * `beta` channel, and CrabNebula's documentation says a channelled release is
+ * not listed on an application's public page; the GitHub releases beside them
+ * are in a private repository. See `docs/notes/design/desktop-distribution.md`.
+ */
+export const downloadUrl = null;
 
 /**
  * What the founder is willing to say about availability today. This sentence
@@ -22,49 +43,6 @@ export const supportEmail = 'hello@teachouse.io';
  */
 export const availability =
 	'Teachouse is in private testing. TeachersPayTeachers and Tes connections work today, and Etsy is next.';
-
-/**
- * D4: the meter is connected marketplaces, with a catalogue cap on the entry
- * tier. Amounts and caps are unset; the memo names none.
- */
-export const tiers = [
-	{
-		name: 'One marketplace',
-		who: 'For a seller who wants a second storefront without a second evening of typing.',
-		amount: null,
-		period: 'per month',
-		features: [
-			'One connected marketplace',
-			'Catalogue cap: to be set',
-			'Mapping, publishing and revision from your own computer',
-			'Sales and view figures pulled back into one place'
-		]
-	},
-	{
-		name: 'A few marketplaces',
-		who: 'For a seller who already lists in more than one place and is tired of the drift.',
-		amount: null,
-		period: 'per month',
-		features: [
-			'Up to a set number of connected marketplaces',
-			'Catalogue cap: to be set',
-			'One update propagated to every marketplace it applies to',
-			'Per-marketplace results, reported one by one'
-		]
-	},
-	{
-		name: 'Every marketplace',
-		who: 'For a seller whose catalogue is the business.',
-		amount: null,
-		period: 'per month',
-		features: [
-			'Every marketplace Teachouse supports',
-			'No catalogue cap',
-			'Multiple accounts on the same marketplace',
-			'Every marketplace added later, as it is added'
-		]
-	}
-];
 
 /**
  * Transport class per marketplace, matching `InventoryId::transport_class` in
@@ -97,7 +75,7 @@ export const marketplaces = [
 ];
 
 export const transportWording = {
-	device: 'Runs on your computer, under your own login',
+	device: 'Built to run on your computer, under your own login',
 	api: 'Runs on our servers, over the official API',
 	either: 'Whichever of the two the marketplace sanctions'
 };

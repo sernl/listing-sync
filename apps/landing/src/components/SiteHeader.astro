@@ -1,5 +1,5 @@
 ---
-import { signInUrl, signUpUrl } from '../site.js';
+import { signInUrl, waitlistHref } from '../site.js';
 ---
 
 <header class="site-head">
@@ -8,9 +8,9 @@ import { signInUrl, signUpUrl } from '../site.js';
 		<nav class="site-nav" aria-label="Primary">
 			<a href="/#how">How it works</a>
 			<a href="/#marketplaces">Marketplaces</a>
-			<a href="/#pricing">Pricing</a>
+			<a href="/#faq">Questions</a>
 			<a href={signInUrl}>Sign in</a>
-			<a class="cta" href={signUpUrl}>Create an account</a>
+			<a class="cta" href={waitlistHref}>Ask to be told</a>
 		</nav>
 	</div>
 </header>
