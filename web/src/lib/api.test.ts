@@ -50,6 +50,59 @@ describe('the api client', () => {
 		expect(seen[0].headers.get('idempotency-key')).toBe('key-123');
 	});
 
+	it('a device-branch migrate is submitted with no resources named', async () => {
+		const seen: Array<{ url: string; method?: string; headers: Headers; body: unknown }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({
+					url,
+					method: init?.method,
+					headers: new Headers(init?.headers),
+					body: JSON.parse(String(init?.body))
+				});
+				return jsonResponse(202, { request: 'r-1' });
+			})
+		);
+		const ack = await api.createSyncRequest(
+			{
+				source: 'TesGb',
+				target: 'Tpt',
+				disposition: 'migrate',
+				intent: 'draft',
+				resources: []
+			},
+			'r-1'
+		);
+		expect(seen[0].url).toBe('/v1/sync');
+		// A create that became a PUT would pass every other assertion here.
+		expect(seen[0].method).toBe('POST');
+		expect(seen[0].headers.get('idempotency-key')).toBe('r-1');
+		expect(seen[0].body).toEqual({
+			source: 'TesGb',
+			target: 'Tpt',
+			disposition: 'migrate',
+			intent: 'draft',
+			resources: []
+		});
+		expect(ack.request).toBe('r-1');
+	});
+
+	it('reads the request list from the collection, not from an id', async () => {
+		const seen: Array<{ url: string; method?: string }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({ url, method: init?.method });
+				return jsonResponse(200, { requests: [] });
+			})
+		);
+		const view = await api.syncRequests();
+		expect(seen[0].url).toBe('/v1/sync');
+		expect(seen[0].method ?? 'GET').toBe('GET');
+		expect(view.requests).toEqual([]);
+	});
+
 	it('allPages walks cursors until the server stops minting them', async () => {
 		const pages = [
 			{ rows: [1, 2], next_cursor: 'a' },

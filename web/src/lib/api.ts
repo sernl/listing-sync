@@ -291,6 +291,126 @@ export interface EventView {
 
 export type ItemDetail = ItemView & { events: EventView[] };
 
+/** The term counters one measurement against the canonical taxonomy produced.
+ *
+ *  Optional wherever it is carried, and absent and present-with-zeros are two
+ *  different facts: absent means nothing was measured there, and zeros mean a
+ *  measurement was taken and found nothing. A client that read the absent case
+ *  as zeros would state a measurement nobody took. Null and undefined are both
+ *  spellings of absent. */
+export interface SyncTermCoverage {
+	terms_seen: number;
+	terms_mapped: number;
+	terms_unmapped: number;
+	terms_uncovered: number;
+}
+
+/** The request's own coverage: the term counters summed across the resources
+ *  the server measured, and how many resources that sum is over.
+ *
+ *  Present exactly when the request's source is a device-branch marketplace,
+ *  carrying zeros for a catalogue that turned out to be empty; absent for a
+ *  sync, and for a migrate whose source runs on our own infrastructure. */
+export interface SyncCoverageView extends SyncTermCoverage {
+	rows: number;
+}
+
+/** Where a request stands. The set is closed by `sync_request_state` in
+ *  migration 0025, which is applied and frozen, so it is the database's own
+ *  vocabulary rather than a guess made here. */
+export type SyncRequestState = 'pending' | 'draining' | 'enqueued' | 'failed';
+
+/** Closed by `sync_request_resource_state` in the same migration. */
+export type SyncResourceState = 'pending' | 'canonicalised' | 'failed';
+
+/** One listing the request names, as the request last recorded it.
+ *
+ *  A resource the seller's device skipped arrives `failed` carrying the
+ *  device's own words in `failure_detail`, which are rendered verbatim: this
+ *  client never re-words a marketplace's or a device's refusal.
+ *
+ *  `coverage` is present only for a resource the server measured, so it is
+ *  absent on a skipped one and on every resource of a request that measures
+ *  nothing. It carries the term counters alone: the resource is the row, so a
+ *  row count on it would count itself. */
+export interface SyncResourceView {
+	ordinal: number;
+	locator: string;
+	state: SyncResourceState;
+	failure_detail: string | null;
+	coverage?: SyncTermCoverage | null;
+}
+
+/** A sync or migrate request as it fills.
+ *
+ *  `create_job` is null while nothing has been enqueued, and stays null when
+ *  the catalogue turned out to be empty. That is why an `enqueued` request
+ *  with no resources is a completed import of an empty shop rather than a
+ *  failure, and the two must never render alike.
+ *
+ *  `waiting_for_device_version` is present while no device this seller has
+ *  registered is new enough to run the work, and absent otherwise. */
+export interface SyncRequestView {
+	request: string;
+	source: InventoryId;
+	target: InventoryId;
+	disposition: string;
+	intent: string;
+	state: SyncRequestState;
+	failure_detail: string | null;
+	create_job: string | null;
+	remove_job: string | null;
+	resources: SyncResourceView[];
+	coverage?: SyncCoverageView | null;
+	waiting_for_device_version?: string | null;
+}
+
+/** One request as the list serves it: enough to name it, place it in time and
+ *  link to it, without the resource rows the detail view carries.
+ *
+ *  `resources_total` and `resources_failed` are counts rather than rows,
+ *  because the list exists so that a request created on one machine is
+ *  reachable from another, not so that it can be read in full from here. */
+export interface SyncRequestHead {
+	request: string;
+	source: InventoryId;
+	target: InventoryId;
+	disposition: string;
+	intent: string;
+	state: SyncRequestState;
+	created_at: number;
+	resources_total: number;
+	resources_failed: number;
+}
+
+/** Newest first, at most fifty. No cursor: the endpoint is bounded rather than
+ *  paginated, so a seller with more than fifty requests sees the newest fifty
+ *  and this client invents no way to ask for the rest. */
+export interface SyncRequestsView {
+	requests: SyncRequestHead[];
+}
+
+/** What the server answers a submit with: the request's identity, which is
+ *  the idempotency key it was sent under. */
+export interface SyncRequestAck {
+	request: string;
+}
+
+/** A submit.
+ *
+ *  `resources` is empty for a migrate whose source runs on the seller's own
+ *  device, and that is required rather than merely allowed: the device
+ *  enumerates the catalogue, so the server refuses such a migrate that names
+ *  resources as well as every other request that names none. There is no
+ *  separate request kind for it — the empty list is what says so. */
+export interface SyncRequestBody {
+	source: InventoryId;
+	target: InventoryId;
+	disposition: 'sync' | 'migrate';
+	intent: PublishIntent;
+	resources: string[];
+}
+
 /** What a surface knows about the seller's declaration for one marketplace.
  *
  *  Three states, and the third is this field being absent altogether. A seller
@@ -1205,6 +1325,21 @@ export const api = {
 			`/v1/jobs/${job}/items${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
 		),
 	item: (job: string, item: string) => request<ItemDetail>(`/v1/jobs/${job}/items/${item}`),
+
+	/** Ask for a sync or a migrate. The key is the request's own identity on the
+	 *  server rather than a deduplication token beside it, so a retried submit is
+	 *  the same request, and the key is what the request is read back by. */
+	createSyncRequest: (body: SyncRequestBody, idempotencyKey: string) =>
+		post<SyncRequestAck>('/v1/sync', body, { 'idempotency-key': idempotencyKey }),
+	/** One request as it fills. This is what the console watches between the
+	 *  submit and the ledger having a run to show. */
+	syncRequest: (id: string) => request<SyncRequestView>(`/v1/sync/${id}`),
+	/** Every request this organisation has made, newest first and bounded by
+	 *  the server. It is what makes a request created on one machine reachable
+	 *  from another and after a restart: a device-branch migrate mints no job
+	 *  while it is pending, so until it does there is nothing else in the
+	 *  console that names it. */
+	syncRequests: () => request<SyncRequestsView>('/v1/sync'),
 
 	/** The seller's own machines. Registration and heartbeat are the desktop
 	 *  client's calls, not the console's, so they are deliberately absent

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { JOB_EVENT_KINDS } from './generated/vocab';
 import { createLedger, type EventStream, type LedgerState } from './ledger';
 
 class FakeStream implements EventStream {
@@ -54,7 +55,28 @@ describe('the ledger store', () => {
 		expect(state().events).toEqual([]);
 	});
 
-	it('subscribes to every generated kind, the drain report included', () => {
+	// Two assertions doing two jobs, because the first alone is weaker than it
+	// looks. Comparing the handler keys against JOB_EVENT_KINDS cannot fail
+	// while `createLedger` derives its loop from that same constant: it catches
+	// the subscription being rewritten as a hand-kept list, and nothing else.
+	it('registers a listener for exactly resync, the connection signals and every generated kind', () => {
+		const { stream } = harness();
+		expect([...stream.handlers.keys()].sort()).toEqual(
+			['resync', 'open', 'error', ...JOB_EVENT_KINDS].sort()
+		);
+	});
+
+	// So the kinds the import screen's liveness actually depends on are named
+	// as literals, which the implementation cannot satisfy by construction. If
+	// a regeneration drops them from the vocabulary, the console stops hearing
+	// the events that move that page and nothing else would say so.
+	it('listens for the two import events the import screen depends on', () => {
+		const { stream } = harness();
+		expect(stream.handlers.has('ImportPageApplied')).toBe(true);
+		expect(stream.handlers.has('ImportCompleted')).toBe(true);
+	});
+
+	it('parses a generated event onto the state under its own kind', () => {
 		const { stream, state } = harness();
 		stream.fire(
 			'ImportDrainMeasured',
