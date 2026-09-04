@@ -124,7 +124,7 @@ A reconcile that finds the listing never settles ambiguous on the grounds that t
 
 `NotSent` is the only class that returns to a pre-submit state, because it is the only class where the request provably never left.
 
-An ambiguous submit on a create is the first of the rows whose effects are chosen so that the run stops rather than continues.
+An ambiguous submit on a create is three rows rather than one, and which of them applies is the strategy's to decide; only one of the three is chosen so that the run stops rather than continues.
 Under a marker strategy the search runs inside the same run, because a marker is embedded at submit time and is there to be found.
 Under the recorded-title strategy it does not: the listing sits in the marketplace's own processing queue for minutes after the submit, so a search run now answers a completed-and-absent `Ok(None)`, which this table settles ambiguous and halts the tenant's inventory on.
 So the machine records the identification in the locator, emits only `CaptureDiagnostics`, and steps to `Stranded`, a state no input carries forward; the interpreter maps it straight to an abandoned run, leaving the attempt in flight and the mapping fenced.
@@ -132,7 +132,7 @@ It is `Stranded` rather than `AwaitingReadBack` because no read was asked for, a
 The reaper parks the item on `awaiting_marketplace_answer` and a later claim reconciles it against the seller's own catalogue, by which time the marketplace has had time to answer.
 The recorded title is read from the machine's own `fields` here and only here: this is the run that rendered them, so they are the intent the submit actually sent, where `ResumeStranded` must carry the title on the input because its `fields` are a fresh projection of a product the seller may have renamed since.
 
-The other rows chosen that way are the create's challenge rows, and they are chosen that way for the same reason.
+The create's challenge rows are the same three-way branch, reached a different way and decided the same way.
 A challenge the seller cannot clear — a captcha, an interstitial, a firewall rule — does not prove the write did not land: an adapter may mint the listing and only then meet the edge on the read that follows, which is exactly what Tes does.
 So a create meeting one is a create of unknown fate, and it takes the same three rows an ambiguous submit takes, decided by what the strategy leaves behind rather than by how the fate became unknown.
 Under the recorded-title strategy it strands, and the halt this row used to raise was stopping a whole tenant's queue to prevent the second create that the standing attempt prevents by itself.

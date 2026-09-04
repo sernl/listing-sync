@@ -145,7 +145,8 @@ The three tests that pin those edges are `a_revoked_device_claims_nothing`, `a_f
 ## 5. Custody
 
 The line D1 draws is not the transport seam, which is a genuine single network door whose `HttpRequest` carries no header field, so no session material is representable there (`crates/tam-marketplace/src/transport.rs:293`).
-The line is which process composes and issues, and today five server binaries compose and issue requests to `SellerDevice` marketplaces under seller sessions: `tam-worker`, `tam-sync-worker`, `tam-analytics`, `tam-canary` and `tam-import`.
+The line is which process composes and issues, and when this was written five server binaries composed and issued requests to `SellerDevice` marketplaces under seller sessions: `tam-worker`, `tam-sync-worker`, `tam-analytics`, `tam-canary` and `tam-import`.
+Four as of 2026-09-04: `tam-worker` lost its Tes and TPT legs and now builds no adapter at all, and `tam-analytics` became a device-pulled read.
 Section 4 of the client-side note lists four of those five as staying server-bound, which contradicts D1 and needs correcting rather than leaving two documents disagreeing.
 
 The entitlement gate sits in two places in the loop, and one is not enough: the transition table emits at most one network-bearing effect per batch, so a per-effect check immediately before each is exact rather than conservative, beside `consume_write_grant` at `crates/tam-engine/src/driver.rs:595`, `:619` and `:653`, and at `AssertFormSchema` at `:547`.
@@ -550,6 +551,7 @@ Recommended: park the item on a gate naming the declaration, so the seller is as
 Two observations from the engine review, both pre-existing and neither addressed here.
 `Effect::Reconcile` draws no rate grant: `find_listing` enumerates the seller's catalogue, which is as much a marketplace request as the scrape now charged for, and it is unbilled.
 And `tam-worker` still builds a server-side TPT adapter, which is the branch D1 says should not exist — the device now carries the attestation that lets it write, so the worker's TPT leg is interim rather than needed.
+Closed 2026-09-04: both legs went with the item pump and the account-claim mode, and the crate keeps only the maintenance pass — the reaper, the park revive and the fleet breaker — with no adapter among its own edges.
 
 Step 14 does not complete the split.
 The broker deletion, the exclusivity-claim lift with its pepper re-sited off the vault key, the four crate dispositions of open question 3, and D1's structural build-failing test are all held until the desktop runs the driver against a live marketplace.
@@ -688,7 +690,7 @@ The decision step 16 recorded and did not take, taken.
 A captcha or a JavaScript interstitial arriving mid-create no longer halts the tenant's inventory; under `DraftThenPublish` it ends the run in `SyncState::Stranded` exactly as the ambiguous submit does, with the attempt held in flight as the duplicate-create fence, the reaper's third arm parking the item on `awaiting_marketplace_answer`, and the recorded-title reconcile finding it later.
 
 `ambiguous_submit` did not have to generalise and no shared path had to be extracted, which is the whole shape of the change.
-It already hands every case that is not a `DraftThenPublish` create straight to `reconcile`, so it was already the shared arm and `SyncMachine::challenged`'s create branch simply calls it instead of calling `reconcile` itself.
+`challenged` forwards only a create, and `ambiguous_submit` already hands a create that is not under `DraftThenPublish` straight to `reconcile`, so it was already the shared arm and that create branch simply calls it instead of calling `reconcile` itself.
 One line of production code moves.
 The consequences follow without further edits: the driver's `SyncState::Stranded` arm already answers `RunVerdict::Abandoned`, `expire_and_steal`'s third arm matches on the item's shape rather than on how it got there, and `claim_for_device`'s stranded predicate already admits the word the reaper writes.
 A marker strategy still searches inline, `HaltOnAmbiguity` still halts, a revise and a removal still settle `Blocked`, and a create whose recorded intent names no title still halts — that last kept deliberately, because there the standing attempt is the only thing holding the mapping and no later run would ever come to settle it.
@@ -724,7 +726,11 @@ The floors are untouched and every count is still well above them.
 
 1. Restate the Phase 1 verification as port conformance over two ledger implementations. Recommended: yes, because the current wording is unrunnable and the phase would otherwise ship without evidence.
 2. Re-scope the live-lease mutex from the organisation to the connection. Recommended: yes, because the form-token race it protects against is per marketplace session and D14 grants several devices; this changes `JOBS_PER_TENANT`, which is founder-gated.
-3. Record a disposition for `tam-analytics`, `tam-sync-worker`'s Tes read leg, `tam-canary` and `tam-import`, and correct the client-side note's keep-list. Recommended: the analytics capture becomes a device-pulled read item, the Tes read leg moves to the device and the crate keeps its enqueue half, `tam-canary` becomes a founder-run desktop command, and `tam-import` is restricted to manifest bytes or routed the same way.
+3. Record a disposition for `tam-analytics`, `tam-sync-worker`'s Tes read leg, `tam-canary` and `tam-import`, and correct the client-side note's keep-list.
+   `tam-analytics` landed 2026-09-04, as a device-pulled read rather than an `ItemOperation`: an analytics capture has no mapping, no attempt and no terminal outcome, so putting it through the job machine would run a row past invariants that are all about writes.
+   The capture library keeps no database edge — `sqlx` and `tam-storage` are optional behind a `server` feature the binary requires, and `tam-marketplace-tpt` defaults off so the reqwest transport it never builds stays out of every client target — and `just purity` and `check-portable` now cover the crate, so a future non-optional edge fails the build rather than being noticed later.
+   The two routes are `GET` and `POST /{version}/devices/{device}/reads`, gated on a connected session and a standing entitlement at `tam_domain::ENTITLEMENT_GRACE_HOURS`, the same grace the work claim applies.
+   The remaining three are unchanged here: `tam-sync-worker` and `tam-import` moved to the migration-file-routing note's scope, and `tam-canary` stays its own item, since it reaches Tes from a cookie jar rather than through the broker and the deletion neither fixes nor breaks it. Recommended: the analytics capture becomes a device-pulled read item, the Tes read leg moves to the device and the crate keeps its enqueue half, `tam-canary` becomes a founder-run desktop command, and `tam-import` is restricted to manifest bytes or routed the same way.
 4. Enable `blake3`'s `pure` feature so `tam-pipeline` cross-compiles, and state whether the interim arrangement is server-held bytes streamed at upload time or full client-side ingest. Recommended: enable it in Phase 1 rather than discovering it in Phase 2, and state client-side ingest as the target with server-held bytes as the interim.
 5. Decide whether the rate grant is issued in bulk at claim time and whether consumption moves into the transport seam. Recommended: bulk grant at claim time with reported consumption in the settle envelope, and move consumption into the seam, because the marketplace now sees the seller's own address.
 6. Decide whether `HaltScope::Org` and `HaltScope::FleetInventory` leave the effect vocabulary. Recommended: yes, narrow the enum in `tam-domain` so the driver's match cannot name a scope wider than its lease, leaving the breaker and the canary as the only fleet-halt writers.
@@ -766,7 +772,7 @@ Severity is B blocking, S should-fix, D design-input, N nit; every blocking and 
 | 21 | Every ledger timestamp the driver writes comes from the local `NowSource` | `crates/tam-engine/src/driver.rs:382` | S |
 | 22 | Admission is checked once in `prepare_item` and never re-checked when the attempt opens | `crates/tam-storage/src/jobs.rs:1481`, `crates/tam-engine/src/seed.rs:197` | S |
 | 23 | A create parked on `ReauthRequired` is reachable by no reaper and stays parked | `crates/tam-storage/src/jobs.rs:1209` | S |
-| 24 | The claim TTL is a fixed 300 seconds with no renewal primitive, against a marginal budget | `crates/tam-worker/src/main.rs:81` | S |
+| 24 | The claim TTL is a fixed 300 seconds with no renewal primitive, against a marginal budget | closed by step 11's renewable leases; the cited server-side code is gone, and the live caller is the desktop's `acquire` under `LEASE_TTL_SECS` | S |
 | 25 | Nothing emits `ItemLeased`, so progress cannot name the device doing the work | `crates/tam-types/src/lib.rs:716` | S |
 | 26 | The authorship attestation reaches no ledger row, and its only writer is in the deleted crate | `crates/tam-engine/src/driver.rs:168`, `crates/tam-session-broker/src/vault.rs:234` | S |
 | 27 | `TransportClass` is decorative: nothing fails the build when a no-API marketplace gains a server transport | `crates/tam-types/src/lib.rs:125` | S |
@@ -792,7 +798,7 @@ Severity is B blocking, S should-fix, D design-input, N nit; every blocking and 
 | 47 | The gateway route allow-lists become signed client data with refusals reported as ledger events | `crates/tam-session-broker/src/gateway.rs:46` | D |
 | 48 | Device-side ledger writes would be attributed to `engine` and dated by the seller's clock | `crates/tam-types/src/actor.rs:19` | D |
 | 49 | `tam-pipeline` cannot cross-compile today, which gates D27's client-side ingest | `justfile:55` | D |
-| 50 | The worker's docstring claims a jittered poll the code does not implement | `crates/tam-worker/src/main.rs:3` | N |
+| 50 | The worker's docstring claims a jittered poll the code does not implement | closed 2026-09-04: the docstring says fixed interval, which is what `run_maintenance` does | N |
 | 51 | The reauth notification dedupe key is per item and event, so a seller is told once and never again | `crates/tam-engine/src/driver.rs:1365` | N |
 | 52 | A compile-time no-op exists only to silence an unused-import warning | `crates/tam-engine/src/driver.rs:1376` | N |
 
