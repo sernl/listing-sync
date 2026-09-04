@@ -52,6 +52,7 @@ pub mod scheduler;
 pub mod session;
 pub mod startup;
 pub mod state;
+pub mod updater;
 pub mod webview_session;
 pub mod work;
 
@@ -160,8 +161,21 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 payload::sweep(&sweep_dir).await.ok();
             });
+            // One task rather than two, because the order is the guarantee.
+            // Installing an update ends the process — on Windows from inside
+            // the install itself (tauri-plugin-updater 2.11.0,
+            // `src/updater.rs:876`) — so it has to happen before the schedule
+            // claims any work rather than during a marketplace request. The
+            // check is bounded, so an unreachable endpoint delays the first
+            // cycle by `updater::CHECK_TIMEOUT` and no more.
             #[cfg(desktop)]
-            tauri::async_runtime::spawn(run_schedule(app.handle().clone(), work));
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    updater::check_at_startup(&handle).await;
+                    run_schedule(handle, work).await;
+                });
+            }
             #[cfg(mobile)]
             tauri::async_runtime::spawn(run_schedule(
                 app.handle().clone(),
