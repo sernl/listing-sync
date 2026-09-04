@@ -882,8 +882,18 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
 
     /// The seller's own files for a published resource: the bytes of the
     /// bundle Tes assembles. Two steps — the manifest names the bundle, then
-    /// the bundle is fetched, the upstream's 302 to the signed CDN url being
-    /// followed by the transport, so what arrives here is the ZIP itself.
+    /// the bundle is fetched — and the second step answers a 302 to a signed
+    /// CDN url on another host.
+    ///
+    /// Whether that hop is followed is the transport's to decide, and the two
+    /// this crate ships decide differently. The broker gateway followed it and
+    /// returned the ZIP, which is what this comment used to describe as though
+    /// it were the only case. The live transport on the seller's own device
+    /// does not: its session client stops at a host change so the rule about
+    /// which client may carry what survives a destination the marketplace
+    /// chose, and the hop comes back here as the 3xx it is. Re-issuing it on
+    /// the credential-free client is not built, so over that transport this
+    /// refuses by name rather than returning bytes.
     ///
     /// Published-only by construction. A draft has no bundle, and that is
     /// reported as a rejection naming the cause rather than as an ambiguity,
@@ -924,6 +934,25 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             },
         })?;
         let bundle = self.send(endpoints::download_bundle_request(&path)).await?;
+        // The bundle hop answers a 302 to a signed CDN url on another host,
+        // and the live transport declines to follow it so the seller's session
+        // cookie cannot travel there. Named here rather than left to the
+        // classifier's catch-all, which would make it `Ambiguous` — and an
+        // ambiguous read is the arm that halts a tenant's inventory and waits
+        // for an operator. A declined hop is an expected, permanent condition
+        // until the re-issue on the credential-free client is built, so it
+        // must read as the refusal it is.
+        if (300..400).contains(&bundle.status) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(format!(
+                    "the bundle for resource {} redirects off this origin, and the hop is not \
+                     followed because it would carry the seller's session to another host; \
+                     re-issuing it without the session is not built yet",
+                    id.0
+                )),
+            });
+        }
         classify_read_bytes(&bundle).map(<[u8]>::to_vec)
     }
 

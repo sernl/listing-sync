@@ -895,10 +895,15 @@ impl core::error::Error for DownloadManifestError {}
 /// Recovers the bundle path from a download manifest, which keys `zipUrls`
 /// by the resource id as a string.
 ///
-/// The returned path must be origin-relative. An absolute url would skip the
-/// transport's rebasing onto the broker's leased endpoint and so escape the
-/// gateway's allow-list entirely, which is the one thing keeping a lease
-/// unable to reach anything but these routes.
+/// The returned path must be origin-relative, and the reason has changed
+/// rather than expired. It was written for the broker's leased gateway, where
+/// an absolute url would skip the transport's rebasing and escape the
+/// allow-list; with the download on the seller's own device there is no
+/// gateway to escape. What the rule does now is keep the first hop on the
+/// session host, so the one request that carries the seller's cookie is one
+/// this crate composed rather than one the marketplace named. Where the
+/// bundle really lives is then the redirect's business, and the redirect is
+/// followed — if at all — by a client carrying nothing.
 pub fn parse_download_manifest(body: &Value, id: DraftId) -> Result<String, DownloadManifestError> {
     let url = body
         .get("zipUrls")

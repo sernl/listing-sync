@@ -77,6 +77,49 @@ impl Default for ExtractBudget {
     }
 }
 
+/// The one entry this archive holds, if it holds exactly one.
+///
+/// `None` for an archive holding none or several, and for anything that is not
+/// a readable archive at all. The three are one answer on purpose: the caller
+/// asking this question has a fallback for all of them — use the archive as it
+/// stands — and distinguishing them would invite a caller to act on a
+/// difference it has no use for.
+///
+/// Mechanics rather than policy. What a caller does with a one-entry archive
+/// is the caller's: a cross-listing upload unwraps it because the target's
+/// product slot takes one file and a buyer expects the document rather than a
+/// zip wrapping it, and that reasoning does not belong here.
+pub fn sole_entry(bundle: &[u8], budget: ExtractBudget) -> Option<ExtractedEntry> {
+    // The count comes from the central directory, before anything is
+    // decompressed. A fifty-file bundle is then rejected for the price of its
+    // index rather than for the price of its contents, which is the difference
+    // between reading a header and inflating hundreds of megabytes to throw
+    // them away. Directory entries are skipped here exactly as `extract` skips
+    // them, or an archive holding one file inside one folder would be counted
+    // as two and refused.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bundle)).ok()?;
+    let mut files = 0usize;
+    for index in 0..archive.len() {
+        if !archive.by_index(index).ok()?.is_dir() {
+            files += 1;
+            if files > 1 {
+                return None;
+            }
+        }
+    }
+    if files != 1 {
+        return None;
+    }
+    // Exactly one file entry, so `extract` inflates exactly it, under every
+    // rail it applies to any other archive: the symlink refusal, the enclosed
+    // name, the budget and the ratio.
+    let entries = extract(std::io::Cursor::new(bundle), budget).ok()?;
+    match <[ExtractedEntry; 1]>::try_from(entries) {
+        Ok([only]) => Some(only),
+        Err(_) => None,
+    }
+}
+
 /// Extracts every file entry into memory under the budget. Directory entries
 /// are skipped; symlink and traversal entries are hard errors, not skips,
 /// because a hostile archive should fail loudly rather than partially.
@@ -152,7 +195,7 @@ pub fn extract<R: Read + std::io::Seek>(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract, ArchiveError, ExtractBudget};
+    use super::{extract, sole_entry, ArchiveError, ExtractBudget};
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
 
@@ -167,6 +210,40 @@ mod tests {
         }
         writer.finish().expect("finish archive");
         buffer.into_inner()
+    }
+
+    #[test]
+    fn the_sole_entry_is_answered_only_when_there_is_exactly_one() {
+        let one = zip_with(&[("worksheet.pdf", b"%PDF-1.7 the only file")]);
+        let only = sole_entry(&one, ExtractBudget::default()).expect("one entry is answered");
+        assert_eq!(only.path, "worksheet.pdf");
+        assert_eq!(only.bytes, b"%PDF-1.7 the only file");
+
+        assert!(
+            sole_entry(
+                &zip_with(&[("a.pdf", b"alpha"), ("b.pdf", b"bravo")]),
+                ExtractBudget::default()
+            )
+            .is_none(),
+            "two entries are not one, and a caller must use the archive as it stands"
+        );
+        assert!(
+            sole_entry(&zip_with(&[]), ExtractBudget::default()).is_none(),
+            "an empty archive holds no sole entry"
+        );
+
+        // The count and the extraction must agree about what an entry is, and
+        // a directory is where they would diverge: counting one would refuse
+        // an archive `extract` reduces to a single file.
+        let foldered = zip_with(&[("pack/", b""), ("pack/worksheet.pdf", b"%PDF-1.7 inside")]);
+        let only = sole_entry(&foldered, ExtractBudget::default())
+            .expect("one file inside one folder is still one file");
+        assert_eq!(only.path, "pack/worksheet.pdf");
+        assert!(
+            sole_entry(b"%PDF-1.7 not an archive at all", ExtractBudget::default()).is_none(),
+            "a thing that is not an archive is not one holding a single entry, and answering \
+             None rather than an error is what lets a caller treat all three the same way"
+        );
     }
 
     #[test]

@@ -2,34 +2,40 @@
 //!
 //! Decision D27 puts file ingest on the seller's device: if the upload is
 //! itself a marketplace request that must originate here, the bytes must be
-//! here at upload time. That is the target. What holds today is the interim —
-//! the catalogue's files were ingested through `POST /v1/uploads` and live in
-//! our object store — so the device fetches them back from the control plane
-//! for the duration of one run and keeps nothing afterwards.
+//! here at upload time. Two things can be true of a file, and
+//! [`PayloadSource`] is which. Either the bytes are ours — ingested through
+//! `POST /v1/uploads` and living in our object store, so the device fetches
+//! them back from the control plane for the duration of one run — or they are
+//! the seller's, held by the marketplace they sell on, and the device fetches
+//! them from there under the seller's own session. The first is the older
+//! arrangement and is what a hand-uploaded file still uses; the second is what
+//! D27 is for.
 //!
-//! Three rules make the interim safe to hold while it lasts.
+//! So this module does reach a marketplace, through a
+//! [`MarketplaceFiles`] implementation handed to it by the caller that holds
+//! the seller's sessions. It composes no marketplace request itself and knows
+//! no marketplace's wire: it names a resource and receives bytes. That
+//! division is the two-branch rule holding at this seam rather than an
+//! accident of layering, and the request it causes is issued on the seller's
+//! own device under the seller's own login, which is what D1 requires.
 //!
-//! The digest is checked against the manifest the work envelope carried, not
-//! against anything the response said about itself. A response that restates
-//! its own digest proves nothing; a digest the server committed to before the
-//! transfer proves the transfer. The manifest is the driver crate's
-//! [`PayloadManifest`], so server and device read one definition of what was
-//! committed to.
-//!
-//! Which of those two things a manifest carries is [`PayloadSource`]'s to say,
-//! and this module fetches only the arm it names as ours. A manifest naming a
-//! marketplace is the seller's bytes held by the marketplace, fetched under
-//! the seller's own session by a source this module does not build.
+//! What a transfer is checked against depends on who committed to it, and the
+//! manifest says. A response that restates its own digest proves nothing; a
+//! digest committed to before the transfer proves the transfer. Our own arm
+//! always carries one. A marketplace-held file carries one only after some
+//! run has observed it, and on a first observation there is nothing to check
+//! against and none is invented — see [`checked`]. The manifest is the driver
+//! crate's [`PayloadManifest`], so server and device read one definition of
+//! what was committed to.
 //!
 //! The bytes live in one directory per item under the application data
 //! directory, and [`DevicePayloads::discard`] removes that directory once the
 //! item settles. [`DevicePayloads`] also removes it on drop, so a run that
 //! ended by an error rather than by a settle leaves nothing, and
-//! [`sweep`] removes what a killed process could not.
-//!
-//! Nothing here reaches a marketplace. The one host this module speaks to is
-//! ours, through the same control-plane seam and under the same console
-//! session as the check-in.
+//! [`sweep`] removes what a killed process could not. That promise is
+//! unchanged by where the bytes came from, and it matters more for the
+//! seller's own files than for ours: a copy we already hold is not made more
+//! private by being deleted here, and a copy of the seller's is.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -100,6 +106,19 @@ pub enum PayloadError {
     /// server's to hold, so an order naming one here would be asking this
     /// device to stand in for the API branch.
     UnsupportedSource { file: FileId, origin: Marketplace },
+    /// The marketplace holding the bytes did not hand them over.
+    ///
+    /// Distinct from [`Self::Plane`] because the seller acts on it
+    /// differently: our control plane being unreachable is ours to fix, and a
+    /// marketplace refusing the seller's own session is a login for them to
+    /// renew. It carries the marketplace's own sentence rather than a code,
+    /// because the run ends the same way whatever the cause and what the
+    /// seller needs is what happened.
+    Source {
+        file: FileId,
+        origin: Marketplace,
+        detail: String,
+    },
     /// The cache directory could not be written or read.
     Cache(String),
 }
@@ -133,12 +152,41 @@ impl core::fmt::Display for PayloadError {
                  plane holds",
                 file.0.to_hyphenated()
             ),
+            Self::Source {
+                file,
+                origin,
+                detail,
+            } => write!(
+                f,
+                "{origin:?} did not hand over file {}: {detail}",
+                file.0.to_hyphenated()
+            ),
             Self::Cache(why) => write!(f, "the payload cache is unusable: {why}"),
         }
     }
 }
 
 impl core::error::Error for PayloadError {}
+
+/// One read of the seller's own bytes from a marketplace, under the seller's
+/// own session.
+///
+/// A trait object rather than a second type parameter on [`DevicePayloads`],
+/// so the seven call sites of [`DevicePayloads::for_item`] keep one signature
+/// and the marketplace half is attached by [`DevicePayloads::sourcing`] where
+/// a run has one. The implementation lives beside the adapters in `work.rs`,
+/// because it is the only place holding the seller's marketplace sessions.
+///
+/// The error is a string because the caller cannot act on its structure: an
+/// unreachable marketplace, a refused session and a bundle that will not parse
+/// all end this run the same way, and what the seller needs is the sentence.
+pub trait MarketplaceFiles: Send + Sync {
+    fn fetch<'a>(
+        &'a self,
+        marketplace: Marketplace,
+        resource: &'a str,
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<u8>, String>> + Send + 'a>>;
+}
 
 /// The [`FileSource`] the adapters upload through on this device.
 ///
@@ -147,6 +195,9 @@ impl core::error::Error for PayloadError {}
 pub struct DevicePayloads<T: PayloadTransport> {
     device: DeviceId,
     transport: T,
+    /// The seller's own marketplace sessions, where this run has any. `None`
+    /// is a run whose every file is ours, which needs no marketplace at all.
+    marketplace: Option<std::sync::Arc<dyn MarketplaceFiles>>,
     manifests: HashMap<FileId, PayloadManifest>,
     directory: PathBuf,
 }
@@ -157,6 +208,7 @@ impl<T: PayloadTransport> core::fmt::Debug for DevicePayloads<T> {
             .field("device", &self.device)
             .field("files", &self.manifests.len())
             .field("directory", &self.directory)
+            .field("marketplace_source", &self.marketplace.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -180,12 +232,25 @@ impl<T: PayloadTransport> DevicePayloads<T> {
         Self {
             device,
             transport,
+            marketplace: None,
             manifests: manifests
                 .into_iter()
                 .map(|manifest| (manifest.file, manifest))
                 .collect(),
             directory,
         }
+    }
+
+    /// Attaches the seller's own marketplace sessions to this run.
+    ///
+    /// A builder rather than a sixth argument to [`Self::for_item`], so a run
+    /// whose files are all ours reads exactly as it did before this existed;
+    /// it is the same shape `TptAdapter::attesting` uses for the declaration a
+    /// write may or may not need.
+    #[must_use]
+    pub fn sourcing(mut self, files: std::sync::Arc<dyn MarketplaceFiles>) -> Self {
+        self.marketplace = Some(files);
+        self
     }
 
     /// The directory this run's bytes live in.
@@ -214,30 +279,51 @@ impl<T: PayloadTransport> DevicePayloads<T> {
     }
 
     async fn load(&self, manifest: &PayloadManifest) -> Result<Vec<u8>, PayloadError> {
-        // The source decides before anything is read, so a manifest this
-        // source cannot serve costs no cache read and no request.
-        let committed = match &manifest.source {
-            PayloadSource::ControlPlane { committed } => committed,
-            PayloadSource::Marketplace { marketplace, .. } => {
-                return Err(PayloadError::UnsupportedSource {
-                    file: manifest.file,
-                    origin: *marketplace,
-                })
-            }
-        };
+        // The cache is consulted before the source is, because a second read
+        // of one file in one run must not be a second transfer whichever end
+        // holds the bytes. What a cache hit is checked against is the same
+        // question the source decides below, so the check travels with it.
         let cached = self.path_for(manifest.file);
         match tokio::fs::read(&cached).await {
-            Ok(bytes) => return verified(manifest.file, committed, bytes),
+            Ok(bytes) => return checked(manifest, bytes),
             Err(why) if why.kind() == std::io::ErrorKind::NotFound => {}
             Err(why) => return Err(PayloadError::Cache(why.to_string())),
         }
 
-        let bytes = self
-            .transport
-            .fetch(&payload_path(&self.device, manifest.file))
-            .await
-            .map_err(PayloadError::Plane)?;
-        let bytes = verified(manifest.file, committed, bytes)?;
+        let bytes = match &manifest.source {
+            PayloadSource::ControlPlane { .. } => self
+                .transport
+                .fetch(&payload_path(&self.device, manifest.file))
+                .await
+                .map_err(PayloadError::Plane)?,
+            PayloadSource::Marketplace {
+                marketplace,
+                resource,
+                ..
+            } => {
+                let files = self
+                    .marketplace
+                    .as_ref()
+                    .ok_or(PayloadError::UnsupportedSource {
+                        file: manifest.file,
+                        origin: *marketplace,
+                    })?;
+                let bundle = files
+                    .fetch(*marketplace, resource)
+                    .await
+                    .map_err(|detail| PayloadError::Source {
+                        file: manifest.file,
+                        origin: *marketplace,
+                        detail,
+                    })?;
+                // The marketplace hands over a bundle; what the target's one
+                // product slot takes is a file. The rule is decided here, on
+                // the bytes, rather than recorded at import, because it never
+                // changes the file count and so cannot move the projection.
+                unwrapped(bundle)
+            }
+        };
+        let bytes = checked(manifest, bytes)?;
 
         tokio::fs::create_dir_all(&self.directory)
             .await
@@ -246,6 +332,42 @@ impl<T: PayloadTransport> DevicePayloads<T> {
             .await
             .map_err(|why| PayloadError::Cache(why.to_string()))?;
         Ok(bytes)
+    }
+}
+
+/// The bytes, checked against whatever this manifest committed to.
+///
+/// A manifest with no commitment is the first observation of a
+/// marketplace-held file, and there is nothing to check it against: the server
+/// holds no copy and so committed to nothing. The bytes are returned rather
+/// than verified, and that is the honest state until the import pass records
+/// an observation for the next run to check. Nothing substitutes for the
+/// missing commitment, because a check against a value invented here would
+/// assert a guarantee nobody made.
+fn checked(manifest: &PayloadManifest, bytes: Vec<u8>) -> Result<Vec<u8>, PayloadError> {
+    match manifest.committed() {
+        Some(committed) => verified(manifest.file, committed, bytes),
+        None => Ok(bytes),
+    }
+}
+
+/// A bundle reduced to the one file it holds, or left whole.
+///
+/// The target's product slot takes exactly one file, so a bundle of several is
+/// sent as the bundle — which is also what the source marketplace's own buyers
+/// receive. A bundle of one is sent as that one file instead, because a buyer
+/// expects the worksheet rather than a zip wrapping the worksheet.
+///
+/// Anything that is not a readable archive is left exactly as it arrived. This
+/// function's job is to unwrap a bundle, and a thing it cannot read is not a
+/// bundle it should be guessing about.
+fn unwrapped(bundle: Vec<u8>) -> Vec<u8> {
+    match tam_pipeline::archive::sole_entry(
+        &bundle,
+        tam_pipeline::archive::ExtractBudget::default(),
+    ) {
+        Some(only) => only.bytes,
+        None => bundle,
     }
 }
 
@@ -348,11 +470,13 @@ pub async fn sweep(data_dir: &Path) -> Result<(), PayloadError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        payload_path, segment, sweep, DevicePayloads, PayloadManifest, PayloadTransport, CACHE_DIR,
+        payload_path, segment, sweep, unwrapped, DevicePayloads, MarketplaceFiles, PayloadManifest,
+        PayloadTransport, CACHE_DIR,
     };
     use crate::device::DeviceId;
     use crate::heartbeat::{ControlPlaneError, PlaneFuture};
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use tam_engine_driver::vocabulary::{Committed, PayloadSource};
     use tam_marketplace::{FileSource, FileSourceError};
     use tam_types::{ContentHash, FileId, Marketplace, Uuid};
@@ -483,6 +607,161 @@ mod tests {
 
         drop(source);
         std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// A marketplace that hands back whatever it was given, recording what it
+    /// was asked for.
+    struct FakeMarketplace {
+        answer: Result<Vec<u8>, String>,
+        asked: Mutex<Vec<(Marketplace, String)>>,
+    }
+
+    impl FakeMarketplace {
+        fn answering(bytes: Vec<u8>) -> Arc<Self> {
+            Arc::new(Self {
+                answer: Ok(bytes),
+                asked: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn refusing(why: &str) -> Arc<Self> {
+            Arc::new(Self {
+                answer: Err(why.to_owned()),
+                asked: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    impl MarketplaceFiles for FakeMarketplace {
+        fn fetch<'a>(
+            &'a self,
+            marketplace: Marketplace,
+            resource: &'a str,
+        ) -> core::pin::Pin<
+            Box<dyn core::future::Future<Output = Result<Vec<u8>, String>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                self.asked
+                    .lock()
+                    .await
+                    .push((marketplace, resource.to_owned()));
+                self.answer.clone()
+            })
+        }
+    }
+
+    /// The bytes come from the marketplace holding them, under the seller's
+    /// own session, and never from us.
+    ///
+    /// The second assertion is the decision's own property: our control plane
+    /// is asked for nothing, because these are bytes we do not have and must
+    /// not have.
+    #[tokio::test]
+    async fn a_marketplace_sourced_file_is_fetched_from_the_marketplace_and_not_from_us() {
+        let data_dir = scratch();
+        let id = file(3);
+        let market = FakeMarketplace::answering(BYTES.to_vec());
+        // Method-call syntax rather than `Arc::clone`, which would resolve its
+        // own type parameter against the concrete type and refuse the unsizing
+        // coercion; the same note sits on the two bindings in `lib.rs`.
+        let files: Arc<dyn MarketplaceFiles> = market.clone();
+        let source = payloads(
+            &data_dir,
+            FakePlane::answering(b"our copy, which must never be reached"),
+            vec![marketplace_manifest(id)],
+        )
+        .sourcing(files);
+
+        let got = source.fetch(id).await.expect("the seller's own bytes");
+        assert_eq!(got.bytes, BYTES, "the marketplace's bytes, unchanged");
+        assert_eq!(
+            market.asked.lock().await.as_slice(),
+            [(Marketplace::Tes, "13549126".to_owned())],
+            "asked the marketplace the manifest named, for the resource it named"
+        );
+        assert!(
+            source.transport.asked().await.is_empty(),
+            "our control plane is asked for nothing: these are the seller's bytes and D27 is \
+             that we never hold them"
+        );
+
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// A first observation has nothing to check against, and says so by
+    /// accepting rather than by inventing a value to check.
+    #[tokio::test]
+    async fn a_first_observation_is_accepted_because_nobody_committed_to_it() {
+        let data_dir = scratch();
+        let id = file(4);
+        // Bytes that would fail any check, which is the point: with no
+        // commitment there is no check to fail.
+        let market = FakeMarketplace::answering(b"whatever the marketplace had".to_vec());
+        let source = payloads(
+            &data_dir,
+            FakePlane::default(),
+            vec![marketplace_manifest(id)],
+        )
+        .sourcing(market);
+
+        let got = source
+            .fetch(id)
+            .await
+            .expect("an uncommitted observation is not a failure");
+        assert_eq!(got.bytes, b"whatever the marketplace had");
+
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// A marketplace that will not hand the file over is named as itself.
+    ///
+    /// It must not read as our control plane failing: the seller renews a
+    /// login for one and waits for us on the other.
+    #[tokio::test]
+    async fn a_marketplace_that_refuses_is_named_rather_than_read_as_our_own_failure() {
+        let data_dir = scratch();
+        let id = file(5);
+        let market = FakeMarketplace::refusing("the session has expired");
+        let source = payloads(
+            &data_dir,
+            FakePlane::default(),
+            vec![marketplace_manifest(id)],
+        )
+        .sourcing(market);
+
+        let why = source.fetch(id).await.expect_err("a refusal is not bytes");
+        let FileSourceError::Unreadable { detail, .. } = why else {
+            panic!("a marketplace refusal is unreadable content, not a missing file");
+        };
+        assert!(
+            detail.contains("Tes") && detail.contains("the session has expired"),
+            "the refusal names the marketplace and carries its own sentence: {detail}"
+        );
+
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// The unwrap's policy half. Its mechanics — what "exactly one entry"
+    /// means — are `tam_pipeline::archive::sole_entry`'s and are tested there
+    /// against real archives; what belongs here is that anything the archive
+    /// reader cannot reduce to one file is uploaded exactly as it arrived,
+    /// because the alternative is this device inventing a payload.
+    #[test]
+    fn bytes_that_are_not_a_single_file_archive_are_left_exactly_as_they_arrived() {
+        assert_eq!(
+            unwrapped(BYTES.to_vec()),
+            BYTES,
+            "a file that is not an archive is the payload, untouched"
+        );
+        assert_eq!(
+            unwrapped(b"PK\x03\x04 truncated".to_vec()),
+            b"PK\x03\x04 truncated",
+            "something claiming to be an archive but unreadable is passed through rather than \
+             guessed at"
+        );
     }
 
     /// The source arm decides before anything is read.

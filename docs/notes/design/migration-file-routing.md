@@ -3,7 +3,7 @@
 How a seller's Tes catalogue reaches TeachersPayTeachers with no file upload by the seller, and where the bytes are at every moment.
 
 - date: 2026-09-04
-- status: design accepted as the plan of record; S1 and the redirect fix are being built, S3 and S4 wait on the founder decisions in the last section
+- status: design accepted as the plan of record. S1, the redirect fix and S2 are built; S3 and S4 are unblocked. Every founder decision in the last section is taken: Q-c to Q-h adopted by silence on 2026-09-04, Q-a and Q-b decided on 2026-09-04
 - decisions it implements: D1 (the seller's device is the only thing that opens a connection to a no-API marketplace), D27 (file ingest moves to the device so the bytes are on the seller's machine at upload time and never on our servers)
 - what it continues: `desktop-data-plane.md`'s interim payload fetch, which this ends; `engine-driver-split.md` steps 10a, 10b, 14 and 15; `tpt-vocabulary-rebase.md`, whose mapping work this consumes unchanged
 
@@ -85,7 +85,8 @@ A second device reporting a different hash for the same resource is a recorded d
 
 `DevicePayloads` (`apps/desktop/src-tauri/src/payload.rs`) keeps its whole shape.
 The per-item directory under the application data directory, the length-then-digest check in `verified`, `discard` on settle, the `Drop` backstop for a run that ended by an error, and `sweep` at start-up for a process that was killed are all unchanged and all still the reason the promise "nothing is kept" holds.
-Only `load` forks on the source: `ControlPlane` keeps `payload_path` over the control plane, and `Marketplace` drives the Tes adapter under the seller's own session, applies the unwrap rule below, and then runs the same `verified` against the manifest.
+Only `load` forks on the source: `ControlPlane` keeps `payload_path` over the control plane, and `Marketplace` drives the Tes adapter under the seller's own session and applies the unwrap rule below.
+Whether what arrives is then checked is the manifest's to say rather than the fetch's: `checked` verifies against a commitment where one exists and returns the bytes where none does, so the uncommitted first observation is visible in the code as the absence it is rather than hidden behind a check against an invented value.
 
 `desktop-data-plane.md` says the interim ends with this endpoint and this cache deleted rather than optimised.
 That is half right and the correction belongs here.
@@ -93,25 +94,37 @@ The route survives for files a seller uploaded by hand and becomes the minority 
 
 One structural change follows and is not optional.
 `DevicePayloads` today holds one transport to our control plane, built in `DeviceWork::execute`.
-A marketplace-backed source needs the seller's `SessionTransport`, which exists only inside `LiveMarketplaces::drive`'s per-marketplace arm, so the file source moves into that arm.
-The consequence is that a TPT run needs a Tes session, which is architecturally fine because both are the seller's and both are on the seller's own device, but it has two gate consequences.
-The tick's four refusals gain a fifth, the source marketplace's session, checked before the claim so a missing Tes login costs a refusal rather than a lease expiry.
-And the entitlement grant for the source marketplace must also stand, because the run makes a request to it and the kill switch has to be able to stop that.
+A marketplace-backed source needs the seller's `SessionTransport`, which only `LiveMarketplaces` can build, because only it holds the session store.
+The consequence is that a TPT run builds a Tes session, which is architecturally fine because both are the seller's and both are on the seller's own device, and it is stated at the point it happens rather than left to be discovered.
 
-### The redirect, which is the one real hazard
+Where the resulting refusal lives was got wrong in this note's first draft, and the correction is worth keeping visible because the reasoning generalises.
+The draft said the tick's four refusals gain a fifth, the source marketplace's session, checked before the claim so that a missing login costs a refusal rather than a lease expiry.
+That is not achievable.
+The scheduler decides per marketplace before the work source is touched at all — which is the whole of that gate and is right — but which marketplace holds an item's *files* is knowable only from the order the claim returns, so the question cannot be asked before the claim exists.
+The refusal therefore sits in `DeviceWork::execute`, after the claim and before anything is composed, and it costs a lease expiry.
+That cost is not novel: the inventory-mismatch refusal already beside it pays exactly the same price, and `desktop-data-plane.md` records that paying it is what makes serving a server-side filter worth doing.
+The server-side claim predicate is what removes the cost, using `DeviceRepo::holds_connected_session`, which already exists; it lands separately from the device half.
+Both halves of the question are asked there — the session and the entitlement — because fetching the seller's own file is a request to that marketplace, so a revoked grant on the source must stop the run even when the marketplace being written to is entitled.
 
-`crates/tam-marketplace-tes/src/live.rs` puts the seller's cookie in `default_headers` on the session client, and the module's own first three lines say default headers apply to every host a client reaches.
-The client is built with reqwest's default redirect policy, so the bundle request's 302 to CloudFront is followed with the seller's Tes cookie attached.
-The host assertion in `route` (`live.rs:105`) and the one in `SessionTransport::send` each run once, against the initial url, and neither runs again on the redirect.
+### The redirect, and a claim this note got wrong
 
-This does not bite today, because the download has only ever run through the broker gateway, whose transport carries no cookie of its own.
-It bites the moment the device performs this fetch.
+This section first said the bundle download would send the seller's Tes session cookie to CloudFront, and that was wrong.
+It is corrected here rather than quietly rewritten, because the corrected reasoning is what the policy now rests on and because the first version was the more alarming of the two.
 
-The fix is small and in one place.
-The session client takes a redirect policy that follows same-origin and stops at anything else; a blanket refusal to follow would break the `?error=notfound` classification, which depends on a same-origin redirect being followed.
-The adapter then sees the 3xx, reads `Location`, asserts the scheme and the host, and re-issues on the existing bare client.
-That vehicle already exists and is already proven by `the_bare_client_sends_no_cookie` (`live.rs:420`), and this is the read-side mirror of the exemption the direct-to-S3 upload already relies on.
-The broker gateway's own redirect policy deserves one look on the same grounds before the crate is deleted.
+reqwest strips `Cookie`, `Authorization`, `cookie2`, `Proxy-Authorization` and `WWW-Authenticate` from any followed redirect whose host or port changes.
+`remove_sensitive_headers` in `redirect.rs` does it, and `on_request` calls it unconditionally after every follow, so under the default policy the cookie would have been dropped at the hop.
+The same mechanism answers the open item this note carried about the broker gateway: its `Authorization` header was covered too, so the gateway leaked nothing and its deletion needs no such audit.
+What would have travelled is the non-sensitive remainder of `default_headers`, which here is `User-Agent`.
+
+Owning the policy is still right, for two reasons that survive the correction.
+That stripping is a dependency's internal behaviour rather than a contract: nothing in reqwest's public API promises it, a minor release could narrow the list, and a custody rule this codebase states in its own module documentation should not rest on a list we do not own.
+And the list is not everything a session client carries — it does not include `User-Agent`, nor whatever a future edit adds to `session_headers`, and the TPT adapter's session client already carries a browser identity and a CSRF header beside its cookie, which is the shape the Tes one drifts toward.
+A rule about the destination stays true as the headers change; a rule about a header list does not.
+
+The policy follows a redirect only while the host does not change, and stops otherwise.
+Stopping rather than erroring is the design half rather than the safety half: the caller gets the 3xx with its `Location`, which is a fact a flow can act on by re-issuing the hop on a client carrying nothing, and an error would leave it unable to tell a declined hop from a marketplace that is down.
+A blanket refusal to follow would also have broken the `?error=notfound` classification, which depends on a same-origin redirect being followed.
+Reaching the hop cap errors instead, matching `Policy::limited`'s own comparison so the constant means one bound on both clients, because a redirect loop is not a destination anybody can re-issue.
 
 ### Multi-file resources, which decide the file model
 
@@ -206,6 +219,12 @@ The review screen mostly exists, as the inventory page with its marketplace chip
 Per product it shows the mapped TPT category and grade, the taxonomy gaps the projection already raises, and the two new gates for file type and cover.
 The mapping and vocabulary work behind it is done, so this is largely rendering gates that already exist.
 
+It also carries a per-product choice of which file to send, added by founder decision on 2026-09-04.
+Each product defaults to using the Tes file, which is the direct route this whole note exists to build, and offers "choose a file from this computer" beside it.
+In S4 that second option is the upload path that already exists: the file goes through `POST /{version}/uploads` into our store and is fetched back at publish, which is the control-plane arm of the manifest and needs nothing new.
+That it puts the seller's chosen file on our servers is the honest cost of reusing the built path, and it is bounded by being a per-product election rather than the default.
+A device-resident variant that keeps a chosen file off our servers entirely is a later slice, and Q-a is what makes it possible: a file the seller picked has no commitment from anybody, so it is the uncommitted case with no import pass to observe it first, and the device's own report is now an accepted answer to that.
+
 Publish all exists: the sync request endpoint takes the whole set, and the sync and job views already stream per-item status.
 
 Four classes of field Tes cannot supply, each in its own place.
@@ -230,15 +249,34 @@ The device payload route survives for hand-uploaded files and stops being the on
 The assumption behind every figure is stated so the estimate can be falsified rather than argued about: this repository's agent-driven cadence, the founder answering a gating question the same day, the working copy green under `just check` throughout, and no live marketplace contact except where a probe is named.
 That is the same basis as the re-baselined column of `vendoo-for-teachers-rethink.md`.
 
-S1, the manifest learns about sources, half a day to one day.
-Add the source arm to the payload manifest, keep the control-plane arm as the only one constructed, and make the device's payload load dispatch on it; behaviourally inert.
-Verified by the wire round-trip covering both arms, which fails under a serde shape that drops one, and by the existing desktop payload suite passing unchanged, which fails under any behaviour change.
-No probe.
+S1, the manifest learns about sources, built.
+The source arm on the payload manifest, the control-plane arm the only one constructed, and the device's payload load dispatching on it; behaviourally inert.
+Verified by the wire round-trip over both arms and both axes of the marketplace one, and by the existing desktop payload suite passing unchanged.
 
-S2, the marketplace-backed file source, one and a half to two and a half days.
-The marketplace arm driving the bundle download under the seller's session, the detached cross-origin redirect, the single-entry unwrap, verification against the committed value, and the source-session and source-entitlement refusals in the tick.
-Verified by a scripted transport serving manifest, redirect and bundle and asserting the second request carries no cookie; by an off-origin location refused; by a single-entry bundle unwrapping while a two-entry bundle stays whole; by a digest mismatch stalling rather than uploading; and by the same-origin redirect still being followed so the not-found classification still holds.
-Gated on a founder probe: the redirect leg on their own Windows machine, one published resource, read-only, recording the location's host and scheme, whether the signed url fetches with no cookies, and the byte count against the known size.
+It carries a deprecation shim, and the shim is the part with a deadline.
+Desktop 0.1.3 is published and auto-updating, and its own copy of the manifest declares `hash` and `byte_len` as required top-level fields with no serde attributes.
+A server emitting only `source` would make every claimed item carrying a file fail to decode there — and fail after the claim, so the item sits leased until its lease expires while the device reports a failure every poll.
+So the manifest's `Serialize` is written by hand and emits the old pair beside `source`, derived from the source rather than stored, which is why the two cannot drift; reading tolerates both shapes because the derived `Deserialize` ignores fields it does not know.
+
+A marketplace source emits neither old field, and that is chosen rather than fallen into.
+No value would let a 0.1.3 client succeed with one: it has no marketplace fetcher, and our object store holds no bytes for that file, so a synthesised hash would only send it to a payload route answering 404 — failing later, after a round trip, in a shape that reads as our server being broken rather than as a client being too old.
+Failing at the envelope is louder and truer, and the cost is real: that item stays leased until its lease expires.
+The window therefore has an end condition rather than a hope.
+It closes when every registered device reports an `app_version` at or past this change, which `device` rows carry at registration and at every check-in, and nothing may emit a marketplace source until it does — which is a gate on S3 rather than on S2, since S2 constructs none.
+
+S2, the marketplace-backed file source, built.
+The marketplace arm driving the bundle download under the seller's own session, the single-entry unwrap, and the source-session and source-entitlement refusals — post-claim in `DeviceWork::execute` rather than in the tick, for the reason recorded above.
+Verified by the seller's bytes coming from the marketplace with our control plane asked for nothing, which is D27's own property; by a marketplace refusal named as itself rather than read as our failure; by a manifest with no attached source refusing before any transfer; by an uncommitted first observation being accepted rather than checked against an invented value; and by the marketplaces holding an order's files being named once each.
+
+One leg of it is deliberately not finished, and it fails closed rather than quietly.
+The bundle hop answers a 302 to a signed url on another host, and the session client declines to follow it, so the download cannot complete until that hop is re-issued on a client carrying nothing.
+Re-issuing it needs a decision the founder's redirect probe supplies — whether the destination is named by a fourth request-authentication variant or by a host constant — and taking it before the probe would be inventing the fact.
+What matters until then is that a declined hop is a named refusal and never an ambiguity, and that is a defect avoided rather than a detail.
+`classify_read_bytes` has no 3xx arm, so a declined hop fell to its catch-all and became `AdapterError::Ambiguous`, which is the arm that halts a tenant's inventory and waits for an operator.
+The first seller whose migration reached a bundle download would have had their whole inventory halted by a hop we deliberately decline, on a condition that is expected and permanent until the re-issue exists.
+The named refusal lives in the download flow rather than in the shared classifier, because a 3xx is legitimate elsewhere on this adapter — the draft manifest's same-origin redirect to `?error=notfound` is followed by the client and never reaches a classifier — so a blanket arm would be a claim about routes nobody has measured.
+The shape is worth remembering past this slice: when the re-issue lands, a failure of the *second* hop reaches the same catch-all by the same route, and the same halt is available to be walked into again.
+Gated on that founder probe: the redirect leg on their own Windows machine, one published resource, read-only, recording the location's host and scheme, whether the signed url fetches with no cookies, and the byte count against the known size.
 
 S3, the device imports the catalogue, two and a half to four days, and the first slice a seller can feel.
 The desktop pass with its discarding sink and its screen, the import route, the import split, the locator migration, serde on the imported listing, and the console mirror.
@@ -274,22 +312,25 @@ The recommendation is to refuse that composition in the first pass and name the 
 
 ## 8. Founder decisions
 
-Open. Each row states the decision, the recommendation and what taking the alternative would cost.
+All taken. Each row states the decision, what was decided, and what taking the alternative would have cost.
 
 | # | Decision | Recommendation | Status |
 |---|---|---|---|
-| Q-a | Is a digest reported by the device acceptable integrity on a first observation, where the server holds no independent commitment? | Accept, recording the device and its asserted instant beside our receipt, and surfacing a later disagreement rather than overwriting it. The alternative is two independent fetches whose agreement is the check, which doubles the transfer for a property the seller's own session already largely provides. | open |
-| Q-b | Is a malware scan performed and asserted by the device acceptable, given the server never sees the bytes? | Accept. The bytes travel from the seller's own account to the seller's own account and we are never a distribution point for them. | open |
-| Q-c | May the device upload a derived cover image, as the one exception to keeping bytes off our servers? | Accept: a fixed 512 by 384 PNG per product, so the console has an image and the existing cover gate stands unchanged. The alternative is to make that gate target-conditional and show no image in the console. | open |
-| Q-d | May payload bytes be cached on the device between the import pass and the publish? | No for now. Discard on settle, the drop backstop and the start-up sweep are what make "the file is still the seller's" true after a crash. Revisit if the second fetch of a large resource is felt, with a seller-visible toggle and a size ceiling. | open |
-| Q-e | Is a migration's payload the bundle whole rather than its exploded entries? | Accept, unwrapping only a bundle that holds exactly one entry. TPT takes exactly one file, and the bundle is what the seller's Tes buyers already receive. | open |
-| Q-f | Does the migrate flow refuse to start without the TPT copyright declaration? | Accept. It converts step 14's open item from a whole catalogue of terminal failures into one gate the seller can act on. | open |
-| Q-g | Does a Tes-sourced TPT upload require the Tes entitlement grant as well as TPT's? | Yes. The run makes a Tes request, and the kill switch must be able to stop it. | open |
-| Q-h | Is a Tes-to-Etsy migration refused in the first pass? | Accept the refusal. Satisfying the sanctioned branch would mean routing the seller's bytes through us, which is the arrangement D27 removes. | open |
+| Q-a | Is a digest reported by the device acceptable integrity on a first observation, where the server holds no independent commitment? | Yes. The device's report is recorded with its asserted instant beside our receipt, and a later disagreement is surfaced rather than overwriting. The alternative considered and not taken was two independent fetches whose agreement is the check, which doubles the transfer for a property the seller's own session already largely provides. | decided yes, 2026-09-04 |
+| Q-b | Is a malware scan performed and asserted by the device acceptable, given the server never sees the bytes? | Yes, and advisory rather than a guarantee we make. The bytes travel from the seller's own account to the seller's own account and we are never a distribution point for them, so what the device asserts is recorded as the device's assertion and is not restated by us as a clean bill. | decided yes, 2026-09-04 |
+| Q-c | May the device upload a derived cover image, as the one exception to keeping bytes off our servers? | Accept: a fixed 512 by 384 PNG per product, so the console has an image and the existing cover gate stands unchanged. The alternative is to make that gate target-conditional and show no image in the console. | adopted by silence, 2026-09-04 |
+| Q-d | May payload bytes be cached on the device between the import pass and the publish? | No for now. Discard on settle, the drop backstop and the start-up sweep are what make "the file is still the seller's" true after a crash. Revisit if the second fetch of a large resource is felt, with a seller-visible toggle and a size ceiling. | adopted by silence, 2026-09-04 |
+| Q-e | Is a migration's payload the bundle whole rather than its exploded entries? | Accept, unwrapping only a bundle that holds exactly one entry. TPT takes exactly one file, and the bundle is what the seller's Tes buyers already receive. | adopted by silence, 2026-09-04 |
+| Q-f | Does the migrate flow refuse to start without the TPT copyright declaration? | Accept. It converts step 14's open item from a whole catalogue of terminal failures into one gate the seller can act on. | adopted by silence, 2026-09-04 |
+| Q-g | Does a Tes-sourced TPT upload require the Tes entitlement grant as well as TPT's? | Yes. The run makes a Tes request, and the kill switch must be able to stop it. | adopted by silence, 2026-09-04 |
+| Q-h | Is a Tes-to-Etsy migration refused in the first pass? | Accept the refusal. Satisfying the sanctioned branch would mean routing the seller's bytes through us, which is the arrangement D27 removes. | adopted by silence, 2026-09-04 |
 
-Two items are flagged rather than decided, because they belong to owners other than this note.
-Whether the broker gateway leaks the seller's cookie on the same CloudFront redirect is worth one read of its redirect policy before the crate is deleted.
-And whether the observed hash and kind columns are nullable-until-observed or provisionally filled with a later correction is a schema call to take with the migration in hand; the provisional form is the lighter of the two.
+One item is flagged rather than decided, because it belongs to an owner other than this note.
+Whether the observed hash and kind columns are nullable-until-observed or provisionally filled with a later correction is a schema call to take with the migration in hand; the provisional form is the lighter of the two.
+
+A second item that stood here is now answered and is recorded rather than dropped.
+It asked whether the broker gateway leaked the seller's cookie on the same CloudFront redirect.
+It did not: reqwest strips `Cookie` and `Authorization` on a cross-host hop, so the gateway's own header was covered, and its deletion needs no audit on these grounds.
 
 ## Sources
 

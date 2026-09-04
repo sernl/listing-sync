@@ -122,6 +122,12 @@ tam-marketplace     = { path = "../../../crates/tam-marketplace" }
 tam-marketplace-tes = { path = "../../../crates/tam-marketplace-tes" }
 tam-marketplace-tpt = { path = "../../../crates/tam-marketplace-tpt" }
 
+# The archive probe and reader the bundle unwrap needs. A marketplace hands
+# over a bundle and the target's product slot takes one file, so the device has
+# to look inside before it uploads. Already proven portable: `just
+# check-portable` compiles this crate for every 64-bit client triple.
+tam-pipeline        = { path = "../../../crates/tam-pipeline" }
+
 # One keychain backend per platform rather than the crate's umbrella feature,
 # so a Windows build never compiles D-Bus and a Linux build never compiles
 # Security Framework. `linux-native` is deliberately not used: linux-keyutils

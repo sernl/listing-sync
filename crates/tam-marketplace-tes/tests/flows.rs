@@ -1873,6 +1873,56 @@ fn a_published_resource_downloads_its_bundle_byte_for_byte() {
     );
 }
 
+/// The hop the live transport declines, seen from the adapter.
+///
+/// The session client stops at a cross-host redirect so the seller's cookie
+/// cannot travel to the signed CDN url, which means the bundle hop comes back
+/// as the 302 itself. What matters is not only that this refuses but that it
+/// refuses *as a rejection*: the classifier's catch-all would make a 3xx
+/// `Ambiguous`, and an ambiguous read is the arm that halts a tenant's
+/// inventory and waits for an operator. A declined hop is expected and
+/// permanent until the credential-free re-issue is built, so halting on it
+/// would take a seller's whole inventory down for a condition we chose.
+#[test]
+fn a_bundle_hop_that_redirects_off_origin_refuses_by_name_rather_than_halting() {
+    let manifest = json!({ "zipUrls": { DRAFT.0.to_string(): { "url": BUNDLE_PATH } } });
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&manifest),
+            },
+            Interaction {
+                request: endpoints::download_bundle_request(BUNDLE_PATH),
+                response: HttpResponse::plain(302, Vec::new()),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect_err("a hop the transport declined is not bytes");
+
+    assert!(
+        !matches!(refused, AdapterError::Ambiguous(_)),
+        "a declined hop must never be ambiguous: that is the arm that halts the tenant's \
+         inventory, and this condition is one we chose and will keep choosing until the \
+         re-issue exists. Got: {refused:?}"
+    );
+    let AdapterError::Rejected { detail, .. } = &refused else {
+        panic!("a declined hop is a rejection naming itself, and got: {refused:?}");
+    };
+    assert!(
+        detail.0.contains("session") && detail.0.contains("another host"),
+        "the refusal says why the hop was declined, so an operator reading it does not go \
+         looking for an outage: {detail:?}"
+    );
+}
+
 #[test]
 fn a_draft_has_no_bundle_and_says_so_distinctly() {
     for (label, body) in [

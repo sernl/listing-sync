@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tam_engine_driver::driver::{run_item, DriverContext, EngineError, RunVerdict};
 use tam_engine_driver::ports::{ItemLedger, ReconcileSource};
 use tam_engine_driver::seed::{seed_for_removal, seed_from_projection};
-use tam_engine_driver::vocabulary::{ClaimView, WorkOrder};
+use tam_engine_driver::vocabulary::{ClaimView, PayloadSource, WorkOrder};
 use tam_marketplace::transport::Transport;
 use tam_marketplace::{
     AdapterError, FetchReason, ListingLocator, ListingState, MarketplaceAdapter, Pause,
@@ -28,12 +28,14 @@ use tam_marketplace::{
 use tam_marketplace_tes::TesAdapter;
 use tam_marketplace_tpt::write_model::AuthorshipDeclaration;
 use tam_marketplace_tpt::{listing_state_from_status, TptAdapter};
-use tam_types::{FailureCode, FailureDetail, Marketplace};
+use tam_types::{FailureCode, FailureDetail, InventoryId, Marketplace, Timestamp};
+use tokio::sync::Mutex;
 
 use crate::device::DeviceId;
+use crate::entitlement::EntitlementGate;
 use crate::ledger::{HttpLedger, LedgerTransport};
 use crate::marketplace::{SessionTransport, TesLive, TptLive};
-use crate::payload::{DevicePayloads, PayloadTransport};
+use crate::payload::{DevicePayloads, MarketplaceFiles, PayloadTransport};
 use crate::run::{DeviceClock, DeviceIds, RunGate, SleepingPause};
 use crate::scheduler::{PullFuture, WorkError, WorkSource};
 use crate::session::SessionStore;
@@ -93,6 +95,25 @@ impl<T: PayloadTransport> tam_marketplace::FileSource for &DevicePayloads<T> {
 /// One run of the interpreter, boxed so the seam stays object-safe.
 pub type RunFuture<'a> = Pin<Box<dyn Future<Output = Result<RunVerdict, EngineError>> + Send + 'a>>;
 
+/// Why an order's payload cannot be fetched here, or `None` to go ahead.
+pub type RefusalFuture<'a> = Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
+
+/// The marketplaces an order's payload names as holding its bytes.
+///
+/// Deduplicated, because a run whose files all come from one marketplace asks
+/// one question rather than one per file.
+fn payload_sources(order: &WorkOrder) -> Vec<Marketplace> {
+    let mut named: Vec<Marketplace> = Vec::new();
+    for manifest in &order.payload {
+        if let PayloadSource::Marketplace { marketplace, .. } = manifest.source {
+            if !named.contains(&marketplace) {
+                named.push(marketplace);
+            }
+        }
+    }
+    named
+}
+
 /// How an order becomes a run against a marketplace.
 ///
 /// A seam, and the only one in this module: with it, the pull, the settle and
@@ -107,12 +128,37 @@ pub trait Marketplaces<P: DevicePlane>: Send + Sync {
         gate: &'a RunGate,
         payloads: &'a DevicePayloads<&'a P>,
     ) -> RunFuture<'a>;
+
+    /// Whether this device can reach the marketplaces holding this order's
+    /// bytes, checked after the claim and before anything is composed.
+    ///
+    /// It cannot be checked before the claim, which is where every other
+    /// refusal lives: the scheduler gates per marketplace on the item's own
+    /// inventory, and which marketplace holds an item's *files* is knowable
+    /// only from the order the claim returns. So this refusal costs a lease
+    /// expiry, exactly as the inventory-mismatch refusal beside it does, and
+    /// the server-side claim predicate is what removes that cost.
+    ///
+    /// Both halves are asked, and D1's kill switch is why the entitlement half
+    /// is not redundant: fetching the seller's own file is a request to that
+    /// marketplace, so a revoked grant there must stop it even when the
+    /// marketplace being written to is entitled.
+    fn source_refusal<'a>(&'a self, order: &'a WorkOrder, now: Timestamp) -> RefusalFuture<'a>;
+
+    /// The seller's own marketplace sessions, as a source of their own files.
+    ///
+    /// `None` where this binding has none to offer, which is every test that
+    /// drives a scripted adapter.
+    fn files(&self) -> Option<Arc<dyn MarketplaceFiles>>;
 }
 
 /// The shipping binding: the marketplace's own adapter, over the seller's own
 /// session, over this device's own file cache.
 pub struct LiveMarketplaces {
     sessions: Arc<dyn SessionStore>,
+    /// The entitlement as it currently stands, shared rather than copied so a
+    /// grant revoked between the tick and the run is seen by the run.
+    gate: Arc<Mutex<EntitlementGate>>,
 }
 
 impl core::fmt::Debug for LiveMarketplaces {
@@ -123,8 +169,83 @@ impl core::fmt::Debug for LiveMarketplaces {
 
 impl LiveMarketplaces {
     #[must_use]
-    pub const fn new(sessions: Arc<dyn SessionStore>) -> Self {
-        Self { sessions }
+    pub const fn new(sessions: Arc<dyn SessionStore>, gate: Arc<Mutex<EntitlementGate>>) -> Self {
+        Self { sessions, gate }
+    }
+}
+
+/// The seller's own files, read from the marketplace holding them under the
+/// seller's own session.
+///
+/// Holds the session store rather than a built transport, because the store is
+/// read per request: a seller who signs in again between two runs is picked up
+/// at the next request rather than at the next restart, which is the same rule
+/// `marketplace.rs` states for the write path.
+struct SellerFiles {
+    sessions: Arc<dyn SessionStore>,
+}
+
+/// A file source for a read that uploads nothing.
+///
+/// The Tes adapter is generic over the source its writes upload through, and a
+/// download performs no write, so the honest binding is one that refuses. A
+/// permissive stub would be a source a future edit could upload through
+/// without noticing.
+struct NoUploads;
+
+impl tam_marketplace::FileSource for NoUploads {
+    fn fetch(
+        &self,
+        file: tam_types::FileId,
+    ) -> impl Future<Output = Result<tam_marketplace::FileContent, tam_marketplace::FileSourceError>>
+           + Send {
+        core::future::ready(Err(tam_marketplace::FileSourceError::Unreadable {
+            file,
+            detail: "a download reads the seller's files and uploads none".to_owned(),
+        }))
+    }
+}
+
+impl MarketplaceFiles for SellerFiles {
+    fn fetch<'a>(
+        &'a self,
+        marketplace: Marketplace,
+        resource: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + 'a>> {
+        Box::pin(async move {
+            match marketplace {
+                Marketplace::Tes => {
+                    let id: i64 = resource
+                        .parse()
+                        .map_err(|_| format!("{resource:?} is not a Tes resource id"))?;
+                    let transport = SessionTransport::new(TesLive, Arc::clone(&self.sessions))
+                        .map_err(|why| why.to_string())?;
+                    // The inventory decides how a read is *interpreted* — the
+                    // country fork on the import read, the vocabulary a term
+                    // is tagged with — and the download route carries no
+                    // country segment, so it does not reach this wire. A
+                    // per-country download would have to put the inventory in
+                    // the locator rather than pick one here.
+                    let adapter = TesAdapter::new(InventoryId::TesGb, transport, NoUploads)
+                        .map_err(|why| why.to_string())?;
+                    adapter
+                        .download_resource_bundle(
+                            &FetchReason::FirstPartyExport {
+                                inventory: InventoryId::TesGb,
+                            },
+                            tam_marketplace_tes::DraftId(id),
+                        )
+                        .await
+                        .map_err(|why| format!("{why:?}"))
+                }
+                // Tpt's own-file download is uncaptured, and Etsy's automation
+                // runs server-side under a sanctioned token, so its bytes are
+                // the server's to hold and never this device's to fetch.
+                Marketplace::Tpt | Marketplace::Etsy => Err(format!(
+                    "no capture exists for a {marketplace:?} file download"
+                )),
+            }
+        })
     }
 }
 
@@ -165,6 +286,41 @@ impl<P: DevicePlane> Marketplaces<P> for LiveMarketplaces {
                 )),
             }
         })
+    }
+
+    fn source_refusal<'a>(&'a self, order: &'a WorkOrder, now: Timestamp) -> RefusalFuture<'a> {
+        Box::pin(async move {
+            let gate = self.gate.lock().await.clone();
+            for source in payload_sources(order) {
+                if !gate.may_work(source, now) {
+                    return Some(format!(
+                        "this item's files are held by {source:?}, and this device's \
+                         entitlement for {source:?} does not stand"
+                    ));
+                }
+                match self.sessions.get(source).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        return Some(format!(
+                            "this item's files are held by {source:?}, and nobody has signed \
+                             in to {source:?} on this device"
+                        ))
+                    }
+                    Err(why) => {
+                        return Some(format!(
+                            "this device's {source:?} session could not be read: {why}"
+                        ))
+                    }
+                }
+            }
+            None
+        })
+    }
+
+    fn files(&self) -> Option<Arc<dyn MarketplaceFiles>> {
+        Some(Arc::new(SellerFiles {
+            sessions: Arc::clone(&self.sessions),
+        }))
     }
 }
 
@@ -246,6 +402,20 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
             }];
         }
 
+        // Before the item is started, because a run that opened an attempt and
+        // then found it could not fetch the bytes would have spent the fence
+        // on work it never had the means to do. The server's own reading of
+        // now, off the envelope, rather than this device's clock: the
+        // entitlement is the server's decision and the laptop's clock is
+        // frequently wrong.
+        if let Some(why) = self
+            .marketplaces
+            .source_refusal(&order, Timestamp(order.server_now_ms))
+            .await
+        {
+            return vec![WorkEvent::Failed { detail: why }];
+        }
+
         let mut events = vec![WorkEvent::Started { item: item.clone() }];
         let gate = RunGate::from_envelope(order.server_now_ms, order.server_deadline_ms)
             .stopped_by(Arc::clone(&self.stopper));
@@ -261,6 +431,15 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
             &item,
             order.payload.clone(),
         );
+        // Attached whichever marketplace this item writes to, because which
+        // marketplace *holds* an item's files is a different question from
+        // which one it is being written to: a TPT create whose bytes live on
+        // Tes builds a Tes session here, deliberately, and that is the whole
+        // point of routing a migration through the seller's own logins.
+        let payloads = match self.marketplaces.files() {
+            Some(files) => payloads.sourcing(files),
+            None => payloads,
+        };
 
         let verdict = self
             .marketplaces
@@ -1154,14 +1333,14 @@ mod reconcile_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_body, interpret, work_path, DevicePlane, DeviceWork, LiveMarketplaces, Marketplaces,
-        RunFuture,
+        claim_body, interpret, payload_sources, work_path, DevicePlane, DeviceWork,
+        LiveMarketplaces, Marketplaces, RefusalFuture, RunFuture,
     };
     use crate::device::DeviceId;
     use crate::entitlement::{Claims, Entitlement, EntitlementGate};
     use crate::heartbeat::{ControlPlaneError, PlaneFuture};
     use crate::ledger::{HttpLedger, LedgerTransport};
-    use crate::payload::{DevicePayloads, PayloadTransport};
+    use crate::payload::{DevicePayloads, MarketplaceFiles, PayloadTransport};
     use crate::run::RunGate;
     use crate::scheduler::{Readiness, Scheduler, WorkSource};
     use crate::session::memory::MemorySessionStore;
@@ -1414,6 +1593,21 @@ mod tests {
                 .await
             })
         }
+
+        /// A scripted run drives no marketplace, so it has no session to be
+        /// missing and no grant to have lapsed. Refusing nothing keeps this
+        /// double answering only the question it exists to answer.
+        fn source_refusal<'a>(
+            &'a self,
+            _order: &'a WorkOrder,
+            _now: Timestamp,
+        ) -> RefusalFuture<'a> {
+            Box::pin(core::future::ready(None))
+        }
+
+        fn files(&self) -> Option<Arc<dyn MarketplaceFiles>> {
+            None
+        }
     }
 
     fn scratch() -> PathBuf {
@@ -1469,6 +1663,196 @@ mod tests {
             exp: NOW_SECONDS + 3_600,
             grace: NOW_SECONDS + 3_600 + 86_400,
         }))
+    }
+
+    /// What the refusal asks about, and how many times.
+    ///
+    /// Deduplication is not tidiness: the refusal reads the session store once
+    /// per marketplace named, and an order whose twenty files all come from
+    /// one marketplace must ask one question rather than twenty.
+    #[test]
+    fn the_marketplaces_holding_an_orders_files_are_named_once_each() {
+        let mut order = order();
+        assert!(
+            payload_sources(&order).is_empty(),
+            "an order whose files are all ours names no marketplace, so the refusal has \
+             nothing to ask and every existing run is unaffected"
+        );
+
+        let held = |last: u8| tam_engine_driver::vocabulary::PayloadManifest {
+            file: tam_types::FileId(uuid(last)),
+            file_name: "worksheet.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            source: tam_engine_driver::vocabulary::PayloadSource::Marketplace {
+                marketplace: Marketplace::Tes,
+                resource: "13549126".to_owned(),
+                entry: None,
+                expected: None,
+            },
+        };
+        order.payload = vec![held(1), held(2), held(3)];
+        assert_eq!(
+            payload_sources(&order),
+            vec![Marketplace::Tes],
+            "three files from one marketplace are one question"
+        );
+    }
+
+    /// An order whose bytes are held by Tes rather than by us.
+    fn tes_sourced_order() -> WorkOrder {
+        let mut order = order();
+        order.payload = vec![tam_engine_driver::vocabulary::PayloadManifest {
+            file: tam_types::FileId(uuid(9)),
+            file_name: "worksheet.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            source: tam_engine_driver::vocabulary::PayloadSource::Marketplace {
+                marketplace: Marketplace::Tes,
+                resource: "13549126".to_owned(),
+                entry: None,
+                expected: None,
+            },
+        }];
+        order
+    }
+
+    /// Drives one order through the shipping binding and reports what the
+    /// seller saw.
+    ///
+    /// Through `DeviceWork` rather than by calling `source_refusal` directly,
+    /// because what is under test is that the refusal is consulted at all and
+    /// consulted before the run: a test calling it by hand would pass with the
+    /// call site deleted.
+    async fn events_for(
+        order: WorkOrder,
+        marketplaces: Vec<Marketplace>,
+        signed_in: &[Marketplace],
+        data_dir: &Path,
+    ) -> Vec<WorkEvent> {
+        let plane = Arc::new(FakePlane::serving(Some(order)));
+        let live = LiveMarketplaces::new(sessions_for(signed_in).await, gate_handle(marketplaces));
+        let work = DeviceWork::new(
+            DeviceId::from_raw(DEVICE),
+            Arc::clone(&plane),
+            live,
+            data_dir,
+            Arc::new(AtomicBool::new(false)),
+        );
+        work.pull(Marketplace::Tes)
+            .await
+            .expect("the pull reports what the device did")
+    }
+
+    /// The kill switch reaches the marketplace an item's files come from.
+    ///
+    /// D1's grant is per marketplace, and fetching the seller's own file is a
+    /// request to the marketplace holding it, so a revoked Tes grant must stop
+    /// a run even when the marketplace being written to is entitled.
+    #[tokio::test]
+    async fn a_source_marketplace_whose_grant_lapsed_stops_the_run_before_it_starts() {
+        let data_dir = scratch();
+        let events = events_for(
+            tes_sourced_order(),
+            // Entitled for the item's own marketplace and not for the one
+            // holding its bytes, which is the case a fleet-wide check misses.
+            vec![Marketplace::Tpt],
+            &[Marketplace::Tes],
+            &data_dir,
+        )
+        .await;
+
+        let [WorkEvent::Failed { detail }] = events.as_slice() else {
+            panic!("a refused source is one failure and nothing else, and got: {events:?}");
+        };
+        assert!(
+            detail.contains("Tes") && detail.contains("entitlement"),
+            "the refusal names the marketplace and what is missing: {detail}"
+        );
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// A missing login for the marketplace holding the bytes stops the run.
+    #[tokio::test]
+    async fn a_source_marketplace_nobody_is_signed_in_to_stops_the_run_before_it_starts() {
+        let data_dir = scratch();
+        let events = events_for(
+            tes_sourced_order(),
+            vec![Marketplace::Tpt, Marketplace::Tes],
+            // Signed in nowhere, so the item's own readiness gate passed on a
+            // marketplace this order's files do not come from.
+            &[],
+            &data_dir,
+        )
+        .await;
+
+        let [WorkEvent::Failed { detail }] = events.as_slice() else {
+            panic!("a refused source is one failure and nothing else, and got: {events:?}");
+        };
+        assert!(
+            detail.contains("Tes") && detail.contains("signed in"),
+            "the seller is told which login is missing, because that is the one thing they \
+             can do about it: {detail}"
+        );
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// The refusal is not the only thing standing between an order and a run.
+    ///
+    /// With the source entitled and signed in, the refusal passes and the item
+    /// starts, which is what makes the two tests above assertions about the
+    /// refusal rather than about any failure at all.
+    #[tokio::test]
+    async fn a_ready_source_lets_the_run_start() {
+        let data_dir = scratch();
+        let events = events_for(
+            tes_sourced_order(),
+            vec![Marketplace::Tpt, Marketplace::Tes],
+            &[Marketplace::Tes],
+            &data_dir,
+        )
+        .await;
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, WorkEvent::Started { .. })),
+            "a ready source is not refused, so the item starts and fails later on its own \
+             merits rather than at the gate: {events:?}"
+        );
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// The shipping binding offers a marketplace file source, and it is the
+    /// seller's own sessions behind it.
+    ///
+    /// Without this the `Some` branch of the attach in `execute` is never
+    /// taken by any test, and a binding that returned `None` for ever would
+    /// leave every marketplace-sourced file refused as unsupported.
+    #[tokio::test]
+    async fn the_shipping_binding_offers_the_sellers_own_files() {
+        let live = LiveMarketplaces::new(sessions_for(&[]).await, open_gate());
+        let files = <LiveMarketplaces as Marketplaces<FakePlane>>::files(&live)
+            .expect("the shipping binding offers a marketplace source");
+
+        // No session stored, so the fetch refuses rather than reaching a
+        // marketplace — which is the point: the branch is exercised and no
+        // request is composed.
+        let why = files
+            .fetch(Marketplace::Tes, "13549126")
+            .await
+            .expect_err("a device nobody signed in on fetches nothing");
+        assert!(
+            !why.is_empty(),
+            "the refusal carries the marketplace's own sentence rather than an empty string"
+        );
+    }
+
+    /// A gate handle, in the shape the shipping binding takes one.
+    fn gate_handle(marketplaces: Vec<Marketplace>) -> Arc<Mutex<EntitlementGate>> {
+        Arc::new(Mutex::new(gate_over(marketplaces)))
+    }
+
+    fn open_gate() -> Arc<Mutex<EntitlementGate>> {
+        gate_handle(vec![Marketplace::Tpt, Marketplace::Tes])
     }
 
     #[tokio::test]
@@ -1735,7 +2119,7 @@ mod tests {
         // Etsy is unreachable through the scheduler, which walks only the
         // seller-device marketplaces. Stated here rather than assumed: the
         // two-branch rule must hold at the binding as well as at the timer.
-        let live = LiveMarketplaces::new(sessions_for(&[]).await);
+        let live = LiveMarketplaces::new(sessions_for(&[]).await, open_gate());
         let data_dir = scratch();
         let plane = Arc::new(FakePlane::serving(None));
         let mut etsy = order();

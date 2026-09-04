@@ -91,7 +91,13 @@ pub struct DesktopState {
     store: Arc<dyn SessionStore>,
     /// Replaced wholesale at each check-in rather than mutated, so a
     /// half-applied entitlement never exists.
-    gate: Mutex<EntitlementGate>,
+    ///
+    /// Shared rather than owned, for the same reason `revoked` below is: a run
+    /// in flight has to be able to read it. A run fetching the seller's files
+    /// from a second marketplace asks whether the grant for *that* marketplace
+    /// still stands, and it asks after the claim, which is long after the tick
+    /// took its own copy.
+    gate: Arc<Mutex<EntitlementGate>>,
     /// The seller signed this device out from the console, and the last
     /// check-in said so. Kept apart from the gate because the two answer
     /// different questions: the gate says whether work may run, and this says
@@ -130,7 +136,7 @@ impl DesktopState {
         Self {
             device,
             store,
-            gate: Mutex::new(EntitlementGate::closed()),
+            gate: Arc::new(Mutex::new(EntitlementGate::closed())),
             revoked: Arc::new(AtomicBool::new(false)),
             signed_in: AtomicBool::new(false),
             plane,
@@ -183,6 +189,17 @@ impl DesktopState {
     #[must_use]
     pub fn stopper(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.revoked)
+    }
+
+    /// The entitlement a run in flight reads, as the same value
+    /// [`Self::set_gate`] writes rather than a copy of it.
+    ///
+    /// The copy [`Self::gate`] hands out is right for a tick, which decides
+    /// once and then acts; it is wrong for a run, which decides again about a
+    /// second marketplace after the claim has already happened.
+    #[must_use]
+    pub fn gate_handle(&self) -> Arc<Mutex<EntitlementGate>> {
+        Arc::clone(&self.gate)
     }
 
     /// Whether the last check-in had a console session to speak under.

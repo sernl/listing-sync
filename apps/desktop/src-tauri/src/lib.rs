@@ -148,7 +148,7 @@ pub fn run() {
             let work = DeviceWork::new(
                 device.id.clone(),
                 plane,
-                LiveMarketplaces::new(store),
+                LiveMarketplaces::new(store, state.gate_handle()),
                 &data_dir,
                 state.stopper(),
             );
