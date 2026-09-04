@@ -4,21 +4,36 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+# The binary is the ledger's maintenance pass and reaches no marketplace, so it
+# builds no adapter and no transport. What remains here is what the pass itself
+# uses; the crates only the live-proof example needs are dev-dependencies, so
+# no adapter crate is among this binary's own edges — which is the checkable
+# property, and the one main.rs states.
+#
+# It is not the stronger claim. `cargo tree -e normal` still reaches
+# tam-domain, tam-marketplace, tam-pipeline and tam-secrets transitively
+# through tam-engine and tam-storage, because the ledger itself uses them;
+# what the dev-dependency move removes from that graph is the two adapter
+# crates, and only those.
 [dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
-tam-domain = { path = "../tam-domain" }
 tam-engine = { path = "../tam-engine" }
-tam-engine-driver = { path = "../tam-engine-driver" }
 tam-limits = { path = "../tam-limits" }
+tam-storage = { path = "../tam-storage" }
+tam-types = { path = "../tam-types" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio-util = "0.7"
+
+# `examples/live_provision.rs` only. It writes the ledger rows a supervised
+# end-to-end proof needs through the real repositories, and it renders listings
+# to do so, which is why it needs the adapters the binary does not.
+[dev-dependencies]
+tam-domain = { path = "../tam-domain" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-marketplace-tes = { path = "../tam-marketplace-tes" }
 tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
 tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }
-tam-storage = { path = "../tam-storage" }
-tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
-tokio-util = "0.7"
 
 [lints]
 workspace = true
