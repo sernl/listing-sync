@@ -348,6 +348,15 @@ desktop-dev:
         echo "no development entitlement key: this build verifies nothing and every gate"
         echo "  answers no. Mint one, once per machine:  just dev-entitlement-key"
     fi
+    # Without this the window navigates to the compiled default, which is
+    # production: `base_url()` falls back to DEFAULT_BASE_URL, and setup points
+    # the console there and builds the control-plane client against the same
+    # origin — so a developer's registration, check-in and import would all go
+    # to the live server. The vite origin proxies /v1 to a local tam-server, so
+    # naming it here keeps the console, the session cookie and the control plane
+    # on one origin, which is what the client assumes.
+    TAM_CONTROL_PLANE=http://localhost:5173
+    export TAM_CONTROL_PLANE
     cd apps/desktop && cargo tauri dev
 
 # Windows is the shipping surface; this is the bundle that needs no

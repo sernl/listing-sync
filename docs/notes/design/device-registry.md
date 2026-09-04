@@ -141,7 +141,7 @@ And a test drives a real captured session with a real cookie through `check_in` 
 The client is now wired end to end.
 `lib.rs` constructs `HttpControlPlane::against(base_url(), WebviewSession)` during setup, so a shipped build reaches the real registry.
 
-The base URL is `control_plane::base_url()`: the compiled-in `https://api.teachouse.io`, which is the origin `tauri.conf.json`'s content-security policy already names, overridable by `TAM_CONTROL_PLANE` for development.
+The base URL is `control_plane::base_url()`: the compiled-in `https://teachouse.stowiq.io`, which is the origin `tauri.conf.json`'s content-security policy already names, overridable by `TAM_CONTROL_PLANE` for development.
 In development that override points at the vite origin, where `just web-dev` serves the console and proxies `/v1` to a local `tam-server`, so the session cookie and the control plane are the same origin there.
 
 The session is resolved per request rather than captured, and that is not a refinement.

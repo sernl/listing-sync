@@ -11,6 +11,20 @@ The first landable slice of Phase 2: a Tauri v2 application that hosts the exist
 The crate is `apps/desktop/src-tauri`, package `tam-desktop`, binary `teachouse`, bundle identifier `io.teachouse.desktop`.
 It is a workspace member, so it is compiled, linted and tested by `just check` alongside everything else.
 The console is the frontend: `frontendDist` is the SvelteKit static build at `web/build` and `devUrl` is the SvelteKit dev server, so there is one console and the desktop client hosts it rather than reimplementing it.
+Amended in C5b: the main window no longer *loads* that bundle, it navigates to the control plane's own origin at start-up.
+The bundle stays because `generate_context!` requires it, and because a window that fails to reach the origin has somewhere to be: the origin is probed before the window is sent there, and a probe that fails loads `unreachable.html` from the bundle instead, which says Teachouse could not be reached and offers a retry through a `retry_console` command that re-probes and navigates.
+That page is the one thing granted a command locally rather than remotely, because it runs at the Tauri origin where the console never does.
+Navigating to an unreachable origin without probing would show the webview's own error page, so a seller who installed the application a minute ago would read "this site can't be reached" with no way to tell a network problem from broken software.
+The probe runs in the background and the scheduler starts either way, so start-up is not gated on the network.
+The content-security policy the window obeys is now the server's: `tam-server` sends one on everything it serves from `--ui-dir` and on nothing else, because the bundle's policy governs only bundled content and the seller's window is no longer that.
+It is computed rather than copied from the bundle's text, and the difference is what decides whether the page runs at all: Tauri augments a bundled window's policy at run time with the inline-script hashes it collected at build time, so `script-src 'self'` boots the shell there and would refuse it here.
+`tam-server` therefore reads the shell it is about to serve at start-up and emits a `sha256-` token for each of its inline blocks, beside `'wasm-unsafe-eval'` for the console's WebAssembly and the four hosts the web fonts, Turnstile and Paddle need; `connect-src` stays `'self'` and names none of them.
+The header is applied to the console's own service rather than to the whole router, so a `/v1` answer carries no policy — no browser applies one to a fetch, so a policy there governed nothing.
+The reason for the change is that the console was unreachable from inside the application in the way that matters: `api.ts` issues same-origin relative `/v1` fetches, so a window at the Tauri origin reached no control plane at all, and `console_session.rs` reads the session cookie for `base_url()`, which exists only on a window at that origin.
+Navigation at start-up rather than a `url` in `tauri.conf.json`, because a configured url is fixed at build time while `TAM_CONTROL_PLANE` is a run-time override; a build-time url would ignore it silently and point a developer's window at production.
+Two consequences follow and are worth stating rather than discovering.
+The content-security policy in `tauri.conf.json` now governs nothing the seller sees, because the window they use is remote content the policy does not apply to; it stays because it still governs anything loaded from the bundle, and the capability's description says so.
+And remote content is granted no application command by default, so the six commands are declared in an app manifest in `build.rs` and granted to that one origin in `capabilities/console.json`; the marketplace login windows remain absent from every capability, so that fence is unchanged.
 
 Six modules carry the slice.
 `connect` holds the login page and the logged-in condition for each marketplace, and refuses outright for any marketplace whose transport class is `OfficialApi`.
@@ -115,14 +129,17 @@ A `cfg` could not have made this decision: this workspace ships `debug-assertion
 
 The capability set is deliberately short, and the login window is deliberately absent from it.
 
-`capabilities/default.json` names the `main` window only and grants `core:event:default`, `core:window:default`, `os:allow-hostname` and `updater:default`.
-Commands the application defines itself are not permission-gated in Tauri v2, so the three below need no entry.
+`capabilities/default.json` names the `main` window only and grants `core:event:default`, `core:window:default`, `os:allow-hostname`, `updater:default` and `allow-retry-console`.
+The last is the fallback page's one button, granted here rather than in `console.json` because that page is bundled and runs at the Tauri origin, where the console never does.
+`capabilities/console.json` carries the six application commands and the `remote.urls` entry naming the control plane, and is the third of the three places the origin appears.
+Commands the application defines itself are permission-gated in Tauri v2 like any other, so all seven are declared in the app manifest `build.rs` assembles — `connect_marketplace`, `session_status`, `forget_session`, `device_check_in`, `device_activity`, `start_import` and `retry_console` — and each needs a grant naming it before it resolves for any window at all.
+The first six are granted in `console.json` to the origin the console is served from, and to local content beside it so the `TAM_CONTROL_PLANE` override works; `retry_console` is granted in `default.json`, locally only, because the page that calls it is the bundled fallback.
 
 The marketplace page gets no capability at all.
 That is the constraint section 7 of `client-side-architecture.md` records: dynamic per-webview capability scoping is unreliable, and the site's own content-security policy blocks Tauri's `ipc.localhost` protocol anyway, so the marketplace origin is never given an IPC surface to begin with.
 Everything the application learns about a login it learns by reading the webview's cookie store from Rust.
 
-The three commands are `connect_marketplace(marketplace)`, `session_status(marketplace)` and `forget_session(marketplace)`.
+The three of those seven that touch a marketplace session are `connect_marketplace(marketplace)`, `session_status(marketplace)` and `forget_session(marketplace)`.
 All three are `async`, which is required rather than stylistic: `cookies_for_url` deadlocks on Windows when called from a synchronous command or an event handler.
 
 ## The build recipes

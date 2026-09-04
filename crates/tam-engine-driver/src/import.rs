@@ -526,6 +526,25 @@ pub struct ImportPage {
     /// is, which is what makes the device saying "complete" the thing that
     /// starts the publish rather than a separate action nobody took.
     pub complete: bool,
+    /// The import stopped, and this is why.
+    ///
+    /// The seller's own request page is the record they read, so a failure that
+    /// posted nothing has to reach it or it reaches nobody: a first page that
+    /// could not be sent, or a sign-out mid-pass, leaves the request holding
+    /// exactly nothing and the console watching a state that never changes. A
+    /// page carrying this settles the request failed with this sentence in its
+    /// `failure_detail`, which the request page already renders.
+    ///
+    /// Completion is implied rather than stated. A stopped import is over,
+    /// and a page that said `failed` and `complete: false` would be asking the
+    /// server to hold a request open for work that has ended.
+    ///
+    /// `serde(default)` because it was added after the first shipped desktop,
+    /// which is the convention this module's documentation states: a device
+    /// that does not know the field posts pages without it and the server
+    /// reads them unchanged.
+    #[serde(default)]
+    pub failed: Option<Reason>,
 }
 
 /// Why one resource could not be described.

@@ -1,12 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The console window, and only it. The login webview is absent from every capability, so no command resolves for it, and that absence is the whole fence. It is not that a marketplace page has no bridge: Tauri injects the IPC internals into every webview it creates regardless of URL (tauri 2.11.5, src/manager/webview.rs:166-200), and app.withGlobalTauri adds window.__TAURI__ on top of them. What a page at a marketplace origin lacks is permission, because its window label is not main and nothing here grants it anything.",
-  "windows": ["main"],
+  "description": "The console window's local grants, and only it. The login webview is absent from every capability, so no command resolves for it, and that absence is the whole fence. It is not that a marketplace page has no bridge: Tauri injects the IPC internals into every webview it creates regardless of URL (tauri 2.11.5, src/manager/webview.rs:166-200), and app.withGlobalTauri adds window.__TAURI__ on top of them. What a page at a marketplace origin lacks is permission, because its window label is not main and nothing here grants it anything. This capability carries no remote block, so nothing in it reaches remote content: the plugin and core permissions here are the ones the bundled fallback page needs, and the application's own console commands are granted separately in console.json, to one named origin and to local content as well \u2014 local because the development override serves the console from the vite origin, where the window is local content and a remote-only grant would refuse every command in development. The one exception is allow-retry-console, which is here because the page that calls it is the bundled fallback shown when the control plane cannot be reached: that page runs at the Tauri origin, where the console never does, and it can reach nothing on its own. Splitting them is what stops a widening of the console grant silently widening the updater's.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:event:default",
     "core:window:default",
     "os:allow-hostname",
-    "updater:default"
+    "updater:default",
+    "allow-retry-console"
   ]
 }

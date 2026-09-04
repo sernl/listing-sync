@@ -144,6 +144,9 @@ keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 ring  = { version = "0.17", features = ["std"] }
+# The mock runtime and the IPC harness, so a test can invoke a command by the
+# name the console sends rather than comparing a constant to a copy of itself.
+tauri = { version = "2.11", features = ["test"] }
 # The scripted adapter and the fixtures the interpreter's own conformance suite
 # uses, so the end-to-end test drives the real pull, the real interpreter and
 # the real settle without a marketplace.

@@ -368,6 +368,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // design; its `fallback` passes the shell through as the 200 the
             // client router needs.
             let shell = read_shell(&dir.join("index.html"))?;
+            // Read once at start-up, so the hashes in the policy are the ones
+            // for the shell this process is actually serving.
+            let shell_text = String::from_utf8(shell.clone())
+                .map_err(|_| "the console shell is not utf-8, so its policy cannot be computed")?;
             let spa = axum::routing::any(move || {
                 let shell = shell.clone();
                 async move {
@@ -377,8 +381,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 }
             });
-            tam_api::router(state)
+            // On the console's own service rather than on the whole router, so
+            // it covers the shell, the fallback page and every asset beside
+            // them and none of the `/v1` answers. A policy on a JSON response
+            // governs nothing — no browser applies one to a fetch — so putting
+            // it there was noise on every API call and a claim this comment
+            // would have had to make and could not.
+            let policy: std::sync::Arc<str> = std::sync::Arc::from(console_policy(&shell_text));
+            let console = axum::Router::new()
                 .fallback_service(tower_http::services::ServeDir::new(dir).fallback(spa))
+                .layer(axum::middleware::from_fn_with_state(
+                    policy,
+                    console_security_headers,
+                ));
+            tam_api::router(state).fallback_service(console)
         }
         None => tam_api::router(state),
     };
@@ -589,6 +605,123 @@ fn load_entitlement_key(path: &str) -> Result<EntitlementKey, Box<dyn std::error
     Ok(EntitlementKey::new(bytes))
 }
 
+/// The console's content-security policy, now that the desktop window loads the
+/// console from here rather than from its own bundle.
+///
+/// The policy used to live in `tauri.conf.json` and applied to a window loading
+/// bundled content. That window now navigates to this origin, so the bundle's
+/// policy governs nothing the seller sees and this header is the only thing
+/// that does.
+///
+/// It does NOT simply copy the bundle's text, and the reason is the defect the
+/// first version of this shipped with. Tauri augments the configured policy at
+/// run time with the inline-script hashes it collected at build time
+/// (tauri 2.11.5, manager/mod.rs:53-105), so `script-src 'self'` was safe there
+/// and is not here: SvelteKit's shell boots from one inline `<script>` block,
+/// and a bare `'self'` refuses it. The window would have rendered an empty div,
+/// for every desktop seller and every browser user, and the two tests that
+/// existed asserted the string rather than loading a page. The hashes below are
+/// what Tauri did for the bundle, done here.
+///
+/// Every host admitted is admitted by directive with its reason, in this one
+/// place, so an addition is a decision rather than an accretion:
+/// `fonts.googleapis.com` serves the stylesheet and `fonts.gstatic.com` the
+/// font files; `challenges.cloudflare.com` is Turnstile, which needs both a
+/// script and a frame; `cdn.paddle.com` is the checkout script.
+/// `wasm-unsafe-eval` is the console's WebAssembly, which Chromium engines
+/// refuse without it.
+///
+/// `frame-src` names `'self'` beside Turnstile because a directive that is
+/// present does not fall back to `default-src`: naming only the one host would
+/// refuse the console's own frames too, silently and with nothing to explain
+/// it.
+///
+/// `connect-src` stays `'self'` and names no host. The console is served from
+/// the same origin it calls, which is the whole reason one host carries the
+/// console and `/v1`, so naming it would be a second thing to edit at cutover
+/// buying no guarantee — and a stale host there would break every request
+/// rather than failing a build.
+fn console_policy(shell: &str) -> String {
+    let mut script = String::from("script-src 'self' 'wasm-unsafe-eval'");
+    for hash in inline_script_hashes(shell) {
+        script.push_str(" '");
+        script.push_str(&hash);
+        script.push('\'');
+    }
+    script.push_str(" https://challenges.cloudflare.com https://cdn.paddle.com");
+    format!(
+        "default-src 'self'; connect-src 'self'; {script}; \
+         img-src 'self' data: blob:; \
+         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+         font-src 'self' data: https://fonts.gstatic.com; \
+         frame-src 'self' https://challenges.cloudflare.com"
+    )
+}
+
+/// The `sha256-…` token for every inline `<script>` block in the shell.
+///
+/// The hash is over the element's exact text content, which is what the CSP
+/// specification says a hash source matches, so a byte of whitespace changed by
+/// a later SvelteKit release changes the token — and that is the point: the
+/// policy is computed from the shell actually being served rather than pinned
+/// to a shell somebody saw once.
+///
+/// A script element carrying a `src` is not inline and contributes no hash.
+fn inline_script_hashes(shell: &str) -> Vec<String> {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    // Over bytes rather than string slices: tag syntax is ASCII, the hash is
+    // over bytes anyway, and slicing a `str` by a byte index is a panic waiting
+    // for the first non-ASCII character in a page title.
+    let bytes = shell.as_bytes();
+    let mut hashes = Vec::new();
+    let mut at = 0usize;
+    while let Some(open) = find_from(bytes, at, b"<script") {
+        let Some(gt) = find_from(bytes, open, b">") else {
+            break;
+        };
+        let attributes = &bytes[open..gt];
+        let body_start = gt + 1;
+        let Some(close) = find_from(bytes, body_start, b"</script>") else {
+            break;
+        };
+        let body = &bytes[body_start..close];
+        if find_from(attributes, 0, b" src=").is_none() && !body.iter().all(u8::is_ascii_whitespace)
+        {
+            hashes.push(format!(
+                "sha256-{}",
+                base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body))
+            ));
+        }
+        at = close + b"</script>".len();
+    }
+    hashes
+}
+
+/// The first occurrence of `needle` at or after `from`.
+fn find_from(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    haystack
+        .get(from..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| from + offset)
+}
+
+async fn console_security_headers(
+    axum::extract::State(policy): axum::extract::State<std::sync::Arc<str>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    if let Ok(value) = axum::http::HeaderValue::from_str(&policy) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_SECURITY_POLICY, value);
+    }
+    response
+}
+
 fn read_shell(path: &std::path::Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
@@ -598,4 +731,142 @@ fn read_shell(path: &std::path::Path) -> Result<Vec<u8>, Box<dyn std::error::Err
 
 async fn shutdown() {
     let _interrupted = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    /// A shell's inline bootstrap gets a hash, and it is the hash the browser
+    /// will compute.
+    ///
+    /// The exact token is asserted rather than merely its shape, because the
+    /// whole value of this routine is that the browser and we agree on the
+    /// digest to the byte. `sha256-` over the element's text content is what
+    /// the specification says a hash source matches, and this fixture is the
+    /// smallest thing that has one.
+    #[test]
+    fn an_inline_script_gets_the_token_the_browser_will_compute() {
+        let shell = "<html><body><script>\nkit.start();\n</script></body></html>";
+        let hashes = super::inline_script_hashes(shell);
+        assert_eq!(hashes.len(), 1, "one inline block, one hash");
+        // sha256 of "\nkit.start();\n" in base64, computed independently rather
+        // than copied out of this implementation's own output — otherwise the
+        // test would assert only that the routine agrees with itself, which it
+        // would also do if the digest and the encoding were wrong together.
+        assert_eq!(
+            hashes[0],
+            "sha256-VjAiOu2+5hLy4jzOw1UoUpq6dLNOdmsOvp6FQGkcMSI="
+        );
+    }
+
+    /// A script with a `src` is not inline and contributes no hash.
+    ///
+    /// Hashing it would produce a token matching nothing, and a policy full of
+    /// tokens that match nothing is one nobody can read.
+    #[test]
+    fn a_sourced_script_contributes_no_hash() {
+        let shell = "<script src=\"/_app/start.js\"></script><script>\nboot();\n</script>";
+        assert_eq!(
+            super::inline_script_hashes(shell).len(),
+            1,
+            "only the inline one"
+        );
+    }
+
+    /// The policy computed for the console this repository actually builds
+    /// carries a hash for its bootstrap.
+    ///
+    /// This is the assertion the first version of the header needed and did not
+    /// have. The two tests it shipped with read the string and never loaded a
+    /// shell, so `script-src 'self'` looked correct and would have rendered an
+    /// empty window for every seller. Skipped rather than failed where the
+    /// console has not been built, because a clone must still run the lane —
+    /// and it says so rather than passing silently.
+    #[test]
+    fn the_real_console_shell_is_admitted_by_its_own_policy() {
+        let shell =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/build/index.html");
+        // Through the crate's own reader rather than `fs::read_to_string`, which
+        // the lint table disallows: one way of reading a file in this binary.
+        let Ok(text) = super::read_shell(&shell)
+            .map(String::from_utf8)
+            .and_then(|utf8| utf8.map_err(|_| "not utf-8".into()))
+        else {
+            eprintln!(
+                "skipped: {} does not exist, so there is no built console to check. \
+                 Run `just web-check` to build one.",
+                shell.display()
+            );
+            return;
+        };
+        let hashes = super::inline_script_hashes(&text);
+        assert!(
+            !hashes.is_empty(),
+            "SvelteKit's shell boots from an inline script; a policy with no hash for it \
+             refuses the boot and the window renders empty"
+        );
+        let policy = super::console_policy(&text);
+        for hash in &hashes {
+            assert!(
+                policy.contains(hash.as_str()),
+                "every hash the shell needs is in the policy it is served with"
+            );
+        }
+        assert!(policy.contains("'wasm-unsafe-eval'"));
+    }
+
+    /// The policy admits each third-party host on the directive it needs, and
+    /// no other.
+    #[test]
+    fn every_third_party_host_is_admitted_by_directive() {
+        let policy = super::console_policy("<html></html>");
+        for (directive, host) in [
+            ("style-src", "https://fonts.googleapis.com"),
+            ("font-src", "https://fonts.gstatic.com"),
+            ("script-src", "https://challenges.cloudflare.com"),
+            ("frame-src", "https://challenges.cloudflare.com"),
+            ("script-src", "https://cdn.paddle.com"),
+        ] {
+            let section = policy
+                .split(';')
+                .find(|part| part.trim_start().starts_with(directive))
+                .unwrap_or_else(|| panic!("{directive} is in the policy"));
+            assert!(
+                section.contains(host),
+                "{host} belongs on {directive}: {section}"
+            );
+        }
+    }
+
+    /// `connect-src` names no host.
+    ///
+    /// Narrowed from the whole policy, which now names four hosts on purpose.
+    /// This directive is the one that must stay relative: the console is served
+    /// from the origin it calls, so naming it here would be a second thing to
+    /// edit at cutover and a stale value would break every request rather than
+    /// failing a build.
+    #[test]
+    fn the_connect_directive_names_no_host() {
+        let policy = super::console_policy("<html></html>");
+        let connect = policy
+            .split(';')
+            .find(|part| part.trim_start().starts_with("connect-src"))
+            .expect("connect-src is in the policy");
+        assert!(
+            !connect.contains("http"),
+            "a host here is a second thing to keep in step with the origin: {connect}"
+        );
+    }
+
+    /// The policy is a header this build can send.
+    ///
+    /// It is built at start-up and inserted per response, so an invalid byte
+    /// would drop the header silently rather than failing anything.
+    #[test]
+    fn the_policy_is_a_sendable_header() {
+        let policy = super::console_policy("<html><script>boot()</script></html>");
+        assert!(
+            axum::http::HeaderValue::from_str(&policy).is_ok(),
+            "the computed policy has to survive being put in a header: {policy}"
+        );
+    }
 }

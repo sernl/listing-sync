@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connect-marketplace"
+description = "Enables the connect_marketplace command without any pre-configured scope."
+commands.allow = ["connect_marketplace"]
+
+[[permission]]
+identifier = "deny-connect-marketplace"
+description = "Denies the connect_marketplace command without any pre-configured scope."
+commands.deny = ["connect_marketplace"]

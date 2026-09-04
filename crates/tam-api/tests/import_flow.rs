@@ -402,6 +402,7 @@ async fn a_page_applies_its_resources_and_keeps_only_their_covers(pool: PgPool) 
         resources: vec![observed(13_549_794, 0x5A), observed(13_549_795, 0x5B)],
         skipped: Vec::new(),
         complete: false,
+        failed: None,
     };
     let (status, body) = post_page(&app, &TOKEN_A, DEVICE_A, &page).await;
     assert_eq!(status, StatusCode::OK, "the page applies: {body}");
@@ -476,6 +477,7 @@ async fn the_same_page_twice_describes_each_resource_once(pool: PgPool) {
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
         complete: false,
+        failed: None,
     };
     let (first, _) = post_page(&app, &TOKEN_A, DEVICE_A, &page).await;
     assert_eq!(first, StatusCode::OK);
@@ -518,6 +520,7 @@ async fn a_completing_page_mints_the_create_job_once(pool: PgPool) {
         resources: vec![observed(13_549_794, 0x5A), observed(13_549_795, 0x5B)],
         skipped: Vec::new(),
         complete: true,
+        failed: None,
     };
     let (status, body) = post_page(&app, &TOKEN_A, DEVICE_A, &page).await;
     assert_eq!(
@@ -563,6 +566,7 @@ async fn an_empty_catalogue_completes_rather_than_failing(pool: PgPool) {
             why: Reason::truncating("the bundle download was refused"),
         }],
         complete: true,
+        failed: None,
     };
     let (status, body) = post_page(&app, &TOKEN_A, DEVICE_A, &page).await;
     assert_eq!(
@@ -621,6 +625,7 @@ async fn a_page_is_refused_across_a_tenant_and_for_a_revoked_device(pool: PgPool
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
         complete: false,
+        failed: None,
     };
 
     // B's session against A's request: missing, not forbidden, so B learns
@@ -758,6 +763,7 @@ async fn the_serialized_view_is_what_the_console_receives(pool: PgPool) {
             why: Reason::truncating("the bundle download was refused"),
         }],
         complete: true,
+        failed: None,
     };
     let (status, _) = post_page(&app, &TOKEN_A, DEVICE_A, &page).await;
     assert_eq!(status, StatusCode::OK);
@@ -815,6 +821,7 @@ async fn a_field_that_carries_a_payload_is_refused_at_the_wire(pool: PgPool) {
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
         complete: false,
+        failed: None,
     })
     .expect("the page serialises");
     body["resources"][0]["file"]["payload_content_type"] =
@@ -878,6 +885,7 @@ async fn the_sync_list_reaches_a_request_that_minted_no_job(pool: PgPool) {
             why: Reason::truncating("the bundle download was refused"),
         }],
         complete: false,
+        failed: None,
     };
     let (status, _) = post_page(&app, &TOKEN_A, DEVICE_A, &page).await;
     assert_eq!(status, StatusCode::OK);
@@ -957,5 +965,63 @@ async fn the_sync_list_reaches_a_request_that_minted_no_job(pool: PgPool) {
     assert!(
         theirs.requests.is_empty(),
         "a tenant sees its own requests and no other's"
+    );
+}
+
+/// A device that stopped tells the request, and the seller's own page says so.
+///
+/// r-c5b2's O1. Everything the pass posts is the request's, but a terminal
+/// failure that posted NOTHING — a first page that could not be sent, a
+/// sign-out mid-pass — left the request holding exactly nothing, and the
+/// console's request page watched a state that never changed. This is that
+/// failure arriving where the seller is already looking.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_device_that_stopped_settles_the_request_with_its_reason(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, DEVICE_A).await;
+    seed_crosswalk(&pool).await;
+    let root = store_root("stopped");
+    let app = router(configured(pool.clone(), &root));
+    let request = open_request(&app, &TOKEN_A, Uuid([0x71; 16])).await;
+
+    let stopped = ImportPage {
+        request,
+        resources: Vec::new(),
+        skipped: Vec::new(),
+        complete: true,
+        failed: Some(Reason::truncating(
+            "your catalogue could not be read: the session has expired",
+        )),
+    };
+    let (status, body) = post_page(&app, &TOKEN_A, DEVICE_A, &stopped).await;
+    assert_eq!(status, StatusCode::OK, "the report is accepted: {body}");
+
+    let settled = view(&app, &TOKEN_A, request).await;
+    assert_eq!(
+        settled.state, "failed",
+        "a stopped import is over, so the request is terminal rather than left expecting pages"
+    );
+    assert_eq!(
+        settled.failure_detail.as_deref(),
+        Some("your catalogue could not be read: the session has expired"),
+        "carrying the device's own sentence, which is what the request page renders"
+    );
+
+    // A late second report does not overwrite the first reason, and does not
+    // reopen anything.
+    let again = ImportPage {
+        request,
+        resources: Vec::new(),
+        skipped: Vec::new(),
+        complete: true,
+        failed: Some(Reason::truncating("a different reason entirely")),
+    };
+    let (status, _) = post_page(&app, &TOKEN_A, DEVICE_A, &again).await;
+    assert_eq!(status, StatusCode::OK);
+    let after = view(&app, &TOKEN_A, request).await;
+    assert_eq!(
+        after.failure_detail.as_deref(),
+        Some("your catalogue could not be read: the session has expired"),
+        "the first reason stands: a report arriving after the request is terminal must not \
+         replace what the seller was already told"
     );
 }

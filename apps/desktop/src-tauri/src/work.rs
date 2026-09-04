@@ -33,8 +33,9 @@ use tokio::sync::Mutex;
 
 use crate::device::DeviceId;
 use crate::entitlement::EntitlementGate;
+use crate::heartbeat::{ControlPlaneError, PlaneFuture};
 use crate::ledger::{HttpLedger, LedgerTransport};
-use crate::marketplace::{SessionTransport, TesLive, TptLive};
+use crate::marketplace::{LiveTransport, SessionTransport, TesLive, TptLive};
 use crate::payload::{DevicePayloads, MarketplaceFiles, PayloadTransport};
 use crate::run::{DeviceClock, DeviceIds, RunGate, SleepingPause};
 use crate::scheduler::{PullFuture, WorkError, WorkSource};
@@ -245,6 +246,121 @@ impl MarketplaceFiles for SellerFiles {
                     "no capture exists for a {marketplace:?} file download"
                 )),
             }
+        })
+    }
+}
+
+/// The seller's own catalogue, read from the marketplace holding it under the
+/// seller's own session.
+///
+/// The live binding for [`crate::import::CatalogueSource`], whose only other
+/// implementation is the test double inside that module. The pass has been
+/// provable without a marketplace since it was written and had no way to reach
+/// one; this is that way, and it is deliberately the same shape as
+/// [`SellerFiles`] beside it — the session store rather than a built
+/// transport, so a seller who signs in again between two calls is picked up at
+/// the next call rather than at the next restart.
+pub struct SellerCatalogue<B: LiveTransport = TesLive> {
+    sessions: Arc<dyn SessionStore>,
+    /// Which of the seller's shops to walk, taken from the request rather than
+    /// chosen here. A device that picked its own would be able to enumerate a
+    /// shop the request does not name.
+    inventory: InventoryId,
+    /// How a session becomes a client. `TesLive` in the application, and a
+    /// scripted one under test.
+    ///
+    /// Generic rather than fixed so the three reads can be pinned against
+    /// recorded traffic — that drafts are listed, that an upload is refused —
+    /// which is otherwise unprovable without a marketplace. The per-call
+    /// re-sign-in property is unaffected: the builder is still invoked once per
+    /// call, through `SessionTransport`, so a seller who signs in again between
+    /// two reads is picked up at the next one rather than at the next restart.
+    live: B,
+}
+
+impl SellerCatalogue<TesLive> {
+    #[must_use]
+    pub const fn new(sessions: Arc<dyn SessionStore>, inventory: InventoryId) -> Self {
+        Self {
+            sessions,
+            inventory,
+            live: TesLive,
+        }
+    }
+}
+
+impl<B: LiveTransport + Clone> SellerCatalogue<B> {
+    /// The same, over a stated transport builder.
+    #[must_use]
+    pub const fn over(sessions: Arc<dyn SessionStore>, inventory: InventoryId, live: B) -> Self {
+        Self {
+            sessions,
+            inventory,
+            live,
+        }
+    }
+
+    /// A Tes adapter over the seller's own session, built per call.
+    ///
+    /// `NoUploads` for the same reason the file source uses it: a catalogue
+    /// read uploads nothing, so the honest binding is one that refuses rather
+    /// than a permissive stub a later edit could write through.
+    fn adapter(&self) -> Result<TesAdapter<SessionTransport<B>, NoUploads>, ControlPlaneError> {
+        let transport = SessionTransport::new(self.live.clone(), Arc::clone(&self.sessions))
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
+        TesAdapter::new(self.inventory, transport, NoUploads)
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+    }
+}
+
+impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogue<B> {
+    /// Every resource the seller has, drafts included.
+    ///
+    /// Drafts are kept rather than filtered out even though a draft has no
+    /// published bundle and will fail its download. The pass turns that
+    /// failure into a named skip the seller can read, and a filter here would
+    /// instead make a draft vanish from the migration silently — which is the
+    /// outcome `ImportPage::skipped` exists to prevent, one step earlier.
+    fn list(&self) -> PlaneFuture<'_, Vec<i64>> {
+        Box::pin(async move {
+            let adapter = self.adapter()?;
+            let entries = adapter
+                .list_own_resources(&FetchReason::FirstPartyExport {
+                    inventory: self.inventory,
+                })
+                .await
+                .map_err(|why| ControlPlaneError::Refused(format!("{why:?}")))?;
+            Ok(entries.into_iter().map(|entry| entry.id).collect())
+        })
+    }
+
+    fn read(&self, resource: i64) -> PlaneFuture<'_, tam_marketplace::ImportedListing> {
+        Box::pin(async move {
+            let adapter = self.adapter()?;
+            adapter
+                .fetch_for_import(
+                    &FetchReason::FirstPartyExport {
+                        inventory: self.inventory,
+                    },
+                    tam_marketplace_tes::DraftId(resource),
+                )
+                .await
+                .map_err(|why| ControlPlaneError::Refused(format!("{why:?}")))
+        })
+    }
+
+    fn bundle(&self, resource: i64) -> PlaneFuture<'_, Vec<u8>> {
+        Box::pin(async move {
+            let adapter = self.adapter()?;
+            adapter
+                .download_resource_bundle(
+                    &FetchReason::FirstPartyExport {
+                        inventory: self.inventory,
+                    },
+                    tam_marketplace_tes::DraftId(resource),
+                )
+                .await
+                .map_err(|why| ControlPlaneError::Refused(format!("{why:?}")))
         })
     }
 }
@@ -1843,6 +1959,161 @@ mod tests {
         assert!(
             !why.is_empty(),
             "the refusal carries the marketplace's own sentence rather than an empty string"
+        );
+    }
+
+    /// The live catalogue source refuses by name on a device nobody signed in
+    /// on, and refuses on every one of its three reads.
+    ///
+    /// The one that matters is `list`. An empty enumeration and a failed one
+    /// are indistinguishable to everything downstream, and the live run of
+    /// 2026-08-28 saw both Tes dashboard routes answer an empty array with HTTP
+    /// 200 on an authenticated session — so a source that answered `Ok(vec![])`
+    /// when it could not read would tell a seller their shop is empty on
+    /// evidence that says no such thing, and the pass would post a completing
+    /// page and mint nothing. Each read must fail as a failure.
+    #[tokio::test]
+    async fn the_live_catalogue_refuses_by_name_rather_than_answering_empty() {
+        use crate::import::CatalogueSource as _;
+        let catalogue = super::SellerCatalogue::new(sessions_for(&[]).await, InventoryId::TesGb);
+
+        let listed = catalogue
+            .list()
+            .await
+            .expect_err("a device nobody signed in on enumerates nothing");
+        assert!(
+            !listed.to_string().is_empty(),
+            "the refusal carries a sentence rather than an empty string"
+        );
+
+        let read = catalogue
+            .read(13_549_794)
+            .await
+            .expect_err("and reads no listing");
+        assert!(!read.to_string().is_empty());
+
+        let bundle = catalogue
+            .bundle(13_549_794)
+            .await
+            .expect_err("and downloads no bundle");
+        assert!(!bundle.to_string().is_empty());
+    }
+
+    /// The source walks the inventory it was given, not one it chose.
+    ///
+    /// Constructed for two different Tes inventories, the two are different
+    /// values; the command takes this from the request the console names, so a
+    /// source that ignored its argument would enumerate whichever shop it
+    /// preferred regardless of what the seller asked to migrate.
+    #[test]
+    fn the_live_catalogue_carries_the_inventory_it_was_built_for() {
+        let gb = super::SellerCatalogue::new(
+            std::sync::Arc::new(crate::session::memory::MemorySessionStore::default()),
+            InventoryId::TesGb,
+        );
+        let nz = super::SellerCatalogue::new(
+            std::sync::Arc::new(crate::session::memory::MemorySessionStore::default()),
+            InventoryId::TesNz,
+        );
+        assert_eq!(gb.inventory, InventoryId::TesGb);
+        assert_eq!(nz.inventory, InventoryId::TesNz);
+        assert_ne!(gb.inventory, nz.inventory);
+    }
+
+    /// A transport builder that answers from a recorded cassette.
+    ///
+    /// The seam that lets the live catalogue be pinned against traffic without
+    /// a marketplace. It still goes through `SessionTransport`, so the stored
+    /// session is still read and the per-call rebuild still happens; only the
+    /// client at the far end is recorded rather than live.
+    #[derive(Clone)]
+    struct ScriptedTes(std::sync::Arc<tam_marketplace::cassette::Cassette>);
+
+    impl crate::marketplace::LiveTransport for ScriptedTes {
+        type Live = tam_marketplace::cassette::CassetteTransport;
+
+        fn marketplace(&self) -> Marketplace {
+            Marketplace::Tes
+        }
+
+        fn build(&self, _cookie_header: &str) -> Result<Self::Live, String> {
+            Ok(tam_marketplace::cassette::CassetteTransport::new(
+                (*self.0).clone(),
+            ))
+        }
+    }
+
+    /// The catalogue walk keeps drafts, and the source refuses to upload.
+    ///
+    /// Drafts are the assertion that matters. A draft has no published bundle
+    /// and will fail its download, so filtering it out here would look tidier
+    /// and would make it vanish from the migration in silence — where keeping
+    /// it turns the failure into a named skip the seller reads. The upload
+    /// refusal is the other half of the same posture: a catalogue read writes
+    /// nothing, so the file source it is built with refuses rather than being
+    /// a permissive stub a later edit could write through.
+    #[tokio::test]
+    async fn the_live_catalogue_lists_drafts_and_refuses_to_upload() {
+        use crate::import::CatalogueSource as _;
+        use tam_marketplace::cassette::{Cassette, Interaction};
+        use tam_marketplace::transport::HttpResponse;
+        use tam_marketplace_tes::endpoints as tes;
+
+        let limit = tes::CATALOGUE_PAGE_LIMIT;
+        let cassette = Cassette {
+            interactions: vec![
+                Interaction {
+                    request: tes::list_resources_request(0, limit),
+                    response: HttpResponse::plain(
+                        200,
+                        serde_json::json!([{ "id": 13_549_794_i64, "title": "Published", "licence": "CC-BY", "price": 0, "draft": false }])
+                            .to_string()
+                            .into_bytes(),
+                    ),
+                },
+                Interaction {
+                    request: tes::list_resources_request(1, limit),
+                    response: HttpResponse::plain(200, b"[]".to_vec()),
+                },
+                Interaction {
+                    request: tes::list_drafts_request(0, limit),
+                    response: HttpResponse::plain(
+                        200,
+                        serde_json::json!([{ "id": 13_549_795_i64, "title": "A draft", "licence": "CC-BY", "price": 0, "draft": true }])
+                            .to_string()
+                            .into_bytes(),
+                    ),
+                },
+                Interaction {
+                    request: tes::list_drafts_request(1, limit),
+                    response: HttpResponse::plain(200, b"[]".to_vec()),
+                },
+            ],
+        };
+        let catalogue = super::SellerCatalogue::over(
+            sessions_for(&[Marketplace::Tes]).await,
+            InventoryId::TesGb,
+            ScriptedTes(std::sync::Arc::new(cassette)),
+        );
+
+        let listed = catalogue.list().await.expect("the catalogue walks");
+        assert!(
+            listed.contains(&13_549_795),
+            "a draft is listed rather than filtered out, so its download failure becomes a skip \
+             the seller reads instead of a resource that vanished: {listed:?}"
+        );
+        assert!(listed.contains(&13_549_794), "and so is the published one");
+
+        let refused = tam_marketplace::FileSource::fetch(
+            &super::NoUploads,
+            tam_types::FileId(tam_types::Uuid([0x11; 16])),
+        )
+        .await
+        .expect_err("a catalogue read uploads nothing");
+        assert!(
+            format!("{refused:?}").contains("uploads none"),
+            "the file source refuses by name rather than being a stub a later edit writes \
+             through: {refused:?}"
         );
     }
 

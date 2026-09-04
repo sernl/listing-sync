@@ -285,6 +285,14 @@ An unattested TPT connection reaches the submit, the adapter refuses, and the it
 The recommendation is that the migrate flow refuses to start without the declaration, which is one gate a seller can act on and is far cheaper than the park-on-a-gate change the step contemplated.
 
 The import screen is new, driven by the desktop and mirrored in the console, with per-resource progress, a running count, an explicit statement that nothing is being kept on our servers, and resumption after a restart.
+How the seller starts it was the gap C5 left and C5b closes: the pass existed with no trigger and no way to reach a marketplace, so the console's button invoked a command nothing registered and the seller read a developer's error as though it were a refusal.
+The trigger is a `start_import` command taking a request id alone; the device reads that request from the control plane to learn which shop it names, so a console cannot ask a device to enumerate one the request does not name.
+Inside the application the console invokes it directly; in a browser it says to open the application, because the pass runs on the device by construction.
+The enumeration runs inside that command rather than behind it, so the seller waits for it and every failure that precedes the first posted page — the entitlement, a revocation, an unreadable catalogue — is a sentence at the click rather than a request view that never changes.
+That wait is bounded at five minutes, because it is otherwise the walk's own limits that bound it: fifty resources a page and forty pages a walk, published and drafts walked separately, each request capped at thirty seconds, which is eighty requests and forty minutes of a button reading "Starting…".
+At the bound the command answers a named refusal saying the read was stopped, nothing was imported, and starting again is safe.
+A failure after the first page is the request's, and the device settles it there: a page carrying `failed` records the reason as the request's `failure_detail`, which is the page the seller is already watching.
+Reaching a request the seller navigated away from needed a list, `GET /{version}/sync`, because a device-branch migrate mints no job until its completing page and so appeared in no list at all until then.
 
 The review screen mostly exists, as the inventory page with its marketplace chips plus the queue and reconciliation pages.
 Per product it shows the mapped TPT category and grade, the taxonomy gaps the projection already raises, and the two new gates for file type and cover.

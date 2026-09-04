@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-activity"
+description = "Enables the device_activity command without any pre-configured scope."
+commands.allow = ["device_activity"]
+
+[[permission]]
+identifier = "deny-device-activity"
+description = "Denies the device_activity command without any pre-configured scope."
+commands.deny = ["device_activity"]

@@ -814,6 +814,7 @@ fn an_import_page_round_trips_over_both_file_arms_and_a_skip() {
             why: Reason::truncating("the bundle download was refused"),
         }],
         complete: true,
+        failed: None,
     };
 
     let wire = serde_json::to_string(&page).expect("a page serialises");
@@ -902,6 +903,7 @@ fn a_page_decodes_across_a_version_skew_in_both_directions() {
         resources: Vec::new(),
         skipped: Vec::new(),
         complete: true,
+        failed: None,
     };
     let mut encoded: serde_json::Value =
         serde_json::to_value(&page).expect("a page serialises to json");

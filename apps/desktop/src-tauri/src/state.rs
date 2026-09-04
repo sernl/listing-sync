@@ -129,6 +129,18 @@ pub struct DesktopState {
     verifying_keys: Vec<[u8; PUBLIC_KEY_BYTES]>,
     /// The most recent entries, newest last, bounded at [`ACTIVITY_MAX`].
     activity: Mutex<VecDeque<DeviceActivity>>,
+    /// How an import pass posts its pages. The same object as `plane` in a
+    /// real build and a second handle rather than a cast, because
+    /// `ControlPlane` and `LedgerTransport` are two traits and a state that
+    /// held only the first could not hand the second to anything.
+    ///
+    /// `None` in a build with no transport, which is what makes
+    /// [`crate::commands::start_import`] refuse rather than start a pass that
+    /// could post nothing.
+    ledger: Option<Arc<dyn crate::ledger::LedgerTransport>>,
+    /// Which imports are running, so a second start for one request is
+    /// refused rather than walking the seller's shop twice at once.
+    imports: Mutex<std::collections::HashSet<tam_types::Uuid>>,
 }
 
 impl DesktopState {
@@ -152,7 +164,48 @@ impl DesktopState {
             plane,
             verifying_keys: EMBEDDED_PUBLIC_KEYS.to_vec(),
             activity: Mutex::new(VecDeque::new()),
+            ledger: None,
+            imports: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// The transport an import pass posts its pages over.
+    ///
+    /// A separate step rather than a parameter on the constructor, so no
+    /// existing caller changes and a build without one is still expressible:
+    /// the application hands it the same object it hands the registry, and a
+    /// test that needs no import leaves it unset.
+    #[must_use]
+    pub fn with_ledger(mut self, ledger: Arc<dyn crate::ledger::LedgerTransport>) -> Self {
+        self.ledger = Some(ledger);
+        self
+    }
+
+    /// The import transport, if this build has one.
+    #[must_use]
+    pub fn ledger(&self) -> Option<Arc<dyn crate::ledger::LedgerTransport>> {
+        self.ledger.clone()
+    }
+
+    /// The session store, shared, for a run that outlives the call that
+    /// started it.
+    #[must_use]
+    pub fn store_handle(&self) -> Arc<dyn SessionStore> {
+        Arc::clone(&self.store)
+    }
+
+    /// Claims the right to run one import, or reports that it is already
+    /// running.
+    ///
+    /// Claim and release rather than a flag the command sets and clears on its
+    /// own path: the pass runs in the background and can end by an error, so
+    /// the release has to be somewhere both endings reach.
+    pub async fn claim_import(&self, request: tam_types::Uuid) -> bool {
+        self.imports.lock().await.insert(request)
+    }
+
+    pub async fn release_import(&self, request: tam_types::Uuid) {
+        self.imports.lock().await.remove(&request);
     }
 
     /// A state whose entitlement verifier is a key set the test generated.

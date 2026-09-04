@@ -54,6 +54,21 @@ pub fn import_path(device: &crate::device::DeviceId) -> String {
     format!("/v1/devices/{device}/import")
 }
 
+/// The name the console invokes and the application registers.
+///
+/// One constant on this side too, so the registration test names the same
+/// string the console's own constant does rather than a third spelling.
+pub const START_IMPORT_COMMAND: &str = "start_import";
+
+/// How long the catalogue walk may take before it is refused.
+///
+/// The command waits for this, so the bound is what stops a slow marketplace
+/// turning a button press into a window that never answers. Five minutes is
+/// generous against a several-hundred-resource shop walked a page at a time and
+/// short against a seller's patience; a bound this large exists to catch a
+/// stall rather than to pace a healthy read.
+pub const ENUMERATION_BUDGET: core::time::Duration = core::time::Duration::from_mins(5);
+
 /// How many resources one page carries.
 ///
 /// A page is the unit of resumability rather than of efficiency: the server
@@ -211,7 +226,14 @@ fn payload_of(bundle: Vec<u8>, fallback_name: &str) -> (Vec<u8>, String, Option<
 }
 
 /// One import of one seller's catalogue.
-pub struct ImportPass<S: CatalogueSource, P: LedgerTransport> {
+/// `P` is `?Sized` so the application can hand this a trait object.
+///
+/// The pass is generic for the tests, which drive it against a fake plane, and
+/// the application has one concrete plane behind an `Arc<dyn LedgerTransport>`
+/// it shares with the heartbeat. Without the relaxation the command would have
+/// to name that concrete type, which would put a transport's identity into the
+/// state every other caller reads.
+pub struct ImportPass<S: CatalogueSource, P: LedgerTransport + ?Sized> {
     device: crate::device::DeviceId,
     source: S,
     plane: Arc<P>,
@@ -234,7 +256,7 @@ pub struct SourcePermission {
     pub stopper: Arc<AtomicBool>,
 }
 
-impl<S: CatalogueSource, P: LedgerTransport> ImportPass<S, P> {
+impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
     #[must_use]
     pub const fn new(
         device: crate::device::DeviceId,
@@ -277,18 +299,59 @@ impl<S: CatalogueSource, P: LedgerTransport> ImportPass<S, P> {
     pub async fn run(
         &self,
         now: Timestamp,
-        mut progress: impl FnMut(ImportProgress) + Send,
+        progress: impl FnMut(ImportProgress) + Send,
     ) -> Result<PassReport, PassError> {
+        let catalogue = self.enumerate(now).await?;
+        self.describe_all(catalogue, || now, progress).await
+    }
+
+    /// Reads the seller's catalogue and stops.
+    ///
+    /// Separate from the rest so a caller can do it while the seller is still
+    /// looking. Everything that can fail before a single page is posted fails
+    /// here — the entitlement, the revocation, and the catalogue read itself —
+    /// and each of those is a refusal the seller can act on. A caller that ran
+    /// the whole pass in the background would answer "started" and then have
+    /// nowhere to put the failure, because the request's own view holds nothing
+    /// until a page lands.
+    pub async fn enumerate(&self, now: Timestamp) -> Result<Vec<i64>, PassError> {
         // Before the enumeration, which is itself a marketplace request.
         if let Some(refusal) = self.refusal(now).await {
             return Err(refusal);
         }
-        let catalogue = self
-            .source
-            .list()
-            .await
-            .map_err(|why| PassError::Catalogue(why.to_string()))?;
+        // Bounded, because the caller waits for this: the command answers only
+        // once the shop is enumerated, so an unbounded walk is a button that
+        // never comes back and a seller with nothing to read. The page walk is
+        // several requests over a large shop and each has its own transport
+        // timeout, but nothing bounded the whole of it, so a marketplace
+        // answering slowly rather than not at all could hold the click open
+        // indefinitely. Refused by name at the bound rather than left hanging.
+        match tokio::time::timeout(ENUMERATION_BUDGET, self.source.list()).await {
+            Ok(listed) => listed.map_err(|why| PassError::Catalogue(why.to_string())),
+            Err(_) => Err(PassError::Catalogue(
+                "reading your catalogue took longer than five minutes, so it was stopped; \
+                 nothing was imported and starting again is safe"
+                    .to_owned(),
+            )),
+        }
+    }
 
+    /// Describes an already-enumerated catalogue, posting pages as it goes.
+    ///
+    /// `clock` rather than an instant, because the between-resource refusal is
+    /// the whole reason that check exists and a shop of several hundred
+    /// resources takes long enough for the answer to change. An entitlement
+    /// whose grace period expires mid-pass has to be read against the current
+    /// instant; against the instant the pass started, the grace never runs out
+    /// and the run continues on a subscription that has lapsed. The crate still
+    /// holds no clock — this is the caller's reading, taken repeatedly rather
+    /// than once.
+    pub async fn describe_all(
+        &self,
+        catalogue: Vec<i64>,
+        clock: impl Fn() -> Timestamp + Send,
+        mut progress: impl FnMut(ImportProgress) + Send,
+    ) -> Result<PassReport, PassError> {
         let mut report = PassReport::default();
         let mut page: Vec<ObservedResource> = Vec::new();
         let mut skipped: Vec<SkippedResource> = Vec::new();
@@ -303,7 +366,7 @@ impl<S: CatalogueSource, P: LedgerTransport> ImportPass<S, P> {
             // large shop runs long enough for a revocation to arrive during
             // it, and the next fetch after one must not happen. What has
             // already been described is posted first, so the work is not lost.
-            if let Some(refusal) = self.refusal(now).await {
+            if let Some(refusal) = self.refusal(clock()).await {
                 if !page.is_empty() {
                     self.post(
                         core::mem::take(&mut page),
@@ -315,7 +378,7 @@ impl<S: CatalogueSource, P: LedgerTransport> ImportPass<S, P> {
                 }
                 return Err(refusal);
             }
-            match self.describe(locator, now).await {
+            match self.describe(locator, clock()).await {
                 Ok(observed) => {
                     page.push(observed);
                     report.described += 1;
@@ -437,12 +500,41 @@ impl<S: CatalogueSource, P: LedgerTransport> ImportPass<S, P> {
         skipped: Vec<SkippedResource>,
         complete: bool,
     ) -> Result<(), PassError> {
-        let page = ImportPage {
+        self.send(ImportPage {
             request: self.request,
             resources,
             skipped,
             complete,
+            failed: None,
+        })
+        .await
+    }
+
+    /// Tells the server the import stopped, and why.
+    ///
+    /// The seller reads the request's own page, so a failure that posted
+    /// nothing has to arrive there or it arrives nowhere: the console would
+    /// otherwise watch a request that never changes state. Best effort by
+    /// construction — the thing that failed may be the very transport this
+    /// needs — so a failure to report a failure is swallowed rather than
+    /// replacing the original reason with a second one.
+    pub async fn report_failure(&self, why: &PassError) {
+        let page = ImportPage {
+            request: self.request,
+            resources: Vec::new(),
+            skipped: Vec::new(),
+            complete: true,
+            failed: Some(Reason::truncating(&why.to_string())),
         };
+        if let Err(unreported) = self.send(page).await {
+            // Deliberately not surfaced. The transport this needs may be the
+            // very thing that failed, and replacing the original reason with a
+            // second one about reporting it would tell the seller less.
+            drop(unreported);
+        }
+    }
+
+    async fn send(&self, page: ImportPage) -> Result<(), PassError> {
         let body = serde_json::to_string(&page)
             .map_err(|why| PassError::Page(format!("the page could not be encoded: {why}")))?;
         self.plane
@@ -457,7 +549,7 @@ impl<S: CatalogueSource, P: LedgerTransport> ImportPass<S, P> {
 mod tests {
     use super::{
         base64, content_type_for, import_path, payload_of, CatalogueSource, ImportPage, ImportPass,
-        Locator, PassError, SourcePermission, PAGE_SIZE, PNG_MAGIC,
+        Locator, PassError, Reason, SourcePermission, PAGE_SIZE, PNG_MAGIC,
     };
     use crate::device::DeviceId;
     use crate::entitlement::{Claims, Entitlement, EntitlementGate};
@@ -903,6 +995,41 @@ mod tests {
         };
         assert!(page.resources.is_empty());
         assert!(page.complete, "or the server never mints anything");
+    }
+
+    /// A pass that stopped posts the reason, and the request renders it.
+    ///
+    /// r-c5b2's O1. A terminal failure that posted no resources used to leave
+    /// the request holding exactly nothing, so the console watched a state
+    /// that never changed and the seller was told nothing at all. The page
+    /// below is the only thing that changes it, so its shape is asserted here
+    /// rather than at the one call site, which is a Tauri command no test
+    /// constructs.
+    #[tokio::test]
+    async fn a_stopped_pass_posts_the_reason_the_request_will_render() {
+        let plane = Arc::new(FakePlane::default());
+        pass(Scripted::of(1, PDF.to_vec()), &plane)
+            .report_failure(&PassError::Revoked)
+            .await;
+
+        let posted = plane.posted.lock().await.clone();
+        let [page] = posted.as_slice() else {
+            panic!("one page, and it is the failure report: {posted:?}");
+        };
+        let expected = PassError::Revoked.to_string();
+        assert_eq!(
+            page.failed.as_ref().map(Reason::as_str),
+            Some(expected.as_str()),
+            "the sentence the request settles with is the pass's own"
+        );
+        assert!(
+            page.complete,
+            "a stopped import is over, so the server is not left holding the request open"
+        );
+        assert!(
+            page.resources.is_empty() && page.skipped.is_empty(),
+            "it reports the stop and nothing else: {page:?}"
+        );
     }
 
     /// A catalogue that could not be read is a failure with its own name.

@@ -177,6 +177,90 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the connect_marketplace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-connect-marketplace",
+          "markdownDescription": "Enables the connect_marketplace command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-activity",
+          "markdownDescription": "Enables the device_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_check_in command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-check-in",
+          "markdownDescription": "Enables the device_check_in command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the forget_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-forget-session",
+          "markdownDescription": "Enables the forget_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the retry_console command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-retry-console",
+          "markdownDescription": "Enables the retry_console command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the session_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-session-status",
+          "markdownDescription": "Enables the session_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-import",
+          "markdownDescription": "Enables the start_import command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the connect_marketplace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-connect-marketplace",
+          "markdownDescription": "Denies the connect_marketplace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-activity",
+          "markdownDescription": "Denies the device_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_check_in command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-check-in",
+          "markdownDescription": "Denies the device_check_in command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the forget_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-forget-session",
+          "markdownDescription": "Denies the forget_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the retry_console command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-retry-console",
+          "markdownDescription": "Denies the retry_console command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the session_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-session-status",
+          "markdownDescription": "Denies the session_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-import",
+          "markdownDescription": "Denies the start_import command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

@@ -6,6 +6,10 @@ publish = false
 
 [dependencies]
 axum = "0.8"
+# The console's policy carries a hash per inline script, so the shell it serves
+# actually boots; both are the versions the rest of the workspace pins.
+base64 = "0.22"
+sha2 = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-api = { path = "../tam-api" }

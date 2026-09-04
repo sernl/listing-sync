@@ -172,6 +172,29 @@ pub trait ControlPlane: Send + Sync {
         device: &'a DeviceId,
         sessions: &'a [SessionReport],
     ) -> PlaneFuture<'a, CheckIn>;
+
+    /// Whether the control plane answers at all, asked without a session.
+    ///
+    /// The console is served from that origin, so a window navigated there
+    /// while it is unreachable shows the browser's own failure page — a seller
+    /// reading "this site can't be reached" about software they just installed.
+    /// Probing first is what lets the application say the true thing instead.
+    /// `/healthz` because it is the one route that needs no session and no
+    /// version segment.
+    fn reachable(&self) -> PlaneFuture<'_, ()>;
+
+    /// Which inventory a sync request names as its source.
+    ///
+    /// Read from the request rather than taken as an argument, and that is the
+    /// point rather than a convenience: the console asks this device to start
+    /// an import by request id alone, so a console that named the inventory
+    /// could ask a device to enumerate a shop the request does not name. The
+    /// server answers under the organisation's own session, so another
+    /// tenant's request is a 404 here and the command reports it as a refusal.
+    fn sync_request_source(
+        &self,
+        request: tam_types::Uuid,
+    ) -> PlaneFuture<'_, tam_types::InventoryId>;
 }
 
 /// The control plane a build with no configured transport gets: one that
@@ -184,6 +207,17 @@ pub trait ControlPlane: Send + Sync {
 pub struct Offline;
 
 impl ControlPlane for Offline {
+    fn reachable(&self) -> PlaneFuture<'_, ()> {
+        Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
+    }
+
+    fn sync_request_source(
+        &self,
+        _request: tam_types::Uuid,
+    ) -> PlaneFuture<'_, tam_types::InventoryId> {
+        Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
+    }
+
     fn register<'a>(
         &'a self,
         _device: &'a DeviceIdentity,
@@ -470,6 +504,17 @@ mod tests {
     }
 
     impl ControlPlane for Fake {
+        fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::TesGb)))
+        }
+
         fn register<'a>(
             &'a self,
             _device: &'a DeviceIdentity,

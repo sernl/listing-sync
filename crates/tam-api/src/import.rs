@@ -114,6 +114,32 @@ pub(crate) async fn import_page(
         ));
     }
 
+    // A page that says the import stopped. Settled here, before anything else
+    // is considered, because the device sends nothing else with it: the seller
+    // reads the request's own page, and a terminal failure that posted no
+    // resources leaves that page holding nothing at all unless this writes the
+    // reason into it. Completion is implied — a stopped import is over — so
+    // there is no state in which a request is both failed and still expecting
+    // pages.
+    if let Some(why) = page.failed.as_ref() {
+        if settled(&record) {
+            // Already terminal. A late failure report does not reopen a
+            // request that completed, and does not overwrite the reason a
+            // request already failed with.
+            return Ok((StatusCode::OK, Json(ack(&record, 0, 0, true))));
+        }
+        requests
+            .record_failure(context.org, page.request, why.as_str(), now)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+        let settled = requests
+            .get(context.org, page.request)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            .ok_or_else(|| missing("no such sync request"))?;
+        return Ok((StatusCode::OK, Json(ack(&settled, 0, 0, true))));
+    }
+
     // What the request already knows about. Read once per page rather than once
     // per resource, and consulted BEFORE anything is canonicalised: `import_one`
     // mints a fresh product every time it runs, so a re-posted page checked

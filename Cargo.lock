@@ -5231,7 +5231,9 @@ name = "tam-server"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "reqwest 0.12.28",
+ "sha2",
  "sqlx",
  "tam-api",
  "tam-engine",

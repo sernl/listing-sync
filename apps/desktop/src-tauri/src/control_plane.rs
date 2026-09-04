@@ -42,8 +42,25 @@ use crate::heartbeat::{
 ///
 /// The same origin `tauri.conf.json`'s content-security policy already names
 /// as the one the console may reach, so the two cannot disagree without one of
-/// them being edited.
-pub const DEFAULT_BASE_URL: &str = "https://api.teachouse.io";
+/// them being edited. The main window's origin is derived from this constant
+/// rather than configured, so it cannot drift from it and is not a third place
+/// to edit; the genuinely independent third is the capability below.
+///
+/// One host carries the console, `/v1` and `/api/auth` for the interim period,
+/// because Cloudflare's free certificate covers one label under `stowiq.io`
+/// and `api.teachouse.stowiq.io` would be a second.
+///
+/// `teachouse.io` replaces this at cutover, in one commit touching THREE
+/// places, all of which must move together:
+/// this constant; the `connect-src` in `tauri.conf.json`; and the `remote.urls`
+/// entry in `capabilities/console.json`.
+/// The third is the one a cutover would miss and the build would not catch:
+/// the window would navigate to the new origin, `Origin::matches` would test it
+/// against the old pattern, and every application command would be refused with
+/// the console rendering "this page is not one the app accepts commands from"
+/// until a new build shipped. `the_capability_grants_the_origin_this_build_uses`
+/// is what makes that a failing test rather than a shipped defect.
+pub const DEFAULT_BASE_URL: &str = "https://teachouse.stowiq.io";
 
 /// The development override. `just web-dev` serves the console on the vite
 /// origin and proxies `/v1` from there to a local `tam-server`, so in
@@ -121,10 +138,17 @@ pub trait Transport: Send + Sync {
 
     /// Reads one of our own paths as bytes, under the same per-call session.
     ///
-    /// The one thing this is for is the interim payload fetch: D27 puts file
-    /// ingest on the seller's device, and until it does the bytes an upload
-    /// needs are on our servers and have to come down. See
-    /// `docs/notes/design/desktop-data-plane.md`.
+    /// Two callers now. The interim payload fetch it was written for — D27 puts
+    /// file ingest on the seller's device, and until it does the bytes an
+    /// upload needs are on our servers and have to come down, see
+    /// `docs/notes/design/desktop-data-plane.md` — and the two JSON reads the
+    /// import added, the sync-request source and the reachability probe.
+    ///
+    /// It sends `accept: application/octet-stream`, which is honest for the
+    /// payload and wrong-looking for the other two. Harmless because axum's
+    /// `Json` responder ignores `Accept`, and recorded here rather than
+    /// silently relied on: a server that ever content-negotiated would break
+    /// those two reads with nothing to explain why.
     fn fetch<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a>;
 }
 
@@ -390,7 +414,77 @@ fn refusal(reply: &Reply) -> ControlPlaneError {
     }
 }
 
+/// The path the device reads a sync request from. A free function so the wire
+/// test names the same expression the client uses rather than a copy of it.
+#[must_use]
+pub fn sync_request_path(request: tam_types::Uuid) -> String {
+    format!(
+        "/v1/sync/{}",
+        uuid::Uuid::from_bytes(request.0).as_hyphenated()
+    )
+}
+
 impl ControlPlane for HttpControlPlane {
+    fn reachable(&self) -> PlaneFuture<'_, ()> {
+        Box::pin(async move {
+            // No session: this asks whether the server is there, and a seller
+            // who is not signed in must still get a true answer rather than a
+            // browser error page. `/healthz` carries no version segment, so a
+            // client one version behind still reaches it.
+            let reply = self
+                .transport
+                .fetch("/healthz", "")
+                .await
+                .map_err(ControlPlaneError::Refused)?;
+            if reply.status == 200 {
+                Ok(())
+            } else {
+                Err(ControlPlaneError::Refused(format!(
+                    "the server answered {} rather than 200",
+                    reply.status
+                )))
+            }
+        })
+    }
+
+    fn sync_request_source(
+        &self,
+        request: tam_types::Uuid,
+    ) -> PlaneFuture<'_, tam_types::InventoryId> {
+        Box::pin(async move {
+            let reply = self.read(&sync_request_path(request)).await?;
+            match reply.status {
+                200 => {}
+                // The server scopes this read to the organisation the session
+                // names, so a request belonging to another tenant is absent
+                // rather than forbidden — and absent is also what a request id
+                // the seller mistyped looks like.
+                404 => {
+                    return Err(ControlPlaneError::Refused(
+                        "this sign-in has no such migration".to_owned(),
+                    ))
+                }
+                status => {
+                    return Err(ControlPlaneError::Refused(format!(
+                        "{status}: {}",
+                        excerpt(&String::from_utf8_lossy(&reply.body))
+                    )))
+                }
+            }
+            let view: serde_json::Value = serde_json::from_slice(&reply.body)
+                .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
+            let source = view.get("source").cloned().ok_or_else(|| {
+                ControlPlaneError::Refused("the migration names no source inventory".to_owned())
+            })?;
+            // Deserialised from the value the server sent rather than from a
+            // string rebuilt out of it. Rebuilding assumes the field is always
+            // a bare string, so a changed wire shape would be reported as "no
+            // source inventory" rather than as what it actually was.
+            serde_json::from_value(source)
+                .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+        })
+    }
+
     fn register<'a>(&'a self, device: &'a DeviceIdentity, facts: HostFacts) -> PlaneFuture<'a, ()> {
         Box::pin(async move {
             let body = serde_json::to_string(&RegisterBody {
@@ -1037,6 +1131,88 @@ mod tests {
             !printed.contains("s3ss10n"),
             "the session is the credential that authenticates this device to us, and a \
              refusal is a string that gets shown: {printed}"
+        );
+    }
+
+    /// The capability grants commands to the origin this build actually uses.
+    ///
+    /// M2's durable half. Three independent places name the control plane —
+    /// this constant, `tauri.conf.json`'s `connect-src`, and
+    /// `capabilities/console.json`'s `remote.urls` — and only the third fails
+    /// silently: a cutover that edits the first two builds clean and passes
+    /// every other test, then refuses all six commands at run time because
+    /// `Origin::matches` tests the new origin against the old pattern. The
+    /// console renders that as "this page is not one the app accepts commands
+    /// from", for every seller, until a new build ships.
+    ///
+    /// Reading the file rather than a generated constant is deliberate: the
+    /// generated schema is derived from this file, so asserting against the
+    /// derivation would compare the file to itself.
+    #[test]
+    fn the_capability_grants_the_origin_this_build_uses() {
+        // Embedded rather than read at run time: the file is then a compile
+        // dependency, so moving or renaming it fails the build instead of
+        // leaving a test that quietly stops checking anything.
+        let raw = include_str!("../capabilities/console.json");
+        let capability: serde_json::Value =
+            serde_json::from_str(raw).expect("the capability is json");
+        let urls = capability["remote"]["urls"]
+            .as_array()
+            .expect("the console capability names remote urls");
+        assert_eq!(
+            urls.len(),
+            1,
+            "one origin, so there is one thing to keep in step rather than a set to audit"
+        );
+        assert_eq!(
+            urls[0].as_str(),
+            Some(super::DEFAULT_BASE_URL),
+            "the capability's origin and the compiled default are the same origin, or the \
+             seller reaches a console whose every button is refused"
+        );
+    }
+
+    /// The source inventory comes off the wire, from the path the request
+    /// names.
+    ///
+    /// The device asks by request id and reads the shop out of the answer,
+    /// which is what stops a console asking it to enumerate a shop the request
+    /// does not name.
+    #[tokio::test]
+    async fn the_source_inventory_is_read_from_the_request() {
+        let fake = Arc::new(Fake::answering(
+            200,
+            r#"{"request":"71717171-7171-7171-7171-717171717171","source":"TesNz","target":"Tpt","disposition":"migrate","intent":"draft","state":"pending","resources":[]}"#,
+        ));
+        let source = plane(Arc::clone(&fake))
+            .sync_request_source(tam_types::Uuid([0x71; 16]))
+            .await
+            .expect("the request reads");
+        assert_eq!(
+            source,
+            tam_types::InventoryId::TesNz,
+            "the shop is the one the request names, not a default this device picked"
+        );
+        let path = fake.seen.lock().await[0].path.clone();
+        assert_eq!(
+            path,
+            super::sync_request_path(tam_types::Uuid([0x71; 16])),
+            "and it is read from the request's own path"
+        );
+    }
+
+    /// Another organisation's request is absent, and the device says so in
+    /// words a seller can act on.
+    #[tokio::test]
+    async fn a_request_this_sign_in_cannot_see_is_a_refusal_rather_than_a_fault() {
+        let refused = plane(Arc::new(Fake::answering(404, "{}")))
+            .sync_request_source(tam_types::Uuid([0x71; 16]))
+            .await
+            .expect_err("a 404 is a refusal");
+        assert!(
+            refused.to_string().contains("no such migration"),
+            "the server scopes this read to the session's organisation, so absent is what \
+             another tenant's request looks like: {refused}"
         );
     }
 

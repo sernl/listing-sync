@@ -29,8 +29,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // nothing and satisfies the check; `just desktop-build` fills it before it
     // bundles anything.
     std::fs::create_dir_all("../../../web/build").ok();
+    require_fallback_page()?;
     emit_entitlement_keys()?;
-    tauri_build::build();
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+    )?;
+    Ok(())
+}
+
+/// The application's own commands, declared so a capability can grant them.
+///
+/// Without this list Tauri's access control has no permissions to resolve for
+/// an application command, so every invocation is refused before dispatch —
+/// and refused identically whether the command is registered or not, which is
+/// measurable: a mock application answers `start_import` and a name nothing
+/// registers with the same `not allowed. Plugin not found`. That is also why
+/// the console, once it is served from the control plane's origin rather than
+/// the bundled bundle, needs this: remote content is granted nothing by
+/// default, and this is the half that makes a grant expressible at all.
+///
+/// `retry_console` is granted LOCALLY rather than remotely: it is the fallback
+/// page's one button, and that page is bundled, so it runs at the Tauri origin
+/// where the console never does.
+///
+/// The list is exactly the handler list in `lib.rs`. A command in one and not
+/// the other is either a command nothing can call or a permission for nothing,
+/// and both are silent.
+const COMMANDS: &[&str] = &[
+    "connect_marketplace",
+    "session_status",
+    "forget_session",
+    "device_check_in",
+    "device_activity",
+    "start_import",
+    "retry_console",
+];
+
+/// A bundle that carries a console must carry the page shown when the console
+/// cannot be reached.
+///
+/// Checked here because nothing else does. `generate_context!` embeds whatever
+/// is in `web/build` and a missing file is not an error, so before this a
+/// binary could ship with a console and no fallback — and the seller who most
+/// needed the fallback, the one with no network, would get a blank window
+/// instead. `web/static/unreachable.html` is copied into the build by
+/// SvelteKit, so a build that ran `just web-check` has it and one that used a
+/// stale directory does not.
+///
+/// Only when `index.html` is present, because a clone that has never built the
+/// console must still compile: the empty directory above satisfies
+/// `generate_context!` and there is no console to be missing a fallback from.
+/// The release workflow builds the console before it bundles, so the shipping
+/// path always takes the checked branch.
+fn require_fallback_page() -> Result<(), Box<dyn std::error::Error>> {
+    let build = std::path::Path::new("../../../web/build");
+    println!("cargo::rerun-if-changed=../../../web/build/index.html");
+    println!("cargo::rerun-if-changed=../../../web/build/unreachable.html");
+    if build.join("index.html").exists() && !build.join("unreachable.html").exists() {
+        return Err(
+            "web/build has a console but no unreachable.html, so a bundle from it \
+                    would show a blank window to any seller who cannot reach the server. \
+                    Rebuild the console with `just web-check`, which copies web/static into \
+                    web/build."
+                .into(),
+        );
+    }
     Ok(())
 }
 
