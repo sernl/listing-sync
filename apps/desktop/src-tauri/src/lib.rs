@@ -44,6 +44,7 @@ pub mod control_plane;
 pub mod device;
 pub mod entitlement;
 pub mod heartbeat;
+pub mod import;
 pub mod ledger;
 pub mod marketplace;
 pub mod payload;
