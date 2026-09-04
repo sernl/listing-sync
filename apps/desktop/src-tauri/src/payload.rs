@@ -16,6 +16,11 @@
 //! [`PayloadManifest`], so server and device read one definition of what was
 //! committed to.
 //!
+//! Which of those two things a manifest carries is [`PayloadSource`]'s to say,
+//! and this module fetches only the arm it names as ours. A manifest naming a
+//! marketplace is the seller's bytes held by the marketplace, fetched under
+//! the seller's own session by a source this module does not build.
+//!
 //! The bytes live in one directory per item under the application data
 //! directory, and [`DevicePayloads::discard`] removes that directory once the
 //! item settles. [`DevicePayloads`] also removes it on drop, so a run that
@@ -29,9 +34,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use tam_engine_driver::vocabulary::PayloadManifest;
+use tam_engine_driver::vocabulary::{Committed, PayloadManifest, PayloadSource};
 use tam_marketplace::{FileContent, FileSource, FileSourceError};
-use tam_types::{ContentHash, FileId};
+use tam_types::{ContentHash, FileId, Marketplace};
 
 use crate::device::DeviceId;
 use crate::heartbeat::{ControlPlaneError, PlaneFuture};
@@ -86,6 +91,15 @@ pub enum PayloadError {
         expected: i64,
         received: i64,
     },
+    /// The manifest names an origin this source cannot fetch from.
+    ///
+    /// Not a transport failure, and never retried: no number of attempts
+    /// gives this source a fetcher it does not have. The seller's own bytes
+    /// on a no-API marketplace are fetched by a marketplace-backed source
+    /// under the seller's own session, and a sanctioned marketplace's are the
+    /// server's to hold, so an order naming one here would be asking this
+    /// device to stand in for the API branch.
+    UnsupportedSource { file: FileId, origin: Marketplace },
     /// The cache directory could not be written or read.
     Cache(String),
 }
@@ -111,6 +125,12 @@ impl core::fmt::Display for PayloadError {
             } => write!(
                 f,
                 "file {} is {expected} bytes in the envelope and {received} arrived",
+                file.0.to_hyphenated()
+            ),
+            Self::UnsupportedSource { file, origin } => write!(
+                f,
+                "file {} is held by {origin:?} and this source fetches only what the control \
+                 plane holds",
                 file.0.to_hyphenated()
             ),
             Self::Cache(why) => write!(f, "the payload cache is unusable: {why}"),
@@ -194,9 +214,20 @@ impl<T: PayloadTransport> DevicePayloads<T> {
     }
 
     async fn load(&self, manifest: &PayloadManifest) -> Result<Vec<u8>, PayloadError> {
+        // The source decides before anything is read, so a manifest this
+        // source cannot serve costs no cache read and no request.
+        let committed = match &manifest.source {
+            PayloadSource::ControlPlane { committed } => committed,
+            PayloadSource::Marketplace { marketplace, .. } => {
+                return Err(PayloadError::UnsupportedSource {
+                    file: manifest.file,
+                    origin: *marketplace,
+                })
+            }
+        };
         let cached = self.path_for(manifest.file);
         match tokio::fs::read(&cached).await {
-            Ok(bytes) => return verified(manifest, bytes),
+            Ok(bytes) => return verified(manifest.file, committed, bytes),
             Err(why) if why.kind() == std::io::ErrorKind::NotFound => {}
             Err(why) => return Err(PayloadError::Cache(why.to_string())),
         }
@@ -206,7 +237,7 @@ impl<T: PayloadTransport> DevicePayloads<T> {
             .fetch(&payload_path(&self.device, manifest.file))
             .await
             .map_err(PayloadError::Plane)?;
-        let bytes = verified(manifest, bytes)?;
+        let bytes = verified(manifest.file, committed, bytes)?;
 
         tokio::fs::create_dir_all(&self.directory)
             .await
@@ -239,24 +270,29 @@ fn segment(raw: &str) -> String {
     }
 }
 
-/// The bytes, if they are the bytes the envelope committed to.
+/// The bytes, if they are the bytes that were committed to.
 ///
 /// Length first so a truncated transfer is named as one rather than as an
 /// unexplained digest mismatch; the digest is what actually decides.
-fn verified(manifest: &PayloadManifest, bytes: Vec<u8>) -> Result<Vec<u8>, PayloadError> {
+///
+/// Takes the commitment rather than the manifest, because the check is the
+/// same check whoever made the commitment: what differs between a
+/// control-plane source and a marketplace one is what the commitment proves,
+/// which [`PayloadSource`] states and this function does not need to know.
+fn verified(file: FileId, committed: &Committed, bytes: Vec<u8>) -> Result<Vec<u8>, PayloadError> {
     let received = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-    if received != manifest.byte_len {
+    if received != committed.byte_len {
         return Err(PayloadError::LengthMismatch {
-            file: manifest.file,
-            expected: manifest.byte_len,
+            file,
+            expected: committed.byte_len,
             received,
         });
     }
     let digest = ContentHash(blake3::hash(&bytes).into());
-    if digest != manifest.hash {
+    if digest != committed.hash {
         return Err(PayloadError::DigestMismatch {
-            file: manifest.file,
-            expected: manifest.hash,
+            file,
+            expected: committed.hash,
             received: digest,
         });
     }
@@ -317,8 +353,9 @@ mod tests {
     use crate::device::DeviceId;
     use crate::heartbeat::{ControlPlaneError, PlaneFuture};
     use std::path::{Path, PathBuf};
+    use tam_engine_driver::vocabulary::{Committed, PayloadSource};
     use tam_marketplace::{FileSource, FileSourceError};
-    use tam_types::{ContentHash, FileId, Uuid};
+    use tam_types::{ContentHash, FileId, Marketplace, Uuid};
     use tokio::sync::Mutex;
 
     const DEVICE: &str = "11112222333344445555666677778888";
@@ -336,8 +373,28 @@ mod tests {
             file: id,
             file_name: "worksheet.pdf".to_owned(),
             content_type: "application/pdf".to_owned(),
-            hash: ContentHash(blake3::hash(bytes).into()),
-            byte_len: i64::try_from(bytes.len()).expect("a fixture fits in an i64"),
+            source: PayloadSource::ControlPlane {
+                committed: Committed {
+                    hash: ContentHash(blake3::hash(bytes).into()),
+                    byte_len: i64::try_from(bytes.len()).expect("a fixture fits in an i64"),
+                },
+            },
+        }
+    }
+
+    /// The same file, held by the marketplace the seller sells it on rather
+    /// than by us.
+    fn marketplace_manifest(id: FileId) -> PayloadManifest {
+        PayloadManifest {
+            file: id,
+            file_name: "worksheet.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            source: PayloadSource::Marketplace {
+                marketplace: Marketplace::Tes,
+                resource: "13549126".to_owned(),
+                entry: None,
+                expected: None,
+            },
         }
     }
 
@@ -423,6 +480,44 @@ mod tests {
             "the bytes live under the application data directory and nowhere else"
         );
         assert!(source.directory().join(id.0.to_hyphenated()).exists());
+
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// The source arm decides before anything is read.
+    ///
+    /// The assertion that matters is the second one: a manifest naming bytes
+    /// this source does not hold must cost no request to our control plane,
+    /// because the alternative is a 403 from the payload route standing in for
+    /// a decision the manifest already stated.
+    #[tokio::test]
+    async fn a_marketplace_sourced_file_is_refused_before_any_transfer_is_attempted() {
+        let data_dir = scratch();
+        let id = file(7);
+        let source = payloads(
+            &data_dir,
+            FakePlane::answering(BYTES),
+            vec![marketplace_manifest(id)],
+        );
+
+        let why = source
+            .fetch(id)
+            .await
+            .expect_err("bytes this source does not hold are not produced");
+        let FileSourceError::Unreadable { file, detail } = why else {
+            panic!("a file held elsewhere is unreadable here, not absent from the envelope");
+        };
+        assert_eq!(file, id);
+        assert!(
+            detail.contains("Tes"),
+            "the refusal names the marketplace holding the bytes, so what is missing is a \
+             login rather than a file: {detail}"
+        );
+        assert!(
+            source.transport.asked().await.is_empty(),
+            "a manifest this source cannot serve costs no request to our control plane"
+        );
 
         drop(source);
         std::fs::remove_dir_all(&data_dir).ok();

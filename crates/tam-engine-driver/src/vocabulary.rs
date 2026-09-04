@@ -292,23 +292,157 @@ impl core::fmt::Display for LedgerError {
 
 impl core::error::Error for LedgerError {}
 
-/// One file the operation uploads, as the server commits to it before the
-/// bytes move.
+/// What a transfer of one file is checked against.
 ///
-/// The hash and the length are the commitment: the device fetches the bytes
-/// separately and checks what arrived against these before it uploads
-/// anything, so a truncated or substituted transfer is caught on the device
-/// rather than discovered on the marketplace. The name and the content type
-/// are what the upload form carries, derived from the file's kind by the same
-/// rule the server's own file source uses.
+/// The pair travels together because the check is one check: the length is
+/// compared first so a truncated transfer of a large file is named as one
+/// rather than as an unexplained digest mismatch, and the hash is what
+/// actually decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Committed {
+    /// The blake3 content hash of the bytes.
+    pub hash: ContentHash,
+    /// How many bytes, checked before the hash so a truncated transfer of a
+    /// large file is named as a truncation rather than as an unexplained
+    /// mismatch.
+    pub byte_len: i64,
+}
+
+/// Where the bytes an upload needs come from, and what the device may check
+/// them against on arrival.
+///
+/// The two arms differ in who committed to the bytes, which is the whole of
+/// what integrity means here. Under `ControlPlane` the server states the hash
+/// and the length before the transfer begins, so what arrives is proved
+/// against a commitment made in advance; that is why the payload route
+/// deliberately carries no digest of its own, a response restating its own
+/// digest proving nothing.
+///
+/// Under `Marketplace` the bytes are the seller's, held by the marketplace,
+/// and the device fetches them under the seller's own session because D27
+/// puts file ingest there: if the upload is itself a marketplace request that
+/// must originate on the seller's machine, the bytes must be on that machine
+/// at upload time. The server holds no copy and so can commit to nothing on a
+/// first observation, which `expected: None` states rather than hides. Where a
+/// previous observation exists it travels as `expected`, and what it proves is
+/// narrower than the `ControlPlane` case and worth naming: it catches a
+/// changed or truncated re-fetch and makes a retry idempotent, but it cannot
+/// prove the bytes are the seller's original, because a wrong first fetch is
+/// what every later one would agree with.
+/// Externally tagged and accepting unknown fields, which is the convention
+/// every nested value enum in this module follows — `LandingEffect`,
+/// `BindDisposition`, `BudgetGrant`, `GrantKind`, `LedgerError`. The
+/// internally tagged, `deny_unknown_fields` shape belongs to the enums that
+/// dispatch a device-to-server call, where refusing a field nobody recognises
+/// is the server declining to guess what a client meant. This travels the
+/// other way, server to device, and a new field added here must be ignorable
+/// by an older client rather than fatal to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadSource {
+    ControlPlane {
+        committed: Committed,
+    },
+    Marketplace {
+        marketplace: Marketplace,
+        /// How that marketplace addresses the resource holding the bytes, in
+        /// the spelling its own adapter takes.
+        resource: String,
+        /// Which file inside the resource, where the marketplace hands over a
+        /// bundle rather than a file. `None` is the bundle whole, which is
+        /// what a migration sends, because the target's product slot takes one
+        /// file and the bundle is what the source's buyers already receive.
+        entry: Option<String>,
+        expected: Option<Committed>,
+    },
+}
+
+/// One file the operation uploads, as the server describes it before the bytes
+/// move.
+///
+/// The name and the content type are what the upload form carries, derived
+/// from the file's kind by the same rule the server's own file source uses.
+/// What the bytes are checked against, and whether they can be checked at all,
+/// is [`PayloadSource`]'s to say.
+///
+/// Deserialise is derived and Serialize is not, and the asymmetry is a
+/// deprecation shim rather than a style. Desktop 0.1.3 is published and
+/// auto-updating, and its own copy of this struct declares `hash` and
+/// `byte_len` as required top-level fields with no serde attributes. A server
+/// emitting only `source` would make every claimed item carrying a file fail
+/// to decode there — and fail after the claim, so the item sits leased until
+/// its lease expires while the device reports a failure every poll. So the
+/// serialisation below emits the old pair beside `source`, derived from the
+/// source rather than stored, which is why they cannot drift out of step with
+/// it. Reading tolerates both shapes because the derived `Deserialize`
+/// ignores fields it does not know.
+///
+/// The window ends when every registered device reports an `app_version` at or
+/// past this change; `device` rows carry it at registration and at every
+/// check-in. What must not happen before then is a marketplace-sourced
+/// manifest reaching an old client, and see [`PayloadManifest::serialize`] for
+/// what that case deliberately does.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PayloadManifest {
     pub file: FileId,
     pub file_name: String,
     pub content_type: String,
-    /// The blake3 content hash of the stored bytes.
-    pub hash: ContentHash,
-    pub byte_len: i64,
+    pub source: PayloadSource,
+}
+
+impl Serialize for PayloadManifest {
+    /// Emits the current shape, plus the pre-`source` pair where there is one
+    /// to emit.
+    ///
+    /// A control-plane source has a commitment, so the old fields are exactly
+    /// that commitment and an old client behaves as it always did.
+    ///
+    /// A marketplace source has no commitment to restate, and emits neither
+    /// field, so an old client fails to decode the envelope. That is chosen
+    /// rather than fallen into. No value would let an old client succeed: it
+    /// has no marketplace fetcher, and our object store holds no bytes for
+    /// that file, so a synthesised hash would only send it to a payload route
+    /// that answers 404 — failing later, after a round trip, in a shape that
+    /// reads as our server being broken rather than as a client being too old.
+    /// Failing at the envelope is louder and truer. The cost is real and is
+    /// the reason the window has an end condition rather than a hope: the
+    /// item stays leased until its lease expires. Nothing emits a marketplace
+    /// source yet, and nothing may until every device has updated.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let legacy = match &self.source {
+            PayloadSource::ControlPlane { committed } => Some(committed),
+            PayloadSource::Marketplace { .. } => None,
+        };
+        let fields = if legacy.is_some() { 6 } else { 4 };
+        let mut out = serializer.serialize_struct("PayloadManifest", fields)?;
+        out.serialize_field("file", &self.file)?;
+        out.serialize_field("file_name", &self.file_name)?;
+        out.serialize_field("content_type", &self.content_type)?;
+        out.serialize_field("source", &self.source)?;
+        if let Some(committed) = legacy {
+            out.serialize_field("hash", &committed.hash)?;
+            out.serialize_field("byte_len", &committed.byte_len)?;
+        }
+        out.end()
+    }
+}
+
+impl PayloadManifest {
+    /// What a transfer of this file may be checked against, where anything
+    /// may.
+    ///
+    /// `None` is the one case with no commitment at all — a marketplace source
+    /// nobody has observed yet — and it is returned rather than substituted
+    /// for, because a caller that verified against a value it invented would
+    /// be asserting a guarantee this manifest does not carry.
+    #[must_use]
+    pub const fn committed(&self) -> Option<&Committed> {
+        match &self.source {
+            PayloadSource::ControlPlane { committed } => Some(committed),
+            PayloadSource::Marketplace { expected, .. } => expected.as_ref(),
+        }
+    }
 }
 
 /// What the server has decided about an item, which is everything the device

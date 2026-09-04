@@ -9,10 +9,10 @@
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
 use tam_engine_driver::driver::VerifyPolicy;
 use tam_engine_driver::vocabulary::{
-    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, GrantKind,
-    ItemPreparation, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall,
-    LedgerError, NewAttempt, PayloadManifest, PreflightStreak, ReconcileSubject, SettleEnvelope,
-    WorkOrder,
+    AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, Committed,
+    GrantKind, ItemPreparation, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerAnswer,
+    LedgerCall, LedgerError, NewAttempt, PayloadManifest, PayloadSource, PreflightStreak,
+    ReconcileSubject, SettleEnvelope, WorkOrder,
 };
 use tam_marketplace::{
     CreateStrategy, FormId, IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle,
@@ -230,8 +230,12 @@ fn the_whole_claim_view_round_trips() {
             file: tam_types::FileId(Uuid([0x0F; 16])),
             file_name: "abc.pdf".to_owned(),
             content_type: "application/pdf".to_owned(),
-            hash: tam_types::ContentHash([0x0A; 32]),
-            byte_len: 4_096,
+            source: PayloadSource::ControlPlane {
+                committed: Committed {
+                    hash: tam_types::ContentHash([0x0A; 32]),
+                    byte_len: 4_096,
+                },
+            },
         }],
         server_now_ms: 1_756_000_000_000,
         server_deadline_ms: 1_756_000_300_000,
@@ -258,6 +262,182 @@ fn the_whole_claim_view_round_trips() {
             "the device branches on these three states, so each must read back as itself"
         );
     }
+}
+
+/// Both arms of where an upload's bytes come from.
+///
+/// The arms are what the device dispatches on before it reads anything, so an
+/// arm that did not read back as itself would be a device fetching from the
+/// wrong place, or refusing bytes it can reach. The marketplace arm is
+/// exercised in both of its forms, because the distinction between them is
+/// the whole integrity story: `Some` is a transfer checked against a previous
+/// observation, and `None` is a first observation with nothing to check
+/// against, which the wire must be able to say rather than approximate with a
+/// zero digest.
+#[test]
+fn every_payload_source_round_trips() {
+    let file = tam_types::FileId(Uuid([0x0F; 16]));
+    let committed = Committed {
+        hash: tam_types::ContentHash([0x0A; 32]),
+        byte_len: 4_096,
+    };
+    let held = |entry: Option<&str>, expected: Option<Committed>| PayloadSource::Marketplace {
+        marketplace: tam_types::Marketplace::Tes,
+        resource: "13549126".to_owned(),
+        entry: entry.map(str::to_owned),
+        expected,
+    };
+    // Both axes, both ways: an entry names a file inside a bundle and an
+    // expectation is a previous observation, and neither implies the other.
+    // A bundle sent whole can still have been observed before, and a named
+    // entry can still be a first sight of it.
+    for source in [
+        PayloadSource::ControlPlane { committed },
+        held(None, None),
+        held(None, Some(committed)),
+        held(Some("worksheets/integers.pdf"), None),
+        held(Some("worksheets/integers.pdf"), Some(committed)),
+    ] {
+        let manifest = PayloadManifest {
+            file,
+            file_name: "abc.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            source: source.clone(),
+        };
+        assert_eq!(
+            round_trip(&manifest),
+            manifest,
+            "a manifest that lost its source on the wire is a device that cannot tell whose \
+             bytes these are"
+        );
+    }
+
+    let uncommitted = PayloadManifest {
+        file,
+        file_name: "abc.pdf".to_owned(),
+        content_type: "application/pdf".to_owned(),
+        source: PayloadSource::Marketplace {
+            marketplace: tam_types::Marketplace::Tes,
+            resource: "13549126".to_owned(),
+            entry: None,
+            expected: None,
+        },
+    };
+    assert_eq!(
+        uncommitted.committed(),
+        None,
+        "a first observation carries no commitment, and the manifest says so rather than \
+         offering a value a caller would verify against"
+    );
+    let held = PayloadManifest {
+        source: PayloadSource::ControlPlane { committed },
+        ..uncommitted
+    };
+    assert_eq!(
+        held.committed(),
+        Some(&committed),
+        "bytes we hold are bytes we committed to before they moved"
+    );
+}
+
+/// The published client keeps working, in both directions.
+///
+/// Desktop 0.1.3 is auto-updating and its own `PayloadManifest` declares
+/// `hash` and `byte_len` as required top-level fields with no serde
+/// attributes. Two things therefore have to hold at once during the
+/// deprecation window, and a break in either is not a decode error somebody
+/// notices in a log: the item has already been claimed, so it sits leased
+/// until its lease expires while the device reports a failure every poll.
+#[test]
+fn the_pre_source_manifest_shape_still_works_in_both_directions() {
+    let committed = Committed {
+        hash: tam_types::ContentHash([0x0A; 32]),
+        byte_len: 4_096,
+    };
+    let manifest = PayloadManifest {
+        file: tam_types::FileId(Uuid([0x0F; 16])),
+        file_name: "abc.pdf".to_owned(),
+        content_type: "application/pdf".to_owned(),
+        source: PayloadSource::ControlPlane { committed },
+    };
+
+    // Forward: what we emit is still readable by a client that knows only the
+    // old fields.
+    let emitted: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&manifest).expect("the manifest serialises"))
+            .expect("the emitted manifest is json");
+    assert_eq!(
+        emitted.get("hash"),
+        Some(&serde_json::to_value(committed.hash).expect("a hash is a value")),
+        "the pre-source hash is still emitted, or every 0.1.3 device fails to decode every \
+         item carrying a file"
+    );
+    assert_eq!(
+        emitted.get("byte_len"),
+        Some(&serde_json::json!(4_096)),
+        "and so is the length"
+    );
+    assert!(
+        emitted.get("source").is_some(),
+        "beside the new shape rather than instead of it"
+    );
+
+    // Backward: an envelope written before `source` existed still decodes
+    // here, which is a new server reading an old recording and a new client
+    // reading an old server.
+    let old_shape = serde_json::json!({
+        "file": manifest.file,
+        "file_name": "abc.pdf",
+        "content_type": "application/pdf",
+        "hash": committed.hash,
+        "byte_len": 4_096,
+        "source": { "control_plane": { "committed": committed } },
+    });
+    let read: PayloadManifest =
+        serde_json::from_value(old_shape).expect("the old shape still decodes");
+    assert_eq!(
+        read, manifest,
+        "the duplicated old fields are ignored rather than fought over"
+    );
+}
+
+/// A marketplace source emits no pre-source pair, and that is the deliberate
+/// half of the shim.
+///
+/// There is no value that would let a 0.1.3 client succeed here — it has no
+/// marketplace fetcher and our object store holds no bytes for the file — so
+/// the only choice is how it fails. Emitting nothing fails it at the envelope,
+/// which is louder and truer than a synthesised hash sending it to a payload
+/// route that answers 404. The cost is that the item stays leased until its
+/// lease expires, which is why nothing may emit a marketplace source until
+/// every registered device reports an `app_version` at or past this change.
+#[test]
+fn a_marketplace_source_emits_no_legacy_pair() {
+    let manifest = PayloadManifest {
+        file: tam_types::FileId(Uuid([0x0F; 16])),
+        file_name: "abc.pdf".to_owned(),
+        content_type: "application/pdf".to_owned(),
+        source: PayloadSource::Marketplace {
+            marketplace: tam_types::Marketplace::Tes,
+            resource: "13549126".to_owned(),
+            entry: None,
+            expected: None,
+        },
+    };
+    let emitted: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&manifest).expect("the manifest serialises"))
+            .expect("the emitted manifest is json");
+    assert_eq!(
+        emitted.get("hash"),
+        None,
+        "a commitment nobody made is not restated as one: a hash here would be invented"
+    );
+    assert_eq!(emitted.get("byte_len"), None);
+    assert_eq!(
+        round_trip(&manifest),
+        manifest,
+        "and the current shape still round trips regardless"
+    );
 }
 
 /// The settle, fenced on the lease it ran under.

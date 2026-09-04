@@ -22,8 +22,9 @@ use tam_engine::seed::{
     Disposed, ItemPreparation,
 };
 use tam_engine_driver::vocabulary::{
-    AttemptRef, Attestation, ClaimView, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall,
-    LedgerError, PayloadManifest, ReconcileSubject, SettleEnvelope, WorkFilter, WorkOrder,
+    AttemptRef, Attestation, ClaimView, Committed, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall,
+    LedgerError, PayloadManifest, PayloadSource, ReconcileSubject, SettleEnvelope, WorkFilter,
+    WorkOrder,
 };
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
@@ -182,7 +183,10 @@ async fn work_order(
     };
     // The server commits to the bytes before they move: the device fetches
     // them separately and checks what arrived against these hashes and
-    // lengths, so a truncated transfer is caught on the device.
+    // lengths, so a truncated transfer is caught on the device. Every file
+    // this route describes is one we hold, so every manifest it states is a
+    // control-plane source; a marketplace-sourced file is the seller's and is
+    // named by its locator rather than described from a blob we do not have.
     let preparation = preparation_for(leased, operation, projected);
     let payload = match preparation.projected.as_ref() {
         Some(listing) => describe_files(&state.pool, org, &listing.files)
@@ -193,8 +197,12 @@ async fn work_order(
                 file: file.id,
                 file_name: file.file_name,
                 content_type: file.content_type,
-                hash: file.hash,
-                byte_len: file.byte_len,
+                source: PayloadSource::ControlPlane {
+                    committed: Committed {
+                        hash: file.hash,
+                        byte_len: file.byte_len,
+                    },
+                },
             })
             .collect(),
         None => Vec::new(),
