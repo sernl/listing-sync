@@ -1175,8 +1175,9 @@ pub async fn run_item<
             // reconcile against what the marketplace says by then.
             (SyncState::Stranded { .. }, _) => {
                 return Ok(RunVerdict::Abandoned {
-                    reason: "the submit's answer was lost; the attempt stays in flight and \
-                             the recorded title identifies the create for a later reconcile"
+                    reason: "the write went out and its fate is unknown; the attempt stays \
+                             in flight and the recorded title identifies the create for a \
+                             later reconcile"
                         .to_owned(),
                 })
             }

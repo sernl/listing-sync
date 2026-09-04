@@ -682,6 +682,44 @@ So the new behaviour was narrowed to the ambiguous submit alone, through `ambigu
 The argument for changing it is the same argument this step makes, with one addition: the abandon leaves the attempt in flight, so the fence that stops a second create is still standing and the halt is a blunter instrument for a job the fence already does.
 That is a decision rather than a consequence, and it belongs to whoever takes it.
 
+Step 17, the create's challenge takes the same arm as its lost submit answer.
+
+The decision step 16 recorded and did not take, taken.
+A captcha or a JavaScript interstitial arriving mid-create no longer halts the tenant's inventory; under `DraftThenPublish` it ends the run in `SyncState::Stranded` exactly as the ambiguous submit does, with the attempt held in flight as the duplicate-create fence, the reaper's third arm parking the item on `awaiting_marketplace_answer`, and the recorded-title reconcile finding it later.
+
+`ambiguous_submit` did not have to generalise and no shared path had to be extracted, which is the whole shape of the change.
+It already hands every case that is not a `DraftThenPublish` create straight to `reconcile`, so it was already the shared arm and `SyncMachine::challenged`'s create branch simply calls it instead of calling `reconcile` itself.
+One line of production code moves.
+The consequences follow without further edits: the driver's `SyncState::Stranded` arm already answers `RunVerdict::Abandoned`, `expire_and_steal`'s third arm matches on the item's shape rather than on how it got there, and `claim_for_device`'s stranded predicate already admits the word the reaper writes.
+A marker strategy still searches inline, `HaltOnAmbiguity` still halts, a revise and a removal still settle `Blocked`, and a create whose recorded intent names no title still halts — that last kept deliberately, because there the standing attempt is the only thing holding the mapping and no later run would ever come to settle it.
+
+The argument is step 16's own, with the addition it named: the abandon leaves the attempt in flight, so the fence that stops a second create is still standing and the halt is a blunter instrument for a job the fence already does.
+What the halt bought was a frozen queue and an operator's intervention for one item whose fate is unknown; what replaces it is the reaper's park and a reconcile against evidence, and every sibling that is still safe to send keeps moving.
+
+Two consequences are recorded rather than fixed, and the first is the argument against this change.
+
+The fleet breaker loses its immediate signal from this arrival.
+`run_breaker` counts settled adverse outcomes — failed, ambiguous and blocked together — so a create-challenge that used to settle `ambiguous` fed it directly, and one that strands settles nothing.
+It returns rather than disappearing: the parked item is claimed as a reconcile, the enumeration meets the same edge, and `ReconcileResult(Err)` settles `Ambiguous ReadBackIndeterminate`, which the breaker counts.
+Revises and removals are untouched and still settle `Blocked` at once.
+So an egress block hitting every tenant's creates trips the fleet halt one reconcile later rather than immediately, and `challenged`'s own doc calls that breaker the remedy that fits this condition.
+The trade was taken knowingly: the halt was stopping a tenant's whole queue on one item's unknown fate, and the delay is bounded by the reconcile rather than open-ended.
+
+The org-inventory halt is deferred rather than removed.
+A stranded create that is re-claimed and whose reconcile answers a completed-and-absent `Ok(None)` or an indeterminate `Err` still halts the tenant, by the `AwaitingReadBack` rows that have always done so.
+That is the better version of the same outcome, because it halts on evidence that a search was performed rather than on the assumption that one would fail; but nothing here should be read as "a captcha never halts".
+`Effect::Reconcile` still draws no rate grant, which step 14 recorded as pre-existing, so this makes one more arrival reach one more unbilled catalogue walk.
+
+Proves that a create whose fate is unknown is treated the same way however it became unknown, and that the fence rather than the halt is what stops the second create.
+Verification: `row_intent_recorded_submit_challenge_on_a_create_strands_rather_than_halting` — which is step 16's `row_intent_recorded_submit_challenge_on_a_create_reconciles_rather_than_settling` renamed, so the name step 16 records above no longer exists — in `crates/tam-domain/src/lib.rs`, driving both strategies, asserting the `Stranded` state and the single `CaptureDiagnostics` under `DraftThenPublish`, no `Halt` and no `RequeueBehindGate`, and the untitled intent still halting; and `a_challenge_on_a_create_under_draft_then_publish_strands_and_holds_the_fence` in `crates/tam-engine/tests/driver.rs`, asserting end to end what the machine test cannot see — the attempt still `in_flight`, the mapping unbound, no `org_inventory_halt` row, and the connection still `linked`.
+`a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further` is untouched and is the contrast: the same adapter answer under `HaltOnAmbiguity`, still halting, because that strategy leaves nothing a walk could find.
+Falsified by reverting the one line to `self.reconcile(attempt)`, which fails the machine test on the exact defect it targets — `Terminal(Ambiguous NoDurableIdentifier)` where `Stranded` was expected.
+Kill gate: a path that releases the duplicate-create fence on anything other than a positive identification, which this does not touch.
+
+One measurement moved and is recorded where it is measured.
+`the_generator_reaches_the_terminals_the_properties_are_conditional_on` draws a fixed sample under a deterministic seed, and its ambiguous count fell from 945 to 936 in five thousand while committed and resumed did not move at all — which is what a change confined to one arm predicts, and the small size of the fall is `BudgetExhausted` applying to `Stranded` and settling most of those runs ambiguous anyway.
+The floors are untouched and every count is still well above them.
+
 ## 8. Open questions for the founder
 
 1. Restate the Phase 1 verification as port conformance over two ledger implementations. Recommended: yes, because the current wording is unrunnable and the phase would otherwise ship without evidence.

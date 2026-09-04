@@ -73,7 +73,8 @@ A requeued item recomputes the same key, which is what lets a connection that tr
 `Submitted` holds the driver's evidence and is the only state from which ambiguity can arise.
 `AwaitingReadBack` holds the locator that will settle the write.
 `Parked` holds a live challenge and is deliberately not terminal.
-`Stranded` is the run ending without a verdict on the item: a create whose submit came back ambiguous under a strategy this build can identify, holding the attempt that fences its mapping and the locator a later run should search for.
+`Stranded` is the run ending without a verdict on the item: a create whose write went out under a strategy this build can identify and whose fate this run cannot determine, holding the attempt that fences its mapping and the locator a later run should search for.
+Two arrivals reach it, a submit whose answer was lost and a challenge that arrived mid-write, and they are one situation rather than two.
 No input carries the machine forward from it, which is the point — entering `AwaitingReadBack` without having asked for a read would let a fabricated read result commit a listing nobody looked at, and `every_committed_terminal_follows_a_read` is the property that refuses it.
 `BudgetExhausted` still terminates it, as `Ambiguous`, because a write did go out; nothing else applies.
 `Terminal` holds an `Outcome` and can be stepped no further, which `step` taking `self` by value enforces at compile time.
@@ -103,7 +104,11 @@ A reconcile that finds the listing never settles ambiguous on the grounds that t
 | `IntentRecorded` | `SubmitResult(Err Ambiguous)` (recorded-title strategy) | `Stranded` | `CaptureDiagnostics` |
 | `IntentRecorded` | `SubmitResult(Err Ambiguous)` (nothing to identify) | `Terminal(Ambiguous NoDurableIdentifier)` | `CaptureDiagnostics`, `Halt OrgInventory`, `Notify` |
 | `IntentRecorded` | `SubmitResult(Err Rejected)` | `Terminal(Rejected)` | none |
-| `IntentRecorded` | `SubmitResult(Err Challenge)` | `Parked` | `ParkItem`, `RequeueBehindGate`, `Notify` |
+| `IntentRecorded` | `SubmitResult(Err Challenge)` (reauth or one-time password) | `Parked` | `ParkItem`, `RequeueBehindGate`, `Notify` |
+| `IntentRecorded` | `SubmitResult(Err Challenge)` (captcha or interstitial, not a create) | `Terminal(Blocked)` | none |
+| `IntentRecorded` | `SubmitResult(Err Challenge)` (captcha or interstitial, create, marker strategy) | `AwaitingReadBack` | `Reconcile`, `CaptureDiagnostics` |
+| `IntentRecorded` | `SubmitResult(Err Challenge)` (captcha or interstitial, create, recorded-title strategy) | `Stranded` | `CaptureDiagnostics` |
+| `IntentRecorded` | `SubmitResult(Err Challenge)` (captcha or interstitial, create, nothing to identify) | `Terminal(Ambiguous NoDurableIdentifier)` | `CaptureDiagnostics`, `Halt OrgInventory`, `Notify` |
 | `IntentRecorded` | `SubmitResult(Err SessionExpired)` | `Parked` | `ParkItem`, `RequeueBehindGate`, `Notify` |
 | `IntentRecorded` | `SubmitResult(Err SchemaDrift)` | `Terminal(Rejected FormSchemaDrift)` | `CaptureDiagnostics`, `Halt OrgInventory` |
 | `IntentRecorded` | `SubmitResult(Err RateLimited)` | `Terminal(Skipped RateLimited)` | none |
@@ -119,13 +124,20 @@ A reconcile that finds the listing never settles ambiguous on the grounds that t
 
 `NotSent` is the only class that returns to a pre-submit state, because it is the only class where the request provably never left.
 
-An ambiguous submit on a create is the one row whose effects are chosen so that the run stops rather than continues.
+An ambiguous submit on a create is the first of the rows whose effects are chosen so that the run stops rather than continues.
 Under a marker strategy the search runs inside the same run, because a marker is embedded at submit time and is there to be found.
 Under the recorded-title strategy it does not: the listing sits in the marketplace's own processing queue for minutes after the submit, so a search run now answers a completed-and-absent `Ok(None)`, which this table settles ambiguous and halts the tenant's inventory on.
 So the machine records the identification in the locator, emits only `CaptureDiagnostics`, and steps to `Stranded`, a state no input carries forward; the interpreter maps it straight to an abandoned run, leaving the attempt in flight and the mapping fenced.
 It is `Stranded` rather than `AwaitingReadBack` because no read was asked for, and a state that accepted a read result it never requested would let one be invented.
 The reaper parks the item on `awaiting_marketplace_answer` and a later claim reconciles it against the seller's own catalogue, by which time the marketplace has had time to answer.
 The recorded title is read from the machine's own `fields` here and only here: this is the run that rendered them, so they are the intent the submit actually sent, where `ResumeStranded` must carry the title on the input because its `fields` are a fresh projection of a product the seller may have renamed since.
+
+The other rows chosen that way are the create's challenge rows, and they are chosen that way for the same reason.
+A challenge the seller cannot clear — a captcha, an interstitial, a firewall rule — does not prove the write did not land: an adapter may mint the listing and only then meet the edge on the read that follows, which is exactly what Tes does.
+So a create meeting one is a create of unknown fate, and it takes the same three rows an ambiguous submit takes, decided by what the strategy leaves behind rather than by how the fate became unknown.
+Under the recorded-title strategy it strands, and the halt this row used to raise was stopping a whole tenant's queue to prevent the second create that the standing attempt prevents by itself.
+Under a strategy that leaves nothing to identify, or where the recorded intent names no title, it still halts, because there the fence is the only thing standing and nothing will ever come to settle it.
+A revise and a removal keep the terminal `Blocked` settle: neither can mint a duplicate, so neither has a fate worth holding open.
 `BudgetExhausted` settles as `Ambiguous` from `IntentRecorded`, `AwaitingReadBack` or `Stranded` and as `Skipped` from any earlier state, because the budget can only have run out after a submit was possible in those three.
 The shipped interpreter never steps it into `Stranded` — its budget guard excludes that state, so a cancellation cannot convert a stranded create into a terminal ambiguity — but the machine answers it, because every non-terminal state must reach a terminal in one transition and a write had gone out.
 A re-entry from `Parked` re-asserts the form schema rather than resuming mid-flow, because the markup may have changed while the item was parked and the assertion is one request.

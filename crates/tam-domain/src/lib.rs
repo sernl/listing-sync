@@ -679,10 +679,12 @@ pub enum SyncState {
     /// The run ended without a verdict on the item, which is a different thing
     /// from the item being decided.
     ///
-    /// A create whose submit came back ambiguous under a strategy this build
-    /// can identify: the write may have landed, the attempt stays in flight
-    /// fencing its mapping, and the locator records what a later run should
-    /// search for. It is deliberately not [`Self::AwaitingReadBack`], because
+    /// A create whose write went out under a strategy this build can identify
+    /// and whose fate this run cannot determine -- a submit whose answer was
+    /// lost, or a challenge that arrived mid-write. The write may have landed,
+    /// the attempt stays in flight fencing its mapping, and the locator
+    /// records what a later run should search for. It is deliberately not
+    /// [`Self::AwaitingReadBack`], because
     /// no read was asked for -- entering that state without emitting a read
     /// would let a fabricated `ReadBackResult` commit a listing nobody looked
     /// at, which is what `every_committed_terminal_follows_a_read` exists to
@@ -1462,16 +1464,23 @@ impl SyncMachine {
             .map(|(_, value)| RecordedTitle(value.clone()))
     }
 
-    /// A submit whose response was lost, on a create this build can identify.
+    /// A write whose fate is unknown, on a create this build can identify.
     ///
-    /// Everything else -- a revise, a removal, a marker strategy, a challenge
-    /// routed through [`Self::reconcile`] -- keeps the behaviour it had. Only
-    /// this one case changes, and it changes by stopping rather than by
-    /// searching: the listing sits in the marketplace's own processing queue
-    /// for minutes after the submit, so a walk run here answers a
+    /// Two callers and one situation. A submit whose response was lost says
+    /// nothing about whether the write landed; neither does a challenge
+    /// arriving mid-write, because an adapter may mint the listing and only
+    /// then meet the edge on the read that follows. Both reach here, and
+    /// everything else -- a revise, a removal, a marker strategy -- is handed
+    /// straight to [`Self::reconcile`] with the behaviour it had.
+    ///
+    /// The one case this arm decides differently decides it by stopping rather
+    /// than by searching: the listing sits in the marketplace's own processing
+    /// queue for minutes after the submit, so a walk run here answers a
     /// completed-and-absent `Ok(None)`, which the table settles ambiguous and
     /// halts the tenant's inventory on. That is the halt this arm exists to
-    /// avoid, arriving one wasted catalogue walk later.
+    /// avoid, arriving one wasted catalogue walk later. On the challenge
+    /// arrival the walk is worse than wasted: the edge that answered the write
+    /// answers the enumeration too.
     ///
     /// So the identification is recorded in the locator and the only effect
     /// produces no input, which is how the interpreter's loop abandons the run
@@ -1619,17 +1628,28 @@ impl SyncMachine {
     /// that read arrives with a draft already minted. Settling terminal there
     /// records no landing, leaves the mapping unbound, and the next lowering
     /// of the same mapping asks for a second create. So a create-challenge
-    /// takes the ambiguity route instead, which is where "the write may have
-    /// landed" already leads: the tenant's inventory halts and a human
-    /// reconciles. This is the same judgement `may_settle_unverified` makes
-    /// in the driver — a create is the one operation whose re-run mints, and
-    /// a duplicate live listing is the one failure this ledger cannot undo.
-    /// A revise re-applies the same fields and a removal re-deletes something
-    /// already gone, so both keep the terminal settle.
+    /// takes [`Self::ambiguous_submit`] instead, which is where "the write may
+    /// have landed" already leads. This is the same judgement
+    /// `may_settle_unverified` makes in the driver — a create is the one
+    /// operation whose re-run mints, and a duplicate live listing is the one
+    /// failure this ledger cannot undo. A revise re-applies the same fields
+    /// and a removal re-deletes something already gone, so both keep the
+    /// terminal settle.
     ///
-    /// The halt is not a gate: `halt_ambiguous` raises the org-inventory halt
-    /// and never touches the connection, so the seller is still told the truth
-    /// about their credential.
+    /// A challenge mid-write and a submit whose answer was lost are one
+    /// situation reached two ways, so they take one arm. Under a strategy that
+    /// leaves a create this walk can identify the item strands: the attempt
+    /// stays in flight fencing its mapping, the reaper parks it on
+    /// `awaiting_marketplace_answer`, and a later claim reconciles it against
+    /// the seller's own catalogue by the title the attempt recorded. The halt
+    /// this arm used to raise was stopping a whole tenant's queue to prevent
+    /// the second create that the standing fence prevents by itself.
+    ///
+    /// Where the strategy leaves nothing to identify, or the recorded intent
+    /// names no title, the halt stands, and there it is not a gate:
+    /// `halt_ambiguous` raises the org-inventory halt and never touches the
+    /// connection, so the seller is still told the truth about their
+    /// credential.
     fn challenged(
         self,
         attempt: WriteAttemptId,
@@ -1638,7 +1658,7 @@ impl SyncMachine {
     ) -> Result<Transition, MachineError> {
         if !seller_clears(challenge) {
             if matches!(self.operation, ItemOperation::Create) {
-                return self.reconcile(attempt);
+                return self.ambiguous_submit(attempt);
             }
             return self.advance(SyncState::Terminal(Outcome::Blocked { challenge }), vec![]);
         }
@@ -2611,11 +2631,23 @@ mod machine_tests {
     /// and reads the resource afterwards, so an edge block on that read
     /// arrives with a draft already minted; settling terminal there records no
     /// landing, leaves the mapping unbound, and the next lowering asks for a
-    /// second create. So a create takes the ambiguity route, which is where
+    /// second create. So a create takes the unknown-fate route, which is where
     /// "may have landed" already goes.
+    ///
+    /// Under the strategy this build configures that route strands rather than
+    /// halting, and the argument is the one the ambiguous submit already
+    /// makes: the abandon leaves the attempt in flight, so the fence that
+    /// stops a second create is still standing and the halt is a blunter
+    /// instrument for a job the fence already does. What the halt bought was a
+    /// frozen queue and an operator; what replaces it is the reaper's park and
+    /// a later reconcile against the title this attempt recorded.
     #[test]
-    fn row_intent_recorded_submit_challenge_on_a_create_reconciles_rather_than_settling() {
-        for strategy in [marker_strategy(), draft_strategy()] {
+    fn row_intent_recorded_submit_challenge_on_a_create_strands_rather_than_halting() {
+        for strategy in [
+            marker_strategy(),
+            draft_strategy(),
+            CreateStrategy::HaltOnAmbiguity,
+        ] {
             let transition = machine(
                 SyncState::IntentRecorded {
                     attempt: attempt(),
@@ -2648,9 +2680,9 @@ mod machine_tests {
                  not our credential"
             );
         }
-        // The strategy production seeds settles it: the tenant's inventory
-        // halts and a human reconciles, which freezes the queue rather than
-        // minting a second listing.
+        // The strategy production seeds records what it sent and stops, in
+        // the same state and with the same single effect an ambiguous submit
+        // reaches: the two are one situation reached two ways.
         let transition = machine(
             SyncState::IntentRecorded {
                 attempt: attempt(),
@@ -2664,13 +2696,98 @@ mod machine_tests {
             now(),
         )
         .expect("a submit result applies in IntentRecorded");
-        assert!(
-            transition
-                .effects
-                .0
-                .iter()
-                .any(|effect| matches!(effect, Effect::Halt { .. })),
-            "the halt is what stops the second create, and it is not a connection gate"
+        assert_eq!(
+            transition.next.state,
+            SyncState::Stranded {
+                attempt: attempt(),
+                locator: ListingLocator::Recorded {
+                    title: RecordedTitle("a resource".to_owned()),
+                    inventory: InventoryId::TesGb,
+                },
+            },
+            "the identification is recorded out of this run's own rendered intent, which is \
+             what the submit sent before the edge answered"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::CaptureDiagnostics {
+                attempt: Some(attempt()),
+                cause: CaptureCause::Ambiguity,
+            }]),
+            "no halt: the attempt stays in flight, so the fence that stops a second create \
+             is standing and stopping the tenant's whole queue would only stop work that is \
+             still safe to do"
+        );
+
+        // And the one case that still halts, kept deliberately: an intent
+        // naming no title offers a catalogue walk nothing to match, so there
+        // is no identification to strand on.
+        let mut untitled = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: Some(schema()),
+            },
+            draft_strategy(),
+            10,
+        );
+        untitled.fields.entries.clear();
+        let transition = untitled
+            .step(
+                Input::SubmitResult(Err(AdapterError::Challenge(ChallengeKind::Captcha))),
+                now(),
+            )
+            .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::NoDurableIdentifier)),
+            "nothing to search for is still the halt, on this arrival as on the other"
+        );
+    }
+
+    /// And the strategy whose name says it stops still stops, on this arrival
+    /// too.
+    ///
+    /// The whole shape rather than the two things the loop above can share:
+    /// a strategy that embeds nothing and leaves nothing a walk could narrow
+    /// on has no identification to strand on, so the fence it holds is the
+    /// only thing standing and the halt is what stops the second create.
+    /// Driven here as well as end to end in
+    /// `a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further`,
+    /// because that one is Postgres-gated and a regression in this arm should
+    /// not wait on the database lane to be noticed.
+    #[test]
+    fn row_intent_recorded_submit_challenge_on_a_create_halts_when_nothing_identifies_it() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: Some(schema()),
+            },
+            CreateStrategy::HaltOnAmbiguity,
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::Challenge(ChallengeKind::Captcha))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::NoDurableIdentifier)),
+            "a strategy that embeds nothing has nothing to reconcile against, whichever way \
+             the write's fate became unknown"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::CaptureDiagnostics {
+                    attempt: Some(attempt()),
+                    cause: CaptureCause::Ambiguity,
+                },
+                halt(),
+                notify(SellerEvent::InventoryHalted),
+            ]),
+            "the same three effects the ambiguous submit raises here, because this is the \
+             same arm reached a different way"
         );
     }
 
@@ -3659,18 +3776,25 @@ mod machine_tests {
         // The draw is deterministic — a fixed ChaCha seed, the same pool, the
         // same strategy — so these are exact rather than expected values, and
         // a run that reports different ones means the machine or the pool
-        // moved. Measured 2026-09-04 at this sample: committed 189, resumed
-        // 110. The resume is the binding margin at a little over twice the
-        // floor; it was 43 against a floor of 50 at two thousand, which is
-        // what raising the sample fixed.
+        // moved. Measured 2026-09-04 at this sample: committed 189, ambiguous
+        // 936, resumed 110. The resume is the binding margin at a little over
+        // twice the floor; it was 43 against a floor of 50 at two thousand,
+        // which is what raising the sample fixed.
         //
-        // The previous reading was committed 164, resumed 108, on 2026-09-03.
-        // The machine moved, exactly as this comment says a change in these
-        // numbers means: the ambiguous submit under a recorded-title strategy
-        // now ends in `Stranded` instead of running a reconcile whose result
-        // could settle the run, so runs that used to end ambiguous end without
-        // a terminal and the committed share rises. The floor is untouched and
-        // every count is still comfortably above it.
+        // The reading immediately before was ambiguous 945, with committed and
+        // resumed identical. A challenge the seller cannot clear now takes the
+        // same unknown-fate arm as a lost submit answer, so nine of the drawn
+        // create runs that used to end `Ambiguous` on the halt end without a
+        // terminal instead. Only nine, because most of them go on to draw
+        // `BudgetExhausted`, which applies to `Stranded` and settles it
+        // ambiguous anyway; and neither committed nor resumed moved at all,
+        // which is what a change confined to that one arm predicts.
+        //
+        // The reading before that was committed 164, ambiguous unrecorded,
+        // resumed 108, on 2026-09-03, when the ambiguous submit under a
+        // recorded-title strategy stopped running a reconcile whose result
+        // could settle the run. The floor is untouched and every count is
+        // still comfortably above it.
         const SAMPLES: u32 = 5_000;
         const FLOOR: u32 = 50;
 
