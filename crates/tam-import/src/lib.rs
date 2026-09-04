@@ -128,6 +128,10 @@ pub enum ImportError {
     Storage(StorageError),
     NoPayload,
     Price(String),
+    /// The request's stated intent has no lowering against a mapping the
+    /// canonicalisation minted. Reachable rather than defensive: `live` on an
+    /// inventory whose publish step is uncaptured refuses here.
+    Lowering(tam_storage::LoweringRefusal),
     /// A paid listing on an inventory whose currency nobody has measured.
     /// Named apart from `Price` because it is not a malformed number: the
     /// source states an amount and renders a symbol, and reading that symbol
@@ -146,6 +150,7 @@ impl core::fmt::Display for ImportError {
             Self::Storage(error) => write!(f, "storage: {error}"),
             Self::NoPayload => f.write_str("the entry carried no ingestable payload"),
             Self::Price(detail) => write!(f, "price: {detail}"),
+            Self::Lowering(refusal) => write!(f, "lowering: {refusal}"),
             Self::CurrencyUnknown { inventory } => write!(
                 f,
                 "currency: {inventory:?} denominates prices per seller and none is measured"
@@ -687,7 +692,62 @@ pub async fn import_one(
     })
 }
 
-/// The price the source stated, denominated where the inventory's own rule
+/// The create job's items for one request: the seller's stated intent lowered
+/// against each mapping the import minted, each with its idempotency key.
+///
+/// Here rather than in `tam-sync-worker` because there are now two callers and
+/// the rows they mint must be identical: the cron drain, and the device
+/// import's completing page. It builds the items and mints nothing, which is
+/// what lets the second caller write them inside the same transaction that
+/// settles its request — `tam-sync-worker` hands them to
+/// `JobRepo::create_with_request_key`, `tam-api` hands them to
+/// `SyncRequestRepo::complete_with_create_job`, and neither has a copy of this
+/// lowering.
+pub async fn create_items(
+    run: &ImportRun,
+    intent: tam_storage::SyncIntent,
+    job: JobId,
+    mappings: &[MappingId],
+) -> Result<Vec<tam_storage::NewJobItem>, ImportError> {
+    let seeds = tam_storage::JobReadRepo::new(run.pool.clone())
+        .mapping_seeds(run.org, run.target, mappings)
+        .await?;
+    let to = match intent {
+        tam_storage::SyncIntent::Draft => ListingState::Draft,
+        tam_storage::SyncIntent::Live => ListingState::Live,
+    };
+    let mut items: Vec<tam_storage::NewJobItem> = Vec::new();
+    for seed in &seeds {
+        for operation in tam_storage::lower(to, run.target, seed).map_err(ImportError::Lowering)? {
+            items.push(tam_storage::NewJobItem {
+                item: tam_domain::JobItemId(fresh_uuid()),
+                mapping: seed.mapping,
+                idempotency_key: tam_marketplace::idempotency::derive_idempotency_key(
+                    run.org,
+                    run.target,
+                    seed.product,
+                    INTENT_VERSION,
+                    tam_storage::job_reads::intent_digest(
+                        &operation,
+                        job,
+                        &seed.payload_hashes,
+                        seed.sever_generation,
+                    ),
+                ),
+                requires_bound_on: tam_storage::requires_bound_on(&operation, run.target),
+                operation,
+            });
+        }
+    }
+    Ok(items)
+}
+
+/// The intent version the idempotency key is derived under. One constant for
+/// both callers, because two copies of it would make the cron drain and the
+/// device import derive different keys for the same write.
+pub const INTENT_VERSION: u32 = 1;
+
+/// The price the source stated, denominated where the inventory's own rule/// The price the source stated, denominated where the inventory's own rule
 /// states the currency and blocked where it does not.
 ///
 /// This is not the licence decoder it replaces. Which licences are paid is

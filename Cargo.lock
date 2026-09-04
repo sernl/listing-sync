@@ -4966,6 +4966,7 @@ dependencies = [
  "tam-domain",
  "tam-engine",
  "tam-engine-driver",
+ "tam-import",
  "tam-limits",
  "tam-marketplace",
  "tam-pipeline",
@@ -5090,6 +5091,13 @@ dependencies = [
  "tam-limits",
  "tam-marketplace",
  "tam-types",
+]
+
+[[package]]
+name = "tam-entitlement-key"
+version = "0.0.0"
+dependencies = [
+ "ring",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT ordinal, locator, state, product_id, mapping_id, source_kind, source_url, source_numeric_id, source_state, failure_detail FROM sync_request_resource WHERE org_id = $1 AND request_id = $2 ORDER BY ordinal",
+  "query": "SELECT ordinal, locator, state, product_id, mapping_id, source_kind, source_url, source_numeric_id, source_state, failure_detail, terms_seen, terms_mapped, terms_unmapped, terms_uncovered FROM sync_request_resource WHERE org_id = $1 AND request_id = $2 ORDER BY ordinal",
   "describe": {
     "columns": [
       {
@@ -52,6 +52,26 @@
         "ordinal": 9,
         "name": "failure_detail",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "terms_seen",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "terms_mapped",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "terms_unmapped",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "terms_uncovered",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -70,8 +90,12 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "ea85737d9aa5017f5519ab9565b9b4bb5aae64c2fb2d80b0db39e2ad5ebe0f91"
+  "hash": "ee0fc528907e1cba73c1d7c2b26738f33604df8b983f112ab9524fe54b71a0a3"
 }

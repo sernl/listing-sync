@@ -1,0 +1,562 @@
+//! The server half of the migration read: what a seller's own device observed
+//! of their catalogue, applied.
+//!
+//! D27 puts the seller's file bytes on the seller's machine, so this route
+//! receives a description and never the thing described. Each page carries what
+//! one device saw of some resources — a listing read verbatim, a file's digest
+//! and length and name, and a derived cover — and this applies them through the
+//! same `import_one` the operator import uses, writing the payload as a
+//! marketplace-sourced file that names where its bytes are and the cover as the
+//! one blob Q-c allows us to keep.
+//!
+//! The completing page is what mints the write jobs, in the same transaction
+//! that settles the request. That is not tidiness: a device gets one answer to
+//! its page and a 200 is not retried, so a window where the job exists and the
+//! request still reads `draining` would leave the seller's migration
+//! permanently mid-flight beside a job nobody had told it about.
+//!
+//! What this route refuses is as much of its job as what it applies. The
+//! vocabulary bounds every string it defines, and the two things it cannot
+//! bound — the seller's own listing copy, and the scan signature `tam_types`
+//! owns — are bounded here, because the server has never seen the device that
+//! posts a page.
+
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::Json;
+use serde::{Deserialize, Serialize};
+use tam_engine_driver::import::{ImportPage, ObservedResource};
+use tam_import::{import_one, AppliedResource, HeldFile, ImportRun, ImportedFile};
+use tam_storage::{
+    job_request_key, BlobRepo, Completion, DeviceRepo, Disposition, EventScope, JobRepo, Mint,
+    NewJob, Observed, ResourceCoverage, SyncRequestRecord, SyncRequestRepo, CREATE_LEG, IMPORT_LEG,
+};
+use tam_types::{
+    Actor, FileBytes, FileKind, JobEventPayload, JobId, Observation, OrgId, ScanOutcome, Stamp,
+    SystemComponent, Timestamp, TransportClass, Uuid,
+};
+
+use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
+use crate::jobs::{missing, storage_fault, validation};
+use crate::{AppState, OrgContext};
+
+/// The longest listing copy this route will accept, in bytes.
+///
+/// The seller's own title and body are free text and no vocabulary can bound
+/// them, so they are bounded here instead. Generous against any real listing
+/// and small against a payload: a body at this size is prose, and a body an
+/// order of magnitude beyond it is something else wearing a body's name.
+const COPY_MAX: usize = 64 * 1024;
+
+/// The longest scan signature this route will accept.
+///
+/// `ScanOutcome::Infected { signature }` is `tam_types`' own shape, shared with
+/// paths that predate this one, so narrowing the type would reach further than
+/// this vocabulary. It is bounded at the one place a device can put a value
+/// into it.
+const SIGNATURE_MAX: usize = 200;
+
+/// What the server did with one page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportAck {
+    /// Resources this page added to the request. A re-posted page reports
+    /// zero, which is how a device tells a retry from a first delivery.
+    pub applied: u32,
+    pub skipped: u32,
+    /// The request's totals, so a resumed device knows where it is without a
+    /// second call.
+    pub described_total: u32,
+    /// The create job, once a completing page has minted it. `null` on every
+    /// page before the last, and on a completion that had nothing to publish.
+    pub create_job: Option<Uuid>,
+    pub complete: bool,
+}
+
+pub(crate) async fn import_page(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, device)): Path<(String, String)>,
+    Json(page): Json<ImportPage>,
+) -> Result<(StatusCode, Json<ImportAck>), APIError> {
+    let blobs = state.blobs.clone().ok_or_else(|| {
+        APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new(
+                "this deployment holds no key-encryption key or object-store root, so no cover \
+                 could be stored; no part of this page was applied",
+            )
+            .code(APIErrorCode::BlobStoreUnavailable)
+            .kind(APIErrorKind::Internal),
+        )
+    })?;
+    let now = (state.wall)();
+    admissible_device(&state, context.org, &device).await?;
+    for resource in &page.resources {
+        bounded_copy(resource)?;
+    }
+
+    let requests = SyncRequestRepo::new(state.pool.clone());
+    let record = requests
+        .get(context.org, page.request)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        // Another organisation's request is missing rather than forbidden: the
+        // caller learns nothing about whether the id exists, which is the
+        // posture every other org-scoped read here takes.
+        .ok_or_else(|| missing("no such sync request"))?;
+    let device_enumerated = record.source.marketplace().transport_class()
+        == TransportClass::SellerDevice
+        && record.disposition == Disposition::Migrate;
+    if !device_enumerated {
+        return Err(validation(
+            "this request is not one a device enumerates: its source marketplace publishes an \
+             official API, or it is a sync rather than a migrate",
+        ));
+    }
+
+    // What the request already knows about. Read once per page rather than once
+    // per resource, and consulted BEFORE anything is canonicalised: `import_one`
+    // mints a fresh product every time it runs, so a re-posted page checked
+    // afterwards would leave a second product behind for every resource.
+    let described: Vec<&str> = record
+        .resources
+        .iter()
+        .map(|row| row.locator.as_str())
+        .collect();
+    let fresh = page
+        .resources
+        .iter()
+        .filter(|resource| !described.contains(&resource.locator.as_str()))
+        .count()
+        + page
+            .skipped
+            .iter()
+            .filter(|skip| !described.contains(&skip.locator.as_str()))
+            .count();
+    if settled(&record) {
+        if fresh == 0 {
+            return Ok((StatusCode::OK, Json(ack(&record, 0, 0, false))));
+        }
+        return Err(APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new(
+                "this import has already completed, and this page brings a resource it never \
+                 described; a completed import is not extended",
+            )
+            .kind(APIErrorKind::Validation),
+        ));
+    }
+
+    requests
+        .mark_draining_if_pending(context.org, page.request)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let anchor = anchor_job(&state, &record, now).await?;
+
+    let run = ImportRun {
+        pool: state.pool.clone(),
+        org: context.org,
+        source: record.source,
+        target: record.target,
+        now,
+    };
+    let repo = BlobRepo::new(
+        state.pool.clone(),
+        tam_pipeline::store::LocalObjectStore::new(blobs.root.clone()),
+        blobs.kek.clone(),
+    );
+
+    let applying = Applying {
+        run: &run,
+        repo: &repo,
+        request: page.request,
+        device: &device,
+    };
+    let mut applied = 0u32;
+    for resource in &page.resources {
+        if described.contains(&resource.locator.as_str()) {
+            continue;
+        }
+        apply_one(&state, &applying, resource).await?;
+        applied = applied.saturating_add(1);
+    }
+
+    let mut skipped = 0u32;
+    for skip in &page.skipped {
+        if described.contains(&skip.locator.as_str()) {
+            continue;
+        }
+        if requests
+            .append_skipped(
+                context.org,
+                page.request,
+                skip.locator.as_str(),
+                skip.why.as_str(),
+            )
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+        {
+            skipped = skipped.saturating_add(1);
+        }
+    }
+
+    JobRepo::new(state.pool.clone())
+        .record_event(
+            &EventScope {
+                org: context.org,
+                job: anchor,
+                item: None,
+            },
+            &JobEventPayload::ImportPageApplied {
+                request: page.request,
+                described: applied,
+                skipped,
+            },
+            Stamp::system(SystemComponent::Import, now),
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+
+    if !page.complete {
+        let after = requests
+            .get(context.org, page.request)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            .ok_or_else(|| missing("no such sync request"))?;
+        return Ok((StatusCode::OK, Json(ack(&after, applied, skipped, false))));
+    }
+    complete(&state, &run, page.request, anchor).await
+}
+
+/// Settles the request and mints its create job, in one transaction.
+async fn complete(
+    state: &AppState,
+    run: &ImportRun,
+    request: Uuid,
+    anchor: JobId,
+) -> Result<(StatusCode, Json<ImportAck>), APIError> {
+    let requests = SyncRequestRepo::new(state.pool.clone());
+    let record = requests
+        .get(run.org, request)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such sync request"))?;
+    let mappings: Vec<tam_types::MappingId> = record
+        .resources
+        .iter()
+        .filter_map(|row| row.mapping)
+        .collect();
+
+    let job = JobId(fresh_uuid());
+    let items = if mappings.is_empty() {
+        Vec::new()
+    } else {
+        tam_import::create_items(run, record.intent, job, &mappings)
+            .await
+            .map_err(|error| match error {
+                tam_import::ImportError::Storage(error) => storage_fault(state, &error),
+                // The seller asked for a state this target has no captured
+                // route to, which is theirs to change rather than a fault.
+                tam_import::ImportError::Lowering(refusal) => validation(&refusal.to_string()),
+                // `create_items` lowers and derives keys; it reads no price,
+                // ingests no payload and resolves no currency. These arms
+                // exist because the error type is wider than this call.
+                impossible @ (tam_import::ImportError::NoPayload
+                | tam_import::ImportError::Price(_)
+                | tam_import::ImportError::CurrencyUnknown { .. }) => {
+                    state.internal(&format!("the create items answered {impossible}"))
+                }
+            })?
+    };
+    let new = NewJob {
+        job,
+        inventory: record.target,
+        stamp: Stamp {
+            at: run.now,
+            actor: Actor::System(SystemComponent::Import),
+        },
+    };
+    // An empty catalogue completes and mints nothing. An itemless job reads
+    // back settled, because zero settled of zero is complete, so creating one
+    // would report a migration finished that never had anything in it.
+    let mint = (!items.is_empty()).then(|| Mint {
+        request_key: job_request_key(request, CREATE_LEG),
+        job: &new,
+        items: &items,
+    });
+    let created = requests
+        .complete_with_create_job(
+            run.org,
+            &Completion {
+                request,
+                at: run.now,
+                mint,
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+
+    let settled = requests
+        .get(run.org, request)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such sync request"))?;
+    let described = u32::try_from(
+        settled
+            .resources
+            .iter()
+            .filter(|row| row.state != "failed")
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    let skipped = u32::try_from(
+        settled
+            .resources
+            .iter()
+            .filter(|row| row.state == "failed")
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    JobRepo::new(state.pool.clone())
+        .record_event(
+            &EventScope {
+                org: run.org,
+                job: anchor,
+                item: None,
+            },
+            &JobEventPayload::ImportCompleted {
+                request,
+                create_job: created.map(|job| job.job),
+                described,
+                skipped,
+            },
+            Stamp::system(SystemComponent::Import, run.now),
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok((
+        StatusCode::OK,
+        Json(ImportAck {
+            applied: 0,
+            skipped: 0,
+            described_total: described,
+            create_job: created.map(|job| job.job.0),
+            complete: true,
+        }),
+    ))
+}
+
+/// Everything one page holds constant while its resources are applied.
+struct Applying<'a> {
+    run: &'a ImportRun,
+    repo: &'a BlobRepo<tam_pipeline::store::LocalObjectStore>,
+    request: Uuid,
+    /// Which machine reported this, recorded as the device's own assertion
+    /// beside our receipt rather than restated as something we verified.
+    device: &'a str,
+}
+
+/// One observed resource, canonicalised and recorded.
+///
+/// The payload is `Sourced` and names where the seller's bytes are; the cover
+/// is the one thing we keep, stored as a held blob directly rather than through
+/// the ingest pipeline, because the pipeline would derive a cover from the
+/// cover.
+async fn apply_one(
+    state: &AppState,
+    applying: &Applying<'_>,
+    resource: &ObservedResource,
+) -> Result<(), APIError> {
+    let run = applying.run;
+    let connection = source_connection(state, run).await?;
+    let hash = applying
+        .repo
+        .put(run.org, resource.cover_png.bytes(), run.now)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let cover_len = u64::try_from(resource.cover_png.bytes().len()).unwrap_or(u64::MAX);
+
+    let applied = AppliedResource {
+        // The row report's own handle on the resource. A locator is not
+        // inherently numeric — a Tes resource is a URL — so an unparseable one
+        // reports zero rather than refusing an import over a display value.
+        resource: resource.locator.as_str().parse().unwrap_or(0),
+        listing: resource.listing.clone(),
+        payload: vec![ImportedFile {
+            kind: resource.file.kind,
+            bytes: FileBytes::Sourced {
+                marketplace: run.source.marketplace(),
+                connection,
+                resource: resource.locator.as_str().to_owned(),
+                entry: resource.file.entry.as_ref().map(|e| e.as_str().to_owned()),
+                payload_file_name: resource.file.payload_file_name.as_str().to_owned(),
+                payload_content_type: resource.file.payload_content_type.as_str().to_owned(),
+                observed: Observation {
+                    device: applying.device.to_owned(),
+                    hash: resource.file.hash,
+                    byte_len: resource.file.byte_len,
+                    scan: resource.file.scan.clone(),
+                    observed_at: run.now,
+                },
+            },
+        }],
+        cover: HeldFile {
+            kind: FileKind::Image,
+            hash,
+            byte_len: cover_len,
+            scan: ScanOutcome::Clean { at: run.now },
+        },
+    };
+    let report = import_one(run, &applied)
+        .await
+        .map_err(|error| match error {
+            tam_import::ImportError::Storage(error) => storage_fault(state, &error),
+            // Every one of these is something about the seller's own listing:
+            // a resource with nothing to sell, a price that will not
+            // denominate, a currency nobody has measured. The seller can act
+            // on each, which is what makes them validation rather than faults.
+            refused @ (tam_import::ImportError::NoPayload
+            | tam_import::ImportError::Price(_)
+            | tam_import::ImportError::CurrencyUnknown { .. }) => validation(&refused.to_string()),
+            // `import_one` mints a product and never lowers an intent.
+            impossible @ tam_import::ImportError::Lowering(_) => {
+                state.internal(&format!("the import answered {impossible}"))
+            }
+        })?;
+    SyncRequestRepo::new(state.pool.clone())
+        .append_observed(
+            run.org,
+            applying.request,
+            &Observed {
+                locator: resource.locator.as_str(),
+                product: report.product,
+                mapping: report.mapping,
+                source: &report.source,
+                source_state: report.source_state,
+                coverage: ResourceCoverage {
+                    terms_seen: u32::try_from(report.terms_seen).unwrap_or(u32::MAX),
+                    terms_mapped: u32::try_from(report.terms_mapped).unwrap_or(u32::MAX),
+                    terms_unmapped: u32::try_from(report.unmapped_native_ids.len())
+                        .unwrap_or(u32::MAX),
+                    terms_uncovered: u32::try_from(report.terms_uncovered).unwrap_or(u32::MAX),
+                },
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok(())
+}
+
+/// Which of the seller's connections can fetch this resource's bytes.
+async fn source_connection(
+    state: &AppState,
+    run: &ImportRun,
+) -> Result<tam_types::ConnectionId, APIError> {
+    let marketplace = run.source.marketplace();
+    tam_storage::ConnectionRepo::new(state.pool.clone())
+        .list(run.org, run.now)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .into_iter()
+        .find(|row| row.marketplace == marketplace && row.state == "linked")
+        .map(|row| row.id)
+        .ok_or_else(|| {
+            validation(
+                "this seller has no linked connection for the source marketplace, so a file \
+                 named in it could never be fetched back",
+            )
+        })
+}
+
+/// The itemless job an import's events hang from, found or created.
+///
+/// Keyed on the request, so every page of one import reaches the same job
+/// rather than minting one each.
+async fn anchor_job(
+    state: &AppState,
+    record: &SyncRequestRecord,
+    now: Timestamp,
+) -> Result<JobId, APIError> {
+    let created = JobRepo::new(state.pool.clone())
+        .create_with_request_key(
+            record.org,
+            job_request_key(record.id, IMPORT_LEG),
+            &NewJob {
+                job: JobId(fresh_uuid()),
+                inventory: record.source,
+                stamp: Stamp {
+                    at: now,
+                    actor: Actor::System(SystemComponent::Import),
+                },
+            },
+            &[],
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok(created.job)
+}
+
+/// The device must be this organisation's and must not be revoked.
+async fn admissible_device(state: &AppState, org: OrgId, device: &str) -> Result<(), APIError> {
+    let devices = DeviceRepo::new(state.pool.clone())
+        .list(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let known = devices
+        .iter()
+        .find(|candidate| candidate.id == device)
+        .ok_or_else(|| missing("no such device"))?;
+    if known.revoked_at.is_some() {
+        return Err(APIError::new(
+            StatusCode::FORBIDDEN,
+            APIErrorEntry::new("this device is revoked and may not report a catalogue")
+                .kind(APIErrorKind::Validation),
+        ));
+    }
+    Ok(())
+}
+
+/// The two strings the page vocabulary cannot bound, bounded here.
+fn bounded_copy(resource: &ObservedResource) -> Result<(), APIError> {
+    if resource.listing.title.len() > COPY_MAX || resource.listing.body.len() > COPY_MAX {
+        return Err(validation(
+            "a listing's title and body are the seller's own copy and are bounded: this page \
+             carries one beyond that bound",
+        ));
+    }
+    if let ScanOutcome::Infected { signature } = &resource.file.scan {
+        if signature.len() > SIGNATURE_MAX {
+            return Err(validation(
+                "a scan signature is a signature and this one is longer than any",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the request has already reached a terminal state.
+fn settled(record: &SyncRequestRecord) -> bool {
+    record.state == "enqueued" || record.state == "failed"
+}
+
+fn ack(record: &SyncRequestRecord, applied: u32, skipped: u32, complete: bool) -> ImportAck {
+    let described = u32::try_from(
+        record
+            .resources
+            .iter()
+            .filter(|row| row.state != "failed")
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    ImportAck {
+        applied,
+        skipped,
+        described_total: described,
+        create_job: record.create_job,
+        complete,
+    }
+}
+
+fn fresh_uuid() -> Uuid {
+    Uuid(*uuid::Uuid::new_v4().as_bytes())
+}

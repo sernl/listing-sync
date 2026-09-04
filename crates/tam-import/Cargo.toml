@@ -5,22 +5,49 @@ edition = "2021"
 publish = false
 
 [features]
+default = ["operator"]
+# The founder's operator import, `src/main.rs`: the only thing in this crate
+# that reads a marketplace, holds a session or touches a byte on disk. It is a
+# feature rather than a second crate because it shares `import_one` with the
+# library, and it is gated because `tam-api` needs that library and must not
+# gain a marketplace adapter in its normal graph to get it — D1's direction,
+# and `engine-driver-split.md` open question 9. Default-on, so
+# `cargo run -p tam-import` is unchanged; `tam-api` takes this crate with
+# `default-features = false`.
+operator = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tam-marketplace-tpt",
+    "dep:tam-pipeline",
+    "dep:tam-secrets",
+    "dep:tokio",
+]
 pg-tests = ["tam-storage/pg-tests"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-domain = { path = "../tam-domain" }
 tam-marketplace = { path = "../tam-marketplace" }
-tam-pipeline = { path = "../tam-pipeline" }
-tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }
-tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
 tam-taxonomy = { path = "../tam-taxonomy" }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1", features = ["v4"] }
+
+# Binary-only, and each one is why the gate exists: the adapter reads the
+# marketplace, the pipeline ingests bytes, secrets unseals the key, and serde
+# and tokio are the manifest and the runtime the binary needs and the library
+# does not.
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+tam-marketplace-tpt = { path = "../tam-marketplace-tpt", optional = true }
+tam-pipeline = { path = "../tam-pipeline", optional = true }
+tam-secrets = { path = "../tam-secrets", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+
+[[bin]]
+name              = "tam-import"
+path              = "src/main.rs"
+required-features = ["operator"]
 
 [dev-dependencies]
 # The cassette fixture is the only consumer left: the binary reads no Tes

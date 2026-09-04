@@ -906,12 +906,46 @@ pub enum JobEventPayload {
     ItemBindAnomaly {
         anomaly: BindAnomaly,
     },
+    /// One page of a device's catalogue import landed.
+    ///
+    /// The console refetches the request on any event of the organisation's
+    /// stream and runs no poller of its own, so an import that emitted nothing
+    /// until it finished would show a seller nothing at all while their shop of
+    /// several hundred resources was walked. This is what makes progress
+    /// visible, and it carries the counts rather than a percentage because the
+    /// total is not known until the enumeration ends.
+    ///
+    /// Anchored to an inert job minted with the request's first page. A
+    /// `job_event` row requires a job and an import has none until it
+    /// completes; an itemless job is the same device `ImportDrainMeasured`
+    /// already uses, and it cannot become a publish because a `queued` item is
+    /// what the lease scan claims and it has none.
+    ImportPageApplied {
+        request: Uuid,
+        described: u32,
+        skipped: u32,
+    },
+    /// A device's catalogue import completed, and the write jobs it earned
+    /// exist.
+    ///
+    /// Separate from the page event rather than a flag on it, because the two
+    /// are different states to a reader: one is progress and this is the
+    /// terminal transition that makes `create_job` readable. `create_job` is
+    /// `None` where the catalogue held nothing to publish, which is a
+    /// completion rather than a failure. The counts are the request's totals
+    /// rather than the last page's.
+    ImportCompleted {
+        request: Uuid,
+        create_job: Option<JobId>,
+        described: u32,
+        skipped: u32,
+    },
 }
 
 impl JobEventPayload {
     /// Every kind name, in a stable order, for the vocabulary generator and
     /// the client's stream subscriptions.
-    pub const ALL_KINDS: [&'static str; 15] = [
+    pub const ALL_KINDS: [&'static str; 17] = [
         "JobQueued",
         "JobStarted",
         "ItemQueued",
@@ -927,6 +961,8 @@ impl JobEventPayload {
         "JobHalted",
         "ImportDrainMeasured",
         "ItemBindAnomaly",
+        "ImportPageApplied",
+        "ImportCompleted",
     ];
 
     /// The serde tag, which is the `job_event.kind` column value. Total, so
@@ -949,6 +985,8 @@ impl JobEventPayload {
             Self::JobHalted { .. } => "JobHalted",
             Self::ImportDrainMeasured { .. } => "ImportDrainMeasured",
             Self::ItemBindAnomaly { .. } => "ItemBindAnomaly",
+            Self::ImportPageApplied { .. } => "ImportPageApplied",
+            Self::ImportCompleted { .. } => "ImportCompleted",
         }
     }
 }
@@ -1104,8 +1142,31 @@ mod tests {
                     binding_state: "severed".to_owned(),
                 },
             },
+            // Absent since the variant was added: the assertion below counted
+            // a hand-maintained literal rather than the vocabulary, so it read
+            // fourteen against fifteen kinds and certified a property it did
+            // not have. Counting `ALL_KINDS` is what stops that recurring.
+            super::JobEventPayload::ItemGateChanged {
+                gate: "taxonomy".to_owned(),
+            },
+            super::JobEventPayload::ImportPageApplied {
+                request: super::Uuid([0x71; 16]),
+                described: 25,
+                skipped: 1,
+            },
+            super::JobEventPayload::ImportCompleted {
+                request: super::Uuid([0x71; 16]),
+                create_job: Some(super::JobId(super::Uuid([0x72; 16]))),
+                described: 120,
+                skipped: 3,
+            },
         ];
-        assert_eq!(samples.len(), 14, "one sample per JobEventKind");
+        assert_eq!(
+            samples.len(),
+            super::JobEventPayload::ALL_KINDS.len(),
+            "one sample per JobEventKind, counted against the vocabulary rather than a literal \
+             that drifts from it"
+        );
         for payload in samples {
             let encoded = serde_json::to_value(&payload).expect("a payload serialises");
             let tag = encoded

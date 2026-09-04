@@ -187,8 +187,13 @@ It costs one pass over the catalogue, which for a teacher's shop is minutes and 
 The cost is that the bytes cross the seller's network twice, which is what the caching question in the last section asks about.
 
 The wire is one route.
-`POST /{version}/devices/{device}/import`, cookie-session authenticated like the rest of the device surface, taking `{ request, page: [ImportedResource], complete }`, where an `ImportedResource` is the seller's locator, the verbatim `ImportedListing` the adapter read, the observed file descriptor, and the cover handle.
+`POST /{version}/devices/{device}/import`, cookie-session authenticated like the rest of the device surface, taking `{ request, resources, skipped, complete }`.
+An entry of `resources` is the seller's locator, the verbatim `ImportedListing` the adapter read, the observed file descriptor, and the cover.
+Two corrections to this line as first drafted, both from building it.
+The cover is the PNG itself, base64 in the page, rather than a handle from a prior upload: the page is then atomic, so a resource is described and its cover stored together or not at all, and the upload route would otherwise run the ingest pipeline over an image and derive a cover from the cover.
+And `skipped` is a field of the page rather than something the device keeps, because completion is what mints the write jobs and a completing page that said nothing about its failures would start a publish for a partial catalogue while reporting success.
 `ImportedListing` and its parts need serde, which is the same move step 10 already made for the driver vocabulary and therefore a known shape rather than a new question.
+The vocabulary itself lives in `tam-engine-driver`, not on the device, so the producer and the consumer compile against one definition; every string it defines is bounded and validated on decode, because the server has never seen the machine that posts a page.
 
 Resumability falls out of what already exists.
 `sync_request_resource` carries a per-resource breadcrumb precisely because `import_one` commits four times internally and mints a fresh product id on every pass, so a second pass over an already-canonicalised resource is skipped rather than duplicated.
@@ -360,6 +365,12 @@ C2, the locator and the type, joint with the storage stream, because the type is
 C3, the import split, follows it: the apply half loses the marketplace read and the ingest, and gains what a device observed.
 C6, the per-device version gate, lands before C4, and that ordering is a correction rather than a preference: C2 makes the manifest builder able to emit a marketplace source, so a sourced row created before the gate exists could be handed to a device that cannot decode it, which is the compatibility defect the S1 shim exists to prevent, re-created one layer up.
 C4, the route, last, and it carries the coverage aggregation.
+Built, in four parts that are worth naming because two of them were not foreseen here.
+C4a moved the page vocabulary into `tam-engine-driver` and bounded every string in it after a review found four unbounded ones behind a claim that said otherwise.
+The route applies each page through C3's `import_one`, writing the payload as a marketplace-sourced file and the cover as the one blob Q-c allows, and its completing page settles the request and mints the create job in a single transaction — which required extracting `create_with_request_key`'s body into a transaction-taking helper, because the two-statement version leaves a window where the job exists and the request still reads `draining`, and a device that gets one answer to its page does not retry a 200.
+The coverage aggregation landed per resource rather than per request, in migration 0053's four nullable columns: a request-level total can say a migration lost eleven terms but not which product lost them, and the seller's next action is always about a product.
+Nullable rather than defaulted to zero, because a resource nothing measured and a resource measured at zero are different facts and this is the number the founder's kill gate compares.
+`tam-import`'s operator binary went behind a default-on `operator` feature in the same slice, so `tam-api` can depend on the library without a marketplace adapter entering its graph; that is half of `engine-driver-split.md`'s open question 9, and the tree assertion it recommends is now possible for the server binaries.
 C7, the console, follows C4's route.
 
 Gated on a founder probe: enumerate once from the device and compare the count against the Tes dashboard, because the live run of 2026-08-28 saw both dashboard routes answer an empty array with HTTP 200 on an authed session, suspected to be site-context scoping.

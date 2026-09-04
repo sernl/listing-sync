@@ -84,8 +84,9 @@ pub mod elections;
 pub mod sync_requests;
 pub use elections::{AnswerReport, AnsweredElection, ElectionRepo, NewAnswer, OpenElection};
 pub use sync_requests::{
-    job_request_key, Canonicalised, Disposition, Enqueued, NewSyncRequest, SyncIntent,
-    SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
+    job_request_key, Canonicalised, Completion, Disposition, Enqueued, Mint, NewSyncRequest,
+    Observed, ResourceCoverage, SyncIntent, SyncRequestRecord, SyncRequestRepo, SyncRequestSummary,
+    SyncResourceRecord, CREATE_LEG, IMPORT_LEG, REMOVE_LEG,
 };
 pub use taxonomy::{
     DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo,

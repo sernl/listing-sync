@@ -12,6 +12,13 @@ axum = "0.8"
 futures-util = { version = "0.3", default-features = false }
 hmac = { workspace = true }
 jsonwebtoken = { version = "9.3", default-features = false }
+# The checked PKCS#8 parse, which is what derives the public half an operator
+# compares against the fleet's repository variable. `jsonwebtoken` signs through
+# `from_pkcs8_maybe_unchecked` and so cannot answer that question. Promoted from
+# a dev-dependency rather than newly introduced: `cargo tree -e normal -p tam-api
+# -i ring` already reaches it through `jsonwebtoken` and through `rustls` under
+# `sqlx`, so this edge adds no package to the graph and no code to the binary.
+ring = { version = "0.17", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = { workspace = true }
@@ -22,6 +29,12 @@ tam-domain = { path = "../tam-domain" }
 # The declarative-intent surface answers a projected listing, and
 # `prepare_item` is the server-side producer of one.
 tam-engine = { path = "../tam-engine" }
+# `import_one` and `MeasureTotals` for the device-import route, and the library
+# half only: `default-features = false` drops the operator binary's feature,
+# which is what keeps a marketplace adapter out of this crate's normal graph.
+# D1's direction, verified by `cargo tree -e normal -p tam-api -i
+# tam-marketplace-tpt` printing nothing.
+tam-import = { path = "../tam-import", default-features = false }
 # The envelope and the settle carry the interpreter's own vocabulary rather
 # than restating it, so the wire has exactly one definition.
 tam-engine-driver = { path = "../tam-engine-driver" }
@@ -39,7 +52,6 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 base64 = "0.22"
 http-body-util = "0.1"
-ring = { version = "0.17", features = ["std"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 tower = { version = "0.5", features = ["util"] }

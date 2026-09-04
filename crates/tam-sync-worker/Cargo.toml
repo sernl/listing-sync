@@ -10,7 +10,9 @@ publish = false
 [dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-domain = { path = "../tam-domain" }
-tam-import = { path = "../tam-import" }
+# Default-features off: this crate mints jobs from rows and never runs the
+# operator import, so it must not drag a marketplace adapter in behind it.
+tam-import = { path = "../tam-import", default-features = false }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }

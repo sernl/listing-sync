@@ -216,13 +216,21 @@ const KEY_2: &str = "22222222-2222-4222-8222-222222222222";
 /// The one enqueue for sync, migrate and bulk. It writes the request and
 /// returns: no marketplace is read here, because this process holds no
 /// session and the broker lease belongs to the drain.
+///
+/// A `sync` rather than the `migrate` this used to post. C4's rule is that a
+/// migrate from a marketplace with no official API names no resources here,
+/// because the seller's own device is the only thing that can enumerate that
+/// catalogue — so the old body is now a 422 by design. A sync is the shape
+/// that still carries a seller-supplied list, which is what the assertions
+/// below are about: that the list is written and polled back in the order it
+/// was given. The migrate rule has its own test beside this one.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_sync_request_is_accepted_written_and_polled_back(pool: PgPool) {
     provision(&pool).await;
     let body = serde_json::json!({
         "source": "TesGb",
         "target": "TesNz",
-        "disposition": "migrate",
+        "disposition": "sync",
         "intent": "live",
         "resources": ["13549794", "13549795"],
     });
@@ -263,7 +271,7 @@ async fn a_sync_request_is_accepted_written_and_polled_back(pool: PgPool) {
     .await;
     assert_eq!(view.status, StatusCode::OK);
     let record: serde_json::Value = view.json();
-    assert_eq!(record["disposition"], "migrate");
+    assert_eq!(record["disposition"], "sync");
     assert_eq!(record["state"], "pending");
     assert_eq!(
         record["resources"].as_array().map(Vec::len),
@@ -273,6 +281,79 @@ async fn a_sync_request_is_accepted_written_and_polled_back(pool: PgPool) {
     assert!(
         record["create_job"].is_null() && record["remove_job"].is_null(),
         "no job exists until the drain has read the source"
+    );
+}
+
+/// Who supplies the resources, both ways.
+///
+/// A migrate from a marketplace with no official API is enumerated by the
+/// seller's own device under D1, so naming a list here is refused rather than
+/// silently ignored — the seller would otherwise submit a list, watch the
+/// device walk the whole shop instead, and never learn the two were unrelated.
+/// The same request with no list is the shape the console posts and is
+/// accepted, which is what makes the refusal a rule about who enumerates
+/// rather than a rule against empty requests.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_migrate_from_a_device_enumerated_source_names_no_resources(pool: PgPool) {
+    provision(&pool).await;
+    let named = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(serde_json::json!({
+            "source": "TesGb",
+            "target": "TesNz",
+            "disposition": "migrate",
+            "intent": "draft",
+            "resources": ["13549794"],
+        })),
+    )
+    .await;
+    assert_eq!(named.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let refusal: serde_json::Value = named.json();
+    assert!(
+        refusal.to_string().contains("enumerates that catalogue"),
+        "the refusal says who does enumerate it, so the seller knows what to do instead: \
+         {refusal}"
+    );
+
+    let empty = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_2),
+        Some(serde_json::json!({
+            "source": "TesGb",
+            "target": "TesNz",
+            "disposition": "migrate",
+            "intent": "draft",
+            "resources": [],
+        })),
+    )
+    .await;
+    assert_eq!(
+        empty.status,
+        StatusCode::ACCEPTED,
+        "and the same request with no list is accepted, because the device fills it"
+    );
+    let view = call(
+        pool,
+        Method::GET,
+        &format!("/v1/sync/{KEY_2}"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(view.status, StatusCode::OK);
+    let record: serde_json::Value = view.json();
+    assert_eq!(
+        record["resources"].as_array().map(Vec::len),
+        Some(0),
+        "written with nothing, waiting for the device's first page"
     );
 }
 

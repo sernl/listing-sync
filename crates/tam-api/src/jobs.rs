@@ -110,14 +110,14 @@ fn parse_page(params: &PageParams) -> Result<Page, APIError> {
     })
 }
 
-fn validation(message: &str) -> APIError {
+pub(crate) fn validation(message: &str) -> APIError {
     APIError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
         APIErrorEntry::new(message).kind(APIErrorKind::Validation),
     )
 }
 
-fn missing(what: &str) -> APIError {
+pub(crate) fn missing(what: &str) -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
         APIErrorEntry::new(what)
@@ -344,7 +344,7 @@ impl EventView {
 
 // ---------------------------------------------------------------- handlers
 
-fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
+pub(crate) fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
     state.internal(&error.to_string())
 }
 
@@ -378,9 +378,6 @@ pub(crate) async fn create_sync_request(
     key: RequestKey,
     Json(body): Json<SyncRequestBody>,
 ) -> Result<Response, APIError> {
-    if body.resources.is_empty() {
-        return Err(validation("a sync names at least one resource"));
-    }
     if body.source == body.target {
         return Err(validation("a sync's source and target are two inventories"));
     }
@@ -403,6 +400,25 @@ pub(crate) async fn create_sync_request(
         Intent::Draft => SyncIntent::Draft,
         Intent::Live => SyncIntent::Live,
     };
+    // Who supplies the resources, decided by the source marketplace's transport
+    // class rather than by a request kind of its own. Under D1 a device-branch
+    // marketplace is enumerated only by the seller's own device, so a migrate
+    // from one starts empty and its pages fill it; every other request names
+    // its resources here, and an empty one would settle complete having moved
+    // nothing.
+    let device_enumerated = body.source.marketplace().transport_class()
+        == tam_types::TransportClass::SellerDevice
+        && disposition == Disposition::Migrate;
+    if device_enumerated && !body.resources.is_empty() {
+        return Err(validation(
+            "a migrate from a marketplace with no official API names no resources here: the \
+             seller's own device enumerates that catalogue and posts it a page at a time, so a \
+             list named now would be silently ignored",
+        ));
+    }
+    if !device_enumerated && body.resources.is_empty() {
+        return Err(validation("a sync names at least one resource"));
+    }
     let new = NewSyncRequest {
         // The idempotency key is the request's identity, so a retried submit
         // is the same request rather than a second one.
@@ -445,7 +461,35 @@ pub struct SyncRequestView {
     /// removal are on two.
     pub create_job: Option<Uuid>,
     pub remove_job: Option<Uuid>,
+    /// The founder's kill-gate number for this request, summed over its
+    /// described resources.
+    ///
+    /// `None` rather than a struct of zeros on a request that measures no
+    /// coverage, which is every request whose source is not enumerated by a
+    /// device. The columns default to zero and are written only when a page
+    /// applies a resource, so all-zeros would render "never measured" and
+    /// "measured, and the answer was zero" as the same object — and this is
+    /// the one number where confusing those two is expensive.
+    pub coverage: Option<CoverageView>,
+    /// Why nothing is running, when the reason is that no device can run it.
+    ///
+    /// Derived on read from the registered devices rather than stored, because
+    /// it stops being true the moment a seller updates one. `None` means
+    /// nothing is waiting on a version.
+    pub waiting_for_device_version: Option<String>,
     pub resources: Vec<SyncResourceView>,
+}
+
+/// The coverage of one request, summed over the resources that carry it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CoverageView {
+    /// How many resources the sum is over: the described ones, excluding
+    /// anything the device skipped, because a skip measured nothing.
+    pub rows: u32,
+    pub terms_seen: u32,
+    pub terms_mapped: u32,
+    pub terms_unmapped: u32,
+    pub terms_uncovered: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -454,6 +498,81 @@ pub struct SyncResourceView {
     pub locator: String,
     pub state: String,
     pub failure_detail: Option<String>,
+    /// What the import measured about this resource, so the console and the
+    /// review step can say which product carried the uncovered terms rather
+    /// than only that some did.
+    ///
+    /// Absent where nothing measured it: a resource the device skipped, and
+    /// every breadcrumb of a request that measures no coverage at all.
+    pub coverage: Option<ResourceCoverageView>,
+}
+
+/// One resource's coverage, as the wire carries it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ResourceCoverageView {
+    pub terms_seen: u32,
+    pub terms_mapped: u32,
+    pub terms_unmapped: u32,
+    pub terms_uncovered: u32,
+}
+
+/// The organisation's sync requests, newest first.
+///
+/// The console's only way back to a request it created and navigated away
+/// from. A device-branch migrate mints no job until its completing page, so
+/// before this it appeared in no list at all and the console's own copy told
+/// the seller to return to a page nothing linked to.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncRequestListView {
+    pub requests: Vec<SyncRequestSummaryView>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncRequestSummaryView {
+    pub request: Uuid,
+    pub source: InventoryId,
+    pub target: InventoryId,
+    pub disposition: String,
+    pub intent: String,
+    pub state: String,
+    pub created_at: i64,
+    pub resources_total: u32,
+    pub resources_failed: u32,
+}
+
+/// How many requests one page carries.
+///
+/// A ceiling rather than a cursor, deliberately: a seller has a handful of
+/// migrations, not a feed, and a pagination surface nobody needs is a surface
+/// to keep working. If a tenant ever passes this, the answer is a cursor and
+/// not a larger number.
+const SYNC_LIST_MAX: i64 = 50;
+
+pub(crate) async fn list_sync_requests(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path(_version): Path<String>,
+) -> Result<Json<SyncRequestListView>, APIError> {
+    let rows = SyncRequestRepo::new(state.pool.clone())
+        .list(context.org, SYNC_LIST_MAX)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(SyncRequestListView {
+        requests: rows
+            .into_iter()
+            .map(|row| SyncRequestSummaryView {
+                request: row.id,
+                source: row.source,
+                target: row.target,
+                disposition: row.disposition.as_str().to_owned(),
+                intent: row.intent.as_str().to_owned(),
+                state: row.state,
+                created_at: row.requested_at.0,
+                resources_total: row.resources_total,
+                resources_failed: row.resources_failed,
+            })
+            .collect(),
+    }))
 }
 
 /// What the client polls between asking for a sync and the ledger having
@@ -469,6 +588,41 @@ pub(crate) async fn sync_request_view(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such sync request"))?;
+    // Coverage is measured only where a device enumerated the catalogue, and
+    // the source's transport class is what says so — the same predicate the
+    // submit validated against, read here rather than restated.
+    let measured = record.source.marketplace().transport_class()
+        == tam_types::TransportClass::SellerDevice
+        && record.disposition == Disposition::Migrate;
+    // A SUM over the breadcrumbs that carry a measurement, and only those. A
+    // skipped resource never reached the taxonomy, so counting it as a row of
+    // zeros would enter it into the founder's average as perfect coverage —
+    // which is exactly what the nullable columns exist to prevent, and this
+    // filter is the read-side half of that.
+    let coverage = measured.then(|| {
+        record.resources.iter().filter_map(|row| row.coverage).fold(
+            CoverageView {
+                rows: 0,
+                terms_seen: 0,
+                terms_mapped: 0,
+                terms_unmapped: 0,
+                terms_uncovered: 0,
+            },
+            |mut total, row| {
+                total.rows = total.rows.saturating_add(1);
+                total.terms_seen = total.terms_seen.saturating_add(row.terms_seen);
+                total.terms_mapped = total.terms_mapped.saturating_add(row.terms_mapped);
+                total.terms_unmapped = total.terms_unmapped.saturating_add(row.terms_unmapped);
+                total.terms_uncovered = total.terms_uncovered.saturating_add(row.terms_uncovered);
+                total
+            },
+        )
+    });
+    let waiting_for_device_version = if measured {
+        waiting_for_a_device(&state, context.org).await?
+    } else {
+        None
+    };
     Ok(Json(SyncRequestView {
         request: record.id,
         source: record.source,
@@ -479,6 +633,8 @@ pub(crate) async fn sync_request_view(
         failure_detail: record.failure_detail,
         create_job: record.create_job,
         remove_job: record.remove_job,
+        coverage,
+        waiting_for_device_version,
         resources: record
             .resources
             .into_iter()
@@ -487,9 +643,36 @@ pub(crate) async fn sync_request_view(
                 locator: row.locator,
                 state: row.state,
                 failure_detail: row.failure_detail,
+                coverage: row.coverage.map(|measured| ResourceCoverageView {
+                    terms_seen: measured.terms_seen,
+                    terms_mapped: measured.terms_mapped,
+                    terms_unmapped: measured.terms_unmapped,
+                    terms_uncovered: measured.terms_uncovered,
+                }),
             })
             .collect(),
     }))
+}
+
+/// The version a device needs before it can run a marketplace-sourced item,
+/// stated only while the tenant has no device that can.
+///
+/// D6's surfacing half. The gate itself is the claim's, which hands a sourced
+/// item only to a device at or past this version; what this answers is the
+/// question that gate leaves a seller with — an item that waits in silence
+/// costs a support ticket, and an item that says which version it needs costs
+/// an update. Derived rather than stored, because it stops being true the
+/// moment the seller updates a machine.
+async fn waiting_for_a_device(state: &AppState, org: OrgId) -> Result<Option<String>, APIError> {
+    let (major, minor, patch) = tam_domain::SOURCED_PAYLOAD_MIN_VERSION;
+    let devices = tam_storage::DeviceRepo::new(state.pool.clone())
+        .list(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let ready = devices.iter().any(|device| {
+        device.revoked_at.is_none() && tam_domain::runs_sourced_payloads(&device.app_version)
+    });
+    Ok((!ready).then(|| format!("{major}.{minor}.{patch}")))
 }
 
 /// What the seller asked the listing to end up as.

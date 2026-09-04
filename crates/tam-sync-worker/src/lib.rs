@@ -25,9 +25,9 @@ use tam_import::ImportRun;
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
-    job_request_key, lower, requires_bound_on, Disposition, Enqueued, JobReadRepo, JobRepo,
-    LoweringRefusal, MappingRepo, NewJob, NewJobItem, StorageError, SyncIntent, SyncRequestRecord,
-    SyncRequestRepo, SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
+    job_request_key, Disposition, Enqueued, JobRepo, LoweringRefusal, MappingRepo, NewJob,
+    NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG,
+    REMOVE_LEG,
 };
 use tam_types::{Actor, JobId, MappingId, OrgId, Stamp, SystemComponent, Uuid};
 
@@ -214,37 +214,29 @@ async fn enqueue_create(
     record: &SyncRequestRecord,
     mappings: &[tam_types::MappingId],
 ) -> Result<Uuid, DrainError> {
-    let seeds = JobReadRepo::new(run.pool.clone())
-        .mapping_seeds(run.org, record.target, mappings)
-        .await?;
+    // The items are `tam-import`'s, because the device import's completing page
+    // mints the same rows inside its own transaction and two copies of this
+    // lowering would let the two callers diverge on what a `live` request means.
     let job = JobId(fresh_uuid());
-    let to = match record.intent {
-        SyncIntent::Draft => ListingState::Draft,
-        SyncIntent::Live => ListingState::Live,
-    };
-    let mut items: Vec<NewJobItem> = Vec::new();
-    for seed in &seeds {
-        for operation in lower(to, record.target, seed).map_err(DrainError::Lowering)? {
-            items.push(NewJobItem {
-                item: JobItemId(fresh_uuid()),
-                mapping: seed.mapping,
-                idempotency_key: derive_idempotency_key(
-                    run.org,
-                    record.target,
-                    seed.product,
-                    INTENT_VERSION,
-                    tam_storage::job_reads::intent_digest(
-                        &operation,
-                        job,
-                        &seed.payload_hashes,
-                        seed.sever_generation,
-                    ),
-                ),
-                requires_bound_on: requires_bound_on(&operation, record.target),
-                operation,
-            });
-        }
-    }
+    let items = tam_import::create_items(run, record.intent, job, mappings)
+        .await
+        .map_err(|error| match error {
+            tam_import::ImportError::Lowering(refusal) => DrainError::Lowering(refusal),
+            tam_import::ImportError::Storage(error) => DrainError::Storage(error),
+            // `create_items` lowers an intent and derives keys. It reads no
+            // price, ingests no payload and resolves no currency, so these
+            // arms exist because the shared error type is wider than this
+            // call rather than because this call can reach them — and saying
+            // so as an inconsistency is truer than filing them under a
+            // locator failure, which is what a wildcard arm did here before.
+            impossible @ (tam_import::ImportError::NoPayload
+            | tam_import::ImportError::Price(_)
+            | tam_import::ImportError::CurrencyUnknown { .. }) => {
+                DrainError::Storage(StorageError::Inconsistent {
+                    reason: format!("the create items answered {impossible}"),
+                })
+            }
+        })?;
     let created = JobRepo::new(run.pool.clone())
         .create_with_request_key(
             run.org,

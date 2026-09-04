@@ -23,6 +23,7 @@ pub mod blocking;
 pub mod catalogue;
 pub mod devices;
 pub mod error;
+pub mod import;
 pub mod jobs;
 pub mod openapi;
 pub mod org;
@@ -170,7 +171,10 @@ pub fn router(state: AppState) -> Router {
             "/{version}/jobs",
             post(jobs::create_job).get(jobs::list_jobs),
         )
-        .route("/{version}/sync", post(jobs::create_sync_request))
+        .route(
+            "/{version}/sync",
+            post(jobs::create_sync_request).get(jobs::list_sync_requests),
+        )
         .route("/{version}/sync/{request}", get(jobs::sync_request_view))
         .route("/{version}/jobs/{job}", get(jobs::job_view))
         .route("/{version}/jobs/{job}/items", get(jobs::job_items))
@@ -237,6 +241,14 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/devices/{device}/work", post(work::claim))
         .route("/{version}/devices/{device}/settle", post(work::settle))
         .route("/{version}/devices/{device}/ledger", post(work::ledger))
+        // The migration read's server half. The body limit is the upload
+        // route's own constant rather than a new number: a page carries up to
+        // twenty-five covers, which the device bounds, and inventing a second
+        // ceiling here would be a second thing to keep in step with the first.
+        .route(
+            "/{version}/devices/{device}/import",
+            post(import::import_page).layer(catalogue::upload_body_limit()),
+        )
         .route(
             "/{version}/devices/{device}/payload/{file}",
             get(work::payload),

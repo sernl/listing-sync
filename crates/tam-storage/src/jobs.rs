@@ -3298,69 +3298,31 @@ impl JobRepo {
                 replay: true,
             });
         }
-        let NewJob {
-            job,
-            inventory,
-            stamp,
-        } = *new;
-        let Stamp { at, actor } = stamp;
-        let org_db = uuid_to_db(org.0);
-        let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
         crate::pin_org(&mut tx, org).await?;
-        let inserted = sqlx::query!(
-            "INSERT INTO job \
-             (org_id, id, inventory, marketplace, created_at, \
-              request_idempotency_key, actor_kind, actor_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            org_db,
-            uuid_to_db(job.0),
-            inventory_to_db(inventory),
-            marketplace_to_db(inventory.marketplace()),
-            at_db,
-            uuid_to_db(request_key),
-            actor.kind(),
-            actor.id(),
-        )
-        .execute(&mut *tx)
-        .await;
-        match inserted {
-            Ok(_) => {}
-            Err(sqlx::Error::Database(database))
-                if database.constraint() == Some("job_request_idempotent") =>
-            {
+        match create_job_in_tx(&mut tx, org, request_key, new, items).await? {
+            JobWrite::Created => {
+                tx.commit().await?;
+                Ok(CreatedJob {
+                    job: new.job,
+                    replay: false,
+                })
+            }
+            JobWrite::KeyAlreadyUsed => {
+                // The failed INSERT aborted this transaction, so the losing
+                // carrier reads the winner's job on a fresh one.
                 drop(tx);
                 let existing = self.job_for_request_key(org, request_key).await?.ok_or(
                     StorageError::Inconsistent {
                         reason: "the winning request's job must exist".to_owned(),
                     },
                 )?;
-                return Ok(CreatedJob {
+                Ok(CreatedJob {
                     job: existing,
                     replay: true,
-                });
+                })
             }
-            Err(error) => return Err(error.into()),
         }
-        for item in items {
-            insert_job_item(&mut tx, org_db, uuid_to_db(job.0), item, at_db).await?;
-        }
-        let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
-            reason: format!("{} items exceed the event range", items.len()),
-        })?;
-        append_event(
-            &mut tx,
-            &EventScope {
-                org,
-                job,
-                item: None,
-            },
-            &JobEventPayload::JobQueued { items: item_count },
-            stamp,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(CreatedJob { job, replay: false })
     }
 
     async fn job_for_request_key(
@@ -3380,6 +3342,86 @@ impl JobRepo {
         tx.commit().await?;
         Ok(found.map(|id| JobId(uuid_from_db(id))))
     }
+}
+
+/// Whether the job was written, or the request key was already spent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobWrite {
+    Created,
+    KeyAlreadyUsed,
+}
+
+/// One job and its items, written into a transaction the caller owns.
+///
+/// Extracted so a caller that must do more in the same transaction can, rather
+/// than copying this body. The device import is that caller: its completing
+/// page marks the request settled and mints its create job, and doing those in
+/// two transactions leaves a window where the job exists and the request still
+/// reads `draining`. A cron drain survives that window by re-running; a device
+/// gets one answer and does not retry a 200, so the seller's request would sit
+/// mid-flight with a job nobody had told it about.
+///
+/// The commit is the caller's, and so is the rollback: an idempotency-key
+/// collision aborts the transaction, so `KeyAlreadyUsed` is returned rather
+/// than recovered here, because only the caller knows what else it had staged.
+pub(crate) async fn create_job_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    request_key: Uuid,
+    new: &NewJob,
+    items: &[NewJobItem],
+) -> Result<JobWrite, StorageError> {
+    let NewJob {
+        job,
+        inventory,
+        stamp,
+    } = *new;
+    let Stamp { at, actor } = stamp;
+    let org_db = uuid_to_db(org.0);
+    let at_db = timestamp_to_db(at)?;
+    let inserted = sqlx::query!(
+        "INSERT INTO job \
+             (org_id, id, inventory, marketplace, created_at, \
+              request_idempotency_key, actor_kind, actor_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        org_db,
+        uuid_to_db(job.0),
+        inventory_to_db(inventory),
+        marketplace_to_db(inventory.marketplace()),
+        at_db,
+        uuid_to_db(request_key),
+        actor.kind(),
+        actor.id(),
+    )
+    .execute(&mut **tx)
+    .await;
+    match inserted {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(database))
+            if database.constraint() == Some("job_request_idempotent") =>
+        {
+            return Ok(JobWrite::KeyAlreadyUsed);
+        }
+        Err(error) => return Err(error.into()),
+    }
+    for item in items {
+        insert_job_item(tx, org_db, uuid_to_db(job.0), item, at_db).await?;
+    }
+    let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
+        reason: format!("{} items exceed the event range", items.len()),
+    })?;
+    append_event(
+        tx,
+        &EventScope {
+            org,
+            job,
+            item: None,
+        },
+        &JobEventPayload::JobQueued { items: item_count },
+        stamp,
+    )
+    .await?;
+    Ok(JobWrite::Created)
 }
 
 /// One inventory's halt, for the public status page: global reference state,

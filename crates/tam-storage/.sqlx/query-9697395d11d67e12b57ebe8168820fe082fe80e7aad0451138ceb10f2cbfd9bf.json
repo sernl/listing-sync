@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sync_request SET state = 'draining' WHERE org_id = $1 AND id = $2 AND state = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9697395d11d67e12b57ebe8168820fe082fe80e7aad0451138ceb10f2cbfd9bf"
+}

@@ -15,7 +15,9 @@
 
 use sqlx::PgPool;
 use tam_marketplace::{ListingState, RemoteListingId};
-use tam_types::{InventoryId, MappingId, OrgId, ProductId, Timestamp, Uuid};
+use tam_types::{InventoryId, MappingId, OrgId, ProductId, Timestamp, TransportClass, Uuid};
+
+use crate::jobs::{CreatedJob, NewJob, NewJobItem};
 
 use crate::codec::{
     inventory_from_db, inventory_to_db, listing_state_from_db, listing_state_to_db,
@@ -23,6 +25,48 @@ use crate::codec::{
 };
 use crate::mapping::remote_id_from_db;
 use crate::{pin_org, StorageError};
+
+/// The four counts as one measurement, which is how
+/// `sync_request_resource_coverage_total` stores them: all present or all
+/// absent. A partial set is a row that constraint should have refused, so it is
+/// read as corrupt rather than as three counts and a guess.
+fn coverage_from_db(
+    seen: Option<i32>,
+    mapped: Option<i32>,
+    unmapped: Option<i32>,
+    uncovered: Option<i32>,
+) -> Result<Option<ResourceCoverage>, StorageError> {
+    match (seen, mapped, unmapped, uncovered) {
+        (None, None, None, None) => Ok(None),
+        (Some(seen), Some(mapped), Some(unmapped), Some(uncovered)) => Ok(Some(ResourceCoverage {
+            terms_seen: count_from_db(seen)?,
+            terms_mapped: count_from_db(mapped)?,
+            terms_unmapped: count_from_db(unmapped)?,
+            terms_uncovered: count_from_db(uncovered)?,
+        })),
+        _ => Err(StorageError::CorruptRow {
+            reason: "a coverage measurement is four counts or none, and this row holds some"
+                .to_owned(),
+        }),
+    }
+}
+
+/// A count as the row holds it. Negative is impossible under
+/// `sync_request_resource_counts`, so reading one back is a corrupt row rather
+/// than a number to clamp.
+fn count_from_db(raw: i32) -> Result<u32, StorageError> {
+    u32::try_from(raw).map_err(|_| StorageError::CorruptRow {
+        reason: format!("a coverage count is not negative and this is {raw}"),
+    })
+}
+
+/// The same in the other direction. A count beyond `i32` is a catalogue no
+/// seller has, and saturating is the honest failure: the alternative is a
+/// wrapped negative the CHECK would refuse at the far end of a page that
+/// otherwise succeeded.
+fn count_to_db(count: u32) -> i32 {
+    i32::try_from(count).unwrap_or(i32::MAX)
+}
 
 pub struct SyncRequestRepo {
     pool: PgPool,
@@ -94,11 +138,87 @@ pub struct SyncRequestRecord {
     pub resources: Vec<SyncResourceRecord>,
 }
 
+/// What the import measured about one resource's taxonomy coverage.
+///
+/// The founder's kill gate, per resource. The definition is
+/// `tam_import::uncovered_terms` and nothing else — Subject and Topic only,
+/// distinct terms, a recorded no-counterpart omitted, an unclassifiable term
+/// counted — because the number is compared across a series of migrations and
+/// a second reckoning of it is how such a number stops meaning anything.
+///
+/// The absence of one of these is null in the row and `None` here, never a
+/// zero: a resource the device skipped and every breadcrumb of a request that
+/// measures nothing have not been through the taxonomy at all, and entering
+/// them into the founder's average as perfect coverage is the one mistake this
+/// number cannot afford.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ResourceCoverage {
+    pub terms_seen: u32,
+    pub terms_mapped: u32,
+    pub terms_unmapped: u32,
+    pub terms_uncovered: u32,
+}
+
+/// What a completing page settles and mints, together.
+#[derive(Debug, Clone)]
+pub struct Completion<'a> {
+    pub request: Uuid,
+    pub at: Timestamp,
+    /// The create job, or `None` for a catalogue that held nothing to publish.
+    pub mint: Option<Mint<'a>>,
+}
+
+/// The create job a completing page earns.
+#[derive(Debug, Clone)]
+pub struct Mint<'a> {
+    /// Derived from the request id, so a re-posted completing page is a replay
+    /// of the same job rather than a second one.
+    pub request_key: Uuid,
+    pub job: &'a NewJob,
+    pub items: &'a [NewJobItem],
+}
+
+/// One resource the device described, as the import route records it.
+#[derive(Debug, Clone)]
+pub struct Observed<'a> {
+    /// How the seller's marketplace addresses it, and the identity a re-posted
+    /// page is recognised by.
+    pub locator: &'a str,
+    pub product: ProductId,
+    pub mapping: MappingId,
+    pub source: &'a RemoteListingId,
+    pub source_state: Option<ListingState>,
+    pub coverage: ResourceCoverage,
+}
+
+/// One request as a list row: enough to render it and reach it, and no
+/// breadcrumbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncRequestSummary {
+    pub id: Uuid,
+    pub source: InventoryId,
+    pub target: InventoryId,
+    pub disposition: Disposition,
+    pub intent: SyncIntent,
+    pub state: String,
+    pub requested_at: Timestamp,
+    pub resources_total: u32,
+    /// How many the device could not describe. Shown beside the total rather
+    /// than folded into it, because a migration that crossed forty of fifty
+    /// resources is a different thing to a seller than one that crossed all
+    /// forty it had.
+    pub resources_failed: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncResourceRecord {
     pub ordinal: i32,
     pub locator: String,
     pub state: String,
+    /// What the import measured about this resource, and `None` where nothing
+    /// measured it: a skipped resource, or any breadcrumb of a request whose
+    /// source is not enumerated by a device.
+    pub coverage: Option<ResourceCoverage>,
     pub product: Option<ProductId>,
     pub mapping: Option<MappingId>,
     /// What the read observed about the source listing, recorded so a redrain
@@ -163,9 +283,22 @@ impl SyncRequestRepo {
     /// both saw no existing row and the loser's INSERT violated the primary
     /// key, turning the double-click into a fault.
     pub async fn create(&self, org: OrgId, new: &NewSyncRequest) -> Result<bool, StorageError> {
-        if new.locators.is_empty() {
+        // A request whose source is a device-branch marketplace starts empty
+        // and is filled by the pages the seller's own device posts, because
+        // under D1 the device is the only thing that can enumerate that
+        // catalogue. Every other request names its resources up front, and an
+        // empty one there is a migration that would settle complete having
+        // moved nothing.
+        //
+        // The guard is here rather than only at the API because it is a
+        // property of the row: the transport class is a fact about the source
+        // marketplace, so the write can decide it without being told.
+        if new.locators.is_empty()
+            && new.source.marketplace().transport_class() != TransportClass::SellerDevice
+        {
             return Err(StorageError::Inconsistent {
-                reason: "a sync request names at least one resource".to_owned(),
+                reason: "a sync request on a server-branch source names at least one resource"
+                    .to_owned(),
             });
         }
         let mut tx = self.pool.begin().await?;
@@ -211,6 +344,58 @@ impl SyncRequestRepo {
         Ok(true)
     }
 
+    /// The organisation's sync requests, newest first.
+    ///
+    /// The console's only way to reach a request it created and navigated away
+    /// from. A device-branch migrate mints no job until its completing page, so
+    /// until then it appears in no job list and, without this, nowhere at all —
+    /// which left the console telling a seller to go back to a page it could
+    /// not link to.
+    ///
+    /// The two counts are computed here rather than by loading every
+    /// breadcrumb, because a list of fifty requests over a five-hundred-resource
+    /// shop is twenty-five thousand rows to answer a question about two numbers.
+    pub async fn list(
+        &self,
+        org: OrgId,
+        limit: i64,
+    ) -> Result<Vec<SyncRequestSummary>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            r#"SELECT r.id, r.source, r.target, r.disposition, r.intent, r.state, r.requested_at,
+                      (SELECT count(*) FROM sync_request_resource s
+                        WHERE s.org_id = r.org_id AND s.request_id = r.id) AS "total!",
+                      (SELECT count(*) FROM sync_request_resource s
+                        WHERE s.org_id = r.org_id AND s.request_id = r.id
+                          AND s.state = 'failed') AS "failed!"
+               FROM sync_request r
+               WHERE r.org_id = $1
+               ORDER BY r.requested_at DESC, r.id DESC
+               LIMIT $2"#,
+            uuid_to_db(org.0),
+            limit,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(SyncRequestSummary {
+                    id: uuid_from_db(row.id),
+                    source: inventory_from_db(&row.source)?,
+                    target: inventory_from_db(&row.target)?,
+                    disposition: disposition_from_db(&row.disposition)?,
+                    intent: intent_from_db(&row.intent)?,
+                    state: row.state,
+                    requested_at: timestamp_from_db(row.requested_at),
+                    resources_total: count_from_db(i32::try_from(row.total).unwrap_or(i32::MAX))?,
+                    resources_failed: count_from_db(i32::try_from(row.failed).unwrap_or(i32::MAX))?,
+                })
+            })
+            .collect()
+    }
+
     pub async fn get(
         &self,
         org: OrgId,
@@ -233,7 +418,8 @@ impl SyncRequestRepo {
         };
         let rows = sqlx::query!(
             "SELECT ordinal, locator, state, product_id, mapping_id, \
-                    source_kind, source_url, source_numeric_id, source_state, failure_detail \
+                    source_kind, source_url, source_numeric_id, source_state, failure_detail, \
+                    terms_seen, terms_mapped, terms_unmapped, terms_uncovered \
              FROM sync_request_resource WHERE org_id = $1 AND request_id = $2 ORDER BY ordinal",
             uuid_to_db(org.0),
             uuid_to_db(request),
@@ -260,6 +446,12 @@ impl SyncRequestRepo {
                         ordinal: row.ordinal,
                         locator: row.locator,
                         state: row.state,
+                        coverage: coverage_from_db(
+                            row.terms_seen,
+                            row.terms_mapped,
+                            row.terms_unmapped,
+                            row.terms_uncovered,
+                        )?,
                         product: row.product_id.map(|id| ProductId(uuid_from_db(id))),
                         mapping: row.mapping_id.map(|id| MappingId(uuid_from_db(id))),
                         source: row
@@ -365,6 +557,186 @@ impl SyncRequestRepo {
                 reason: "no such sync request resource".to_owned(),
             });
         }
+        Ok(())
+    }
+
+    /// Appends one described resource to a device import, at the next ordinal.
+    ///
+    /// `Ok(false)` means the request already carries a breadcrumb for this
+    /// locator and nothing was written. Identity is the marketplace resource
+    /// id within the request rather than the ordinal, because a device that
+    /// re-posts a page it already sent must not mint a second product: the
+    /// caller checks this before it canonicalises, and this is the write-side
+    /// half of the same rule.
+    ///
+    /// The ordinal is computed and inserted in one statement so two pages
+    /// cannot read the same maximum; the primary key refuses the remainder of
+    /// that race rather than the two silently sharing an ordinal.
+    pub async fn append_observed(
+        &self,
+        org: OrgId,
+        request: Uuid,
+        observed: &Observed<'_>,
+    ) -> Result<bool, StorageError> {
+        let columns = RemoteIdColumns::encode(observed.source)?;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let written = sqlx::query!(
+            "INSERT INTO sync_request_resource \
+             (org_id, request_id, ordinal, locator, state, product_id, mapping_id, \
+              source_kind, source_url, source_numeric_id, source_state, \
+              terms_seen, terms_mapped, terms_unmapped, terms_uncovered) \
+             SELECT $1, $2, \
+                    COALESCE((SELECT MAX(ordinal) FROM sync_request_resource \
+                              WHERE org_id = $1 AND request_id = $2), -1) + 1, \
+                    $3, 'canonicalised', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 \
+             WHERE NOT EXISTS (SELECT 1 FROM sync_request_resource \
+                               WHERE org_id = $1 AND request_id = $2 AND locator = $3)",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+            observed.locator,
+            uuid_to_db(observed.product.0),
+            uuid_to_db(observed.mapping.0),
+            columns.kind,
+            columns.url,
+            columns.numeric_id,
+            observed.source_state.map(listing_state_to_db),
+            count_to_db(observed.coverage.terms_seen),
+            count_to_db(observed.coverage.terms_mapped),
+            count_to_db(observed.coverage.terms_unmapped),
+            count_to_db(observed.coverage.terms_uncovered),
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(written == 1)
+    }
+
+    /// Appends one resource the device could not describe, as a failed
+    /// breadcrumb carrying the device's own reason.
+    ///
+    /// A skip is recorded rather than dropped because completion is what mints
+    /// the write jobs: a request that completed without saying what did not
+    /// cross would report success for a partial catalogue, and the seller
+    /// would find out by noticing something missing from their own shop. It is
+    /// never a product, so no create item is ever minted for it.
+    pub async fn append_skipped(
+        &self,
+        org: OrgId,
+        request: Uuid,
+        locator: &str,
+        why: &str,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let written = sqlx::query!(
+            "INSERT INTO sync_request_resource \
+             (org_id, request_id, ordinal, locator, state, failure_detail) \
+             SELECT $1, $2, \
+                    COALESCE((SELECT MAX(ordinal) FROM sync_request_resource \
+                              WHERE org_id = $1 AND request_id = $2), -1) + 1, \
+                    $3, 'failed', $4 \
+             WHERE NOT EXISTS (SELECT 1 FROM sync_request_resource \
+                               WHERE org_id = $1 AND request_id = $2 AND locator = $3)",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+            locator,
+            why,
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(written == 1)
+    }
+
+    /// Settles a device import and mints its create job in ONE transaction.
+    ///
+    /// The two halves are one fact and are written as one. Doing them
+    /// separately — `create_with_request_key` then `record_enqueued`, which is
+    /// what the cron drain does — leaves a window where the job exists and the
+    /// request still reads `draining`. The drain survives that by re-running on
+    /// its next tick; a device does not, because it gets one answer to its
+    /// completing page and a 200 is not retried, so a crash in the window would
+    /// leave the seller's request permanently mid-flight beside a job nobody
+    /// had told it about.
+    ///
+    /// `mint` is `None` where the catalogue held nothing to publish. That is a
+    /// completion rather than a failure, and it deliberately mints no job: an
+    /// itemless job reads back settled, because zero settled of zero is
+    /// complete, so creating one would report a migration finished when there
+    /// was never anything in it.
+    pub async fn complete_with_create_job(
+        &self,
+        org: OrgId,
+        completion: &Completion<'_>,
+    ) -> Result<Option<CreatedJob>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let created = match completion.mint.as_ref() {
+            None => None,
+            Some(mint) => {
+                match crate::jobs::create_job_in_tx(
+                    &mut tx,
+                    org,
+                    mint.request_key,
+                    mint.job,
+                    mint.items,
+                )
+                .await?
+                {
+                    crate::jobs::JobWrite::Created => Some(CreatedJob {
+                        job: mint.job.job,
+                        replay: false,
+                    }),
+                    // The key was already spent, which means an earlier
+                    // completing page minted this job and settled this request.
+                    // The failed insert aborted the transaction, so nothing here
+                    // is written and the caller is told it is a replay.
+                    crate::jobs::JobWrite::KeyAlreadyUsed => {
+                        drop(tx);
+                        return Ok(Some(CreatedJob {
+                            job: mint.job.job,
+                            replay: true,
+                        }));
+                    }
+                }
+            }
+        };
+        sqlx::query!(
+            "UPDATE sync_request \
+             SET state = 'enqueued', create_job_id = $3, settled_at = $4 \
+             WHERE org_id = $1 AND id = $2 AND state <> 'enqueued'",
+            uuid_to_db(org.0),
+            uuid_to_db(completion.request),
+            created.map(|job| uuid_to_db(job.job.0)),
+            timestamp_to_db(completion.at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(created)
+    }
+
+    /// Moves a request from `pending` to `draining` on its first page, and
+    /// leaves it alone once it is already there.
+    pub async fn mark_draining_if_pending(
+        &self,
+        org: OrgId,
+        request: Uuid,
+    ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        sqlx::query!(
+            "UPDATE sync_request SET state = 'draining' \
+             WHERE org_id = $1 AND id = $2 AND state = 'pending'",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -480,6 +852,15 @@ pub fn job_request_key(request: Uuid, leg: &str) -> Uuid {
 
 pub const CREATE_LEG: &str = "create";
 pub const REMOVE_LEG: &str = "remove";
+/// The leg an import's own events hang from.
+///
+/// A `job_event` row requires a job, and a device import has none until its
+/// completing page mints the create leg — so progress would be invisible for
+/// however long the seller's shop takes to walk. This leg names an itemless
+/// job created with the first page purely to anchor those events, which is the
+/// same device `record_drain_report` already uses. It can never become a
+/// publish: a `queued` item is what the lease scan claims, and it has none.
+pub const IMPORT_LEG: &str = "import";
 
 fn disposition_from_db(raw: &str) -> Result<Disposition, StorageError> {
     match raw {
