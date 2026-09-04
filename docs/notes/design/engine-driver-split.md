@@ -735,6 +735,8 @@ The floors are untouched and every count is still well above them.
 8. Release the duplicate-create fence on a positive absence, once the reconciliation has run for a while and the enumeration's reliability on each platform is known from live evidence rather than from its contract.
    Recommended: not yet, and not on any `Ok(None)` — only on a complete enumeration under the seller's own session, which is what `list_own_resources` already guarantees on both platforms by refusing a walk it cannot finish. The caveat that decides the timing is Tpt's: a create sits in an asynchronous processing queue for minutes, so an enumeration that lacks the marker can legitimately precede the listing appearing, and releasing on that would manufacture the duplicate the fence exists to prevent. Until then both answers stay stranded and surfaced, recorded as distinct causes so this can change without anything else changing.
 
+Open questions 3 and 4 are designed out in `docs/notes/design/migration-file-routing.md`, which routes the Tes read leg and the file bytes to the device, keeps the sync worker's enqueue half, and states full client-side ingest as the arrangement rather than the interim.
+
 ## 9. Appendix: the findings
 
 Severity is B blocking, S should-fix, D design-input, N nit; every blocking and should-fix row survived adversarial refutation.
