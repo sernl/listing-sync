@@ -490,7 +490,7 @@ impl CopyFormat {
 /// `VocabularyPath` stays the typed-axis form and is recovered from one of
 /// these only once a kind is known, which is the pure upgrade with no data
 /// migration the model promises.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportedTerm {
     pub inventory: InventoryId,
     pub kind: Option<TermKind>,
@@ -506,7 +506,8 @@ pub struct ImportedTerm {
 /// `Money`, where it is indistinguishable from a measured one and the parity
 /// and price-floor guards then compare across the wrong denomination.
 /// Resolution happens only where `CurrencyRule::Fixed` states the answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ImportedPrice {
     Free,
     Paid {

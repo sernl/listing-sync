@@ -662,7 +662,13 @@ pub struct RemovalPlan {
 /// tagged with an axis where the adapter knows one and left untagged where it
 /// does not, which is the honest state of eight of TPT's twelve facet
 /// categories.
-#[derive(Debug, Clone, PartialEq)]
+/// Crosses the wire because the read that produces one now happens on the
+/// seller's own device: the adapter reads the listing there and the server's
+/// import applies it here, so this type is the contract between them. Derived
+/// where it is defined rather than restated as a parallel wire struct, for the
+/// reason the driver crate's vocabulary gives — one definition is what stops
+/// the envelope on the wire and the envelope in the code drifting apart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImportedListing {
     pub remote: RemoteListingId,
     pub title: String,
@@ -824,8 +830,78 @@ pub trait FaultPlan: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{settle, FieldDiffReport, InstantPause, Outcome, Pause as _, RemoteListingId};
-    use tam_types::{AttemptId, FieldKey, FieldMismatch, MismatchClass, Timestamp, Uuid};
+    use super::{
+        settle, FieldDiffReport, ImportedListing, InstantPause, ListingState, Outcome, Pause as _,
+        RemoteListingId,
+    };
+    use tam_types::{
+        AttemptId, CopyFormat, FieldKey, FieldMismatch, ImportedPrice, ImportedTerm, InventoryId,
+        MismatchClass, TermKind, Timestamp, Uuid,
+    };
+
+    /// The whole imported listing survives the wire.
+    ///
+    /// It crosses one now: the read happens on the seller's device and the
+    /// import applies it on the server, so a field that serialises but does
+    /// not read back is a field the catalogue silently loses — a dropped
+    /// subject is a product that projects to nothing, and a dropped rights
+    /// grant is a licence nobody declared. Every axis is populated rather than
+    /// a representative one, and both optional halves are exercised, because
+    /// the fields most likely to be missed are the ones a sparse fixture never
+    /// fills.
+    #[test]
+    fn a_fully_populated_imported_listing_round_trips() {
+        let term = |kind: Option<TermKind>, native: &str| ImportedTerm {
+            inventory: InventoryId::TesGb,
+            kind,
+            segments: vec!["Mathematics".to_owned(), native.to_owned()],
+            native_id: Some(native.to_owned()),
+        };
+        let listing = ImportedListing {
+            remote: RemoteListingId::Tes {
+                url: "https://www.tes.com/api/v2/resources/13549126".to_owned(),
+            },
+            title: "Integers: a worksheet".to_owned(),
+            body: "<p>Ten pages of practice.</p>".to_owned(),
+            body_format: CopyFormat::Html,
+            native: vec![
+                term(Some(TermKind::Subject), "1001586"),
+                term(Some(TermKind::Phase), "99001"),
+                term(Some(TermKind::ResourceType), "99003"),
+                // Untagged, which is the honest state of most of one
+                // marketplace's facets and the case a tidy fixture omits.
+                term(None, "unmapped-facet"),
+            ],
+            rights: Some(term(Some(TermKind::Licence), "CC-BY")),
+            price: ImportedPrice::Paid {
+                minor_units: 500,
+                denomination: "£".to_owned(),
+            },
+            state: Some(ListingState::Live),
+        };
+
+        let json = serde_json::to_string(&listing).expect("the listing serialises");
+        let read: ImportedListing = serde_json::from_str(&json).expect("the listing reads back");
+        assert_eq!(read, listing, "every field survives the wire");
+
+        // The absent halves separately, because `None` reading back as `None`
+        // is a different claim from `Some` surviving, and a removal names the
+        // state it observed rather than defaulting one.
+        let bare = ImportedListing {
+            rights: None,
+            state: None,
+            native: Vec::new(),
+            price: ImportedPrice::Free,
+            ..listing
+        };
+        let json = serde_json::to_string(&bare).expect("the bare listing serialises");
+        let read: ImportedListing = serde_json::from_str(&json).expect("it reads back");
+        assert_eq!(
+            read, bare,
+            "an absent rights grant and an unobserved lifecycle stay absent rather than \
+             arriving as defaults nobody stated"
+        );
+    }
 
     fn receipt_parts() -> (AttemptId, RemoteListingId, Timestamp) {
         (
