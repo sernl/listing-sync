@@ -39,6 +39,11 @@ let
   # search parameters (`pg-connection-string`).
   dbUrl = role: "postgres:///${cfg.database.name}?host=${cfg.database.socketDir}&user=${role}";
 
+  # The two halves of `database.provision`, named once so the several places
+  # that branch on it read as the same question.
+  provisionsCluster = cfg.database.provision == "cluster";
+  provisionsTenancy = cfg.database.provision != "none";
+
   serverArgs = [
     (dbUrl "tam_app")
     "${cfg.server.bindAddress}:${toString cfg.server.port}"
@@ -265,13 +270,29 @@ in
         description = "Directory holding the postgres unix socket.";
       };
       provision = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
+        type = lib.types.enum [
+          "cluster"
+          "roles"
+          "none"
+        ];
+        default = "cluster";
         description = ''
-          Configure postgres on this machine: the database, the five roles, the
-          peer-authentication map, and the auth schema and its grants. False
-          leaves every one of those to something else, which is only correct when
-          the database is not on this host.
+          How much of postgres this deployment owns.
+
+          `cluster` configures the server and provisions tenancy on it: the
+          database, the five roles, the peer-authentication map, and the auth
+          schema and its grants. Correct on a machine that exists to run this.
+
+          `roles` provisions the same tenancy into a cluster somebody else
+          configured, and defines nothing about the server itself. The split is
+          not arbitrary: `enable`, `package` and `enableTCPIP` are single-valued
+          options a second definition collides with, while the database list, the
+          role list, the host-based authentication and the identity map are all
+          merge-by-concatenation, so this mode composes with another module by
+          construction rather than by luck.
+
+          `none` leaves postgres entirely alone, which is the only correct answer
+          when the database is not on this host.
         '';
       };
     };
@@ -467,14 +488,73 @@ in
         assertion = cfg.auth.environmentFiles != [ ];
         message = "services.teachouse.auth.environmentFiles is empty, so BETTER_AUTH_SECRET is unset and tam-auth refuses to start.";
       }
+      {
+        assertion = cfg.backup.enable -> provisionsCluster;
+        message = ''
+          services.teachouse.backup.enable is set while database.provision is
+          "${cfg.database.provision}", which means this deployment does not own
+          the cluster. Both halves of the backup are cluster-scoped and neither
+          can be aimed at one database inside it.
+
+          pgBackRest backs up a cluster, not a database, so enabling it here
+          would either capture every other tenant's data or capture nothing that
+          could be restored on its own. And it reads the data directory as its
+          own user, for which nixpkgs sets `initdbArgs = [ "--allow-group-access" ]`
+          — an argument that applies at initdb and nowhere else, so on a cluster
+          somebody else already created that definition is inert and pgBackRest
+          would find a directory it cannot read.
+
+          Back the cluster up where the cluster is configured. The host's own
+          `services.postgresqlBackup.databases` is the place to name this
+          deployment's database.
+        '';
+      }
     ];
 
-    warnings = lib.optional (cfg.server.paddleWebhookSecret != null) ''
-      services.teachouse.server.paddleWebhookSecret puts the billing webhook's
-      secret in /proc/<pid>/cmdline, where every local account can read it.
-      tam-server takes every configuration value as argv and offers no
-      path-shaped flag for this one.
-    '';
+    warnings =
+      lib.optional (cfg.server.paddleWebhookSecret != null) ''
+        services.teachouse.server.paddleWebhookSecret puts the billing webhook's
+        secret in /proc/<pid>/cmdline, where every local account can read it.
+        tam-server takes every configuration value as argv and offers no
+        path-shaped flag for this one.
+      ''
+      ++
+        lib.optional
+          (
+            provisionsTenancy
+            && !provisionsCluster
+            && !(lib.elem cfg.database.name config.services.postgresqlBackup.databases)
+          )
+          ''
+            services.teachouse.database.provision is "roles", so this deployment
+            provisions its tenancy into a cluster it does not back up, and
+            services.postgresqlBackup.databases does not name ${cfg.database.name}.
+            Nothing on this host is backing up the listing catalogue, the job ledger
+            or the billing state. Adding it to that list gives a nightly dump; the
+            object store under ${cfg.server.blobStoreRoot} is separately uncovered,
+            because backup.enable is refused in this mode.
+          ''
+      ++
+        lib.optional
+          (
+            provisionsTenancy
+            && !provisionsCluster
+            && lib.versions.major config.services.postgresql.package.version != "17"
+          )
+          ''
+            services.teachouse.database.provision is "roles" and this host's
+            cluster is PostgreSQL ${config.services.postgresql.package.version}.
+            The migration set has been exercised only against 17 — in
+            development, and in every deployment this module configures itself —
+            so nothing here says whether it applies cleanly on major version
+            ${lib.versions.major config.services.postgresql.package.version}.
+
+            A warning rather than a refusal, deliberately: the cluster belongs to
+            this host, and a module that only provisions tenancy into it has no
+            standing to veto its version. Rehearse the migration set against this
+            version before the first deploy, or pin services.postgresql.package
+            to 17 on the host.
+          '';
 
     users.groups.${group} = { };
     users.users =
@@ -490,57 +570,82 @@ in
           inherit group;
         });
 
-    services.postgresql = lib.mkIf cfg.database.provision {
-      enable = true;
-      package = pkgs.postgresql_17;
-      enableTCPIP = false;
-      ensureDatabases = [ cfg.database.name ];
-      ensureUsers = [
-        # Ownership of `tam` is transferred by the provisioning unit rather than
-        # claimed here: `ensureDBOwnership` grants the database that shares the
-        # role's name, and this role's name is not the database's.
-        { name = "tam_app"; }
-        {
-          # The one deliberate tenancy crossing: the drainer claims every
-          # organisation's due messages and one prune pass covers the whole
-          # ledger, which forced row-level security correctly hides from the
-          # application role.
-          name = "tam_engine";
-          ensureClauses.bypassrls = true;
-        }
-        { name = "tam_auth"; }
-        { name = "tam_backoffice"; }
-        {
-          # Retired, and kept only as a name to grant to. Migrations 0010, 0017
-          # and 0032 GRANT to it, they are applied and frozen, and postgres
-          # errors on a grant naming a role that does not exist — so a database
-          # replaying the set from empty, which is exactly what a first
-          # deployment does, fails at 0010 without it.
-          name = "tam_broker";
-          ensureClauses.login = false;
-        }
-      ];
-      # Inserted above the module's own rules, which is what makes the map win:
-      # pg_hba is first-match-wins and the default `local all all peer` would
-      # otherwise refuse every one of these, the unix and database names differing.
-      authentication = "local ${cfg.database.name} all peer map=teachouse";
-      identMap = ''
-        teachouse ${apiUser}     tam_app
-        teachouse ${apiUser}     tam_engine
-        teachouse ${apiUser}     tam_backoffice
-        teachouse ${workerUser}  tam_engine
-        teachouse ${authUser}    tam_auth
-        teachouse ${migrateUser} tam_app
-        teachouse ${migrateUser} tam_auth
-      '';
-      settings = lib.mkIf cfg.backup.enable {
-        # Forces a write-ahead-log segment at least every minute, so the achieved
-        # recovery point sits far inside the fifteen minutes committed for it.
-        archive_timeout = "60s";
-      };
-    };
+    services.postgresql = lib.mkMerge [
+      # The cluster half: three single-valued options, defined only where this
+      # deployment owns the server.
+      #
+      # The package is deliberately not a plain definition and cannot be
+      # `mkDefault`. A plain one would silently outrank a host's own choice and
+      # fail at activation against an existing data directory rather than at
+      # evaluation; `mkDefault` collides outright, because nixpkgs defines this
+      # option at that same priority from `system.stateVersion` rather than
+      # leaving it as an option default. 900 is the one place that says what is
+      # meant: it outranks nixpkgs' guess, which would give 18 on a host whose
+      # state version is 26.11 and which this workspace has never run against,
+      # and it yields to any host that names its own version.
+      (lib.mkIf provisionsCluster {
+        enable = true;
+        package = lib.mkOverride 900 pkgs.postgresql_17;
+        enableTCPIP = false;
+        settings = lib.mkIf cfg.backup.enable {
+          # Forces a write-ahead-log segment at least every minute, so the
+          # achieved recovery point sits far inside the fifteen minutes
+          # committed for it. Cluster-wide, which is one of the two reasons
+          # `backup.enable` is refused when the cluster is not ours.
+          archive_timeout = "60s";
+        };
+      })
 
-    systemd.services.teachouse-provision = lib.mkIf cfg.database.provision {
+      # The tenancy half: every one of these merges, so it composes with whatever
+      # else configures this cluster.
+      (lib.mkIf provisionsTenancy {
+        ensureDatabases = [ cfg.database.name ];
+        ensureUsers = [
+          # Ownership of `tam` is transferred by the provisioning unit rather than
+          # claimed here: `ensureDBOwnership` grants the database that shares the
+          # role's name, and this role's name is not the database's.
+          { name = "tam_app"; }
+          {
+            # The one deliberate tenancy crossing: the drainer claims every
+            # organisation's due messages and one prune pass covers the whole
+            # ledger, which forced row-level security correctly hides from the
+            # application role.
+            name = "tam_engine";
+            ensureClauses.bypassrls = true;
+          }
+          { name = "tam_auth"; }
+          { name = "tam_backoffice"; }
+          {
+            # Retired, and kept only as a name to grant to. Migrations 0010, 0017
+            # and 0032 GRANT to it, they are applied and frozen, and postgres
+            # errors on a grant naming a role that does not exist — so a database
+            # replaying the set from empty, which is exactly what a first
+            # deployment does, fails at 0010 without it.
+            name = "tam_broker";
+            ensureClauses.login = false;
+          }
+        ];
+        # `mkBefore` rather than a plain definition, and the safety here is
+        # positional rather than incidental: pg_hba is first-match-wins, and
+        # nixpkgs' default `local all all peer` refuses every one of these
+        # because the unix account and the role deliberately do not share a name.
+        # Added rules already sit above the defaults, so a plain definition would
+        # work today by module ordering alone; pinning it means a later
+        # contributor cannot reorder this into a broken deployment.
+        authentication = lib.mkBefore "local ${cfg.database.name} all peer map=teachouse";
+        identMap = ''
+          teachouse ${apiUser}     tam_app
+          teachouse ${apiUser}     tam_engine
+          teachouse ${apiUser}     tam_backoffice
+          teachouse ${workerUser}  tam_engine
+          teachouse ${authUser}    tam_auth
+          teachouse ${migrateUser} tam_app
+          teachouse ${migrateUser} tam_auth
+        '';
+      })
+    ];
+
+    systemd.services.teachouse-provision = lib.mkIf provisionsTenancy {
       description = "Teachouse schema and grant provisioning";
       requires = [ "postgresql-setup.service" ];
       after = [ "postgresql-setup.service" ];
@@ -556,11 +661,11 @@ in
 
     systemd.services.teachouse-migrate = {
       description = "Teachouse database migrations";
-      requires = lib.optional cfg.database.provision "teachouse-provision.service";
+      requires = lib.optional provisionsTenancy "teachouse-provision.service";
       after = [
         "postgresql.service"
       ]
-      ++ lib.optional cfg.database.provision "teachouse-provision.service";
+      ++ lib.optional provisionsTenancy "teachouse-provision.service";
       wantedBy = [ "multi-user.target" ];
       # One runner, once, ordered ahead of everything that serves: an application
       # that migrates on boot means a rollback restarts the old binary against

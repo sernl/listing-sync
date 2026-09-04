@@ -25,6 +25,9 @@ The last two are not backup material in the ordinary sense and are named here an
 
 ## The drill
 
+This procedure assumes the deployment owns its Postgres cluster, which is what `services.teachouse.database.provision = "cluster"` means.
+On a host where the cluster belongs to something else, the module refuses `backup.enable` for reasons it states in the assertion, the mechanism below is a nightly `pg_dump` from the host's own `services.postgresqlBackup` rather than point-in-time recovery, and steps 1 and 2 change accordingly — restore the dump, and accept that the recovery point is the age of the last one.
+
 Provision a scratch NixOS virtual machine from the same flake, so the system under test is the system that runs.
 
 1. Restore Postgres to a chosen timestamp: `pgbackrest restore --stanza=default --type=time --target='<timestamp>' --target-action=promote`, with `--set` to pin a specific backup.
