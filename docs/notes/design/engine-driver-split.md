@@ -392,6 +392,24 @@ Two things are recorded rather than fixed.
 The read-back reconciliation that finding 4 named is owed to 12b.
 And `open` compares no lease epoch in its own statement: it is fenced by `held_by` at the API, which is the same pre-existing gap the stolen-lease settle has, and closing both is one change rather than two.
 
+Both closed on 2026-09-04, as one change and not by the predicate this note implied.
+The gap was narrower than the line above suggests and better hidden: `LeaseRepo::settle`, the item settle, always compared `job_item.lease_epoch` and was never at risk, and `a_stale_worker_is_fenced_after_a_steal` proves it.
+What was unfenced is the attempt ledger — `WriteAttemptRepo::open` compared nothing, and its `settle` compared `write_attempt.lease_epoch` against the caller's own `LeaseRef`, which is the value written at open from that same lease and therefore agrees with itself however stale the caller is.
+So a worker whose lease had been stolen could take the in-flight slot from the device that now owned the work, and could settle its own standing attempt, binding the mapping on evidence from a run that had already lost the item.
+Nothing was bitten because `held_by` in the api fences the device branch on both the holder and the epoch; the exposed callers were the in-process ones, which do not pass through it.
+The fix is one shared `assert_current_epoch` read before each write rather than a predicate inside either statement, and the difference is the lock order: `settle` holds the attempt row and then takes the mapping, so an `EXISTS` on `job_item` inside its `UPDATE` would take `job_item` last and invert the order this module documents, which is the deadlock step 12's review already found once between these two methods.
+Read first and both callers keep the order they had, `FOR SHARE` so a steal landing between the check and the write cannot make the check prove nothing, and an item row that has gone answers `StaleLease` as well.
+Verification: `a_stale_holder_cannot_open_an_attempt_after_a_steal` and `a_stale_holder_cannot_settle_its_attempt_after_a_steal` in `crates/tam-storage/tests/leases.rs`, each with the positive control at the bumped epoch so the check refuses the stale caller rather than everyone, and the second asserting the mapping is still unbound afterwards, because the binding is the damage and the refusal is only how it is avoided.
+
+Open, and found by the first draft of that settle test failing: a parked create keeps its epoch, so the epoch fences nothing there.
+The reaper's third arm takes a create whose attempt is in flight and whose mapping is unbound and parks it rather than stealing it, charged nothing, and a park does not bump `lease_epoch`.
+The claim's stranded arm then serves that same item to a device, still at epoch N, so the previous holder and the device now working it hold the same epoch.
+The previous holder can therefore settle the attempt the device was served to reconcile, binding the mapping on evidence from a run that had already lost the item — which is the damage item 9 closed everywhere the epoch actually moves, and cannot close here because it does not move.
+Bumping the epoch in the park arm is the obvious fix and is not the fix.
+The reaper's own arm and the claim's stranded arm both select on `wa.lease_epoch = ji.lease_epoch`, and the whole 12b reconcile depends on the attempt and the item still agreeing; bumping the item's epoch would make the standing attempt unfindable by both, which trades a narrow settle race for the loss of the path that exists to decide these creates at all.
+Closing it means deciding what identifies a stranded attempt once the epoch is not it, which is a design question rather than a predicate.
+The exposure is bounded meanwhile: `held_by` in `crates/tam-api/src/work.rs` fences a device on both the holder and the epoch before either write is reached, so the caller that can still do this is the in-process worker, whose own disposition is an open question of its own.
+
 `tam-storage` gained one dev-dependency edge in the process, `tokio` at the version and features `tam-api`'s tests already use, granted because a deadlock needs two transactions and the lock order the module documents cannot be proved with one; sqlx already brings that runtime, so it is an edge in the graph rather than a crate in it.
 
 One process note for whoever does the next revert-run-restore here: reverting a change that touches SQL leaves the committed query cache holding the reverted statement, so `just db-prepare` has to run again after restoring.

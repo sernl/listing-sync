@@ -11,8 +11,10 @@
 //!
 //! Where each takes what. `WriteAttemptRepo::settle` takes the item row, then
 //! the attempt it is settling, then the mapping it binds or severs.
-//! `WriteAttemptRepo::open_asserted` takes the attempt it inserts, then the
-//! mapping its admission check reads. `LeaseRepo::revive_expired` takes item
+//! `WriteAttemptRepo::open_asserted` takes the item row, then the attempt it
+//! inserts, then the mapping its admission check reads. The item row is what
+//! [`assert_current_epoch`] reads before either write, which is why both
+//! methods here begin at the same end of the order. `LeaseRepo::revive_expired` takes item
 //! rows, then the attempt rows its re-link arm settles.
 //! `LeaseRepo::charge_and_requeue` takes the item row alone.
 //!
@@ -2376,6 +2378,9 @@ impl WriteAttemptRepo {
         let AttemptIntent { body, hash } = intent;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, lease.org).await?;
+        // Before the insert, so a stale holder cannot take the in-flight slot
+        // from the device that now owns the item.
+        assert_current_epoch(&mut tx, lease).await?;
         let inserted = sqlx::query!(
             "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id, asserted_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10, $11)              ON CONFLICT (org_id, id) DO NOTHING",
             uuid_to_db(lease.org.0),
@@ -2406,6 +2411,49 @@ impl WriteAttemptRepo {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+/// The lease this call names must still be the one the item is on.
+///
+/// `write_attempt.lease_epoch` cannot answer this. It is written at open from
+/// the run's own `LeaseRef` and compared at settle against that same one, so
+/// within a run it matches by construction and a caller whose lease was stolen
+/// carries an epoch that agrees with its own row. The authoritative value is
+/// `job_item.lease_epoch`, which `expire_and_steal` bumps and neither of those
+/// statements ever reads.
+///
+/// A separate read rather than a predicate inside each statement, and the
+/// order is the reason: `settle` holds the attempt row and then takes the
+/// mapping, so an `EXISTS` on `job_item` inside its `UPDATE` would take
+/// `job_item` *after* `write_attempt` and invert the lock order this module
+/// documents. Read first, and both callers keep the order they already had.
+///
+/// `FOR SHARE` rather than a bare read, because a steal between the check and
+/// the write would leave the check having proved nothing; the stealer's
+/// `UPDATE` waits on this row until the calling transaction commits. How long
+/// that is depends on the caller — an open goes on to insert and admit, and a
+/// settle that lands and binds does rather more — so it is bounded by the
+/// caller's own work rather than by a statement.
+///
+/// An item that no longer exists answers `StaleLease` too: a caller naming a
+/// row that is gone is no more current than one naming a stolen lease.
+async fn assert_current_epoch(
+    tx: &mut Transaction<'_, Postgres>,
+    lease: &LeaseRef,
+) -> Result<(), StorageError> {
+    let current = sqlx::query_scalar!(
+        "SELECT lease_epoch FROM job_item \
+         WHERE org_id = $1 AND id = $2 \
+         FOR SHARE",
+        uuid_to_db(lease.org.0),
+        uuid_to_db(lease.item.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    match current {
+        Some(epoch) if epoch == lease.lease_epoch => Ok(()),
+        _ => Err(StorageError::StaleLease),
     }
 }
 
@@ -2467,10 +2515,12 @@ impl WriteAttemptRepo {
     ///
     /// What authorises the sever is `write_attempt_one_in_flight`, not
     /// `write_attempt.lease_epoch`: the epoch is written at open from the
-    /// run's own `LeaseRef` and compared here against the same one, so it can
-    /// never mismatch within a run, and `expire_and_steal` bumps
-    /// `job_item.lease_epoch` rather than the attempt's. The clause that
-    /// bites is `state = 'in_flight'`. The sever's remote-id predicate is
+    /// run's own `LeaseRef` and compared here against the same one, so within
+    /// a run it matches by construction and cannot fence a stale caller out.
+    /// What fences one is [`assert_current_epoch`], which reads the
+    /// authoritative `job_item.lease_epoch` that `expire_and_steal` bumps,
+    /// ahead of this statement. Of the clauses here, the one that bites is
+    /// `state = 'in_flight'`. The sever's remote-id predicate is
     /// defence in depth against fixture-level writes and a future concurrent
     /// binder, not a live guard: while a removal is in flight no second
     /// attempt on the mapping can open, so nothing can rebind it underneath.
@@ -2495,6 +2545,9 @@ impl WriteAttemptRepo {
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, lease.org).await?;
+        // Before the update, so a run whose lease was stolen cannot bind the
+        // mapping on evidence from a run that no longer owns the item.
+        assert_current_epoch(&mut tx, lease).await?;
         let updated = sqlx::query!(
             "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6,                  remote_id_kind = $7, remote_url = $8, remote_numeric_id = $9              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
             org_db,

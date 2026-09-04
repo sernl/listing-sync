@@ -802,6 +802,248 @@ async fn a_job_whose_last_item_exhausts_its_attempts_still_says_it_finished(app:
     );
 }
 
+/// The attempt ledger is fenced by the same steal, at both of its writes.
+///
+/// `a_stale_worker_is_fenced_after_a_steal` below covers the *item* settle,
+/// which compares `job_item.lease_epoch` and always did. These two cover the
+/// *attempt* writes, which did not: `write_attempt.lease_epoch` is written at
+/// open from the run's own lease and compared at settle against that same one,
+/// so it agrees with itself no matter how stale the caller is, and the clause
+/// could never bite. Until the epoch was read from the item, a worker whose
+/// lease had been stolen could still take the in-flight slot from the device
+/// that now owned the work, and could still settle its own standing attempt --
+/// binding the mapping on evidence from a run that had already lost the item.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stale_holder_cannot_open_an_attempt_after_a_steal(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x81, true).await;
+    enqueue_one(&engine, &tenant, 0x82, 0x83).await;
+    let stale = claim(&app, tenant.org, "w1", 60)
+        .await
+        .expect("the item leases");
+    steal_the_lease(&engine).await;
+
+    let refused = WriteAttemptRepo::new(engine.clone())
+        .open(
+            &stale.lease_ref(),
+            Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(StorageError::StaleLease)),
+        "the previous holder must not open an attempt on work it no longer holds: {refused:?}"
+    );
+
+    // The positive control, and it is what keeps the predicate from being a
+    // refusal of everyone: the device that actually holds the item now opens
+    // normally at the bumped epoch.
+    let current = claim(&app, tenant.org, "w2", 60)
+        .await
+        .expect("the stolen item re-leases");
+    assert_eq!(
+        current.lease_epoch,
+        stale.lease_epoch + 1,
+        "the steal bumped the epoch, or this proves nothing"
+    );
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &current.lease_ref(),
+            Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the current holder opens");
+}
+
+/// And the settle, where the damage would be a bound mapping rather than a
+/// taken slot.
+///
+/// A removal rather than a create, and the reason is worth stating because the
+/// first draft of this test used a create and passed for the wrong reason. The
+/// reaper's third arm takes a create whose attempt is in flight and whose
+/// mapping is unbound and *parks* it rather than stealing it, charged nothing —
+/// and a park does not bump `lease_epoch`. So a create in this shape is never
+/// stolen at all and there is no stale epoch to fence. A removal falls through
+/// to the steal arm, which is the situation this test is about.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stale_holder_cannot_settle_its_attempt_after_a_steal(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x84, true).await;
+    enqueue_operation(
+        &engine,
+        &tenant,
+        0x85,
+        0x86,
+        ItemOperation::Remove {
+            subject: subject(0x86),
+            state: ListingState::Live,
+        },
+    )
+    .await;
+    let stale = claim(&app, tenant.org, "w1", 60)
+        .await
+        .expect("the item leases");
+    let attempt = Uuid(*uuid::Uuid::new_v4().as_bytes());
+    let attempts = WriteAttemptRepo::new(engine.clone());
+    attempts
+        .open(
+            &stale.lease_ref(),
+            attempt,
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the attempt opens while the lease is still current");
+    steal_the_lease(&engine).await;
+
+    let refused = attempts
+        .settle(
+            &stale.lease_ref(),
+            AttemptRef {
+                attempt,
+                mapping: tenant.mapping,
+            },
+            &AttemptVerdict {
+                state: "committed".to_owned(),
+                failure_code: None,
+                landing: LandingEffect::Landed {
+                    id: RemoteListingId::Tes {
+                        url: "https://www.tes.com/teaching-resource/stale-9".to_owned(),
+                    },
+                    lifecycle: RemoteLifecycle::Draft,
+                },
+            },
+            T0,
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(StorageError::StaleLease)),
+        "a run that lost its lease must not settle the attempt it left behind: {refused:?}"
+    );
+
+    let bound = binding_state(&engine, tenant.org, tenant.mapping).await;
+    assert_ne!(
+        bound.as_deref(),
+        Some("bound"),
+        "and the mapping is still unbound, which is the damage rather than the refusal: a \
+         binding written here would name a listing on the word of a run that had already \
+         lost the item"
+    );
+
+    // The control D asked for cannot exist, and the reason is worth asserting
+    // rather than leaving as an absence: the device that re-leases the item
+    // after the steal is refused too. `write_attempt.lease_epoch` is the epoch
+    // the attempt was opened under, and `settle` compares it against the
+    // caller's own, so only a caller at that same epoch can settle that row --
+    // which the steal has just made impossible for everyone. That is
+    // pre-existing and by design, not something the epoch check introduced:
+    // the clause predates it and refused the new holder before it existed too.
+    //
+    // What settles a stranded attempt is therefore not this call at all. It is
+    // the reaper's own arms, which update `write_attempt` in SQL without a
+    // lease -- `expire_and_steal`'s settle arm and `revive_expired`'s re-link
+    // arm both do it, and they are the only things that can.
+    let current = claim(&app, tenant.org, "w2", 60)
+        .await
+        .expect("the stolen item re-leases");
+    assert_eq!(
+        current.lease_epoch,
+        stale.lease_epoch + 1,
+        "the steal bumped the epoch, or nothing below means anything"
+    );
+    let also_refused = attempts
+        .settle(
+            &current.lease_ref(),
+            AttemptRef {
+                attempt,
+                mapping: tenant.mapping,
+            },
+            &AttemptVerdict {
+                state: "committed".to_owned(),
+                failure_code: None,
+                landing: LandingEffect::Landed {
+                    id: RemoteListingId::Tes {
+                        url: "https://www.tes.com/teaching-resource/stale-9".to_owned(),
+                    },
+                    lifecycle: RemoteLifecycle::Draft,
+                },
+            },
+            T0,
+        )
+        .await;
+    assert!(
+        matches!(also_refused, Err(StorageError::StaleLease)),
+        "the new holder cannot settle the old attempt either, so the fence refuses a stale \
+         caller rather than choosing between two live ones: {also_refused:?}"
+    );
+    assert_eq!(
+        binding_state(&engine, tenant.org, tenant.mapping)
+            .await
+            .as_deref(),
+        Some("unbound"),
+        "and the mapping stays unbound throughout, which is the property the whole fence \
+         exists for"
+    );
+}
+
+/// One mapping's binding state, named rather than read as whichever row comes
+/// first: a fixture that grows a second mapping would otherwise start
+/// asserting about the wrong one without failing.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn binding_state(engine: &PgPool, org: OrgId, mapping: MappingId) -> Option<String> {
+    sqlx::query_scalar("SELECT binding_state FROM mapping WHERE org_id = $1 AND id = $2")
+        .bind(db_uuid(org.0))
+        .bind(db_uuid(mapping.0))
+        .fetch_one(engine)
+        .await
+        .expect("the mapping row reads")
+}
+
+/// Ages the live lease past its expiry and runs the stealer, which is what
+/// bumps `job_item.lease_epoch` out from under whoever held it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn steal_the_lease(engine: &PgPool) {
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
+        .execute(engine)
+        .await
+        .expect("the lease ages");
+    let touched = LeaseRepo::new(engine.clone())
+        .expire_and_steal(Timestamp(T0.0 + 61_000), 5)
+        .await
+        .expect("the stealer runs");
+    assert_eq!(
+        touched, 1,
+        "the expired lease is stolen, or the fixture proves nothing"
+    );
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
     let engine = engine_pool(&app).await;
@@ -812,18 +1054,8 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
     let lease = claim(&app, tenant.org, "w1", 60)
         .await
         .expect("the item leases");
-    // The lease expiry is the database's own fact now, so a fixture that means
-    // to expire one ages the row rather than naming a later instant.
-    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour'")
-        .execute(&engine)
-        .await
-        .expect("the lease ages");
+    steal_the_lease(&engine).await;
     let after_expiry = Timestamp(T0.0 + 61_000);
-    let touched = leases
-        .expire_and_steal(after_expiry, 5)
-        .await
-        .expect("the stealer runs");
-    assert_eq!(touched, 1, "the expired lease is stolen");
 
     let stale = leases
         .settle(
