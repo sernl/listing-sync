@@ -1138,6 +1138,27 @@ impl LeaseRepo {
         } = *policy;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
+        // Read inside the claim's own transaction, and compared here rather
+        // than in SQL.
+        //
+        // Inside, because a version read in a separate transaction can be
+        // superseded between the read and the claim: a device upgrading
+        // mid-poll would be gated on what it used to be, or worse, ungated on
+        // what it no longer is.
+        //
+        // Here, because the comparison must fail closed on a version it cannot
+        // parse and SQL cannot do that — casting a non-numeric segment to int
+        // raises rather than answering false, which would error the claim
+        // instead of declining the item. An unregistered device answers `None`
+        // and reaches the same refusal.
+        let runs_sourced_payloads = sqlx::query_scalar!(
+            "SELECT app_version FROM device WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            device,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some_and(|version| tam_domain::runs_sourced_payloads(&version));
         let leased = sqlx::query!(
             r#"WITH candidate AS (
                  -- The pre-update state travels with the candidate, because
@@ -1221,6 +1242,37 @@ impl LeaseRepo {
                          WHERE live.org_id = ji.org_id
                            AND live.marketplace = ji.marketplace
                            AND live.state IN ('leased', 'running', 'verifying'))
+                   -- An item whose payload is the seller's marketplace
+                   -- resource goes only to a client that can decode a work
+                   -- order naming one. A published client below that version
+                   -- treats the manifest's missing hash and byte_len as a
+                   -- decode failure, and fails *after* the claim -- so the
+                   -- item sits leased until its lease expires while the device
+                   -- reports a failure every poll.
+                   --
+                   -- The gate is here, in the candidate filter, rather than in
+                   -- the route that builds the order. An item refused after
+                   -- the claim has to be released, and a release advances
+                   -- nothing: this statement orders by created_at, so the same
+                   -- item would be claimed, refused and released on every
+                   -- poll, holding every sibling behind the per-connection
+                   -- mutex meanwhile. That is the livelock this route already
+                   -- had once, and not being a candidate is the only shape
+                   -- that does not reintroduce it.
+                   --
+                   -- The version is read in Rust and arrives as $6, because
+                   -- the comparison must fail closed on a version it cannot
+                   -- parse and SQL cannot: casting a non-numeric segment to
+                   -- int raises rather than answering false, which would error
+                   -- the claim instead of declining the item.
+                   AND ($6::bool OR NOT EXISTS (
+                         SELECT 1 FROM mapping m
+                         JOIN product_file pf
+                           ON pf.org_id = m.org_id AND pf.product_id = m.product_id
+                         WHERE m.org_id = ji.org_id AND m.id = ji.mapping_id
+                           AND pf.role = 'payload'
+                           AND pf.deleted_at IS NULL
+                           AND pf.hash IS NULL))
                  -- Reconciles first: each holds a mapping's fence, so
                  -- clearing one unblocks every sibling behind it, and a newer
                  -- create would otherwise be served ahead of the item that is
@@ -1284,6 +1336,7 @@ impl LeaseRepo {
             i32::try_from(grace_hours).unwrap_or(i32::MAX),
             marketplace.map(marketplace_to_db),
             reconcile,
+            runs_sourced_payloads,
         )
         .fetch_optional(&mut *tx)
         .await;
@@ -1369,6 +1422,56 @@ impl LeaseRepo {
                 .map(inventory_from_db)
                 .transpose()?,
         })))
+    }
+
+    /// The item-level spelling of "this item's payload is the seller's
+    /// marketplace resource".
+    ///
+    /// `claim_for_device` asks the same question inside its candidate filter and
+    /// cannot share this text, though not for the reason first recorded here.
+    /// `sqlx::query!` parses its query source as plus-joined string literals,
+    /// so `"..." + "..."` is supported and concatenated; what is refused is a
+    /// name. A `const` or a `concat!` in that position is a hard compile
+    /// error, not a bind parameter and not a truncated query. So the fragment
+    /// can be spliced but cannot be *named*, and two call sites splicing the
+    /// same anonymous text are two spellings again.
+    ///
+    /// They are therefore tied by
+    /// `the_claim_and_the_item_read_agree_about_what_is_sourced`, which drives
+    /// one item through both and fails if they ever disagree. That test is the
+    /// guarantee; this comment is only how a reader finds it.
+    ///
+    /// Scoped to the payload role deliberately. A sourced cover does not make a
+    /// work order undecodable — the payload manifest is what carries the source,
+    /// and a cover is not in it — so an item whose payload is blob-backed still
+    /// runs on a client below the shim, and gating it would strand work for a
+    /// reason that is not true of it.
+    pub async fn payload_is_marketplace_sourced(
+        &self,
+        org: OrgId,
+        item: JobItemId,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let sourced = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                 SELECT 1
+                 FROM job_item ji
+                 JOIN mapping m ON m.org_id = ji.org_id AND m.id = ji.mapping_id
+                 JOIN product_file pf
+                   ON pf.org_id = m.org_id AND pf.product_id = m.product_id
+                 WHERE ji.org_id = $1 AND ji.id = $2
+                   AND pf.role = 'payload'
+                   AND pf.deleted_at IS NULL
+                   AND pf.hash IS NULL
+               ) AS "sourced!""#,
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(sourced)
     }
 
     /// One leased item by id, for a caller that already knows which item it

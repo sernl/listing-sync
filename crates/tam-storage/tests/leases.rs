@@ -4184,3 +4184,368 @@ async fn an_attested_intent_is_recorded_whole_with_its_hash_carried_not_recomput
          the idempotency key an identity of what was written rather than of who attested"
     );
 }
+
+/// Makes the tenant's product's payload a marketplace-sourced file.
+///
+/// Written directly rather than through `ProductRepo::insert`, because these
+/// fixtures build their product with raw SQL and the subject here is the
+/// claim's predicate rather than the write path, which
+/// `tam-storage::file_source` covers.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn make_payload_sourced(app: &PgPool, tenant: &Tenant) {
+    let mut tx = app.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(tenant.org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "UPDATE product_file SET hash = NULL, scan_state = NULL, \
+                scan_signature = NULL, scanned_at = NULL, scan_failure_code = NULL, \
+                source_marketplace = 'tes', source_connection = \
+                  (SELECT id FROM connection WHERE org_id = $1 LIMIT 1), \
+                source_resource = '13549794', source_entry = 'worksheet.pdf', \
+                observed_hash = $2, observed_byte_len = 493000, \
+                asserted_scan_state = 'pending', observed_by_device = $3, \
+                observed_at = now(), recorded_at = now(), \
+                payload_file_name = 'worksheet.pdf', \
+                payload_content_type = 'application/pdf' \
+         WHERE org_id = $1 AND product_id = $4",
+    )
+    .bind(db_uuid(tenant.org.0))
+    .bind(vec![0x5Au8; 32])
+    .bind("device-a")
+    .bind(db_uuid(tenant.product.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the payload becomes marketplace-sourced");
+    tx.commit().await.expect("the fixture commits");
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn set_app_version(app: &PgPool, tenant: &Tenant, device: &str, version: &str) {
+    let mut tx = app.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(tenant.org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query("UPDATE device SET app_version = $3 WHERE org_id = $1 AND id = $2")
+        .bind(db_uuid(tenant.org.0))
+        .bind(device)
+        .bind(version)
+        .execute(&mut *tx)
+        .await
+        .expect("the version writes");
+    tx.commit().await.expect("the fixture commits");
+}
+
+/// A client too old to decode a marketplace source is never handed one.
+///
+/// The item waits rather than failing: a published client below the shim reads
+/// a work order naming a `Marketplace` source as a decode failure, and fails
+/// after the claim, so serving it would leave the item leased until its lease
+/// expired while the device reported a failure every poll. Declining costs a
+/// delay that ends at the device's next upgrade.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_device_below_the_shim_is_not_handed_a_marketplace_sourced_item(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xF1, true).await;
+    let engine = engine_pool(&app).await;
+    enqueue_one(&engine, &tenant, 0xF2, 0xF3).await;
+    register_device(&app, tenant.org, "device-a").await;
+    set_app_version(&app, &tenant, "device-a", "0.1.3").await;
+    make_payload_sourced(&app, &tenant).await;
+
+    let claimed = LeaseRepo::new(app.clone())
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-a",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs");
+    assert_eq!(
+        claimed,
+        DeviceClaim::Empty,
+        "an item this client cannot decode must not be a candidate at all: served and then \
+         refused, it would be claimed and released on every poll, since the claim orders by \
+         created_at and a release advances nothing"
+    );
+}
+
+/// The same device is still handed ordinary work.
+///
+/// The gate keys on the item rather than on the device's whole eligibility, so
+/// an old client keeps doing everything it could do before.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_device_below_the_shim_still_claims_a_blob_backed_item(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xF4, true).await;
+    let engine = engine_pool(&app).await;
+    enqueue_one(&engine, &tenant, 0xF5, 0xF6).await;
+    register_device(&app, tenant.org, "device-a").await;
+    set_app_version(&app, &tenant, "device-a", "0.1.3").await;
+
+    let claimed = LeaseRepo::new(app.clone())
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-a",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs");
+    assert!(
+        matches!(claimed, DeviceClaim::Leased(_)),
+        "the gate is about the item's payload, not about the client's age: {claimed:?}"
+    );
+}
+
+/// A client at the shim gets the item the old one could not have.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_device_at_the_shim_is_handed_the_marketplace_sourced_item(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xF7, true).await;
+    let engine = engine_pool(&app).await;
+    enqueue_one(&engine, &tenant, 0xF8, 0xF9).await;
+    register_device(&app, tenant.org, "device-a").await;
+    set_app_version(&app, &tenant, "device-a", "0.2.0").await;
+    make_payload_sourced(&app, &tenant).await;
+
+    let claimed = LeaseRepo::new(app.clone())
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-a",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs");
+    assert!(
+        matches!(claimed, DeviceClaim::Leased(_)),
+        "a device at the shim must not be starved of the work it exists to do: {claimed:?}"
+    );
+}
+
+/// An unreadable version is treated as below the shim, proved at the claim.
+///
+/// The parser's own test covers the same ground, but the direction matters
+/// where it bites rather than only where it is decided: a device reporting
+/// something we cannot read is a client this code has never seen, and admitting
+/// it wrongly costs a stuck lease while refusing it wrongly costs a delay.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_unreadable_app_version_is_treated_as_below_the_shim(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xFA, true).await;
+    let engine = engine_pool(&app).await;
+    enqueue_one(&engine, &tenant, 0xFB, 0xFC).await;
+    register_device(&app, tenant.org, "device-a").await;
+    set_app_version(&app, &tenant, "device-a", "nightly").await;
+    make_payload_sourced(&app, &tenant).await;
+
+    let claimed = LeaseRepo::new(app.clone())
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-a",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs");
+    assert_eq!(
+        claimed,
+        DeviceClaim::Empty,
+        "a version we cannot read must fail closed, not open"
+    );
+}
+
+/// The claim's predicate and the item view's read answer the same question.
+///
+/// They are two spellings of one predicate, and they have to be. `sqlx::query!`
+/// parses its query source as plus-joined string literals, so the text can be
+/// spliced but cannot be given a name: a `const` or a `concat!` in that
+/// position is a hard compile error. Two call sites splicing the same
+/// anonymous fragment are two spellings again, so this test is what stands in
+/// for sharing, and it drives one item through both in both directions rather
+/// than asserting either alone.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_claim_and_the_item_read_agree_about_what_is_sourced(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xE1, true).await;
+    let engine = engine_pool(&app).await;
+    let item = enqueue_one(&engine, &tenant, 0xE2, 0xE3).await;
+    register_device(&app, tenant.org, "device-a").await;
+    set_app_version(&app, &tenant, "device-a", "0.1.3").await;
+    let leases = LeaseRepo::new(app.clone());
+
+    // Blob-backed: the read says not sourced, and the claim serves it.
+    assert!(
+        !leases
+            .payload_is_marketplace_sourced(tenant.org, item)
+            .await
+            .expect("the read runs"),
+        "a blob-backed payload is not sourced"
+    );
+    let served = leases
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-a",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs");
+    assert!(
+        matches!(served, DeviceClaim::Leased(_)),
+        "what the read calls not-sourced, the claim must serve to a client below the shim"
+    );
+
+    // Sourced: the read says sourced, and the claim declines it.
+    settle_back_to_queued(&engine).await;
+    make_payload_sourced(&app, &tenant).await;
+    assert!(
+        leases
+            .payload_is_marketplace_sourced(tenant.org, item)
+            .await
+            .expect("the read runs"),
+        "a marketplace-sourced payload is sourced"
+    );
+    let declined = leases
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-a",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs");
+    assert_eq!(
+        declined,
+        DeviceClaim::Empty,
+        "what the read calls sourced, the claim must decline for a client below the shim; \
+         a disagreement here is the item view telling a seller the wrong reason"
+    );
+}
+
+/// Adds a marketplace-sourced file in the cover role, leaving the payload
+/// blob-backed.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn make_cover_sourced(app: &PgPool, tenant: &Tenant) {
+    let mut tx = app.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(tenant.org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "INSERT INTO product_file \
+         (org_id, id, product_id, position, role, kind, created_at, \
+          source_marketplace, source_connection, source_resource, \
+          observed_hash, observed_byte_len, asserted_scan_state, \
+          observed_by_device, observed_at, recorded_at, \
+          payload_file_name, payload_content_type) \
+         VALUES ($1, $2, $3, 7, 'cover', 'image', now(), \
+                 'tes', (SELECT id FROM connection WHERE org_id = $1 LIMIT 1), \
+                 '13549794', decode(repeat('5a', 32), 'hex'), 4096, 'pending', \
+                 'device-a', now(), now(), 'cover.png', 'image/png')",
+    )
+    .bind(db_uuid(tenant.org.0))
+    .bind(db_uuid(Uuid([0xCC; 16])))
+    .bind(db_uuid(tenant.product.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the sourced cover inserts");
+    tx.commit().await.expect("the fixture commits");
+}
+
+/// A sourced cover does not gate an item whose payload is blob-backed.
+///
+/// The payload manifest is what carries the source and a cover is not in it,
+/// so such an item decodes on a client below the shim and must still be
+/// served. Gating it would strand work for a reason that is not true of it.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sourced_cover_does_not_gate_a_blob_backed_payload(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xE4, true).await;
+    let engine = engine_pool(&app).await;
+    let item = enqueue_one(&engine, &tenant, 0xE5, 0xE6).await;
+    register_device(&app, tenant.org, "device-a").await;
+    set_app_version(&app, &tenant, "device-a", "0.1.3").await;
+    make_cover_sourced(&app, &tenant).await;
+
+    let leases = LeaseRepo::new(app.clone());
+    assert!(
+        !leases
+            .payload_is_marketplace_sourced(tenant.org, item)
+            .await
+            .expect("the read runs"),
+        "the sourced file is the cover, and the question is about the payload"
+    );
+    let served = leases
+        .claim_for_device(
+            &DeviceRef {
+                org: tenant.org,
+                device: "device-a",
+            },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: None,
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs");
+    assert!(
+        matches!(served, DeviceClaim::Leased(_)),
+        "an item whose payload is blob-backed decodes on an old client whatever its cover is"
+    );
+}

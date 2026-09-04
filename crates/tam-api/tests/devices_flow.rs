@@ -2343,3 +2343,235 @@ async fn declaring_again_replaces_the_declaration_rather_than_adding_one(pool: P
          for the same marketplace, which is the shape the unique index exists to refuse"
     );
 }
+
+/// Makes the fixture product's payload a marketplace-sourced file.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn source_the_payload(pool: &PgPool) {
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "UPDATE product_file SET hash = NULL, scan_state = NULL, scan_signature = NULL, \
+                scanned_at = NULL, scan_failure_code = NULL, \
+                source_marketplace = 'tes', \
+                source_connection = (SELECT id FROM connection WHERE org_id = $1 LIMIT 1), \
+                source_resource = '13549794', source_entry = 'worksheet.pdf', \
+                observed_hash = decode(repeat('5a', 32), 'hex'), observed_byte_len = 493000, \
+                asserted_scan_state = 'pending', observed_by_device = $2, \
+                observed_at = now(), recorded_at = now(), \
+                payload_file_name = 'worksheet.pdf', payload_content_type = 'application/pdf' \
+         WHERE org_id = $1 AND role = 'payload'",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(LAPTOP)
+    .execute(&mut *tx)
+    .await
+    .expect("the payload becomes marketplace-sourced");
+    tx.commit().await.expect("the fixture commits");
+}
+
+/// Registers the device again at a stated version, which is how a client
+/// reports an upgrade.
+///
+/// No `expect_used` attribute: this helper asserts rather than unwrapping, and
+/// an unfulfilled expectation is itself a denied lint.
+async fn register_at(pool: &PgPool, version: &str) -> Answer {
+    let answer = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: "/v1/devices",
+            token: &TOKEN_A,
+            body: Some(serde_json::json!({
+                "id": LAPTOP,
+                "name": "laptop",
+                "os": "linux",
+                "arch": "x86_64",
+                "app_version": version,
+            })),
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "the fixture's registration must succeed or every claim below is vacuous: {}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    answer
+}
+
+/// The one item's state, read as the engine so RLS does not hide it.
+///
+/// The claim view cannot answer what this asks. `seed_claimable`'s product is
+/// not projectable, so an item that *is* claimed is prepared, found blocked
+/// and parked, and the route answers idle — the same word it answers for an
+/// item the gate never made a candidate. The difference is in the ledger: a
+/// gated item is untouched at `queued`, a claimed one has moved.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn item_state(app: &PgPool) -> String {
+    let engine = engine_pool(app).await;
+    // Keyed on the tenant and counted, because the engine role is BYPASSRLS
+    // and an unfiltered `LIMIT 1` would read whichever row came first — right
+    // only while exactly one exists, and silently wrong the day a fixture
+    // enqueues a second or a sibling tenant appears.
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT state FROM job_item ji \
+         JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id \
+         WHERE ji.org_id = $1",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .fetch_all(&engine)
+    .await
+    .expect("the item reads");
+    assert_eq!(
+        rows.len(),
+        1,
+        "this probe answers for one item and the fixture must hold exactly one: {rows:?}"
+    );
+    rows.into_iter().next().expect("the one row")
+}
+
+/// The gate, through the route a device actually calls.
+///
+/// The three claim tests in `tam-storage` drive `claim_for_device` directly,
+/// which leaves the route's own half — that the version compared is the one on
+/// the device's row — asserted nowhere. This is that half: nothing here hands
+/// the claim a version, so the only way the right item is served is if the
+/// route read it from the row it registered.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_work_route_gates_a_sourced_item_on_the_devices_reported_version(pool: PgPool) {
+    provision(&pool).await;
+    // `seed_claimable` inserts the connection and `connected` derives one from
+    // the heartbeat, so the seed goes first: the other order trips
+    // `connection_one_per_marketplace`, which is the constraint doing its job
+    // rather than a fixture problem to work around.
+    seed_claimable(&pool).await;
+    register_at(&pool, "0.1.3").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
+    source_the_payload(&pool).await;
+
+    let idle = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(idle.status, StatusCode::OK);
+    assert_eq!(
+        item_state(&pool).await,
+        "queued",
+        "a client at 0.1.3 cannot decode a marketplace source, so the item was never a \
+         candidate and the ledger has not moved"
+    );
+
+    // The same device reporting an upgrade is served the same item.
+    register_at(&pool, "0.2.0").await;
+    let served = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(served.status, StatusCode::OK);
+    assert_ne!(
+        item_state(&pool).await,
+        "queued",
+        "the upgrade is what the gate reads: the item is now a candidate and has been claimed, \
+         whatever the preparation then made of it"
+    );
+}
+
+/// A version claimed in the request body changes nothing.
+///
+/// This is the test that catches version-from-request, which is the wrong
+/// implementation and the tempting one: the device is the governed party, so a
+/// gate that asked it what it may run would be asking the thing being gated.
+/// The body below says 0.2.0 while the row says 0.1.3, and the item must still
+/// wait.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_version_claimed_in_the_request_body_is_ignored(pool: PgPool) {
+    provision(&pool).await;
+    // `seed_claimable` inserts the connection and `connected` derives one from
+    // the heartbeat, so the seed goes first: the other order trips
+    // `connection_one_per_marketplace`, which is the constraint doing its job
+    // rather than a fixture problem to work around.
+    seed_claimable(&pool).await;
+    register_at(&pool, "0.1.3").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
+    source_the_payload(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: Some(serde_json::json!({ "app_version": "0.2.0", "marketplace": "Tes" })),
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    // The ledger, not the view. `idle` is also what a claimed-then-parked item
+    // produces, so asserting it would pass whether or not the body was read —
+    // which is the whole of what this test exists to falsify.
+    assert_eq!(
+        item_state(&pool).await,
+        "queued",
+        "the gate reads the device's row, never its request: a client that could ask for work \
+         it cannot decode by saying so would be the governed party deciding what it is allowed"
+    );
+}
+
+/// A blob-backed item is still served to a client below the shim.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_work_route_still_serves_a_blob_backed_item_to_an_old_client(pool: PgPool) {
+    provision(&pool).await;
+    // `seed_claimable` inserts the connection and `connected` derives one from
+    // the heartbeat, so the seed goes first: the other order trips
+    // `connection_one_per_marketplace`, which is the constraint doing its job
+    // rather than a fixture problem to work around.
+    seed_claimable(&pool).await;
+    register_at(&pool, "0.1.3").await;
+    connected(&pool, &TOKEN_A, LAPTOP).await;
+
+    let answer = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/work"),
+            token: &TOKEN_A,
+            body: None,
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_ne!(
+        item_state(&pool).await,
+        "queued",
+        "the gate is about the item's payload, not the client's age: a blob-backed item is a \
+         candidate for an old client and was claimed"
+    );
+}

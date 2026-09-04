@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                 SELECT 1\n                 FROM job_item ji\n                 JOIN mapping m ON m.org_id = ji.org_id AND m.id = ji.mapping_id\n                 JOIN product_file pf\n                   ON pf.org_id = m.org_id AND pf.product_id = m.product_id\n                 WHERE ji.org_id = $1 AND ji.id = $2\n                   AND pf.role = 'payload'\n                   AND pf.deleted_at IS NULL\n                   AND pf.hash IS NULL\n               ) AS \"sourced!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sourced!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d4b1d5ca0816d77c8966659fa00dba6bbd27c03152b4cee9fb51476cfd5eb184"
+}
