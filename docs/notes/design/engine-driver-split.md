@@ -543,6 +543,21 @@ The order that reaches it is device-first-then-broker, which is a seller who con
 Refusing the declaration for a marketplace with an official API removes the permanent half, because Etsy is the one marketplace that stays on the broker branch for good; what is left is a transition window that ends when the vault's writer does.
 Closing it sooner is one conflict target widened in `vault.rs`, which step 15 deliberately did not touch.
 
+The gate was run on 2026-09-04, ahead of the deletion, by replacing the vault's connection writer with a hard error and running both halves.
+It answers two separate questions and both answers are positive, which is why they are recorded apart rather than as one verdict.
+Gate validity: with the writer gone, every test in `crates/tam-api/tests/devices_flow.rs` passed, 32 of 32, including the decisive test and E1 to E5.
+So the device-reported writer is sufficient on its own — a heartbeat links the connection and the seller's declaration attests it with nothing of the broker's involved — and the gate this note recorded is met.
+Writer liveness: thirteen tests failed, every one of them `vault.rs`'s own, so the writer being removed is doing work rather than already dead.
+Thirteen rather than the six call sites predicted, because several tests reach `link` through shared helpers instead of calling it directly.
+The two controls held: `crates/tam-session-broker/tests/broker.rs` passed 2 of 2, and `crates/tam-storage/tests/custody.rs` passed untouched.
+That `broker.rs` is unaffected is a finding rather than a footnote, because the run was first scoped against that file: `Vault::link` is `pub(crate)` and an integration test cannot reach it, so the original scoping would have reported nothing failing while thirteen real failures sat one file away.
+Custody passing untouched matters for sequencing: the credential role and the connection writer can be retired in separate commits without either masking the other.
+
+What the run does not establish is worth stating beside what it does.
+It cannot show that nothing outside `tam-session-broker` depends on the vault's writer, because no test can; the `pub(crate)` visibility shows that by construction instead.
+It says nothing about whether the four consumers of the broker socket can lose it, which is open question 3 and is the actual blocker.
+And it is evidence about code rather than permission to remove any of it.
+The deletion waits on founder words on five things: dropping the `tam_broker` role, dropping or keeping the `connection_secret` column, deleting the crate itself, the four consumer dispositions of open question 3, and whether `POST /{version}/connections/{connection}/revoke` is removed or re-pointed at the connection row.
 Step 15, the device-reported link and the seller's declaration.
 
 The predecessor step 14 named, built: `connection` now has a writer outside the crate that is being deleted, so the deletion has something to be gated on rather than being blocked outright.
