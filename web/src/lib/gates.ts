@@ -20,7 +20,8 @@ const LABELS: Record<BlockedGate, string> = {
 	subject_diverged: 'a listing that changed on the marketplace',
 	lifecycle_diverged: 'a listing in an unexpected state',
 	ReauthRequired: 'you signing in again',
-	awaiting_seller_signin: 'you signing in again, so this can be checked'
+	awaiting_seller_signin: 'you signing in again, so this can be checked',
+	awaiting_marketplace_answer: 'an answer from the marketplace'
 };
 
 /** The label for a gate, falling back to the raw value for an unknown one. */

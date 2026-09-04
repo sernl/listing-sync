@@ -58,7 +58,8 @@ pub use jobs::{
     InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef,
     LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
     OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, Revived, WriteAttemptRepo, ALL_GATES,
-    AWAITING_COUNTERPART, AWAITING_SELLER_SIGNIN, ELECTION, REAUTH_REQUIRED, REVIVABLE_GATES,
+    AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
+    REAUTH_REQUIRED, REVIVABLE_GATES,
 };
 pub use labels::{Colour, LabelRecord, LabelRepo};
 pub use lowering::{

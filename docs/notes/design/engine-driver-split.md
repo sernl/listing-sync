@@ -590,6 +590,49 @@ The vault's conflict target does not cover the unique index these writers key on
 And `DeviceRepo::revoke` does not re-derive, so signing out the last connected device from the console leaves its connection reading `linked` until some device checks in.
 Nothing is served on it — the claim independently requires a non-revoked device holding a connected session — so the cost is a stale word on the connections page rather than work going anywhere it should not.
 
+Step 16, the ambiguous submit, and one word for what a stranded create is waiting on.
+
+Step 12d left this open deliberately and named it the obvious next step: `SyncMachine::reconcile` searched only under `CorrelationMarker` and halted the tenant's inventory under `DraftThenPublish`, so a submit whose response was lost was treated as it had been before the reconcile path existed.
+That had become an asymmetry rather than a gap.
+A create whose device died is reconciled by the title its attempt recorded; a create whose response was lost in the same run halted the tenant and waited for an operator, even though the identification is strictly better there — it is the same run that rendered the fields, so no wire field is needed and the seller cannot have renamed the product in between.
+
+The arm no longer halts and no longer settles.
+It records the identification in a `Recorded` locator, emits `CaptureDiagnostics` alone and steps to `SyncState::Stranded`, a state no input applies to, which the interpreter maps straight to `RunVerdict::Abandoned` — leaving the attempt in flight and the mapping fenced, because nothing is settled on the way out.
+
+`Stranded` is a new state and the first draft did not have one, which is the part worth recording.
+That draft stepped to `AwaitingReadBack` and emitted no read, relying on the interpreter's existing "no next input in a non-terminal state" arm to abandon.
+It compiled, every hand-written test passed, and the machine's own property suite refused it: `every_committed_terminal_follows_a_read` found a sequence reaching a committed terminal with no `ReadBack` or `Reconcile` effect anywhere before it — because a state that admits a read result admits one whether a read was asked for or not, and the interpreter not feeding it is a fact about the interpreter rather than about the machine.
+The pure machine is the specification, so the fix was to make the state honest rather than the property lenient.
+That is the property suite paying for itself: no reading of the diff would have found it, and the defect it names is an interpreter committing a listing on a read nobody performed.
+
+Searching inline was the obvious fix and is the wrong one, for the reason open question 8 already records.
+A create sits in Tpt's asynchronous processing queue for minutes, so an enumeration run seconds after the submit answers a completed-and-absent `Ok(None)` — which the transition table settles ambiguous and halts on.
+Inline searching would therefore buy a wasted catalogue walk, a spent rate grant and the same halt.
+The search is right and the moment is wrong, so the moment moves: the reaper parks the item and a later claim reconciles it once the marketplace has had time to answer.
+
+The park needed a word, and the word it had was false.
+The reaper's third arm parked these on `awaiting_seller_signin`, which names an action that changes nothing here — no one is waiting on the seller.
+`awaiting_marketplace_answer` replaces it for this shape, in `ALL_GATES` and deliberately not in `REVIVABLE_GATES`, because that list is time-gated and no clock opens this one; what opens it is a claim serving the item as a reconcile and a positive identification settling it.
+Step 12's re-gate arm keeps `awaiting_seller_signin`, because a create whose reauth park aged out genuinely is waiting on a sign-in, and the claim's stranded predicate admits both words so neither arm's items become unreachable.
+That is the commit's subject rather than a side effect: an ambiguous submit and a device-died create are the same situation reached two ways, and they now park on one word that says what is awaited.
+
+Proves that a create whose fate is unknown is decided by evidence at a moment when evidence exists, and never by a halt standing in for one.
+Verification: the transition driven directly, asserting the arm emits no `Halt` and reaches no terminal state; a driver run in `crates/tam-engine/tests/driver.rs` whose scripted adapter answers the submit `Ambiguous`, asserting the run abandons with the attempt in flight and the mapping still fenced; the reaper parking that item rather than requeueing it; and `a_stranded_create_is_claimed_under_either_park_word` in `crates/tam-storage/tests/leases.rs`, which strands a create under the older arm's word and asserts the claim still serves it — the half of the widened predicate that moving the fixture to the new word would otherwise have left untested.
+`the_gate_vocabulary_covers_every_gate_the_tree_writes` carries the vocabulary's own arithmetic from two clock-never-clears gates to three.
+Kill gate: a park on this gate that no claim admits, which is the failure mode a second spelling produces and which the either-word test is pointed at.
+
+Four things this deliberately does not do, and the last was discovered rather than planned.
+`HaltOnAmbiguity` is untouched: it is configured to stop and says so in its name, and nothing in this argument reaches it.
+No fence is released on a negative search — every outcome short of a positive identification leaves the attempt standing, so open question 8 is undisturbed.
+And `SyncMachine::reconcile` still searches inline under `CorrelationMarker`, because a marker is embedded at submit time and is there to be found immediately; the two strategies differ in when their evidence exists, which is why they differ here.
+
+The fourth is a scope boundary this step found by tripping over it, and it is recorded rather than taken.
+`SyncMachine::challenged` routes a create through `reconcile` for the same reason the ambiguous submit did — a create has no durable subject, so a challenge mid-write leaves its fate unknown too — which means a captcha on a create under `DraftThenPublish` still halts the tenant's inventory.
+Changing `reconcile` itself changed that path as well, and `row_intent_recorded_submit_challenge_on_a_create_reconciles_rather_than_settling` failed and said so; its comment records the halt as a deliberate choice, to freeze the queue rather than mint a second listing.
+So the new behaviour was narrowed to the ambiguous submit alone, through `ambiguous_submit`, and the challenge path keeps exactly what it had.
+The argument for changing it is the same argument this step makes, with one addition: the abandon leaves the attempt in flight, so the fence that stops a second create is still standing and the halt is a blunter instrument for a job the fence already does.
+That is a decision rather than a consequence, and it belongs to whoever takes it.
+
 ## 8. Open questions for the founder
 
 1. Restate the Phase 1 verification as port conformance over two ledger implementations. Recommended: yes, because the current wording is unrunnable and the phase would otherwise ship without evidence.

@@ -671,6 +671,7 @@ pub async fn run_item<
                 // machine decides it.
                 SyncState::Submitted { .. }
                 | SyncState::AwaitingReadBack { .. }
+                | SyncState::Stranded { .. }
                 | SyncState::Parked { .. }
                 | SyncState::Terminal(_) => {}
             }
@@ -678,7 +679,7 @@ pub async fn run_item<
         if stopping
             && !matches!(
                 transition.next.state,
-                SyncState::Terminal(_) | SyncState::Parked { .. }
+                SyncState::Terminal(_) | SyncState::Parked { .. } | SyncState::Stranded { .. }
             )
         {
             transition = transition
@@ -1168,6 +1169,17 @@ pub async fn run_item<
                 return Ok(RunVerdict::Settled(item_outcome));
             }
             (SyncState::Parked { .. }, _) => return Ok(RunVerdict::Parked),
+            // The run stopped without deciding the item, on purpose. Nothing
+            // is settled here: the attempt stays in flight so no second create
+            // can start, and the reaper parks the item for a later claim to
+            // reconcile against what the marketplace says by then.
+            (SyncState::Stranded { .. }, _) => {
+                return Ok(RunVerdict::Abandoned {
+                    reason: "the submit's answer was lost; the attempt stays in flight and \
+                             the recorded title identifies the create for a later reconcile"
+                        .to_owned(),
+                })
+            }
             (_, Some(input)) => {
                 let now = ctx.clock.now();
                 transition = next.step(input, LogicalInstant(now.0))?;

@@ -184,6 +184,36 @@ describe('a chip the newest run speaks for', () => {
 		expect(held.action?.href).toBe('/marketplaces');
 	});
 
+	// A park whose gate is an unanswered write is not an interruption: the
+	// send completed and the answer is what is missing, so this branch reads
+	// differently for that one gate and identically for every other.
+	it('says the answer is missing where the write completed, not that it was interrupted', () => {
+		const held = chip('Tpt', {
+			mapping: bound,
+			work: work({ state: 'parked_live', blocked_on: 'awaiting_marketplace_answer' })
+		});
+		expect(held.state).toBe('stranded');
+		expect(held.detail).toBe(
+			'We sent the listing, did not get an answer we could trust, and are going back to look for it.'
+		);
+		expect(held.detail).not.toContain('interrupted');
+		expect(held.detail).not.toContain('waiting on');
+		// Nothing the seller does clears it, so the chip offers the run rather
+		// than a sign-in it would not fix.
+		expect(held.action?.href).toBe('/sync/j1');
+	});
+
+	it('leaves every other parked gate reading as an interruption', () => {
+		const held = chip('Tpt', {
+			mapping: bound,
+			work: work({ state: 'parked_cold', blocked_on: 'reconciliation' })
+		});
+		expect(held.state).toBe('stranded');
+		expect(held.detail).toContain('interrupted');
+		expect(held.detail).toContain('held rather than retried blind');
+		expect(held.detail).toContain('waiting on reconciliation');
+	});
+
 	it('names a parked item with no gate rather than inventing one', () => {
 		const held = chip('Tpt', { mapping: bound, work: work({ state: 'parked_cold' }) });
 		expect(held.detail).toContain('not been told the name of');

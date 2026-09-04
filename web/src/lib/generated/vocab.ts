@@ -107,7 +107,8 @@ export type BlockedGate =
   | "subject_diverged"
   | "lifecycle_diverged"
   | "ReauthRequired"
-  | "awaiting_seller_signin";
+  | "awaiting_seller_signin"
+  | "awaiting_marketplace_answer";
 
 export type ItemState =
   | "queued"

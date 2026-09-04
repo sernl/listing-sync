@@ -565,6 +565,27 @@ pub const REVIVABLE_GATES: [&str; 10] = [
 /// [`REAUTH_REQUIRED`] is: that list is time-gated, and no clock opens this.
 pub const AWAITING_SELLER_SIGNIN: &str = "awaiting_seller_signin";
 
+/// The gate a create parks on when what the marketplace did with the write is
+/// not known.
+///
+/// Two arrivals, one situation. A device that died between issuing the request
+/// and its read-back leaves an attempt in flight that nothing can decide; so
+/// does a submit whose response was lost mid-run, which the machine answers by
+/// recording what it sent and abandoning rather than halting the tenant. Both
+/// are a create whose fate the ledger cannot determine, and both are decided
+/// the same way: a later claim reconciles the item against the seller's own
+/// catalogue, by the title its own attempt recorded.
+///
+/// It names what is awaited, which is why it is not [`AWAITING_SELLER_SIGNIN`].
+/// Nothing the seller does clears this one, and a gate that asked them to sign
+/// in would be naming an action that changes nothing.
+///
+/// Deliberately absent from [`REVIVABLE_GATES`], for the same reason the two
+/// beside it are: that list is time-gated and no clock opens this. What opens
+/// it is a claim serving the item as a reconcile, and a positive
+/// identification settling it.
+pub const AWAITING_MARKETPLACE_ANSWER: &str = "awaiting_marketplace_answer";
+
 /// Every gate the tree can write to `blocked_on`, for the client's
 /// vocabulary.
 ///
@@ -573,7 +594,7 @@ pub const AWAITING_SELLER_SIGNIN: &str = "awaiting_seller_signin";
 /// label every gate it might render rather than printing the raw string for
 /// the ones nobody thought of, and `the_gate_vocabulary_covers_every_gate_the_tree_writes`
 /// keeps it in step with the two sources it unions.
-pub const ALL_GATES: [&str; 12] = [
+pub const ALL_GATES: [&str; 13] = [
     "reconciliation",
     ELECTION,
     "currency_unknown",
@@ -586,6 +607,7 @@ pub const ALL_GATES: [&str; 12] = [
     "lifecycle_diverged",
     REAUTH_REQUIRED,
     AWAITING_SELLER_SIGNIN,
+    AWAITING_MARKETPLACE_ANSWER,
 ];
 
 /// The gate a counterpart-bound item waits on. Stated here because both the
@@ -1139,7 +1161,8 @@ impl LeaseRepo {
                         -- reconcilable by a later build.
                         OR ($5::bool
                             AND ji.state = 'parked_live'
-                            AND ji.blocked_on = 'awaiting_seller_signin'
+                            AND ji.blocked_on IN ('awaiting_seller_signin',
+                                                  'awaiting_marketplace_answer')
                             AND EXISTS (SELECT 1 FROM write_attempt wa
                                   WHERE wa.org_id = ji.org_id
                                     AND wa.job_item_id = ji.id
@@ -1826,7 +1849,7 @@ impl LeaseRepo {
                AND NOT EXISTS (SELECT 1 FROM mapping m \
                      WHERE m.org_id = ji.org_id AND m.id = ji.mapping_id \
                        AND m.binding_state = 'bound')",
-            AWAITING_SELLER_SIGNIN,
+            AWAITING_MARKETPLACE_ANSWER,
         )
         .execute(&mut *tx)
         .await?;
@@ -3236,7 +3259,10 @@ impl HaltRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALL_GATES, AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED, REVIVABLE_GATES};
+    use super::{
+        ALL_GATES, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
+        REVIVABLE_GATES,
+    };
 
     /// The client's gate vocabulary covers every gate the tree can write.
     ///
@@ -3252,7 +3278,11 @@ mod tests {
                 "{gate} is written by the revive arms but the client has no label for it"
             );
         }
-        for gate in [REAUTH_REQUIRED, AWAITING_SELLER_SIGNIN] {
+        for gate in [
+            REAUTH_REQUIRED,
+            AWAITING_SELLER_SIGNIN,
+            AWAITING_MARKETPLACE_ANSWER,
+        ] {
             assert!(
                 ALL_GATES.contains(&gate),
                 "{gate} is written by the driver or the park exit but is not in the vocabulary"
@@ -3260,8 +3290,8 @@ mod tests {
         }
         assert_eq!(
             ALL_GATES.len(),
-            REVIVABLE_GATES.len() + 2,
-            "the vocabulary is exactly the revivable gates plus the two the clock never \
+            REVIVABLE_GATES.len() + 3,
+            "the vocabulary is exactly the revivable gates plus the three the clock never \
              clears; a gate added to either side without the other is what this catches"
         );
     }

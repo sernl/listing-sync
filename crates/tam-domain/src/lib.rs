@@ -21,9 +21,9 @@ use tam_marketplace::{
 };
 use tam_types::{
     AttemptId, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
-    FieldMismatch, FileId, ImportedTerm, InventoryId, ListingCopy, LogicalInstant, MappingId,
-    OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, Timestamp, Title, UserId,
-    Uuid,
+    FieldKey, FieldMismatch, FileId, ImportedTerm, InventoryId, ListingCopy, LogicalInstant,
+    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, Timestamp, Title,
+    UserId, Uuid,
 };
 
 /// How long a claim on a job item stands before the reaper may steal it.
@@ -663,6 +663,32 @@ pub enum SyncState {
         attempt: Option<WriteAttemptId>,
         challenge: ChallengeKind,
     },
+    /// The run ended without a verdict on the item, which is a different thing
+    /// from the item being decided.
+    ///
+    /// A create whose submit came back ambiguous under a strategy this build
+    /// can identify: the write may have landed, the attempt stays in flight
+    /// fencing its mapping, and the locator records what a later run should
+    /// search for. It is deliberately not [`Self::AwaitingReadBack`], because
+    /// no read was asked for -- entering that state without emitting a read
+    /// would let a fabricated `ReadBackResult` commit a listing nobody looked
+    /// at, which is what `every_committed_terminal_follows_a_read` exists to
+    /// refuse.
+    ///
+    /// No input carries the machine forward from here. The run is over as far
+    /// as the machine is concerned, and the item's fate belongs to the claim
+    /// that serves it next and steps a fresh machine through `ResumeStranded`.
+    ///
+    /// `BudgetExhausted` is the one exception and settles this `Ambiguous`,
+    /// because a write did go out. Every non-terminal state must reach a
+    /// terminal in one transition, which `budget_exhaustion_is_terminal_in_one_transition`
+    /// holds, and answering anything else here would break it. The shipped
+    /// interpreter never asks: its budget guard excludes this state, so a
+    /// cancellation cannot turn a stranded create into a terminal ambiguity.
+    Stranded {
+        attempt: WriteAttemptId,
+        locator: ListingLocator,
+    },
     Terminal(Outcome),
 }
 
@@ -920,7 +946,7 @@ impl SyncMachine {
             SyncState::IntentRecorded { attempt, schema } => {
                 self.intent_recorded_rows(input, attempt, schema, now)
             }
-            SyncState::Submitted { .. } | SyncState::Terminal(_) => {
+            SyncState::Submitted { .. } | SyncState::Stranded { .. } | SyncState::Terminal(_) => {
                 Err(MachineError::InputNotApplicable)
             }
             SyncState::AwaitingReadBack { attempt, .. } => {
@@ -944,6 +970,7 @@ impl SyncMachine {
             | SyncState::Terminal(_) => None,
             SyncState::IntentRecorded { attempt, .. }
             | SyncState::Submitted { attempt, .. }
+            | SyncState::Stranded { attempt, .. }
             | SyncState::AwaitingReadBack { attempt, .. } => Some(*attempt),
             SyncState::Parked { attempt, .. } => *attempt,
         };
@@ -1130,7 +1157,7 @@ impl SyncMachine {
     ) -> Result<Transition, MachineError> {
         match input {
             Input::SubmitResult(Ok(evidence)) => self.await_read_back(attempt, evidence.landed),
-            Input::SubmitResult(Err(AdapterError::Ambiguous(_))) => self.reconcile(attempt),
+            Input::SubmitResult(Err(AdapterError::Ambiguous(_))) => self.ambiguous_submit(attempt),
             Input::SubmitResult(Err(AdapterError::Rejected { code, detail })) => self.advance(
                 SyncState::Terminal(Outcome::Rejected { code, detail }),
                 vec![],
@@ -1355,6 +1382,7 @@ impl SyncMachine {
             ),
             SyncState::IntentRecorded { attempt, .. }
             | SyncState::Submitted { attempt, .. }
+            | SyncState::Stranded { attempt, .. }
             | SyncState::AwaitingReadBack { attempt, .. } => (
                 Some(*attempt),
                 ambiguous(*attempt, AmbiguityCause::ProcessKilledByBackstop),
@@ -1403,6 +1431,68 @@ impl SyncMachine {
             reason: FetchReason::VerifyAttempt { attempt },
         }];
         self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects)
+    }
+
+    /// The title this run recorded that it sent, out of its own rendered
+    /// intent.
+    ///
+    /// Sound only where the machine rendering the fields is the machine that
+    /// submitted them, which is true on the ambiguous-submit path and false on
+    /// `ResumeStranded`, where the recorded title travels on the input for
+    /// exactly this reason. A removal renders no title and a create always
+    /// does, so `None` here is a create carrying nothing to search for.
+    fn recorded_title(&self) -> Option<RecordedTitle> {
+        self.fields
+            .entries
+            .iter()
+            .find(|(key, _)| *key == FieldKey::Title)
+            .map(|(_, value)| RecordedTitle(value.clone()))
+    }
+
+    /// A submit whose response was lost, on a create this build can identify.
+    ///
+    /// Everything else -- a revise, a removal, a marker strategy, a challenge
+    /// routed through [`Self::reconcile`] -- keeps the behaviour it had. Only
+    /// this one case changes, and it changes by stopping rather than by
+    /// searching: the listing sits in the marketplace's own processing queue
+    /// for minutes after the submit, so a walk run here answers a
+    /// completed-and-absent `Ok(None)`, which the table settles ambiguous and
+    /// halts the tenant's inventory on. That is the halt this arm exists to
+    /// avoid, arriving one wasted catalogue walk later.
+    ///
+    /// So the identification is recorded in the locator and the only effect
+    /// produces no input, which is how the interpreter's loop abandons the run
+    /// with the attempt still in flight. The reaper parks the item and a later
+    /// claim reconciles it, by which time the marketplace has answered.
+    ///
+    /// The title is read from `fields` here and nowhere else. Under
+    /// `ResumeStranded` it must travel on the input, because there `fields`
+    /// hold a fresh projection of a product the seller may have renamed since
+    /// the strand; here they are this run's own rendered intent, recorded by
+    /// the `RecordIntent` that preceded this very submit, so they are exactly
+    /// what was sent.
+    fn ambiguous_submit(self, attempt: WriteAttemptId) -> Result<Transition, MachineError> {
+        if self.operation.subject().is_some()
+            || !matches!(self.strategy, CreateStrategy::DraftThenPublish { .. })
+        {
+            return self.reconcile(attempt);
+        }
+        let Some(title) = self.recorded_title() else {
+            return self.halt_ambiguous(
+                attempt,
+                AmbiguityCause::NoDurableIdentifier,
+                Capture::Diagnostics,
+            );
+        };
+        let locator = ListingLocator::Recorded {
+            title,
+            inventory: self.inventory,
+        };
+        let effects = vec![Effect::CaptureDiagnostics {
+            attempt: Some(attempt),
+            cause: CaptureCause::Ambiguity,
+        }];
+        self.advance(SyncState::Stranded { attempt, locator }, effects)
     }
 
     /// Only a marker strategy can reconcile an ambiguous create in this
@@ -2358,40 +2448,116 @@ mod machine_tests {
         );
     }
 
+    /// A draft-then-publish create records what it sent and stops, rather than
+    /// halting the tenant or searching now.
+    ///
+    /// The search is right and the moment is wrong: this listing sits in the
+    /// marketplace's own processing queue for minutes, so an enumeration run
+    /// here answers a completed-and-absent `Ok(None)`, which the table settles
+    /// ambiguous and halts on. Emitting no effect that produces an input is
+    /// how the run abandons with the attempt still in flight, leaving the item
+    /// to the reaper's park and a later claim.
     #[test]
-    fn row_intent_recorded_submit_ambiguous_halts_without_a_marker() {
-        for strategy in [CreateStrategy::HaltOnAmbiguity, draft_strategy()] {
-            let transition = machine(
-                SyncState::IntentRecorded {
-                    attempt: attempt(),
-                    schema: Some(schema()),
+    fn row_intent_recorded_submit_ambiguous_records_and_stops_under_draft_then_publish() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: Some(schema()),
+            },
+            draft_strategy(),
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Stranded {
+                attempt: attempt(),
+                locator: ListingLocator::Recorded {
+                    title: RecordedTitle("a resource".to_owned()),
+                    inventory: InventoryId::TesGb,
                 },
-                strategy,
-                10,
-            )
+            },
+            "the identification is recorded in the locator, out of this run's own rendered \
+             intent, which is what the submit actually sent. The state is not \
+             `AwaitingReadBack`, because no read was asked for and a state that admitted a \
+             read result would let one be fabricated"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![Effect::CaptureDiagnostics {
+                attempt: Some(attempt()),
+                cause: CaptureCause::Ambiguity,
+            }]),
+            "no halt, no reconcile and nothing that produces an input: the run stops here \
+             and the attempt stays in flight"
+        );
+    }
+
+    /// And a create carrying no title has nothing to record, so it halts as it
+    /// did before.
+    #[test]
+    fn row_intent_recorded_submit_ambiguous_halts_when_the_intent_names_no_title() {
+        let mut untitled = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: Some(schema()),
+            },
+            draft_strategy(),
+            10,
+        );
+        untitled.fields.entries.clear();
+        let transition = untitled
             .step(
                 Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
                 now(),
             )
             .expect("a submit result applies in IntentRecorded");
-            assert_eq!(
-                transition.next.state,
-                SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::NoDurableIdentifier)),
-                "a strategy that embedded nothing has nothing to reconcile against"
-            );
-            assert_eq!(
-                transition.effects,
-                EffectList(vec![
-                    Effect::CaptureDiagnostics {
-                        attempt: Some(attempt()),
-                        cause: CaptureCause::Ambiguity,
-                    },
-                    halt(),
-                    notify(SellerEvent::InventoryHalted),
-                ]),
-                "stopping is what HaltOnAmbiguity means, and a draft strategy has no marker either"
-            );
-        }
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::NoDurableIdentifier)),
+            "a search needs something to search for, and an intent naming no title offers \
+             nothing a catalogue walk could match"
+        );
+    }
+
+    #[test]
+    fn row_intent_recorded_submit_ambiguous_halts_when_nothing_identifies_the_create() {
+        let transition = machine(
+            SyncState::IntentRecorded {
+                attempt: attempt(),
+                schema: Some(schema()),
+            },
+            CreateStrategy::HaltOnAmbiguity,
+            10,
+        )
+        .step(
+            Input::SubmitResult(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut))),
+            now(),
+        )
+        .expect("a submit result applies in IntentRecorded");
+        assert_eq!(
+            transition.next.state,
+            SyncState::Terminal(ambiguous(attempt(), AmbiguityCause::NoDurableIdentifier)),
+            "a strategy that embedded nothing has nothing to reconcile against"
+        );
+        assert_eq!(
+            transition.effects,
+            EffectList(vec![
+                Effect::CaptureDiagnostics {
+                    attempt: Some(attempt()),
+                    cause: CaptureCause::Ambiguity,
+                },
+                halt(),
+                notify(SellerEvent::InventoryHalted),
+            ]),
+            "stopping is what HaltOnAmbiguity means: it embeds nothing and leaves nothing a \
+             walk could narrow on. The draft strategy no longer arrives here, which is what \
+             the row above asserts"
+        );
     }
 
     #[test]
@@ -3480,10 +3646,18 @@ mod machine_tests {
         // The draw is deterministic — a fixed ChaCha seed, the same pool, the
         // same strategy — so these are exact rather than expected values, and
         // a run that reports different ones means the machine or the pool
-        // moved. Measured 2026-09-03 at this sample: committed 164, ambiguous
-        // 989, resumed 108. The resume is the binding margin at a little over
-        // twice the floor; it was 43 against a floor of 50 at two thousand,
-        // which is what raising the sample fixed.
+        // moved. Measured 2026-09-04 at this sample: committed 189, resumed
+        // 110. The resume is the binding margin at a little over twice the
+        // floor; it was 43 against a floor of 50 at two thousand, which is
+        // what raising the sample fixed.
+        //
+        // The previous reading was committed 164, resumed 108, on 2026-09-03.
+        // The machine moved, exactly as this comment says a change in these
+        // numbers means: the ambiguous submit under a recorded-title strategy
+        // now ends in `Stranded` instead of running a reconcile whose result
+        // could settle the run, so runs that used to end ambiguous end without
+        // a terminal and the committed share rises. The floor is untouched and
+        // every count is still comfortably above it.
         const SAMPLES: u32 = 5_000;
         const FLOOR: u32 = 50;
 

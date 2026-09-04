@@ -12,6 +12,15 @@ describe('gateLabel', () => {
 		expect(`blocked on ${gateLabel('cover_missing')}`).toBe('blocked on a missing cover image');
 	});
 
+	// The label completes someone else's sentence, so it is a noun phrase
+	// rather than a sentence of its own: "blocked on Waiting on the
+	// marketplace" is what a sentence here would read as.
+	it('names what is awaited rather than restating that something is', () => {
+		expect(`blocked on ${gateLabel('awaiting_marketplace_answer')}`).toBe(
+			'blocked on an answer from the marketplace'
+		);
+	});
+
 	// The map is exhaustive over the generated union, so this is unreachable
 	// through the API. It exists because a client running against a newer
 	// server would otherwise render nothing where a gate should be, and a

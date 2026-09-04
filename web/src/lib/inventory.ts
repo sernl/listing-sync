@@ -63,7 +63,10 @@ const SIGN_IN_GATE: Record<BlockedGate, boolean> = {
 	subject_diverged: false,
 	lifecycle_diverged: false,
 	ReauthRequired: true,
-	awaiting_seller_signin: true
+	awaiting_seller_signin: true,
+	// Nothing the seller does clears this one: the write went out and we are
+	// going back to look for its answer.
+	awaiting_marketplace_answer: false
 };
 
 /** Where the seller goes to clear each gate.
@@ -83,7 +86,11 @@ const GATE_DESTINATION: Record<BlockedGate, 'queue' | 'run' | 'connections' | 'l
 	subject_diverged: 'run',
 	lifecycle_diverged: 'run',
 	ReauthRequired: 'connections',
-	awaiting_seller_signin: 'connections'
+	awaiting_seller_signin: 'connections',
+	// The run, as `election` does, because no screen clears this either: the
+	// console shows that something is awaited without pretending to offer an
+	// action.
+	awaiting_marketplace_answer: 'run'
 };
 
 function signInGate(gate: string | undefined): boolean {
@@ -261,7 +268,14 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 		case 'parked_cold':
 			return {
 				state: 'stranded',
-				detail: `A send reached this marketplace and was interrupted, so it is held rather than retried blind. It is waiting on ${waitingOn(gate)}.`,
+				// One gate on this branch is not an interruption: the write
+				// completed and the answer is what is missing, so it gets its
+				// own sentence rather than the one about being held rather than
+				// retried blind. Every other cause keeps that sentence.
+				detail:
+					gate === 'awaiting_marketplace_answer'
+						? 'We sent the listing, did not get an answer we could trust, and are going back to look for it.'
+						: `A send reached this marketplace and was interrupted, so it is held rather than retried blind. It is waiting on ${waitingOn(gate)}.`,
 				action: signInGate(gate)
 					? { label: 'Open Marketplaces', href: '/marketplaces' }
 					: gateAction(gate, input.product, entry.job)

@@ -20,7 +20,8 @@ use tam_storage::{
     BudgetGrant, Charged, ClaimPolicy, ConnectionAudit, DeviceClaim, DeviceRef, HaltCause,
     HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LandingEffect, LeaseRepo, LeasedItem, MappingRepo,
     NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo,
-    StorageError, WriteAttemptRepo, AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
+    StorageError, WriteAttemptRepo, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN,
+    REAUTH_REQUIRED,
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -3365,7 +3366,7 @@ async fn strand_a_create(
         .await
         .expect("the fencing attempt opens");
     LeaseRepo::new(engine.clone())
-        .park(&lease.lease_ref(), AWAITING_SELLER_SIGNIN, 3_600)
+        .park(&lease.lease_ref(), AWAITING_MARKETPLACE_ANSWER, 3_600)
         .await
         .expect("the park is fenced on a live lease");
     (lease.item, attempt)
@@ -3456,6 +3457,45 @@ async fn a_stranded_create_is_claimed_ahead_of_older_queued_work(app: PgPool) {
     );
 }
 
+/// The claim serves a stranded create parked under either word.
+///
+/// Two arms write a stranded create's park and they disagree on the word. The
+/// reaper writes `awaiting_marketplace_answer`, which is what a create whose
+/// fate is unknown is actually waiting on; step 12's re-gate arm still writes
+/// `awaiting_seller_signin`, for a create whose reauth park aged out, where
+/// signing in is genuinely the thing that helps. Both are stranded creates
+/// holding a mapping's fence, so both have to be reachable -- a predicate
+/// admitting only the newer word would leave every item the older arm had
+/// already parked unreconcilable, and nothing else in this file would notice.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stranded_create_is_claimed_under_either_park_word(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x71, true).await;
+    enqueue_one(&engine, &tenant, 0x72, 0x73).await;
+    let (stranded, attempt) = strand_a_create(&app, &engine, tenant.org, tenant.mapping).await;
+
+    // What the older arm leaves behind, written directly: reaching it through
+    // `revive_expired` would need a reauth park aged past its clock, which is
+    // a different fixture proving a different thing.
+    sqlx::query("UPDATE job_item SET blocked_on = $1 WHERE org_id = $2 AND id = $3")
+        .bind(AWAITING_SELLER_SIGNIN)
+        .bind(db_uuid(tenant.org.0))
+        .bind(db_uuid(stranded.0))
+        .execute(&engine)
+        .await
+        .expect("the older arm's word is written");
+
+    let leased = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("a create parked under the older word is still claimable");
+    assert_eq!(
+        (leased.item, leased.stranded_attempt),
+        (stranded, Some(attempt)),
+        "and it is served as a reconcile carrying its own attempt, exactly as one parked \
+         under the newer word is"
+    );
+}
+
 /// A device claims only work whose marketplace it holds a connected session
 /// for, and a session the seller signed out of is still a row rather than an
 /// absent one.
@@ -3480,7 +3520,7 @@ async fn a_stranded_create_needs_a_connected_session_for_its_marketplace(app: Pg
     let (state, blocked_on, _, _, _) = item_disposition(&engine, tenant.org, stranded).await;
     assert_eq!(
         (state.as_str(), blocked_on.as_deref()),
-        ("parked_live", Some(AWAITING_SELLER_SIGNIN)),
+        ("parked_live", Some(AWAITING_MARKETPLACE_ANSWER)),
         "and the refused claim left it exactly where it was, still fencing its mapping"
     );
 
@@ -3548,7 +3588,7 @@ async fn the_reaper_parks_a_stranded_create_rather_than_settling_or_stealing_it(
         item_disposition(&engine, tenant.org, item).await;
     assert_eq!(
         (state.as_str(), blocked_on.as_deref(), outcome.as_deref()),
-        ("parked_live", Some(AWAITING_SELLER_SIGNIN), None),
+        ("parked_live", Some(AWAITING_MARKETPLACE_ANSWER), None),
         "it goes to the park the reconcile path reads, not to the queue and not to a \
          settled row recording an outcome nobody observed"
     );
@@ -3711,7 +3751,7 @@ async fn a_stranded_create_is_left_parked_where_no_reconcile_can_run(app: PgPool
     let (state, blocked_on, attempts, _, _) = item_disposition(&engine, tenant.org, stranded).await;
     assert_eq!(
         (state.as_str(), blocked_on.as_deref(), attempts),
-        ("parked_live", Some(AWAITING_SELLER_SIGNIN), 0),
+        ("parked_live", Some(AWAITING_MARKETPLACE_ANSWER), 0),
         "and it is left exactly where the reaper put it, charged nothing"
     );
     assert_eq!(

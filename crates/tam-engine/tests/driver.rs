@@ -666,6 +666,78 @@ async fn an_item_out_of_attempt_budget_still_settles_on_the_connection(app: PgPo
     );
 }
 
+/// An ambiguous submit on a create this build can identify abandons the run
+/// and leaves its fence standing, rather than halting the tenant.
+///
+/// The end-to-end half of the transition row. The machine steps to
+/// `SyncState::Stranded`, a named state carrying the attempt and the locator,
+/// and the driver's own arm for it returns `RunVerdict::Abandoned` without
+/// settling anything. What that leaves behind is what this test is for and is
+/// exactly what the machine tests cannot see, because they stop at the
+/// transition: the attempt still in flight, so nothing can create a second
+/// listing on that mapping, the mapping unbound, because nothing was observed,
+/// and no halt row, because the fence already does the job a halt would.
+///
+/// The contrast with `a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further`
+/// above is deliberate. Both are a create whose fate is unknown; that one halts
+/// under `HaltOnAmbiguity`, which embeds nothing a walk could find, and this
+/// one records what it sent and waits, because a draft-then-publish create is
+/// identifiable by the title its own attempt recorded.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_ambiguous_submit_under_draft_then_publish_abandons_and_holds_the_fence(app: PgPool) {
+    let adapter =
+        ScriptedAdapter::answering(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut)));
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+
+    let verdict = drive(
+        &app,
+        &engine,
+        &adapter,
+        CreateStrategy::DraftThenPublish {
+            draft_state: tam_marketplace::RemoteLifecycleKind::Draft,
+        },
+        T0,
+    )
+    .await;
+    assert!(
+        matches!(verdict, RunVerdict::Abandoned { .. }),
+        "the run stops without settling, so the item is still there to be reconciled when \
+         the marketplace has answered: {verdict:?}"
+    );
+
+    let attempts: Vec<String> = sqlx::query_scalar("SELECT state FROM write_attempt")
+        .fetch_all(&engine)
+        .await
+        .expect("the attempt rows read");
+    assert_eq!(
+        attempts,
+        vec!["in_flight".to_owned()],
+        "the fence is the point: while this row stands nothing can create a second \
+         listing for that mapping, which is the failure this ledger cannot undo"
+    );
+
+    let bound: Option<String> = sqlx::query_scalar("SELECT binding_state FROM mapping LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the mapping row reads");
+    assert_ne!(
+        bound.as_deref(),
+        Some("bound"),
+        "nothing was bound, because nothing was observed"
+    );
+
+    let halted: i64 = sqlx::query_scalar("SELECT count(*) FROM org_inventory_halt")
+        .fetch_one(&engine)
+        .await
+        .expect("the halt table reads");
+    assert_eq!(
+        halted, 0,
+        "and the tenant's inventory is not stopped: the fence already prevents the second \
+         create, so a halt would only stop work that is still safe to do"
+    );
+}
+
 /// The duplicate-create path this arm opened, closed. Tes mints the draft in
 /// `create_listing` and only then reads the resource back, so a Cloudflare
 /// block on that read arrives *after* a listing exists. Settling terminal
