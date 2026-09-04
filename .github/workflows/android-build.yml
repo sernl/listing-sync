@@ -192,8 +192,23 @@ jobs:
       # phone turns out to need it.
       - name: build the APK
         working-directory: apps/desktop
+        env:
+          # The keys this build verifies entitlement tokens against. Absent, the
+          # build carries none and every gate answers no: tolerable for a debug
+          # sideload, and a refusal for a release one, matching the desktop job's
+          # own guard. A release APK is a shipped artefact and an `attach_to`
+          # input puts it on an existing release, so a warning here would put a
+          # client that can never work in front of sellers.
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
         run: |
           set -euo pipefail
+          if [ "$RELEASE" = "true" ] && [ -z "${TAM_ENTITLEMENT_PUBLIC_KEY:-}" ]; then
+            echo "the TAM_ENTITLEMENT_PUBLIC_KEY repository variable is unset." >&2
+            echo "A release APK built without it carries no entitlement key, verifies no" >&2
+            echo "token, and every gate answers no. Set the variable, or build the debug" >&2
+            echo "profile, which does not ship." >&2
+            exit 1
+          fi
           if [ "$RELEASE" = "true" ]; then
             cargo tauri android build --apk --ci --target aarch64
           else

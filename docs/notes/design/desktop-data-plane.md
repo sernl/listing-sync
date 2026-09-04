@@ -139,8 +139,9 @@ A third gap is smaller and sharper.
 The device sends the marketplace as a filter the server currently ignores, and refuses an order whose inventory is not the marketplace it gated on, because the readiness gate is per marketplace and running past it would bypass the session and entitlement checks that gate performed.
 That refusal costs a lease expiry, which is what makes serving the filter worth doing.
 
-The entitlement verifier still carries an all-zero public key, which is not a valid Ed25519 point, so every gate answers no until the founder supplies the real one.
-That is the correct failure for a placeholder and is recorded in `desktop-client.md`.
+Amended 2026-09-04: the entitlement verifier is wired, and a build given no `TAM_ENTITLEMENT_PUBLIC_KEY` carries an empty key set, so it verifies no token and every gate answers no until the founder supplies the real one.
+This paragraph previously said the placeholder was an all-zero key "which is not a valid Ed25519 point"; that was false — all-zero is a valid point of order four and signatures can be forged against it without a private key — and it is why "no key" is now an empty set rather than a value assumed to fail.
+The reasoning and the forgery are recorded in `desktop-client.md`.
 
 Lease renewal is not implemented.
 The split note's section 4 makes claims renewable so a device that goes offline mid-flow is reclaimed for having stopped heartbeating rather than for being slow, and the driver's own budget inequality already sits close to the lease TTL.

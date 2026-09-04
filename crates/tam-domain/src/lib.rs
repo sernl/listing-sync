@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod entitlement;
 pub mod equivalence;
 pub mod product;
 pub mod registry;
@@ -59,6 +60,19 @@ pub const LEASE_TTL_SECS: i32 = 600;
 /// An organisation that never subscribed has no row and is never blocked by
 /// this; what it bounds is a plan that lapsed and stayed lapsed.
 pub const ENTITLEMENT_GRACE_HOURS: i32 = 24;
+
+/// How long an entitlement token stands before the device must check in again.
+///
+/// D11's other number, and its sibling above is the reason it is here rather
+/// than in `tam-limits`: the two are one decision, they are applied together
+/// at every mint, and `tam-limits` bounds a tenant's share of a resource
+/// rather than fixing a protocol constant.
+///
+/// One hour, which is also `Scheduler::DEFAULT_CADENCE` on the device, so a
+/// machine that is syncing revalidates at the rhythm its token expires on
+/// rather than at some other one. The kill-switch latency the founder commits
+/// to publicly is this plus the grace above.
+pub const ENTITLEMENT_TOKEN_VALIDITY_SECS: i64 = 3_600;
 
 /// The desktop version that can run a marketplace-sourced payload.
 ///

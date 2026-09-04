@@ -253,13 +253,22 @@ struct HeartbeatBody<'a> {
     sessions: Vec<SessionLine<'a>>,
 }
 
-/// The one field this client reads off a heartbeat answer. Deliberately not
+/// The two fields this client reads off a heartbeat answer. Deliberately not
 /// the whole `HeartbeatView`: the revocation instant is the console's to
 /// render, and a client that insisted on every field would break on the next
 /// one the server adds.
+///
+/// `entitlement` is `default` rather than required, so a server that mints no
+/// token — one started without a signing key, or an older one — is answered
+/// as granting none rather than as unparseable. That is also why the field
+/// could be added at all without stranding the published 0.1.3 client: neither
+/// this type nor the server's `HeartbeatView` denies unknown fields, so each
+/// end ignores what the other added.
 #[derive(Debug, serde::Deserialize)]
 struct HeartbeatReply {
     revoked: bool,
+    #[serde(default)]
+    entitlement: Option<String>,
 }
 
 /// The registry, over HTTP.
@@ -433,6 +442,7 @@ impl ControlPlane for HttpControlPlane {
             })?;
             Ok(CheckIn {
                 revoked: parsed.revoked,
+                entitlement: parsed.entitlement,
             })
         })
     }
@@ -697,6 +707,41 @@ mod tests {
             !body.contains("s3cr3t") && !body.contains("sessionKey"),
             "a cookie reached the control plane, which is the one thing this client \
              must never send: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_minted_token_is_carried_off_the_wire_unread() {
+        let fake = Arc::new(Fake::answering(
+            200,
+            r#"{"revoked":false,"revoked_at":null,"entitlement":"a.b.c"}"#,
+        ));
+        let answer = plane(Arc::clone(&fake))
+            .heartbeat(&identity().id, &[])
+            .await
+            .expect("a two-hundred is a check-in");
+        assert_eq!(
+            answer.entitlement.as_deref(),
+            Some("a.b.c"),
+            "the transport carries the token as a string; nothing here verifies it, because \
+             the key belongs to the check-in and not to the socket"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_from_a_server_that_mints_nothing_still_parses() {
+        let fake = Arc::new(Fake::answering(
+            200,
+            r#"{"revoked":false,"revoked_at":null}"#,
+        ));
+        let answer = plane(Arc::clone(&fake))
+            .heartbeat(&identity().id, &[])
+            .await
+            .expect("a reply without the field is not a malformed reply");
+        assert_eq!(
+            answer.entitlement, None,
+            "a deployment with no signing key, and every server older than the mint, answers \
+             exactly what this client already accepted"
         );
     }
 

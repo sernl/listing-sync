@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT mi.marketplace AS \"marketplace!\"\n               FROM marketplace_inventory mi\n               WHERE mi.transport_class = 'seller_device'\n                 AND EXISTS (SELECT 1 FROM device d\n                       WHERE d.org_id = $1 AND d.id = $2\n                         AND d.revoked_at IS NULL)\n                 AND NOT EXISTS (SELECT 1 FROM billing_subscription bs\n                       WHERE bs.org_id = $1\n                         AND bs.status NOT IN ('active', 'trialing')\n                         AND bs.current_period_end IS NOT NULL\n                         AND bs.current_period_end < now() - make_interval(hours => $3))\n                 AND NOT EXISTS (SELECT 1 FROM org_halt oh WHERE oh.org_id = $1)\n                 AND EXISTS (SELECT 1 FROM connection c\n                       WHERE c.org_id = $1 AND c.marketplace = mi.marketplace\n                         AND c.state = 'linked')\n                 AND NOT EXISTS (SELECT 1 FROM inventory_halt ih\n                       WHERE ih.inventory = mi.code AND ih.marketplace = mi.marketplace)\n                 AND NOT EXISTS (SELECT 1 FROM org_inventory_halt oih\n                       WHERE oih.org_id = $1 AND oih.inventory = mi.code\n                         AND oih.marketplace = mi.marketplace)\n               ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "marketplace!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "90e5b400560e38619573b86f92ec90baff2c213fd9ce6e60aa3be9cc28cc54b7"
+}

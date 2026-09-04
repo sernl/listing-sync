@@ -11,7 +11,7 @@ use tam_types::{Marketplace, Timestamp};
 use tokio::sync::Mutex;
 
 use crate::device::{DeviceId, DeviceIdentity};
-use crate::entitlement::EntitlementGate;
+use crate::entitlement::{EntitlementGate, EMBEDDED_PUBLIC_KEYS, PUBLIC_KEY_BYTES};
 use crate::heartbeat::{ControlPlane, Offline};
 use crate::session::SessionStore;
 
@@ -117,6 +117,16 @@ pub struct DesktopState {
     /// because this slice ships no transport and a client that believed it had
     /// checked in would never learn it had been revoked.
     plane: Arc<dyn ControlPlane>,
+    /// The keys every entitlement token is verified against, of which there are
+    /// one, two during a rotation, or none.
+    ///
+    /// Always [`EMBEDDED_PUBLIC_KEYS`] outside tests, and private for that
+    /// reason: a build able to be told a different verifying key at run time
+    /// would be a way to point the one claim this architecture accepts at a key
+    /// somebody else holds. The only constructor that sets it otherwise is
+    /// test-only, and exists so a check-in can be driven end to end with a key
+    /// the test generated rather than only at the verifier's own seam.
+    verifying_keys: Vec<[u8; PUBLIC_KEY_BYTES]>,
     /// The most recent entries, newest last, bounded at [`ACTIVITY_MAX`].
     activity: Mutex<VecDeque<DeviceActivity>>,
 }
@@ -140,8 +150,29 @@ impl DesktopState {
             revoked: Arc::new(AtomicBool::new(false)),
             signed_in: AtomicBool::new(false),
             plane,
+            verifying_keys: EMBEDDED_PUBLIC_KEYS.to_vec(),
             activity: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// A state whose entitlement verifier is a key set the test generated.
+    #[cfg(test)]
+    pub(crate) fn with_verifying_keys(
+        device: DeviceIdentity,
+        store: Arc<dyn SessionStore>,
+        verifying_keys: Vec<[u8; PUBLIC_KEY_BYTES]>,
+    ) -> Self {
+        Self {
+            verifying_keys,
+            ..Self::new(device, store)
+        }
+    }
+
+    /// The keys a check-in verifies an entitlement token against. Empty in a
+    /// build that was given none, which refuses every token.
+    #[must_use]
+    pub fn verifying_keys(&self) -> &[[u8; PUBLIC_KEY_BYTES]] {
+        &self.verifying_keys
     }
 
     #[must_use]

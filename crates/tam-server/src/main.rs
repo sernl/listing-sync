@@ -5,12 +5,13 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use tam_api::devices::EntitlementKey;
 use tam_api::{
     AppState, AuthBridge, BlobStore, Config, Disclosure, JwkSet, JwksFuture, JwksSource,
     JwksUnavailable, WebhookSecret,
@@ -71,6 +72,49 @@ const AUTH_JWKS_FLAG: &str = "--auth-jwks-url";
 /// them. Absent, `POST /{version}/uploads` answers 503: an upload has to seal
 /// its bytes somewhere, and there is no unsealed mode of it to fall back to.
 const BLOB_KEK_FLAG: &str = "--blob-kek-path";
+
+/// The Ed25519 key entitlement tokens are signed under, read from a file the
+/// way the blob key-encryption key is and given on the command line for the
+/// same reason: the lint table bans environment reads outside the one crate
+/// that will own them. The file holds PKCS#8 DER, which is the only form
+/// `jsonwebtoken` accepts in this workspace -- it is built without `use_pem`,
+/// so there is no `from_ed_pem` to take the other one.
+///
+/// Absent, a heartbeat still answers. It carries no token, every device's gate
+/// stays closed, and nothing is served that would have been served anyway:
+/// refusing the route instead would stop a signed-out device learning it was
+/// signed out, which is the one thing a heartbeat must never fail to say.
+const ENTITLEMENT_KEY_FLAG: &str = "--entitlement-key-path";
+
+/// Refuse to start without that key.
+///
+/// A positive assertion rather than an inferred mode, and for exactly the
+/// reason `--disclose-internals` is a flag: this workspace ships
+/// `debug-assertions = true` in release, so no `cfg` can tell production
+/// apart. Production passes this; `just dev` does not, and a development run
+/// with no key grants nothing and says so.
+const REQUIRE_ENTITLEMENT_KEY_FLAG: &str = "--require-entitlement-key";
+
+/// The public half this deployment is expected to be signing under, as the
+/// sixty-four lowercase hex characters the fleet's `TAM_ENTITLEMENT_PUBLIC_KEY`
+/// repository variable carries. Given, a mismatch refuses the start.
+///
+/// It exists because the failure it catches is otherwise silent. A restored
+/// backup or a half-finished rotation puts the wrong pair at the key path;
+/// every token still signs, every client then fails to verify it, and every
+/// seller's gate closes on their next check-in with nothing in any log
+/// separating that from a healthy deployment. Optional rather than required
+/// because a deployment that does not know its own fleet's key is still better
+/// off minting than not, and the public half is printed either way.
+const ENTITLEMENT_PUBLIC_KEY_FLAG: &str = "--entitlement-public-key";
+
+/// The most of an entitlement key file that is read.
+///
+/// An Ed25519 PKCS#8 key pair is under a hundred bytes; this is three orders of
+/// magnitude of headroom and still refuses to allocate a mis-pointed gigabyte
+/// before rejecting it. Named because the doc comment on the reader calls it
+/// bounded, and without this that described the path rather than the length.
+const ENTITLEMENT_KEY_BYTES_MAX: u64 = 8 * 1024;
 
 /// The directory the sealed objects are written beneath, which is the same
 /// root the worker reads them back from. Paired with the key above for the
@@ -204,7 +248,7 @@ fn spawn_event_pruner(pruner: PruneRepo, cancel: CancellationToken) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let invocation = parse_invocation()?;
+    let mut invocation = parse_invocation()?;
     // Before anything else: the standards corpus is compiled into this binary,
     // and a build that cannot parse its own corpus should fail here rather
     // than at the first seller's search. Parsing it once also means no request
@@ -255,6 +299,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         }
         None => None,
+    };
+    invocation.config.entitlement_key = if let Some(path) = &invocation.entitlement_key_path {
+        let key = load_entitlement_key(path)?;
+        // The checked parse, here rather than at the first check-in: a key that
+        // is not a key pair is a start-up fault, not a seller's fault.
+        let public = key
+            .public_key_hex()
+            .map_err(|why| format!("{path} is not an Ed25519 signing key: {why}"))?;
+        if let Some(expected) = &invocation.entitlement_public_key {
+            if expected != &public {
+                return Err(format!(
+                    "{path} signs under public key {public}, but {ENTITLEMENT_PUBLIC_KEY_FLAG} \
+                     expects {expected}. A server signing under a key the fleet does not carry \
+                     closes every seller's gate on their next check-in, so this refuses to \
+                     start rather than looking healthy while doing it."
+                )
+                .into());
+            }
+        }
+        // Printed whether or not it was checked, so an operator can compare it
+        // with the fleet's repository variable in one glance.
+        eprintln!("tam-server minting entitlement tokens under public key {public}");
+        Some(key)
+    } else {
+        eprintln!(
+            "tam-server minting no entitlement tokens ({ENTITLEMENT_KEY_FLAG} unset); \
+             every desktop client's gate stays closed"
+        );
+        None
     };
     let state = AppState {
         pool,
@@ -330,6 +403,10 @@ struct Invocation {
     /// The key-encryption key's path and the object-store root, which are
     /// meaningless apart for the same reason.
     blobs: Option<(String, std::path::PathBuf)>,
+    /// Where the entitlement signing key is, if this deployment mints tokens.
+    entitlement_key_path: Option<String>,
+    /// The public half that key is expected to have, if the operator stated one.
+    entitlement_public_key: Option<String>,
 }
 
 /// The database url first, then an optional bind address and the disclosure
@@ -346,6 +423,9 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut auth_jwks_url = None;
     let mut blob_kek_path = None;
     let mut blob_store_root = None;
+    let mut entitlement_key_path = None;
+    let mut entitlement_public_key = None;
+    let mut require_entitlement_key = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -390,6 +470,20 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--blob-kek-path needs a path argument")?,
             );
+        } else if argument == ENTITLEMENT_KEY_FLAG {
+            entitlement_key_path = Some(
+                arguments
+                    .next()
+                    .ok_or("--entitlement-key-path needs a path argument")?,
+            );
+        } else if argument == ENTITLEMENT_PUBLIC_KEY_FLAG {
+            entitlement_public_key = Some(
+                arguments
+                    .next()
+                    .ok_or("--entitlement-public-key needs a 64-character hex argument")?,
+            );
+        } else if argument == REQUIRE_ENTITLEMENT_KEY_FLAG {
+            require_entitlement_key = true;
         } else if argument == BLOB_STORE_ROOT_FLAG {
             blob_store_root = Some(std::path::PathBuf::from(
                 arguments
@@ -434,6 +528,15 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             .into())
         }
     };
+    // The assertion a production unit file makes, refused rather than warned
+    // about: a deployment that meant to mint tokens and was started without a
+    // key would serve every seller a closed gate and look healthy doing it.
+    if require_entitlement_key && entitlement_key_path.is_none() {
+        return Err(format!(
+            "{REQUIRE_ENTITLEMENT_KEY_FLAG} demands {ENTITLEMENT_KEY_FLAG}, which was not given"
+        )
+        .into());
+    }
     Ok(Invocation {
         db_url,
         bind,
@@ -443,6 +546,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         ui_dir,
         identity,
         blobs,
+        entitlement_key_path,
+        entitlement_public_key,
     })
 }
 
@@ -454,6 +559,34 @@ fn load_kek(path: &str) -> Result<tam_secrets::Kek, Box<dyn std::error::Error>> 
     let mut bytes = Vec::new();
     std::fs::File::open(path)?.read_to_end(&mut bytes)?;
     Ok(tam_secrets::Kek::from_bytes(&bytes)?)
+}
+
+/// The entitlement signing key off disk: a file opened and read under a byte
+/// cap, rather than `std::fs::read`, which the lint table bans.
+///
+/// Capped at [`ENTITLEMENT_KEY_BYTES_MAX`] rather than read to end, so a
+/// mis-pointed path is refused instead of allocating whatever it happened to
+/// name. A key pair is under a hundred bytes, so anything at the cap is already
+/// not one.
+fn load_entitlement_key(path: &str) -> Result<EntitlementKey, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(ENTITLEMENT_KEY_BYTES_MAX + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty() {
+        return Err(
+            format!("{path} is empty; it holds the PKCS#8 DER of an Ed25519 key pair").into(),
+        );
+    }
+    if bytes.len() as u64 > ENTITLEMENT_KEY_BYTES_MAX {
+        return Err(format!(
+            "{path} is larger than {ENTITLEMENT_KEY_BYTES_MAX} bytes, so it is not the PKCS#8 \
+             DER of an Ed25519 key pair"
+        )
+        .into());
+    }
+    Ok(EntitlementKey::new(bytes))
 }
 
 fn read_shell(path: &std::path::Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

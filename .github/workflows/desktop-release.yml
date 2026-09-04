@@ -61,6 +61,44 @@ jobs:
           set -euo pipefail
           bash .github/scripts/release-check.sh "$TAG"
           printf 'version=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
+      # A release built without this carries no entitlement key at all, so it
+      # verifies no token and every seller's gate answers no. It is a repository
+      # variable rather than a secret because a public key is not one, and
+      # because a variable is greppable in this log when diagnosing a fleet that
+      # verifies nothing.
+      #
+      # One key, or two separated by a comma while a rotation is in flight: a
+      # release carrying the outgoing and the incoming key verifies tokens signed
+      # by either, which is what lets the fleet cross without a window in which
+      # somebody's gate is shut.
+      - name: require the entitlement public key
+        env:
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAM_ENTITLEMENT_PUBLIC_KEY" ]; then
+            echo "the TAM_ENTITLEMENT_PUBLIC_KEY repository variable is unset." >&2
+            echo "A release built without it carries no entitlement key, verifies no" >&2
+            echo "token, and every seller's gate answers no." >&2
+            echo "Mint the pair with \`just entitlement-key\` and set the variable;" >&2
+            echo "see docs/notes/design/desktop-client.md." >&2
+            exit 1
+          fi
+          if ! printf '%s' "$TAM_ENTITLEMENT_PUBLIC_KEY" \
+              | grep -Eq '^[0-9a-f]{64}(,[0-9a-f]{64})?$'; then
+            echo "TAM_ENTITLEMENT_PUBLIC_KEY must be 64 lowercase hex characters, or two" >&2
+            echo "such values separated by a comma and nothing else." >&2
+            echo "The desktop build script refuses anything else, so this would fail" >&2
+            echo "on the Windows runner instead of here." >&2
+            exit 1
+          fi
+          if [ "$TAM_ENTITLEMENT_PUBLIC_KEY" = "${TAM_ENTITLEMENT_PUBLIC_KEY%%,*},${TAM_ENTITLEMENT_PUBLIC_KEY%%,*}" ]; then
+            echo "TAM_ENTITLEMENT_PUBLIC_KEY names the same key twice; two keys exist for" >&2
+            echo "a rotation, so a duplicate means one was meant to be the other." >&2
+            exit 1
+          fi
+          echo "entitlement public key present and well formed"
+
       - name: decide whether an APK can ship
         id: android
         run: |
@@ -262,6 +300,10 @@ jobs:
 
       - name: build the APK
         working-directory: apps/desktop
+        env:
+          # The key this build verifies entitlement tokens against. The verify
+          # job has already refused the tag if it is unset or malformed.
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           cargo tauri android build --apk --ci --target aarch64
@@ -421,6 +463,10 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # The key this build verifies entitlement tokens against, embedded by
+          # the crate's build script. The verify job has already refused the
+          # tag if it is unset or malformed.
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}

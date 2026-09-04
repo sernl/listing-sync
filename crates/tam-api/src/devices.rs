@@ -24,12 +24,15 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
+use tam_domain::entitlement::Claims;
+use tam_domain::ENTITLEMENT_GRACE_HOURS;
 use tam_storage::{
     ConnectionFactsRepo, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
     DeviceSessionReport, DeviceSessionStatus,
 };
-use tam_types::{Marketplace, Timestamp, TransportClass};
+use tam_types::{Marketplace, OrgId, Timestamp, TransportClass};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
@@ -45,6 +48,84 @@ pub const LABEL_MAX_CHARS: usize = 200;
 /// the same width as an account label because it is the same kind of thing: a
 /// human name typed into a form.
 pub const AUTHORSHIP_MAX_CHARS: usize = 200;
+
+/// Milliseconds to the seconds RFC 7519 fixes `exp` to be. `div_euclid` rather
+/// than `/`, which the workspace lint table denies.
+const MILLIS_PER_SEC: i64 = 1_000;
+
+/// An Ed25519 public key is thirty-two bytes, and the desktop build script that
+/// embeds it wants exactly this many lowercase hex characters.
+const PUBLIC_KEY_HEX_CHARS: usize = 64;
+
+/// The Ed25519 key entitlement tokens are signed under, held so it cannot
+/// reach a log line or a `Debug` render of the configuration that carries it.
+///
+/// PKCS#8 DER, and not by preference: `jsonwebtoken` is built here with
+/// `default-features = false`, which drops its `use_pem` feature, so
+/// `from_ed_pem` does not exist in this workspace and DER is the only form
+/// there is.
+///
+/// The equality this derives is a byte comparison and is not constant-time. It
+/// exists because [`crate::Config`] is compared in tests and nowhere else; no
+/// request path compares a key.
+///
+/// Not zeroized on drop, and recorded as a follow-up rather than done here.
+/// `tam-secrets` already zeroizes its own key material and would be the right
+/// home for a wrapper, but neither type it exposes fits: `Secret` holds a
+/// `String` and this is DER, and `Kek` is fixed at thirty-two bytes while a
+/// PKCS#8 Ed25519 pair is eighty-three. Adding `zeroize` to this crate's own
+/// manifest is a dependency decision rather than a cleanup. The exposure is
+/// bounded and worth stating: the key lives for the whole process either way,
+/// so what zeroizing would buy is only that a core dump or a swapped page taken
+/// after a shutdown no longer carries it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EntitlementKey(Vec<u8>);
+
+impl EntitlementKey {
+    #[must_use]
+    pub const fn new(der: Vec<u8>) -> Self {
+        Self(der)
+    }
+
+    /// The one legitimate use: signing a token. Never logged, never echoed.
+    fn signing_key(&self) -> EncodingKey {
+        EncodingKey::from_ed_der(&self.0)
+    }
+
+    /// The public half this key signs under, as the sixty-four lowercase hex
+    /// characters `TAM_ENTITLEMENT_PUBLIC_KEY` carries.
+    ///
+    /// Asked once at start-up, and it answers a different question from "can
+    /// these bytes sign". `jsonwebtoken` signs through
+    /// `Ed25519KeyPair::from_pkcs8_maybe_unchecked`, the constructor that
+    /// deliberately skips the consistency check between the private seed and the
+    /// public key embedded in the DER, so a successful signature proves only that
+    /// *a* signature came out — never that it is the one the installed base
+    /// verifies. `from_pkcs8` below is the checked constructor, and the hex it
+    /// yields is what an operator compares against the repository variable.
+    ///
+    /// The failure this closes is silent otherwise: a restored backup or a
+    /// half-finished rotation puts the wrong pair at the key path, every client
+    /// fails verification, and every gate closes on the next check-in with
+    /// nothing anywhere distinguishing it from a healthy deployment.
+    pub fn public_key_hex(&self) -> Result<String, String> {
+        use core::fmt::Write as _;
+        let pair =
+            ring::signature::Ed25519KeyPair::from_pkcs8(&self.0).map_err(|why| why.to_string())?;
+        let mut hex = String::with_capacity(PUBLIC_KEY_HEX_CHARS);
+        for byte in ring::signature::KeyPair::public_key(&pair).as_ref() {
+            // infallible on String; the Result is the trait's, not the writer's
+            let _unused: core::fmt::Result = write!(hex, "{byte:02x}");
+        }
+        Ok(hex)
+    }
+}
+
+impl core::fmt::Debug for EntitlementKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("EntitlementKey(redacted)")
+    }
+}
 
 fn validation(message: &str) -> APIError {
     APIError::new(
@@ -142,6 +223,16 @@ pub struct DevicesView {
 pub struct HeartbeatView {
     pub revoked: bool,
     pub revoked_at: Option<Timestamp>,
+    /// The entitlement token this check-in grants, under decision D10.
+    ///
+    /// Skipped rather than serialised as null, so a reply that grants nothing
+    /// is byte-identical to what this route answered before the mint existed,
+    /// and `default` so a reply without it still deserialises. Neither this
+    /// type nor the desktop client's own reply type denies unknown fields,
+    /// which is what let the field be added at all without stranding the
+    /// published 0.1.3 client: each end ignores what the other added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entitlement: Option<String>,
 }
 
 /// Whether we have asked a device to wipe and have not heard from it since.
@@ -332,15 +423,68 @@ pub(crate) async fn heartbeat(
         .iter()
         .map(reported)
         .collect::<Result<Vec<_>, APIError>>()?;
+    let now = (state.wall)();
     let beat = DeviceRepo::new(state.pool.clone())
-        .heartbeat(context.org, device, &sessions, (state.wall)())
+        .heartbeat(context.org, device, &sessions, now)
         .await
         .map_err(|error| state.internal(&error.to_string()))?
         .ok_or_else(missing)?;
+    // A signed-out device is granted nothing, so a client that ignored
+    // `revoked` still gets no entitlement out of the same answer.
+    let entitlement = if beat.revoked() {
+        None
+    } else {
+        mint_entitlement(&state, context.org, device, now).await?
+    };
     Ok(Json(HeartbeatView {
         revoked: beat.revoked(),
         revoked_at: beat.revoked_at,
+        entitlement,
     }))
+}
+
+/// The entitlement this check-in grants, or none.
+///
+/// Decision D10 in full: Postgres decides and this only transports the
+/// decision. The grant set is most of the work claim's own predicate asked as a
+/// question rather than embedded in a claim — a registered unrevoked device, a
+/// plan that has not lapsed past the grace, a linked connection, and no halt
+/// over the marketplace — and it is a superset of what the claim will serve
+/// rather than an equal set, because the connected-session and per-item
+/// conditions are deliberately left out. Over-approximating is the safe
+/// direction for a gate that can only refuse: too wide costs one refused claim,
+/// too narrow stops an entitled seller working. `DeviceRepo::entitled_marketplaces`
+/// carries the full reasoning.
+///
+/// Every reason to grant nothing answers `None` rather than an error, and the
+/// device reads that as a closed gate. A heartbeat's first job is delivering a
+/// revocation, so a deployment with no signing key, a lapsed plan and a halted
+/// fleet all still get their answer rather than a fault.
+async fn mint_entitlement(
+    state: &AppState,
+    org: OrgId,
+    device: &str,
+    now: Timestamp,
+) -> Result<Option<String>, APIError> {
+    let Some(key) = state.config.entitlement_key.as_ref() else {
+        return Ok(None);
+    };
+    let marketplaces = DeviceRepo::new(state.pool.clone())
+        .entitled_marketplaces(org, device, ENTITLEMENT_GRACE_HOURS)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    if marketplaces.is_empty() {
+        return Ok(None);
+    }
+    let claims = Claims::mint(
+        org.0.to_hyphenated(),
+        device.to_owned(),
+        marketplaces,
+        now.0.div_euclid(MILLIS_PER_SEC),
+    );
+    encode(&Header::new(Algorithm::EdDSA), &claims, &key.signing_key())
+        .map(Some)
+        .map_err(|error| state.internal(&format!("the entitlement token did not sign: {error}")))
 }
 
 pub(crate) async fn list_devices(
@@ -397,6 +541,48 @@ mod tests {
             account_label: None,
             status: status.to_owned(),
         }
+    }
+
+    #[test]
+    fn the_public_half_is_derived_from_the_pair_rather_than_from_a_signature() {
+        use core::fmt::Write as _;
+        let random = ring::rand::SystemRandom::new();
+        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&random)
+            .expect("the test key generates");
+        let pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
+            .expect("the generated key parses");
+        let mut expected = String::new();
+        for byte in ring::signature::KeyPair::public_key(&pair).as_ref() {
+            let _unused: core::fmt::Result = write!(expected, "{byte:02x}");
+        }
+
+        let key = super::EntitlementKey::new(pkcs8.as_ref().to_vec());
+        assert_eq!(
+            key.public_key_hex().as_deref(),
+            Ok(expected.as_str()),
+            "the operator compares this against the fleet's repository variable, so it must be \
+             the public half of this very pair"
+        );
+        assert_eq!(expected.len(), 64, "sixty-four lowercase hex characters");
+
+        let nonsense = super::EntitlementKey::new(vec![0x30, 0x00, 0x01]);
+        assert!(
+            nonsense.public_key_hex().is_err(),
+            "and a file that is not a key pair is a start-up fault, not a running server that \
+             mints tokens nobody can verify"
+        );
+    }
+
+    #[test]
+    fn a_signing_key_cannot_reach_a_log_line() {
+        let key = super::EntitlementKey::new(vec![0x11, 0x22, 0x33, 0x44]);
+        let printed = format!("{key:?}");
+        assert_eq!(printed, "EntitlementKey(redacted)");
+        assert!(
+            !printed.contains("11") && !printed.contains("22"),
+            "the key's own bytes must not survive a Debug render, which is what a \
+             configuration dump would print: {printed}"
+        );
     }
 
     #[test]

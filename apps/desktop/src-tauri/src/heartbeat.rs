@@ -20,10 +20,17 @@
 //! marketplace cookies until the marketplace expires them. Nothing here can do
 //! better, because the sessions are on this machine and never on the server.
 //!
-//! There is no wire implementation in this slice. [`ControlPlane`] is the seam,
-//! exactly as [`crate::scheduler::WorkSource`] is for work, and its only
-//! implementation is [`Offline`], which reaches nothing. The crate has no HTTP
-//! client and adding one is a founder-gated dependency decision.
+//! [`ControlPlane`] is the seam, exactly as [`crate::scheduler::WorkSource`] is
+//! for work. [`Offline`] reaches nothing and is what a build with no configured
+//! transport gets; [`crate::control_plane::HttpControlPlane`] is the wire
+//! implementation, added on 2026-09-03 with the founder-disclosed `reqwest`
+//! edge.
+//!
+//! The answer also carries the entitlement. The server mints a token per
+//! check-in under D10, this module verifies it against the key compiled into
+//! the binary and installs the gate, and an answer with no token closes that
+//! gate rather than leaving the last one standing — which is what keeps a
+//! lapsed subscription to one revalidation window instead of one grace window.
 
 use core::future::Future;
 use core::pin::Pin;
@@ -31,7 +38,7 @@ use core::pin::Pin;
 use tam_types::{Marketplace, Timestamp, TransportClass};
 
 use crate::device::{DeviceId, DeviceIdentity};
-use crate::entitlement::EntitlementGate;
+use crate::entitlement::{Entitlement, EntitlementGate, PUBLIC_KEY_BYTES};
 use crate::scheduler::{Readiness, Scheduler, TickReport, WorkSource};
 use crate::session::{SessionStore, StoreError};
 use crate::state::DesktopState;
@@ -99,11 +106,22 @@ pub struct SessionReport {
 }
 
 /// What a heartbeat answered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckIn {
     /// The seller signed this device out from the console. Everything stored
     /// here is to be forgotten.
     pub revoked: bool,
+    /// The entitlement token this check-in was granted, unverified: it is a
+    /// string off the wire until [`check_in`] has checked it against the key
+    /// this build carries.
+    ///
+    /// Absent means the server minted none — a lapsed plan, a halt, a revoked
+    /// device, or a deployment with no signing key — and the device treats
+    /// that as no entitlement at all. It is deliberately not an error: a
+    /// heartbeat's first job is delivering revocation, and a device that
+    /// refused the whole answer for want of a token would stop learning it had
+    /// been signed out.
+    pub entitlement: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,8 +174,8 @@ pub trait ControlPlane: Send + Sync {
     ) -> PlaneFuture<'a, CheckIn>;
 }
 
-/// The only implementation in this slice: a control plane that reaches
-/// nothing.
+/// The control plane a build with no configured transport gets: one that
+/// reaches nothing.
 ///
 /// Deliberately an error rather than a silent success. A device that believed
 /// it had checked in would never learn it had been revoked, which is the exact
@@ -262,11 +280,49 @@ pub async fn check_in(
         }
     };
     if answer.revoked {
+        // Revocation wins over any token in the same answer. `wipe` closes the
+        // gate, and installing an entitlement after it would hand a signed-out
+        // device permission the seller has just withdrawn.
         wipe(state).await?;
+    } else {
+        state
+            .set_gate(gate_for(
+                &state.device().id,
+                state.verifying_keys(),
+                &answer,
+            ))
+            .await;
     }
     state.set_signed_in(true);
     state.set_revoked(answer.revoked);
     Ok(answer)
+}
+
+/// The gate an answer installs.
+///
+/// A token that verifies opens the gate for exactly the marketplaces it names.
+/// Everything else closes it: a token this build has no key for, one minted for
+/// another machine, a malformed one, and — the case that matters most — an
+/// answer carrying none at all. A withheld token has to replace the one being
+/// held rather than leave it standing, because leaving it would run the grace
+/// window from the last good token and turn a lapsed plan into twenty-five
+/// hours of further work instead of one.
+///
+/// A rejected token and an absent one are not told apart, and the seller sees
+/// the same thing for both: the next tick refuses every marketplace with
+/// [`crate::state::BlockReason::NotEntitled`]. That is not lossy — both mean
+/// this device may not work — and the device cannot tell a key rotation from a
+/// forgery in any case.
+fn gate_for(
+    device: &DeviceId,
+    verifying_keys: &[[u8; PUBLIC_KEY_BYTES]],
+    answer: &CheckIn,
+) -> EntitlementGate {
+    answer
+        .entitlement
+        .as_deref()
+        .and_then(|token| Entitlement::verify(token, verifying_keys, device).ok())
+        .map_or_else(EntitlementGate::closed, EntitlementGate::holding)
 }
 
 /// Registers this device and immediately checks in, which is what first run
@@ -346,6 +402,8 @@ mod tests {
         Offline, PlaneFuture, SessionReport, SessionState,
     };
     use crate::device::{DeviceId, DeviceIdentity};
+    use crate::entitlement::testing::{at, claims, mint, test_key, TestKey, GRACE, NOW, VALIDITY};
+    use crate::entitlement::EntitlementGate;
     use crate::session::memory::MemorySessionStore;
     use crate::session::{Cookie, CookieJar, SessionRecord, SessionStore};
     use crate::state::DesktopState;
@@ -381,6 +439,7 @@ mod tests {
     /// last report so a test can assert what actually left the device.
     struct Fake {
         revoked: bool,
+        entitlement: Option<String>,
         registrations: AtomicUsize,
         beats: AtomicUsize,
         last: tokio::sync::Mutex<Vec<SessionReport>>,
@@ -390,9 +449,18 @@ mod tests {
         fn new(revoked: bool) -> Self {
             Self {
                 revoked,
+                entitlement: None,
                 registrations: AtomicUsize::new(0),
                 beats: AtomicUsize::new(0),
                 last: tokio::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        /// The same plane, answering with a token as well.
+        fn granting(token: String) -> Self {
+            Self {
+                entitlement: Some(token),
+                ..Self::new(false)
             }
         }
 
@@ -418,9 +486,13 @@ mod tests {
         ) -> PlaneFuture<'a, CheckIn> {
             self.beats.fetch_add(1, Ordering::SeqCst);
             let revoked = self.revoked;
+            let entitlement = self.entitlement.clone();
             Box::pin(async move {
                 *self.last.lock().await = sessions.to_vec();
-                Ok(CheckIn { revoked })
+                Ok(CheckIn {
+                    revoked,
+                    entitlement,
+                })
             })
         }
     }
@@ -631,6 +703,163 @@ mod tests {
                 .is_some(),
             "and it must not wipe on a failure to reach the server, which would make \
              every offline period a disconnect"
+        );
+    }
+
+    // ------------------------------------------------------------ D10's token
+
+    /// A state that verifies against `key`, and a plane granting a token this
+    /// device, signed with it. Driven through the real `check_in` rather than
+    /// at the verifier's own seam, because the wiring is what these assert.
+    fn granted(key: &TestKey, marketplaces: Vec<Marketplace>) -> (DesktopState, Fake) {
+        let granted = claims(NOW, marketplaces);
+        let state = DesktopState::with_verifying_keys(
+            identity(),
+            Arc::new(MemorySessionStore::new()),
+            vec![key.public],
+        );
+        (state, Fake::granting(mint(key, &granted)))
+    }
+
+    fn verifying_against(key: &TestKey) -> DesktopState {
+        DesktopState::with_verifying_keys(
+            identity(),
+            Arc::new(MemorySessionStore::new()),
+            vec![key.public],
+        )
+    }
+
+    #[tokio::test]
+    async fn a_verified_token_opens_the_gate_for_exactly_the_marketplaces_it_names() {
+        let key = test_key();
+        let (state, plane) = granted(&key, vec![Marketplace::Tpt]);
+
+        check_in(&state, &plane).await.expect("the check-in lands");
+
+        let gate = state.gate().await;
+        assert!(gate.may_work(Marketplace::Tpt, at(NOW)));
+        assert!(
+            !gate.may_work(Marketplace::Tes, at(NOW)),
+            "a marketplace the token does not name stays refused, which is how one \
+             marketplace is revoked across the installed fleet without an update"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_installed_gate_carries_d11s_grace_window() {
+        let key = test_key();
+        let (state, plane) = granted(&key, vec![Marketplace::Tpt]);
+
+        check_in(&state, &plane).await.expect("the check-in lands");
+
+        let gate = state.gate().await;
+        assert!(
+            gate.may_work(Marketplace::Tpt, at(NOW + VALIDITY + GRACE - 1)),
+            "inside the grace the seller keeps working while our server is unreachable"
+        );
+        assert!(
+            !gate.may_work(Marketplace::Tpt, at(NOW + VALIDITY + GRACE + 1)),
+            "past it the gate fails closed, which is the kill-switch latency the founder \
+             commits to publicly"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_minted_for_another_machine_leaves_the_gate_closed() {
+        let key = test_key();
+        let mut elsewhere = claims(NOW, vec![Marketplace::Tpt]);
+        elsewhere.device = "ffffffffffffffffffffffffffffffff".to_owned();
+        let state = verifying_against(&key);
+
+        check_in(&state, &Fake::granting(mint(&key, &elsewhere)))
+            .await
+            .expect("the check-in lands");
+
+        assert_eq!(
+            state.gate().await,
+            EntitlementGate::closed(),
+            "a token copied to a second machine must not work there"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_this_build_has_no_key_for_leaves_the_gate_closed() {
+        let (signer, verifier) = (test_key(), test_key());
+        let state = verifying_against(&verifier);
+        let token = mint(&signer, &claims(NOW, vec![Marketplace::Tpt]));
+
+        check_in(&state, &Fake::granting(token))
+            .await
+            .expect("the check-in lands");
+
+        assert_eq!(
+            state.gate().await,
+            EntitlementGate::closed(),
+            "a token signed by a key this build does not carry is refused, not read"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_with_no_token_closes_a_gate_that_was_open() {
+        let key = test_key();
+        let (state, granting) = granted(&key, vec![Marketplace::Tpt]);
+        check_in(&state, &granting)
+            .await
+            .expect("the first check-in lands");
+        assert!(state.gate().await.may_work(Marketplace::Tpt, at(NOW)));
+
+        check_in(&state, &Fake::new(false))
+            .await
+            .expect("the second check-in lands");
+
+        assert_eq!(
+            state.gate().await,
+            EntitlementGate::closed(),
+            "a withheld token must replace the one being held: leaving it standing would run \
+             the grace window from the last good token and turn a lapsed plan into \
+             twenty-five further hours of work rather than one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_check_in_that_never_reached_the_server_leaves_an_open_gate_open() {
+        let key = test_key();
+        let (state, granting) = granted(&key, vec![Marketplace::Tpt]);
+        check_in(&state, &granting)
+            .await
+            .expect("the first check-in lands");
+
+        check_in(&state, &Offline)
+            .await
+            .expect_err("there is no transport to reach");
+
+        assert!(
+            state.gate().await.may_work(Marketplace::Tpt, at(NOW)),
+            "an offline period is not a lapse, and D11's grace window exists precisely so a \
+             seller keeps working through one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revoked_answer_closes_the_gate_even_when_it_carries_a_valid_token() {
+        let key = test_key();
+        let state = verifying_against(&key);
+        let token = mint(&key, &claims(NOW, vec![Marketplace::Tpt]));
+
+        check_in(
+            &state,
+            &Fake {
+                revoked: true,
+                ..Fake::granting(token)
+            },
+        )
+        .await
+        .expect("the check-in lands");
+
+        assert_eq!(
+            state.gate().await,
+            EntitlementGate::closed(),
+            "the sign-out the seller performed wins over any grant riding in the same answer"
         );
     }
 }

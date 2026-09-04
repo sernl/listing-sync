@@ -321,6 +321,78 @@ impl DeviceRepo {
         Ok(stands)
     }
 
+    /// The marketplaces this device may be granted right now, as decision D10's
+    /// entitlement token names them.
+    ///
+    /// The work claim's own predicate asked as a question rather than embedded
+    /// in a claim, and deliberately most of the same predicate. The grant set is
+    /// a *superset* of what the claim will actually serve, never an equal set:
+    /// the two conditions below are omitted, so a marketplace can be named here
+    /// and still have every item refused.
+    ///
+    /// The over-approximation is the safe direction, and which direction is safe
+    /// is a fact about this gate rather than a general principle. The gate on the
+    /// device can only ever refuse — it grants nothing the server has not already
+    /// decided, and the server re-decides on every claim — so a grant that is too
+    /// wide costs a device one refused claim, while a grant that is too narrow
+    /// stops a seller who is entitled from working at all. A later reader adding
+    /// a condition to the claim should therefore ask whether omitting it here
+    /// could ever make this set too *narrow*; if not, it does not belong here.
+    ///
+    /// Two of the claim's conditions are left out, each for a reason. A
+    /// reported `connected` session is not one, because the device knows its
+    /// own sessions better than its last report to us does, and refuses for
+    /// want of one on its own — under a different reason, which the seller acts
+    /// on differently; folding it in here would relabel "you are not logged in
+    /// to that marketplace" as "you are not entitled". The per-item conditions
+    /// are about an item rather than about entitlement.
+    ///
+    /// Halts are keyed on an inventory and a marketplace while the token's
+    /// vocabulary is a marketplace alone, so a marketplace is granted when any
+    /// of its inventories is unhalted. "Any" can never let a halted inventory
+    /// be worked, because the claim still refuses per inventory; "all" would
+    /// stop a seller working two healthy Tes inventories because a third was
+    /// halted.
+    pub async fn entitled_marketplaces(
+        &self,
+        org: OrgId,
+        device: &str,
+        grace_hours: i32,
+    ) -> Result<Vec<Marketplace>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let granted = sqlx::query_scalar!(
+            r#"SELECT DISTINCT mi.marketplace AS "marketplace!"
+               FROM marketplace_inventory mi
+               WHERE mi.transport_class = 'seller_device'
+                 AND EXISTS (SELECT 1 FROM device d
+                       WHERE d.org_id = $1 AND d.id = $2
+                         AND d.revoked_at IS NULL)
+                 AND NOT EXISTS (SELECT 1 FROM billing_subscription bs
+                       WHERE bs.org_id = $1
+                         AND bs.status NOT IN ('active', 'trialing')
+                         AND bs.current_period_end IS NOT NULL
+                         AND bs.current_period_end < now() - make_interval(hours => $3))
+                 AND NOT EXISTS (SELECT 1 FROM org_halt oh WHERE oh.org_id = $1)
+                 AND EXISTS (SELECT 1 FROM connection c
+                       WHERE c.org_id = $1 AND c.marketplace = mi.marketplace
+                         AND c.state = 'linked')
+                 AND NOT EXISTS (SELECT 1 FROM inventory_halt ih
+                       WHERE ih.inventory = mi.code AND ih.marketplace = mi.marketplace)
+                 AND NOT EXISTS (SELECT 1 FROM org_inventory_halt oih
+                       WHERE oih.org_id = $1 AND oih.inventory = mi.code
+                         AND oih.marketplace = mi.marketplace)
+               ORDER BY 1"#,
+            uuid_to_db(org.0),
+            device,
+            grace_hours,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        granted.iter().map(|raw| marketplace_from_db(raw)).collect()
+    }
+
     /// Every device this organisation has registered, revoked ones included: a
     /// device the seller signed out is part of the record, and hiding it would
     /// hide the one row whose wipe is still outstanding.

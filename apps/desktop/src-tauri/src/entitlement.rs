@@ -15,6 +15,12 @@
 //! `crates/tam-api/src/auth.rs` already verifies, and reuses the same crate,
 //! because a second signature stack is a second thing to get wrong.
 //!
+//! The claim set itself is not defined here. It lives in
+//! `tam_domain::entitlement`, which the server mints from and this module
+//! verifies into, so the wire contract has one definition and a field added on
+//! one side is a compile error on the other. What stays here is everything
+//! that is the device's own: the key it verifies against, and the gate.
+//!
 //! Validity and grace are D11: one hour of validity and a twenty-four hour
 //! grace, failing closed. Those numbers are the server's to set — they arrive
 //! in the token — and the kill-switch latency the founder commits to publicly
@@ -23,52 +29,56 @@
 use std::collections::HashSet;
 
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use serde::{Deserialize, Serialize};
 use tam_types::{Marketplace, Timestamp};
 
 use crate::device::DeviceId;
 
-/// The audience every accepted token must name, fixed rather than configured:
-/// a build able to widen this would accept a token minted for something else.
-pub const AUDIENCE: &str = "tam-desktop";
+/// The audience and issuer every accepted token must name, and the claim set
+/// itself, re-exported from the crate that defines them so this module's own
+/// surface is unchanged by where they live.
+pub use tam_domain::entitlement::{Claims, AUDIENCE, ISSUER};
 
-/// The issuer every accepted token must name.
-pub const ISSUER: &str = "tam-server";
+/// Ed25519 public keys are thirty-two bytes.
+pub const PUBLIC_KEY_BYTES: usize = 32;
 
-/// The Ed25519 public key the shipping binary verifies against, as its raw
-/// thirty-two bytes.
+/// The Ed25519 public keys this binary verifies against, as their raw bytes.
 ///
-/// All zeroes is a placeholder and is not a valid Ed25519 point, so a build
-/// carrying it verifies nothing and every gate answers no. That is the correct
-/// failure for a placeholder: the founder supplies the real key, and until
-/// then the client cannot be told it may work. See
-/// `docs/notes/design/desktop-client.md`.
-pub const EMBEDDED_PUBLIC_KEY: [u8; 32] = [0u8; 32];
+/// Written by `build.rs` from the `TAM_ENTITLEMENT_PUBLIC_KEY` environment
+/// variable: one key as sixty-four lowercase hex characters, or two separated by
+/// a comma. The release workflow supplies it from a repository variable and
+/// `just desktop-dev` from the development key pair.
+///
+/// Empty is what a build with no such variable gets, and empty is a state rather
+/// than a value: [`Entitlement::verify`] refuses everything against an empty set,
+/// so such a build verifies no token and every gate answers no. That distinction
+/// is load-bearing. This constant was once thirty-two zero bytes, described in
+/// four places as "not a valid Ed25519 point, so it verifies nothing"; those
+/// bytes are in fact a valid point of order four, and a signature can be forged
+/// against them with no private key at all — `S = 0` with `R` the identity
+/// encoding satisfies the cofactorless equation whenever the challenge is
+/// divisible by four, which is about one payload in four. The test below builds
+/// exactly that forgery.
+///
+/// Two keys exist for rotation. A release carrying the outgoing and the incoming
+/// key verifies tokens signed by either, which is what makes the ordering in
+/// `docs/notes/design/desktop-client.md` safe rather than merely conventional.
+///
+/// A release that forgot the variable is refused before it is built, by the
+/// desktop-release workflow's own guard.
+pub const EMBEDDED_PUBLIC_KEYS: &[[u8; PUBLIC_KEY_BYTES]] =
+    include!(concat!(env!("OUT_DIR"), "/entitlement_key.rs"));
 
-/// What the server signed. Nothing here is consulted for anything but the gate
-/// below; no claim names an organisation's permissions, because the server
-/// decides those from Postgres on every call.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Claims {
-    /// The account the device is entitled under.
-    pub sub: String,
-    pub aud: String,
-    pub iss: String,
-    /// The device this token was minted for, as [`crate::device::DeviceId`]
-    /// spells it. A token is useless on any other machine.
-    pub device: String,
-    /// The marketplaces this device may work. A marketplace absent here is
-    /// revoked, which is the per-marketplace kill switch.
-    pub marketplaces: Vec<Marketplace>,
-    /// When revalidation is due, in seconds since the epoch. Seconds because
-    /// that is what RFC 7519 fixes `exp` to be; `tam_types::Timestamp` is
-    /// milliseconds, and the two are converted at every comparison below
-    /// rather than assumed to agree.
-    pub exp: i64,
-    /// The last second at which work is still permitted without a successful
-    /// revalidation. Never earlier than `exp`.
-    pub grace: i64,
-}
+/// The all-zero key, refused wherever it appears.
+///
+/// Refused by name rather than by a small-order test: this is the value an unset
+/// variable, a shell that expanded one into zeroes, or the old placeholder
+/// produces, and it is the one an accident actually reaches. The wider class is
+/// a recorded residual rather than a covered case — the other seven small-order
+/// encodings are equally forgeable and are not checked here — and the reason
+/// that residual is acceptable is that no key reaches this constant except one a
+/// human deliberately set: `build.rs` refuses all-zero at the build boundary and
+/// emits an empty set for the absent case, so this check is the second of two.
+const SMALL_ORDER_KEY: [u8; PUBLIC_KEY_BYTES] = [0u8; PUBLIC_KEY_BYTES];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntitlementError {
@@ -103,15 +113,26 @@ pub struct Entitlement {
 }
 
 impl Entitlement {
-    /// Verifies a token against `public_key` and binds it to `device`.
+    /// Verifies a token against any of `public_keys` and binds it to `device`.
     ///
-    /// Expiry is decided by [`EntitlementGate::may_work`] rather than by the
-    /// JWT library, which is why `validate_exp` is off: a token past `exp` but
-    /// inside `grace` is still workable under D11, and the library would
-    /// refuse it outright and collapse the grace period to nothing.
+    /// An empty set refuses everything, which is what a build given no key is:
+    /// there is nothing to check a signature against, and a client that cannot
+    /// check one must not be told it may work.
+    ///
+    /// More than one key is a rotation in flight. A key is tried, and a
+    /// signature it does not verify moves on to the next; the first key whose
+    /// signature verifies decides the answer, so a token that verifies but names
+    /// another device is refused as [`EntitlementError::WrongDevice`] rather
+    /// than being retried under a key that would only reject it and lose the
+    /// reason.
+    ///
+    /// Expiry is decided by [`EntitlementGate::may_work`] rather than by the JWT
+    /// library, which is why `validate_exp` is off: a token past `exp` but inside
+    /// `grace` is still workable under D11, and the library would refuse it
+    /// outright and collapse the grace period to nothing.
     pub fn verify(
         token: &str,
-        public_key: &[u8],
+        public_keys: &[[u8; PUBLIC_KEY_BYTES]],
         device: &DeviceId,
     ) -> Result<Self, EntitlementError> {
         let mut validation = Validation::new(Algorithm::EdDSA);
@@ -121,10 +142,29 @@ impl Entitlement {
             HashSet::from(["exp".to_owned(), "aud".to_owned(), "iss".to_owned()]);
         validation.validate_exp = false;
 
-        let decoded = decode::<Claims>(token, &DecodingKey::from_ed_der(public_key), &validation)
-            .map_err(|why| EntitlementError::Rejected(why.to_string()))?;
-        let claims = decoded.claims;
+        let mut refusal = EntitlementError::Rejected(
+            "this build carries no entitlement key, so no token can verify".to_owned(),
+        );
+        for key in public_keys {
+            if key == &SMALL_ORDER_KEY {
+                refusal = EntitlementError::Rejected(
+                    "an all-zero entitlement key is a small-order point, against which a \
+                     signature can be forged without a private key"
+                        .to_owned(),
+                );
+                continue;
+            }
+            match decode::<Claims>(token, &DecodingKey::from_ed_der(key), &validation) {
+                Ok(decoded) => return Self::bind(decoded.claims, device),
+                Err(why) => refusal = EntitlementError::Rejected(why.to_string()),
+            }
+        }
+        Err(refusal)
+    }
 
+    /// What a verified signature still has to satisfy before it is an
+    /// entitlement: the right machine, and two deadlines the right way round.
+    fn bind(claims: Claims, device: &DeviceId) -> Result<Self, EntitlementError> {
         if claims.device != device.as_str() {
             return Err(EntitlementError::WrongDevice);
         }
@@ -205,32 +245,47 @@ const fn millis(seconds: i64) -> Option<i64> {
     seconds.checked_mul(1_000)
 }
 
+/// Key material and claim fixtures for this crate's tests.
+///
+/// Shared rather than duplicated per module: `heartbeat` exercises the same
+/// gate through a check-in, and two generators would eventually mint subtly
+/// different tokens and hide the difference in whichever module was not
+/// looked at.
 #[cfg(test)]
-mod tests {
-    use super::{Claims, Entitlement, EntitlementError, EntitlementGate, AUDIENCE, ISSUER};
+pub(crate) mod testing {
+    use super::Claims;
     use crate::device::DeviceId;
     use jsonwebtoken::{encode, EncodingKey, Header};
     use tam_types::{Marketplace, Timestamp};
 
     /// Seconds, because these are JWT claim values.
-    const NOW: i64 = 1_756_000_000;
-    /// D11's numbers: one hour of validity, twenty-four hours of grace.
-    const VALIDITY: i64 = 3_600;
-    const GRACE: i64 = 86_400;
+    pub(crate) const NOW: i64 = 1_756_000_000;
+    /// D11's numbers: one hour of validity, twenty-four hours of grace. Named
+    /// here as literals rather than read from `tam_domain`, so a test that
+    /// asserts on them is a check of the constants rather than a restatement.
+    pub(crate) const VALIDITY: i64 = 3_600;
+    pub(crate) const GRACE: i64 = 86_400;
 
     /// The same instant as a `Timestamp`, which counts milliseconds. The whole
     /// reason this helper exists rather than being inlined: the two units are
     /// one careless comparison apart, and `tam-api` already had to convert.
-    const fn at(seconds: i64) -> Timestamp {
+    pub(crate) const fn at(seconds: i64) -> Timestamp {
         Timestamp(seconds * 1_000)
     }
 
-    struct TestKey {
-        encoding: EncodingKey,
-        public: Vec<u8>,
+    pub(crate) struct TestKey {
+        pub(crate) encoding: EncodingKey,
+        pub(crate) public: [u8; super::PUBLIC_KEY_BYTES],
     }
 
-    fn test_key() -> TestKey {
+    impl TestKey {
+        /// This key alone, as the one-element set a verifier takes.
+        pub(crate) fn only(&self) -> [[u8; super::PUBLIC_KEY_BYTES]; 1] {
+            [self.public]
+        }
+    }
+
+    pub(crate) fn test_key() -> TestKey {
         let random = ring::rand::SystemRandom::new();
         let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&random)
             .expect("the test key generates");
@@ -240,27 +295,56 @@ mod tests {
             encoding: EncodingKey::from_ed_der(pkcs8.as_ref()),
             public: ring::signature::KeyPair::public_key(&pair)
                 .as_ref()
-                .to_vec(),
+                .try_into()
+                .expect("an Ed25519 public key is thirty-two bytes"),
         }
     }
 
-    fn device() -> DeviceId {
+    /// Base64url without padding, which is what a JWS segment is.
+    ///
+    /// Hand-rolled because this crate has no base64 dependency and the only
+    /// thing that needs one is the forged signature the placeholder test
+    /// builds; a manifest edge for one test would be the wrong trade.
+    pub(crate) fn b64url(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let trio = [
+                usize::from(chunk[0]),
+                usize::from(chunk.get(1).copied().unwrap_or(0)),
+                usize::from(chunk.get(2).copied().unwrap_or(0)),
+            ];
+            let packed = (trio[0] << 16) | (trio[1] << 8) | trio[2];
+            let quantum = [
+                (packed >> 18) & 63,
+                (packed >> 12) & 63,
+                (packed >> 6) & 63,
+                packed & 63,
+            ];
+            for symbol in quantum.iter().take(chunk.len() + 1) {
+                out.push(char::from(ALPHABET[*symbol]));
+            }
+        }
+        out
+    }
+
+    pub(crate) fn device() -> DeviceId {
         DeviceId::from_raw("11112222333344445555666677778888")
     }
 
-    fn claims(issued_at: i64, marketplaces: Vec<Marketplace>) -> Claims {
-        Claims {
-            sub: "org-1".to_owned(),
-            aud: AUDIENCE.to_owned(),
-            iss: ISSUER.to_owned(),
-            device: device().as_str().to_owned(),
+    /// A well-formed claim set, built through the shared mint so a test can
+    /// never assert against arithmetic the server does not perform.
+    pub(crate) fn claims(issued_at: i64, marketplaces: Vec<Marketplace>) -> Claims {
+        Claims::mint(
+            "org-1".to_owned(),
+            device().as_str().to_owned(),
             marketplaces,
-            exp: issued_at + VALIDITY,
-            grace: issued_at + VALIDITY + GRACE,
-        }
+            issued_at,
+        )
     }
 
-    fn mint(key: &TestKey, claims: &Claims) -> String {
+    pub(crate) fn mint(key: &TestKey, claims: &Claims) -> String {
         encode(
             &Header::new(jsonwebtoken::Algorithm::EdDSA),
             claims,
@@ -268,11 +352,21 @@ mod tests {
         )
         .expect("the test token signs")
     }
+}
 
-    fn gate(key: &TestKey, claims: &Claims) -> EntitlementGate {
+#[cfg(test)]
+mod tests {
+    use super::testing::{
+        at, b64url, claims, device, mint, test_key, TestKey, GRACE, NOW, VALIDITY,
+    };
+    use super::{Entitlement, EntitlementError, EntitlementGate};
+    use crate::device::DeviceId;
+    use tam_types::Marketplace;
+
+    fn gate(key: &TestKey, claims: &super::Claims) -> EntitlementGate {
         let token = mint(key, claims);
         EntitlementGate::holding(
-            Entitlement::verify(&token, &key.public, &device()).expect("the token verifies"),
+            Entitlement::verify(&token, &key.only(), &device()).expect("the token verifies"),
         )
     }
 
@@ -323,7 +417,7 @@ mod tests {
     fn a_token_signed_by_the_wrong_key_does_not_verify() {
         let (signer, verifier) = (test_key(), test_key());
         let token = mint(&signer, &claims(NOW, vec![Marketplace::Tpt]));
-        let outcome = Entitlement::verify(&token, &verifier.public, &device());
+        let outcome = Entitlement::verify(&token, &verifier.only(), &device());
         assert!(
             matches!(outcome, Err(EntitlementError::Rejected(_))),
             "a token this build did not have the key for must be rejected, not read: {outcome:?}"
@@ -359,7 +453,7 @@ mod tests {
         let key = test_key();
         let token = mint(&key, &claims(NOW, vec![Marketplace::Tpt]));
         assert_eq!(
-            Entitlement::verify(&token, &key.public, &DeviceId::from_raw("ffff")),
+            Entitlement::verify(&token, &key.only(), &DeviceId::from_raw("ffff")),
             Err(EntitlementError::WrongDevice),
             "a token copied to a second machine must not work there"
         );
@@ -372,7 +466,7 @@ mod tests {
         malformed.grace = malformed.exp - 1;
         let token = mint(&key, &malformed);
         assert_eq!(
-            Entitlement::verify(&token, &key.public, &device()),
+            Entitlement::verify(&token, &key.only(), &device()),
             Err(EntitlementError::GraceBeforeExpiry),
             "a negative grace period is a malformed token, not a very short one"
         );
@@ -386,7 +480,7 @@ mod tests {
         let token = mint(&key, &foreign);
         assert!(
             matches!(
-                Entitlement::verify(&token, &key.public, &device()),
+                Entitlement::verify(&token, &key.only(), &device()),
                 Err(EntitlementError::Rejected(_))
             ),
             "an audience check is what stops a token minted elsewhere being replayed here"
@@ -394,13 +488,87 @@ mod tests {
     }
 
     #[test]
-    fn the_placeholder_key_verifies_nothing() {
+    fn a_build_given_no_key_refuses_an_honestly_signed_token() {
         let key = test_key();
         let token = mint(&key, &claims(NOW, vec![Marketplace::Tpt]));
         assert!(
-            Entitlement::verify(&token, &super::EMBEDDED_PUBLIC_KEY, &device()).is_err(),
-            "a build shipped before the founder supplies a key must refuse every token rather \
-             than accept any"
+            Entitlement::verify(&token, &[], &device()).is_err(),
+            "a build shipped before the founder supplies a key has nothing to check a \
+             signature against, and must refuse every token rather than accept any"
+        );
+    }
+
+    /// The forgery the all-zero key admits, built rather than described.
+    ///
+    /// All-zero decodes to a valid Ed25519 point of order four. Cofactorless
+    /// verification checks `[S]B = R + [k]A`; with `S = 0` and `R` the identity
+    /// encoding that reduces to `[k]A = identity`, which holds whenever the
+    /// challenge `k = H(R‖A‖M)` is divisible by four — about one payload in
+    /// four. No private key is involved at any point.
+    ///
+    /// The test proves the forgery is real before asserting we refuse it: if
+    /// `ring` ever stopped accepting it the first assertion would fail, and a
+    /// rejection test that could not tell "we refuse this" from "nothing could
+    /// have accepted it" is the vacuous kind this replaces.
+    #[test]
+    fn a_signature_forged_against_the_all_zero_key_is_refused() {
+        let scratch = test_key();
+        let mut forged = None;
+        for attempt in 0..64 {
+            let mut payload = claims(NOW, vec![Marketplace::Tpt, Marketplace::Tes]);
+            payload.sub = format!("forger-{attempt}");
+            let honest = mint(&scratch, &payload);
+            let signing_input = honest
+                .rsplit_once('.')
+                .map(|(head, _signature)| head.to_owned())
+                .expect("a JWS has three segments");
+            // R is the identity point's encoding, S is zero.
+            let mut signature = [0u8; 64];
+            signature[0] = 1;
+            if ring::signature::UnparsedPublicKey::new(
+                &ring::signature::ED25519,
+                super::SMALL_ORDER_KEY,
+            )
+            .verify(signing_input.as_bytes(), &signature)
+            .is_ok()
+            {
+                forged = Some(format!("{signing_input}.{}", b64url(&signature)));
+                break;
+            }
+        }
+        let token = forged.expect(
+            "one payload in four should satisfy the forgery; sixty-four attempts finding none \
+             would mean the construction no longer works and this test needs rewriting",
+        );
+
+        assert!(
+            Entitlement::verify(&token, &[super::SMALL_ORDER_KEY], &device()).is_err(),
+            "a token forged against the all-zero key must be refused; the signature itself \
+             verifies, which is exactly why the key has to be refused rather than trusted"
+        );
+        assert!(
+            Entitlement::verify(&token, &[], &device()).is_err(),
+            "and a build carrying no key at all refuses it too"
+        );
+    }
+
+    #[test]
+    fn a_rotation_set_verifies_a_token_signed_by_either_key() {
+        let (outgoing, incoming) = (test_key(), test_key());
+        let set = [outgoing.public, incoming.public];
+        for signer in [&outgoing, &incoming] {
+            let token = mint(signer, &claims(NOW, vec![Marketplace::Tpt]));
+            assert!(
+                Entitlement::verify(&token, &set, &device()).is_ok(),
+                "a release carrying both keys is what lets the fleet cross a rotation without \
+                 a window in which somebody's gate is closed"
+            );
+        }
+        let stranger = test_key();
+        let token = mint(&stranger, &claims(NOW, vec![Marketplace::Tpt]));
+        assert!(
+            Entitlement::verify(&token, &set, &device()).is_err(),
+            "and a third key is still refused: two accepted keys is a rotation, not a relaxation"
         );
     }
 }

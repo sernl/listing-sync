@@ -1,0 +1,15 @@
+[package]
+name    = "tam-entitlement-key"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The only generator of an Ed25519 key pair already in this tree, and the one
+# whose PKCS#8 output `jsonwebtoken::EncodingKey::from_ed_der` takes verbatim.
+# Already in the lock through `tam-api` and the desktop client; this adds a
+# member, not a package.
+ring = { version = "0.17", features = ["std"] }
+
+[lints]
+workspace = true

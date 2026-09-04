@@ -105,6 +105,12 @@ Turning the cache on is now a founder decision that has to answer for the latenc
 `report_of` walks the session store over the seller-device marketplaces and returns what the machine holds, as metadata: the marketplace, the account label the marketplace already showed the seller, and the status.
 Nothing in the report type can carry a cookie, for the same reason `SessionStatus` cannot, and a test asserts that neither a cookie name nor a value appears in the report's `Debug` output.
 
+Amended 2026-09-04: the check-in also carries decision D10's entitlement.
+`POST /v1/devices/{device}/heartbeat` answers an optional `entitlement` field holding a signed token, minted only when the deployment has a signing key, the device is not revoked, and `DeviceRepo::entitled_marketplaces` returns a non-empty set — the work claim's own predicate asked as a question rather than embedded in a claim.
+`check_in` verifies it against the key compiled into the binary and installs the gate; a token that does not verify, and an answer carrying none, both close it, which is what keeps a lapsed plan to one revalidation window rather than one grace window.
+A check-in that could not reach the server leaves the gate alone, for the same reason it wipes nothing: an offline period is not a lapse.
+The field is optional and skipped when absent, and neither `HeartbeatView` nor the client's own reply type denies unknown fields, so the published 0.1.3 client sees bytes identical to what it saw before.
+
 `check_in` reports, acts on the answer, and records the state.
 A revoked answer forgets every marketplace session through the existing `SessionStore` and closes the entitlement gate before it returns, so a caller that ignores the return value has still had the sessions removed.
 It forgets every marketplace rather than only the seller-device ones, because this is the removal and skipping a key on the strength of what we believe about its transport class would leave a stored session behind on the one path whose job is leaving none.

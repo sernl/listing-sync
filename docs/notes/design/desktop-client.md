@@ -89,11 +89,27 @@ Expiry is decided by the gate rather than by the JWT library, and `validate_exp`
 `EntitlementGate::may_work(marketplace, now)` fails closed by construction.
 No token is no, a marketplace the token does not name is no, and past the grace deadline is no.
 That is the whole of the client-side enforcement, and it is advisory: D10 keeps Postgres the decision-maker, the token only transports a decision Postgres already made, and the server re-checks on every control-plane call regardless.
-The per-marketplace grant set is the kill switch, and dropping one marketplace from it answers a cease-and-desist across the installed fleet within one revalidation window with no shipped update.
+The per-marketplace grant set is the kill switch, and dropping one marketplace from it answers a cease-and-desist with no shipped update.
 
-The compiled-in key, `entitlement::EMBEDDED_PUBLIC_KEY`, is thirty-two zero bytes.
-That is not a valid Ed25519 point, so a build carrying it verifies nothing and every gate answers no, which is the correct behaviour for a placeholder.
-A test asserts it.
+Two latencies follow, and which one applies depends on the device rather than on the switch.
+A device that is reaching us stops within one revalidation window, at most an hour, because its next check-in simply arrives without that marketplace in the grant set.
+A device that has gone dark stops at the grace deadline, at most validity plus grace, twenty-five hours, because that is the last instant its existing token permits work without a successful revalidation.
+The second is the number to commit to publicly: it is the one that holds without assuming the device cooperates.
+
+The claim set is not defined in this crate.
+It is `tam_domain::entitlement::Claims`, which `tam-api` mints from and `entitlement.rs` re-exports and verifies into, so the wire contract has one definition and a field added on one side is a compile error on the other rather than a token nobody reads.
+`Claims::mint` computes both deadlines from `ENTITLEMENT_TOKEN_VALIDITY_SECS` and `ENTITLEMENT_GRACE_HOURS` rather than from arguments, so no caller can mint itself a token of any length.
+
+`entitlement::EMBEDDED_PUBLIC_KEYS` is written by the crate's build script from the `TAM_ENTITLEMENT_PUBLIC_KEY` environment variable: one key as sixty-four lowercase hex characters, or two separated by a comma, each refused with a message if it is anything else, and an *empty set* when the variable is unset.
+Empty is a state rather than a value, and that distinction is load-bearing.
+This constant was thirty-two zero bytes until 2026-09-04, described in four places as "not a valid Ed25519 point, so it verifies nothing".
+That was false. All-zero decodes to a valid point of order four, and a signature can be forged against it with no private key at all: with `S = 0` and `R` the identity encoding, cofactorless verification holds whenever the challenge is divisible by four, which is about one payload in four.
+`ring` does not reject small-order public keys and `jsonwebtoken` calls it directly, so a build carrying that placeholder accepted forged tokens naming any device and any marketplace.
+The test now builds exactly that forgery, asserts `ring` accepts it, and asserts our verifier does not.
+An empty set refuses everything because there is nothing to check a signature against, which is what "this build has no key" should always have meant.
+The all-zero value is additionally refused by name at both the build boundary and the verifier; the other seven small-order encodings are not checked, and that residual is acceptable only because no key reaches the constant except one a human deliberately set.
+The variable comes from a repository variable in a release, from `.dev/entitlement.pub.hex` under `just desktop-dev`, and from nowhere in a plain `cargo build` — which is why `just check` and a fresh clone still compile.
+A `cfg` could not have made this decision: this workspace ships `debug-assertions = true` in release, so nothing in the build can tell production apart, which is the same reason `tam-server` takes `--disclose-internals` as a flag.
 
 ## The capability list
 
@@ -205,11 +221,13 @@ The only implementation of `WorkSource` is `NoWork`, which returns nothing to do
 The gate is consulted before the work source is reached rather than after, and a test asserts the work source is never called for a marketplace the gate refuses, because a gate that refuses after the call has gone out is not a gate.
 The engine driver split that gives `WorkSource` a real implementation is a separate stream.
 
-The entitlement gate always answers no in a shipped build today, because nothing sets it: there is no check-in, the server that mints tokens is a later stream, and the compiled-in key is a placeholder.
-Clock-tamper detection is not implemented; the gate reads the wall clock and believes it.
+Amended 2026-09-04: the entitlement gate is wired.
+The server mints a token per check-in, `heartbeat::check_in` verifies it and installs the gate, and a build supplied with `TAM_ENTITLEMENT_PUBLIC_KEY` verifies real tokens.
+What remains true is the shape of the placeholder's behaviour, though not the old reason for it: a build given no such variable carries an empty key set, so it verifies no token and every gate answers no.
+Clock-tamper detection is still not implemented; the gate reads the wall clock and believes it.
 
-The updater is configured but cannot update anything.
-Its endpoint is the CrabNebula format with literal `ORG` and `APP` placeholders, its public key is the string `PLACEHOLDER_FOUNDER_SUPPLIES_THIS`, and `createUpdaterArtifacts` is `false`.
+Amended 2026-09-04: the updater's own placeholders are gone.
+`tauri.conf.json` carries a real minisign public key and the CrabNebula endpoint names the application, `createUpdaterArtifacts` is set to `true` by the release job's configuration overlay rather than in the base file, and `.github/scripts/release-check.sh` refuses a tag that reintroduces either placeholder.
 The icons are a generated placeholder set, not artwork.
 macOS, Android and iOS are not built; D2 defers them, and the mobile targets additionally need a `crate-type` change for the mobile entry point.
 Corrected 2026-09-03: this sentence also claimed a hand-written Tauri plugin for Android cookie access, and that is not true of the versions this tree resolves.
@@ -220,18 +238,34 @@ What is genuinely absent there is `cookies()`, the all-URLs read, which returns 
 ## What the founder must supply
 
 Four things gate a real release, and none of them can be inferred.
+Three are supplied as of 2026-09-04; each is left in the list with its state, because what a release needs is the question this section answers and a shortened list would not answer it.
 
 The updater signing keypair, generated with `cargo tauri signer generate`.
 Its public half replaces `plugins.updater.pubkey` in `tauri.conf.json` and its private half becomes `TAURI_SIGNING_PRIVATE_KEY` in CI; `createUpdaterArtifacts` then becomes `true`.
 This key is irreplaceable: lose it and the installed base can never be updated again.
+Supplied: the config carries a real key and the release job sets the flag through its overlay.
 
 The CrabNebula organisation and application slugs, which replace `ORG` and `APP` in the updater endpoint.
+Supplied, as the `CN_APPLICATION` repository variable the workflow refuses to run without.
 
 The Windows code-signing certificate, roughly $120 a year through Azure Trusted Signing, capped at one year since December 2025, with EV certificates no longer bypassing SmartScreen.
 Signing runs on the Windows runner, not here.
+Outstanding: the release builds unsigned and warns when `AZURE_CLIENT_ID` is unset.
 
-The Ed25519 entitlement keypair.
-Its public half, thirty-two raw bytes, replaces `EMBEDDED_PUBLIC_KEY`; its private half signs tokens on the server.
+The Ed25519 entitlement keypair, minted with `just entitlement-key <path>`.
+Its public half is sixty-four lowercase hex characters and becomes the `TAM_ENTITLEMENT_PUBLIC_KEY` repository variable, which the crate's build script decodes into `EMBEDDED_PUBLIC_KEYS`; its private half is the PKCS#8 DER the server reads through `tam-server --entitlement-key-path`, and it never enters this repository or CI.
+Outstanding: the release workflow's verify job refuses a tag while the variable is unset, so this cannot be forgotten silently.
+
+Unlike the updater key it is replaceable, and the rotation is only lossless because a build can carry two keys.
+Set the variable to `<outgoing>,<incoming>` and release; wait for that build to reach the fleet; switch the server to the incoming key; drop the outgoing one from the variable in the next release.
+Every step of that order is safe in both directions, because throughout it every installed client accepts tokens signed by whichever key the server is currently using.
+The single-key ordering this note recommended until 2026-09-04 was not safe: it said to release the new-key client first and switch the server later, which strands exactly the sellers who update fastest — a client carrying only the new key fails to verify the old-key token it receives an hour later, and `gate_for` closes its gate immediately rather than at `exp`, for the whole length of the wait.
+Switching the server first has the mirror-image failure and strands the slow updaters instead. With one embedded key there is no order that strands nobody, which is why there are now two.
+
+The production invocation therefore also carries `--entitlement-public-key <hex>`, naming the public half the fleet is verifying against.
+It is optional and it refuses to start on a mismatch.
+Without it, a restored backup or a half-finished rotation that puts the wrong pair at the key path is silent: every token still signs, every client then fails to verify, and every seller's gate closes on their next check-in with nothing in any log distinguishing that from a healthy deployment.
+The server prints the public half it is actually signing under on every start, checked or not, so the comparison can be made by eye.
 
 ## Four findings on the dependency policy, and the decisions taken
 

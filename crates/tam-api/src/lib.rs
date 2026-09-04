@@ -68,6 +68,10 @@ pub struct Config {
     /// authenticates the billing webhook. Absent, that route answers 503:
     /// there is no unauthenticated mode of it to fall back to.
     pub paddle_webhook_secret: Option<billing::WebhookSecret>,
+    /// The Ed25519 signing key for the entitlement tokens the heartbeat mints
+    /// under decision D10. Absent in development, and the heartbeat then
+    /// answers without a token: the client gate reads that as closed.
+    pub entitlement_key: Option<devices::EntitlementKey>,
     /// When the standards crawl that vouches for TPT's node ids was taken.
     ///
     /// A node id is served only where a capture inside this window stands

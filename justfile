@@ -7,6 +7,11 @@ export SQLX_OFFLINE := "true"
 # Local-dev Postgres on both provisioning paths; dev-only credential
 db_url := "postgres://tam_app:tam_dev_password@127.0.0.1:5433/tam"
 
+# The development entitlement key pair. Under `.dev/`, which is gitignored:
+# the private half is generated per machine and never committed.
+dev_entitlement_key := ".dev/entitlement.pkcs8"
+dev_entitlement_public := ".dev/entitlement.pub.hex"
+
 # The identity role, whose search_path is auth and whose grants stop at that
 # schema; dev-only credential, matching db/init/02-auth-role.sql
 auth_db_url := "postgres://tam_auth:tam_auth_dev@127.0.0.1:5433/tam"
@@ -331,6 +336,18 @@ landing-dev:
 #
 # The desktop client against a running `just web-dev`
 desktop-dev:
+    #!/usr/bin/env sh
+    set -eu
+    # Without this the build carries no entitlement key at all, so it verifies
+    # no token, every gate answers no, and no scheduled work ever runs against a
+    # local server.
+    if [ -f '{{dev_entitlement_public}}' ]; then
+        TAM_ENTITLEMENT_PUBLIC_KEY="$(cat '{{dev_entitlement_public}}')"
+        export TAM_ENTITLEMENT_PUBLIC_KEY
+    else
+        echo "no development entitlement key: this build verifies nothing and every gate"
+        echo "  answers no. Mint one, once per machine:  just dev-entitlement-key"
+    fi
     cd apps/desktop && cargo tauri dev
 
 # Windows is the shipping surface; this is the bundle that needs no
@@ -468,6 +485,44 @@ auth-migrate: db-wait
             -c "INSERT INTO auth.applied_migration (name) VALUES ('$name')"
     done
 
+# The Ed25519 key pair decision D10's entitlement token is signed and verified
+# with. Run once by the founder, on a trusted machine, and never in CI: the
+# private half is a production secret this repository never sees.
+#
+# The public half it prints becomes the TAM_ENTITLEMENT_PUBLIC_KEY repository
+# variable a desktop release embeds; the private half goes to the server host
+# as `tam-server --entitlement-key-path`.
+#
+# Mint the production entitlement key pair (founder, once)
+entitlement-key path:
+    cargo run -q -p tam-entitlement-key -- '{{path}}'
+
+# The same pair for development, once per machine, into a gitignored directory.
+#
+# Generated rather than committed, following `auth-env` rather than the dev
+# database password: a committed private key would be the first in this tree
+# and would buy nothing, since a development token opens a gate only on a
+# build that carries the matching development public half.
+#
+# Mint the development entitlement key pair (once per machine)
+dev-entitlement-key:
+    #!/usr/bin/env sh
+    set -eu
+    mkdir -p "$(dirname '{{dev_entitlement_key}}')"
+    if [ -f '{{dev_entitlement_key}}' ]; then
+        echo 'a development entitlement key already exists at {{dev_entitlement_key}}'
+        echo "its public half: $(cat '{{dev_entitlement_public}}')"
+        exit 0
+    fi
+    cargo run -q -p tam-entitlement-key -- '{{dev_entitlement_key}}' \
+        | sed -n 's/^public key (hex): //p' > '{{dev_entitlement_public}}'
+    if [ ! -s '{{dev_entitlement_public}}' ]; then
+        echo 'the key minted but printed no public half; refusing a half-configured pair' >&2
+        exit 1
+    fi
+    echo "development entitlement key at {{dev_entitlement_key}}"
+    echo "its public half: $(cat '{{dev_entitlement_public}}')"
+
 # The identity service: better-auth over /api/auth/*, nothing else
 auth-dev: auth-env
     cd auth && npm run dev
@@ -480,8 +535,17 @@ dev-session: db-wait
 
 # Full local environment: database, migrations, API server
 dev: db-up db-wait db-migrate
-    @echo "need a login? in another terminal:  just dev-session"
-    cargo run -p tam-server -- {{db_url}}
+    #!/usr/bin/env sh
+    set -eu
+    echo "need a login? in another terminal:  just dev-session"
+    set -- '{{db_url}}'
+    if [ -f "{{dev_entitlement_key}}" ]; then
+        set -- "$@" --entitlement-key-path "{{dev_entitlement_key}}"
+    else
+        echo "no development entitlement key: every desktop gate stays closed"
+        echo "  mint one, once per machine:  just dev-entitlement-key"
+    fi
+    cargo run -p tam-server -- "$@"
 
 # The whole environment in one terminal: database, both migration sets, an
 # environment file if the machine has none, then the API server, the identity
@@ -503,8 +567,14 @@ dev-all: db-up db-wait db-migrate auth-migrate auth-env
     # cargo's and npm's own children rather than orphaning them; the trap is
     # cleared first so the signal it sends cannot re-enter it.
     trap 'trap - INT TERM; kill 0' INT TERM
-    cargo run -p tam-server -- '{{db_url}}' \
-        --auth-issuer "$issuer" --auth-jwks-url "$issuer/api/auth/jwks" &
+    set -- '{{db_url}}' --auth-issuer "$issuer" --auth-jwks-url "$issuer/api/auth/jwks"
+    if [ -f "{{dev_entitlement_key}}" ]; then
+        set -- "$@" --entitlement-key-path "{{dev_entitlement_key}}"
+    else
+        echo "no development entitlement key: every desktop gate stays closed"
+        echo "  mint one, once per machine:  just dev-entitlement-key"
+    fi
+    cargo run -p tam-server -- "$@" &
     (cd auth && npm run dev) &
     (cd web && npm run dev) &
     wait
