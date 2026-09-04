@@ -633,6 +633,11 @@ in
         # work today by module ordering alone; pinning it means a later
         # contributor cannot reorder this into a broken deployment.
         authentication = lib.mkBefore "local ${cfg.database.name} all peer map=teachouse";
+        # The rule above is scoped to this database and matches every user, so
+        # being first it shadows the cluster's `local all postgres` rule for this
+        # database alone. The map therefore admits the superuser too: the
+        # provisioning oneshot runs as postgres because `ALTER DATABASE … OWNER`
+        # needs one, and `services.postgresqlBackup` runs `pg_dump` as postgres.
         identMap = ''
           teachouse ${apiUser}     tam_app
           teachouse ${apiUser}     tam_engine
@@ -641,6 +646,7 @@ in
           teachouse ${authUser}    tam_auth
           teachouse ${migrateUser} tam_app
           teachouse ${migrateUser} tam_auth
+          teachouse postgres       postgres
         '';
       })
     ];
