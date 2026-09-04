@@ -254,6 +254,73 @@ impl DeviceRepo {
         }))
     }
 
+    /// Whether this device is one the server will still answer, and holds a
+    /// connected session for this marketplace.
+    ///
+    /// The same two conditions the work claim applies, asked as a question
+    /// rather than embedded in a claim: the device is not revoked, and it
+    /// reports that marketplace `connected` rather than merely recorded. A
+    /// read the device branch needs because a capture is a marketplace request
+    /// like any other and must not be handed to a machine that cannot make it.
+    pub async fn holds_connected_session(
+        &self,
+        org: OrgId,
+        device: &str,
+        marketplace: Marketplace,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let held = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                 SELECT 1 FROM device_marketplace_session dms
+                 JOIN device d ON d.org_id = dms.org_id AND d.id = dms.device_id
+                 WHERE dms.org_id = $1 AND dms.device_id = $2
+                   AND dms.marketplace = $3 AND dms.status = 'connected'
+                   AND d.revoked_at IS NULL
+               ) AS "held!""#,
+            uuid_to_db(org.0),
+            device,
+            marketplace_to_db(marketplace),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(held)
+    }
+
+    /// Whether this tenant's entitlement still stands, in the sense D11 gives
+    /// it and the work claim already applies.
+    ///
+    /// Not "has paid": an organisation that never subscribed has no row and is
+    /// entitled, and what blocks is a plan that lapsed and stayed lapsed past
+    /// the grace. Stated here as its own read because the claim expresses it
+    /// only as a clause inside its own statement, and a second surface that
+    /// spends a seller's marketplace budget needs the same gate rather than a
+    /// second spelling of it.
+    pub async fn entitlement_stands(
+        &self,
+        org: OrgId,
+        grace_hours: i32,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let stands = sqlx::query_scalar!(
+            r#"SELECT NOT EXISTS (
+                 SELECT 1 FROM billing_subscription bs
+                 WHERE bs.org_id = $1
+                   AND bs.status NOT IN ('active', 'trialing')
+                   AND bs.current_period_end IS NOT NULL
+                   AND bs.current_period_end < now() - make_interval(hours => $2)
+               ) AS "stands!""#,
+            uuid_to_db(org.0),
+            grace_hours,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(stands)
+    }
+
     /// Every device this organisation has registered, revoked ones included: a
     /// device the seller signed out is part of the record, and hiding it would
     /// hide the one row whose wipe is still outstanding.

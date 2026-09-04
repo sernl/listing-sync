@@ -35,7 +35,7 @@ check:
 purity:
     #!/usr/bin/env sh
     set -eu
-    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-standards -p tam-vocab-drift --prefix none)"
+    tree="$(cargo tree -e normal -p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-standards -p tam-vocab-drift -p tam-analytics --prefix none)"
     if printf '%s\n' "$tree" | grep -E '^(tokio|tokio-util|reqwest|sqlx) v'; then
         echo 'purity violation: a banned dependency reached the pure core' >&2
         exit 1
@@ -65,7 +65,7 @@ portable_targets := "wasm32-unknown-unknown x86_64-pc-windows-msvc aarch64-apple
 # decision 3 of docs/research/rethink/oxichrome-extension-client.md, and its
 # other blocker had already gone when blake3's `pure` feature dropped the cc
 # and ml64.exe paths.
-portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes -p tam-engine-driver"
+portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-authoring -p tam-taxonomy -p tam-marketplace-tpt -p tam-marketplace-tes -p tam-engine-driver -p tam-analytics"
 
 # The 64-bit-only leg. These two are not blocked any more — the narrowed
 # assertion lets tam-limits compile for wasm32, which is how tam-engine-driver

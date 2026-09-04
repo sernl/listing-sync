@@ -96,6 +96,38 @@ pub struct Attestation {
     pub attested_at_ms: i64,
 }
 
+/// One bound listing a capture reads metrics for: the mapping it belongs to
+/// and the remote listing that names it on the marketplace.
+///
+/// Here rather than in `tam-storage` because the capture that consumes it now
+/// runs on the seller's own device, and the interpreter's vocabulary is the
+/// one crate both ends already share. The storage repository that produces
+/// these converts at its own boundary, the way every other wire type on this
+/// surface is converted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundListing {
+    pub mapping: MappingId,
+    pub remote: RemoteListingId,
+}
+
+/// One metric reading, as the device reports it back.
+///
+/// `metric` is an open string rather than a closed set, because the three
+/// captured today are a shortlist off the twelve the adapter names and
+/// widening it must not need a migration or a redeploy of the read side --
+/// which is the same reason the column carries no CHECK.
+///
+/// `total_value` is the untyped double the adapter read: a count for sales, an
+/// amount for earnings, a ratio for the Easel rates. Typing it here would
+/// decide per metric what the read deliberately does not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricSnapshot {
+    pub mapping: MappingId,
+    pub metric: String,
+    pub observed_at: i64,
+    pub total_value: f64,
+}
+
 /// The stranded create a reconcile is settling, and what identifies it.
 ///
 /// The title is the one that create recorded that it sent, read from its own

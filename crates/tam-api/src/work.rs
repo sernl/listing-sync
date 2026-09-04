@@ -35,9 +35,6 @@ use tam_types::{FailureDetail, Timestamp};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
 
-/// How long a lapsed plan keeps working. D11's grace, stated once.
-const ENTITLEMENT_GRACE_HOURS: i64 = 24;
-
 /// The jittered wait before the next ask. The server suggests; the device's own
 /// timer decides, which is the half of the cron move that matters legally.
 const fn next_poll_ms(held: bool) -> u64 {
@@ -69,7 +66,7 @@ pub(crate) async fn claim(
             },
             &ClaimPolicy {
                 ttl_seconds: i64::from(LEASE_TTL_SECS),
-                grace_hours: ENTITLEMENT_GRACE_HOURS,
+                grace_hours: i64::from(tam_domain::ENTITLEMENT_GRACE_HOURS),
                 marketplace: filter.marketplace,
                 // The engine owns the create strategy, so it owns whether a
                 // stranded create is worth taking out of its park.

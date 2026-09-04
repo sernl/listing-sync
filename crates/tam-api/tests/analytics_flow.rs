@@ -323,3 +323,312 @@ async fn the_surface_is_closed_to_a_session_that_does_not_resolve(pool: PgPool) 
         "a request without a live session is refused before any handler runs"
     );
 }
+
+// The capture's own two routes: what a device is told to read, and the reading
+// it sends back. They live beside the summary tests for the reason the routes
+// live beside the summary handler -- a reader looking for anything
+// analytics-shaped looks once.
+
+const DEVICE: &str = "aaaabbbbccccddddeeeeffff00001111";
+
+/// A registered device reporting a connected Tpt session, written directly
+/// because these tests are about the capture routes rather than about the
+/// device registry, which has its own file.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_device(pool: &PgPool, org: OrgId, status: &str) {
+    let mut tx = pool.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, first_seen_at, last_seen_at) \
+         VALUES ($1, $2, 'laptop', 'windows', 'x86_64', '0.1.0', now(), now())",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(DEVICE)
+    .execute(&mut *tx)
+    .await
+    .expect("the device seeds");
+    sqlx::query(
+        "INSERT INTO device_marketplace_session \
+         (org_id, device_id, marketplace, account_label, linked_at, last_used_at, status) \
+         VALUES ($1, $2, 'tpt', NULL, now(), now(), $3)",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(DEVICE)
+    .bind(status)
+    .execute(&mut *tx)
+    .await
+    .expect("the session seeds");
+    tx.commit().await.expect("the fixture commits");
+}
+
+/// A subscription that lapsed and stayed lapsed past the grace, which is what
+/// D11 blocks on — not the absence of one, which is a Free tenant and entitled.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn lapse_entitlement(pool: &PgPool, org: OrgId) {
+    let mut tx = pool.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO billing_subscription \
+         (org_id, paddle_subscription_id, paddle_customer_id, status, current_period_end, \
+          occurred_at, updated_at) \
+         VALUES ($1, $2, 'ctm_x', 'canceled', now() - interval '30 days', now(), now())",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(format!("sub_{}", org.0 .0[0]))
+    .execute(&mut *tx)
+    .await
+    .expect("the lapsed subscription seeds");
+    tx.commit().await.expect("the fixture commits");
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn reads(pool: PgPool, token: &SessionToken) -> serde_json::Value {
+    let request = Request::builder()
+        .uri(format!("/v1/devices/{DEVICE}/reads"))
+        .header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        )
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(state(pool))
+        .oneshot(request)
+        .await
+        .expect("the router serves");
+    assert_eq!(response.status(), StatusCode::OK, "the read order answers");
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes();
+    serde_json::from_slice(&body).expect("the read order parses")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn capture(pool: PgPool, token: &SessionToken, body: serde_json::Value) -> serde_json::Value {
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/devices/{DEVICE}/reads"))
+        .header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        )
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("the request builds");
+    let response = router(state(pool))
+        .oneshot(request)
+        .await
+        .expect("the router serves");
+    assert_eq!(response.status(), StatusCode::OK, "the capture is accepted");
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes();
+    serde_json::from_slice(&body).expect("the acceptance parses")
+}
+
+fn wire_snapshot(mapping: MappingId, metric: &str, at: i64, value: f64) -> serde_json::Value {
+    serde_json::json!({
+        "mapping": mapping,
+        "metric": metric,
+        "observed_at": at,
+        "total_value": value,
+    })
+}
+
+/// The loop a capture actually runs: the device is told what to read, reads it,
+/// sends it back, and the summary the console renders is what it sent.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_device_is_told_what_to_capture_and_what_it_sends_back_is_recorded(pool: PgPool) {
+    provision(&pool).await;
+    seed_device(&pool, ORG_A, "connected").await;
+
+    let order = reads(pool.clone(), &TOKEN_A).await;
+    assert_eq!(
+        order["listings"].as_array().map(Vec::len),
+        Some(1),
+        "the tenant's one bound Tpt listing is what there is to capture: {order}"
+    );
+    assert_eq!(
+        order["listings"][0]["remote"]["tpt"]["product_id"], 9_001,
+        "and it carries the remote id the capture reads against: {order}"
+    );
+
+    let accepted = capture(
+        pool.clone(),
+        &TOKEN_A,
+        serde_json::json!({
+            "snapshots": [wire_snapshot(MAPPING_A, "sales_count", 7_000, 42.0)],
+        }),
+    )
+    .await;
+    assert_eq!(accepted["written"], 1, "the snapshot is stored: {accepted}");
+
+    let summary = summary(pool, &TOKEN_A).await;
+    assert_eq!(
+        summary.listings[0].metrics.get("sales_count"),
+        Some(&42.0),
+        "and the console reads back what the device captured, which is the whole loop"
+    );
+}
+
+/// A device holding no connected session is told to capture nothing, and told
+/// it as an empty list rather than as a refusal.
+///
+/// Both halves matter. The empty list is what stops an hourly poll logging an
+/// error nobody can act on; the post writing nothing is what stops a device
+/// that lost its session mid-capture from reporting readings it should not
+/// have been able to take.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_device_without_a_connected_session_captures_nothing(pool: PgPool) {
+    provision(&pool).await;
+    seed_device(&pool, ORG_A, "signed_out").await;
+
+    let order = reads(pool.clone(), &TOKEN_A).await;
+    assert_eq!(
+        order["listings"].as_array().map(Vec::len),
+        Some(0),
+        "a signed-out session is not one a capture can be made under: {order}"
+    );
+
+    let accepted = capture(
+        pool.clone(),
+        &TOKEN_A,
+        serde_json::json!({
+            "snapshots": [wire_snapshot(MAPPING_A, "sales_count", 7_000, 42.0)],
+        }),
+    )
+    .await;
+    assert_eq!(
+        accepted["written"], 0,
+        "and the post is re-checked rather than trusted from the order that prompted it: \
+         {accepted}"
+    );
+}
+
+/// A plan that lapsed past the grace is the same answer, which is D11 applied
+/// to a read rather than to a write.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_lapsed_entitlement_captures_nothing(pool: PgPool) {
+    provision(&pool).await;
+    seed_device(&pool, ORG_A, "connected").await;
+    lapse_entitlement(&pool, ORG_A).await;
+
+    let order = reads(pool.clone(), &TOKEN_A).await;
+    assert_eq!(
+        order["listings"].as_array().map(Vec::len),
+        Some(0),
+        "a capture spends the connection's budget, so it waits on the same entitlement a \
+         write does: {order}"
+    );
+    let accepted = capture(
+        pool,
+        &TOKEN_A,
+        serde_json::json!({
+            "snapshots": [wire_snapshot(MAPPING_A, "sales_count", 7_000, 42.0)],
+        }),
+    )
+    .await;
+    assert_eq!(accepted["written"], 0, "and nothing is stored: {accepted}");
+}
+
+/// One tenant's device is served none of another's listings, and cannot write
+/// against one either.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_device_reaches_only_its_own_tenants_listings(pool: PgPool) {
+    provision(&pool).await;
+    seed_device(&pool, ORG_A, "connected").await;
+    seed_device(&pool, ORG_B, "connected").await;
+
+    let order = reads(pool.clone(), &TOKEN_A).await;
+    let listings = order["listings"].as_array().expect("listings is a list");
+    assert_eq!(listings.len(), 1, "one tenant, one listing: {order}");
+    assert_eq!(
+        listings[0]["remote"]["tpt"]["product_id"], 9_001,
+        "and it is this tenant's, not the other's: {order}"
+    );
+
+    // The device id is the same string in both tenants, which is the case a
+    // path-derived organisation would get wrong: the session decides whose
+    // device it is, and the body names no organisation at all.
+    let accepted = capture(
+        pool.clone(),
+        &TOKEN_A,
+        serde_json::json!({
+            "snapshots": [wire_snapshot(MAPPING_B, "sales_count", 7_000, 99.0)],
+        }),
+    )
+    .await;
+    assert_eq!(
+        accepted["written"], 0,
+        "a snapshot naming another tenant's mapping writes nothing. It is dropped rather \
+         than refused, because the alternative is a foreign-key violation surfacing as a \
+         five-hundred -- a caller's mistake reported as ours: {accepted}"
+    );
+}
+
+/// One unstorable instant costs its own row and nothing else.
+///
+/// The snapshots in a capture are independent readings and the writer is a
+/// device. Before the skip, `timestamp_to_db` failed on the first out-of-range
+/// value, the transaction rolled back, every good row beside it was lost and
+/// the device got a fault — a whole capture discarded because one number was
+/// wrong. The row is dropped now and the count says how many landed.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_unstorable_instant_costs_its_own_row_and_no_other(pool: PgPool) {
+    provision(&pool).await;
+    seed_device(&pool, ORG_A, "connected").await;
+
+    let accepted = capture(
+        pool.clone(),
+        &TOKEN_A,
+        serde_json::json!({
+            "snapshots": [
+                wire_snapshot(MAPPING_A, "sales_count", i64::MAX, 1.0),
+                wire_snapshot(MAPPING_A, "resource_views", 7_000, 88.0),
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(
+        accepted["written"], 1,
+        "the good row lands and the impossible one does not: {accepted}"
+    );
+
+    let summary = summary(pool, &TOKEN_A).await;
+    let metrics = &summary.listings[0].metrics;
+    assert_eq!(
+        metrics.get("resource_views"),
+        Some(&88.0),
+        "the reading beside it survived, which is the whole point of dropping per row"
+    );
+    assert_ne!(
+        metrics.get("sales_count"),
+        Some(&1.0),
+        "and the unstorable one is simply absent rather than recorded at some other instant"
+    );
+}

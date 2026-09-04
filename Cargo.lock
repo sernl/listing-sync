@@ -4941,6 +4941,7 @@ version = "0.0.0"
 dependencies = [
  "sqlx",
  "tam-engine",
+ "tam-engine-driver",
  "tam-marketplace",
  "tam-marketplace-tpt",
  "tam-storage",
@@ -5293,6 +5294,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tam-domain",
+ "tam-engine-driver",
  "tam-marketplace",
  "tam-pipeline",
  "tam-secrets",

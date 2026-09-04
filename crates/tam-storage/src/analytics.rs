@@ -15,6 +15,37 @@ use crate::codec::{
 };
 use crate::{pin_org, StorageError};
 
+/// The wire shapes and the stored rows, converted in one place.
+///
+/// The capture runs on a device now, so both shapes exist: the driver's
+/// vocabulary is what crosses the wire and these rows are what the ledger
+/// holds. Two call sites needed the same two conversions — the api route that
+/// receives a capture and the operator binary that still runs one — and a
+/// second copy of a field-for-field mapping is where a renamed field silently
+/// stops travelling.
+///
+/// Here rather than in the driver because `just purity` bans `tam-storage`
+/// from that crate's dependency tree, so only this direction is available.
+impl From<tam_engine_driver::vocabulary::MetricSnapshot> for MetricSnapshot {
+    fn from(wire: tam_engine_driver::vocabulary::MetricSnapshot) -> Self {
+        Self {
+            mapping: wire.mapping,
+            metric: wire.metric,
+            observed_at: Timestamp(wire.observed_at),
+            total_value: wire.total_value,
+        }
+    }
+}
+
+impl From<crate::BoundListing> for tam_engine_driver::vocabulary::BoundListing {
+    fn from(row: crate::BoundListing) -> Self {
+        Self {
+            mapping: row.mapping,
+            remote: row.remote,
+        }
+    }
+}
+
 /// One metric total for one listing at one instant, as a capture writes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricSnapshot {
@@ -69,6 +100,16 @@ impl AnalyticsRepo {
         pin_org(&mut tx, org).await?;
         let mut written = 0;
         for snapshot in snapshots {
+            // An instant the column cannot hold is dropped rather than
+            // propagated. The snapshots in one call are independent readings
+            // and the writer is a device: a single out-of-range value
+            // propagating would roll the transaction back, lose every good row
+            // beside it and answer the device a fault, which is the whole
+            // batch lost to one bad number. Skipping keeps the rest and the
+            // count says how many landed.
+            let Ok(observed_at) = timestamp_to_db(snapshot.observed_at) else {
+                continue;
+            };
             written += sqlx::query!(
                 "INSERT INTO listing_metric_snapshot \
                  (org_id, mapping_id, metric, observed_at, total_value) \
@@ -76,7 +117,7 @@ impl AnalyticsRepo {
                 uuid_to_db(org.0),
                 uuid_to_db(snapshot.mapping.0),
                 snapshot.metric,
-                timestamp_to_db(snapshot.observed_at)?,
+                observed_at,
                 snapshot.total_value,
             )
             .execute(&mut *tx)

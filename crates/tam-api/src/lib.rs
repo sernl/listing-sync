@@ -290,6 +290,13 @@ pub fn router(state: AppState) -> Router {
             "/{version}/analytics/summary",
             get(analytics::analytics_summary),
         )
+        // The capture's own two, device-scoped: what to read, and the reading
+        // sent back. Analytics rather than device routes because that is where
+        // a reader looks for them, and the device is named in the path.
+        .route(
+            "/{version}/devices/{device}/reads",
+            get(analytics::read_order).post(analytics::record_capture),
+        )
         .route("/{version}/status", get(resources::status))
         .route("/{version}/admin/signups", get(admin::signups))
         .route("/{version}/admin/orgs", get(admin::list_orgs))

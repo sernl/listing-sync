@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                 SELECT 1 FROM device_marketplace_session dms\n                 JOIN device d ON d.org_id = dms.org_id AND d.id = dms.device_id\n                 WHERE dms.org_id = $1 AND dms.device_id = $2\n                   AND dms.marketplace = $3 AND dms.status = 'connected'\n                   AND d.revoked_at IS NULL\n               ) AS \"held!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "held!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "87b2371af670fe658deed71cfdfa4e972799fb700d82ddcd9e0d8354d8a5eea6"
+}

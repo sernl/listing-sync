@@ -47,6 +47,19 @@ use tam_types::{
 /// which the heartbeat already distinguishes from one that is merely slow.
 pub const LEASE_TTL_SECS: i32 = 600;
 
+/// How long a lapsed plan keeps working before D11 stops serving it.
+///
+/// Stated once because two surfaces apply it and they must not drift: the work
+/// claim, which decides whether a device may be handed a write, and the
+/// analytics read, which decides whether it may be handed a capture. Both are
+/// marketplace requests made on the seller's behalf and both spend the
+/// connection's budget, so a grace that differed between them would let one
+/// surface keep working after the other had stopped.
+///
+/// An organisation that never subscribed has no row and is never blocked by
+/// this; what it bounds is a plan that lapsed and stayed lapsed.
+pub const ENTITLEMENT_GRACE_HOURS: i32 = 24;
+
 /// Whether the attempt being charged is the item's last.
 ///
 /// `attempt_count` is the value stored before the charge, so the `+ 1` is that

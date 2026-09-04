@@ -112,9 +112,16 @@ async fn capture_tenant(
         NoFiles,
         InstantPause,
     );
-    let outcome = capture_listings(&adapter, &listings, at).await;
+    // The library speaks the shared vocabulary now, so the two plain data
+    // types convert here rather than the capture reaching for a storage type
+    // it must not depend on. This is the only place either shape crosses.
+    let wire: Vec<tam_engine_driver::vocabulary::BoundListing> =
+        listings.iter().cloned().map(Into::into).collect();
+    let outcome = capture_listings(&adapter, &wire, at).await;
+    let snapshots: Vec<tam_storage::MetricSnapshot> =
+        outcome.snapshots.into_iter().map(Into::into).collect();
     let written = AnalyticsRepo::new(pool.clone())
-        .record(org, &outcome.snapshots)
+        .record(org, &snapshots)
         .await?;
     println!(
         "tam-analytics: organisation {}: {} listings, {} snapshots written",

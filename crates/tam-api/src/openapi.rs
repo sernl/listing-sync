@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 61] = [
+pub const ROUTES: [Route; 63] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -93,6 +93,16 @@ pub const ROUTES: [Route; 61] = [
         method: "post",
         path: "/{version}/mappings/{mapping}/bind",
         summary: "Bind a mapping to a listing by its URL, contacting no marketplace",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/devices/{device}/reads",
+        summary: "What this device should capture from the marketplace, or nothing",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/reads",
+        summary: "The capture this device made, recorded as snapshots",
     },
     Route {
         method: "get",
@@ -389,14 +399,14 @@ mod tests {
             .get("paths")
             .and_then(|paths| paths.as_object())
             .map(serde_json::Map::len);
-        // /v1/jobs, /v1/session, /v1/org, /v1/devices and
-        // /v1/products/{product}/labels each carry two operations,
-        // /v1/products carries two, /v1/products/{product} three and
-        // /v1/mappings/overrides three, so distinct paths are ten fewer than
-        // the operations in the table.
+        // /v1/jobs, /v1/session, /v1/org, /v1/devices,
+        // /v1/devices/{device}/reads and /v1/products/{product}/labels each
+        // carry two operations, /v1/products carries two,
+        // /v1/products/{product} three and /v1/mappings/overrides three, so
+        // distinct paths are eleven fewer than the operations in the table.
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 10),
+            Some(ROUTES.len() - 11),
             "each operation lands in the document exactly once"
         );
     }

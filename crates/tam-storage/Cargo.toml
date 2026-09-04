@@ -20,6 +20,10 @@ sqlx = { version = "0.8", default-features = false, features = [
   "json",
 ] }
 tam-domain = { path = "../tam-domain" }
+# For the wire shapes the device surface and the storage rows share. This
+# direction only: `just purity` bans `tam-storage` from the driver's own tree,
+# so the conversions live here rather than there.
+tam-engine-driver = { path = "../tam-engine-driver" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }

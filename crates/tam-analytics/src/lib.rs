@@ -11,11 +11,11 @@
 
 use std::collections::BTreeMap;
 
+use tam_engine_driver::vocabulary::{BoundListing, MetricSnapshot};
 use tam_marketplace::transport::Transport;
 use tam_marketplace::{AdapterError, FetchReason, FileSource, Pause};
 use tam_marketplace_tpt::endpoints::STATS_BATCH_MAX;
 use tam_marketplace_tpt::{AllTimeMetric, ProductId, ResourceStat, TptAdapter};
-use tam_storage::{BoundListing, MetricSnapshot};
 use tam_types::{InventoryId, MappingId, Timestamp};
 
 /// The metrics a pass captures, each with the name it is stored under.
@@ -157,7 +157,7 @@ pub fn snapshot_rows(
             index.get(&stat.resource.0).map(|mapping| MetricSnapshot {
                 mapping: *mapping,
                 metric: metric.to_owned(),
-                observed_at,
+                observed_at: observed_at.0,
                 total_value: stat.total_value,
             })
         })
@@ -232,8 +232,8 @@ mod tests {
         CAPTURED_METRICS, SNAPSHOT_RETENTION_DAYS, STATS_BATCH_MAX,
     };
     use std::collections::BTreeMap;
+    use tam_engine_driver::vocabulary::BoundListing;
     use tam_marketplace::{AdapterError, RemoteListingId};
-    use tam_storage::BoundListing;
     use tam_types::{FailureCode, FailureDetail, MappingId, Timestamp, Uuid};
 
     const NOW: Timestamp = Timestamp(1_756_512_000_000);
@@ -389,7 +389,7 @@ mod tests {
         );
         assert_eq!(
             (rows[0].mapping, rows[0].total_value, rows[0].observed_at),
-            (MappingId(Uuid([1; 16])), 17.0, NOW),
+            (MappingId(Uuid([1; 16])), 17.0, NOW.0),
             "the row carries the mapping, the untouched value and the pass's instant"
         );
     }
@@ -422,7 +422,7 @@ mod tests {
             outcome
                 .snapshots
                 .iter()
-                .all(|snapshot| snapshot.observed_at == NOW),
+                .all(|snapshot| snapshot.observed_at == NOW.0),
             "one pass is one instant, however long its requests took"
         );
     }

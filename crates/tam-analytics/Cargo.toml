@@ -4,14 +4,36 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+# The capture library drives an adapter and returns rows; nothing in it reaches
+# a database. The binary beside it owns the pool, the schedule and the clock,
+# so those edges are optional and the binary names them as required features.
+# That is what keeps `sqlx` and `tam-storage` out of the library's dependency
+# graph rather than merely unused within it, which is the difference that lets
+# the capture run on a seller's own device.
+#
+# It does reach a runtime: `tokio` arrives transitively through
+# `tam-marketplace-tpt`'s transport, as it does for every client that speaks to
+# a marketplace, so the claim here is about the database edges alone.
+[features]
+server = ["dep:sqlx", "dep:tam-engine", "dep:tam-storage", "dep:tokio", "tam-marketplace-tpt/live"]
+
 [dependencies]
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
-tam-engine = { path = "../tam-engine" }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"], optional = true }
+tam-engine = { path = "../tam-engine", optional = true }
+tam-engine-driver = { path = "../tam-engine-driver" }
 tam-marketplace = { path = "../tam-marketplace" }
-tam-marketplace-tpt = { path = "../tam-marketplace-tpt" }
-tam-storage = { path = "../tam-storage" }
+# Default features off:  is that crate's reqwest transport, which the
+# capture library never builds — it takes a reader. The binary needs one, so
+# the server feature turns it back on for the binary alone. Without this the
+# library drags a native HTTP stack into every client target.
+tam-marketplace-tpt = { path = "../tam-marketplace-tpt", default-features = false }
+tam-storage = { path = "../tam-storage", optional = true }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+
+[[bin]]
+name              = "tam-analytics"
+required-features = ["server"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
