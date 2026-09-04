@@ -27,6 +27,12 @@
         "x86_64-darwin"
       ];
 
+      # The deployment contract, consumed by the fleet flake that owns the
+      # machine. It resolves this flake's own packages for the machine's system,
+      # so a consumer needs no overlay and cannot deploy a binary built from a
+      # different tree than the module it read.
+      flake.nixosModules.teachouse = import ./nix/module.nix { inherit (inputs) self; };
+
       perSystem =
         { system, ... }:
         let
@@ -134,12 +140,74 @@
             ];
           };
           bin = craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; });
+
+          # One binary per deployed process rather than the whole workspace, so
+          # the closure copied to a 2 GB box carries the two processes that run
+          # there and not the seed, crawl and operator tools beside them.
+          # `cargoArtifacts` is shared with `bin`, so the marginal build is the
+          # leaf crates.
+          serviceBin =
+            crate:
+            craneLib.buildPackage (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                pname = crate;
+                cargoExtraArgs = "--locked -p ${crate}";
+                # `checks.nextest` runs the suite once for the whole workspace;
+                # running it again per binary would prove the same thing twice.
+                doCheck = false;
+              }
+            );
+
+          # The browser's copy of the core, built by the two commands
+          # `just web-wasm` runs. No `cargoArtifacts`: crane's host-target
+          # artifacts are not reusable across a `--target`, which is the same
+          # reason `checks.portable` builds its own.
+          coreWasm = craneLib.mkCargoDerivation (
+            commonArgs
+            // {
+              cargoArtifacts = null;
+              pnameSuffix = "-core-wasm";
+              doInstallCargoArtifacts = false;
+              nativeBuildInputs = [ pkgs.wasm-bindgen-cli ];
+              buildPhaseCargoCommand = ''
+                cargo build --locked --target wasm32-unknown-unknown --release --lib -p tam-core-wasm
+              '';
+              installPhaseCommand = ''
+                wasm-bindgen --target web --out-name core --out-dir $out \
+                  "''${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/tam_core_wasm.wasm"
+              '';
+            }
+          );
+
+          teachouseConsole = pkgs.callPackage ./nix/console.nix {
+            nodejs = pkgs.nodejs_22;
+            inherit coreWasm;
+          };
+          tamAuth = pkgs.callPackage ./nix/tam-auth.nix { nodejs = pkgs.nodejs_22; };
+          teachouseMigrations = pkgs.callPackage ./nix/migrations.nix { };
         in
         {
-          packages.default = bin;
+          packages = {
+            default = bin;
+            tam-server = serviceBin "tam-server";
+            tam-worker = serviceBin "tam-worker";
+            tam-auth = tamAuth;
+            teachouse-console = teachouseConsole;
+            teachouse-migrations = teachouseMigrations;
+            teachouse-core-wasm = coreWasm;
+          };
 
           checks = {
             inherit bin;
+
+            # The two deployed artefacts no Rust lane covers. The console's own
+            # source gates — the vocabulary freshness diff, svelte-check and
+            # vitest — stay in `just web-check`, because they judge the source
+            # rather than the artefact; this proves the artefact builds.
+            console = teachouseConsole;
+            tam-auth = tamAuth;
 
             # The default --ignore yanked stands. Measured: -n leaves the
             # sandbox without a crates.io index, so cargo-audit logs "couldn't
