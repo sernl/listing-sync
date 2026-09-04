@@ -25,9 +25,9 @@ use tam_storage::{
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
-    FieldKey, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId, Marketplace,
-    OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Stamp,
-    SystemComponent, Timestamp, Title, TransportClass, Uuid,
+    FieldKey, FileBytes, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy, MappingId,
+    Marketplace, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
+    Stamp, SystemComponent, Timestamp, Title, TransportClass, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -92,9 +92,11 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
                 id: FileId(Uuid([seed.wrapping_add(3); 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: ContentHash([seed; 32]),
-                byte_len: 4,
-                scan: ScanOutcome::Pending,
+                bytes: FileBytes::Held {
+                    hash: ContentHash([seed; 32]),
+                    byte_len: 4,
+                    scan: ScanOutcome::Pending,
+                },
             },
             vec![],
         ),

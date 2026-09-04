@@ -503,7 +503,8 @@ impl JobReadRepo {
         let rows = sqlx::query!(
             "SELECT m.id AS mapping_id, m.product_id, m.sever_generation, \
                     m.binding_state, m.lifecycle_state, \
-                    m.remote_id_kind, m.remote_url, m.remote_numeric_id, f.hash \
+                    m.remote_id_kind, m.remote_url, m.remote_numeric_id, \
+                    COALESCE(f.hash, f.observed_hash) AS \"hash!\" \
              FROM mapping m \
              JOIN product_file f \
                ON f.org_id = m.org_id AND f.product_id = m.product_id \
@@ -517,6 +518,24 @@ impl JobReadRepo {
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
+        // A payload file is blob-backed or marketplace-sourced, and the
+        // idempotency key covers the bytes that will be uploaded either way,
+        // so the coalesce takes whichever digest describes them. The two are
+        // deliberately distinct everywhere else — one we verified, one a
+        // device asserted — and this is the one place the distinction does not
+        // change the answer, because the key asks what is being sent rather
+        // than who vouched for it. `product_file_blob_or_source` is what makes
+        // the coalesce total.
+        //
+        // The consequence worth knowing: the key is no longer purely
+        // server-derived, because on a sourced file the digest is one a device
+        // asserted. That is Q-a's decision doing its work rather than a new
+        // exposure: the value is read from our own row rather than from a
+        // request. What it is not is responsive to a later disagreement — the
+        // file's digest records the first observation and is never updated, so
+        // a second device reporting different bytes changes nothing here. The
+        // key follows the recorded digest; the disagreement is recorded beside
+        // it and surfaced, not applied.
         let mut seeds: Vec<MappingSeed> = Vec::new();
         for row in rows {
             let mapping = MappingId(uuid_from_db(row.mapping_id));

@@ -30,9 +30,10 @@ use tam_storage::{
     ClaimPolicy, DeviceRef, ElectionRepo, LeasedItem, MappingRepo, ProductRepo, TaxonomyRepo,
 };
 use tam_types::{
-    Actor, CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileId, FileKind, FileRole,
-    InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule,
-    ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, UserId, Uuid,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, FieldKey, FileBytes, FileId, FileKind,
+    FileRole, InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent,
+    PriceRule, ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title,
+    UserId, Uuid,
 };
 
 /// The rendering reads no files, so the source is a refusal.
@@ -196,9 +197,11 @@ fn canonical_product(id: ProductId, files: u8) -> tam_domain::CanonicalProduct {
                 id: FileId(Uuid([files; 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: ContentHash([0x51; 32]),
-                byte_len: 4,
-                scan: ScanOutcome::Clean { at: NOW },
+                bytes: FileBytes::Held {
+                    hash: ContentHash([0x51; 32]),
+                    byte_len: 4,
+                    scan: ScanOutcome::Clean { at: NOW },
+                },
             },
             vec![],
         ),
@@ -206,9 +209,11 @@ fn canonical_product(id: ProductId, files: u8) -> tam_domain::CanonicalProduct {
             id: FileId(Uuid([files.wrapping_add(1); 16])),
             role: FileRole::Cover,
             kind: FileKind::Image,
-            hash: ContentHash([0x52; 32]),
-            byte_len: 4,
-            scan: ScanOutcome::Clean { at: NOW },
+            bytes: FileBytes::Held {
+                hash: ContentHash([0x52; 32]),
+                byte_len: 4,
+                scan: ScanOutcome::Clean { at: NOW },
+            },
         }),
         previews: vec![],
         subjects: vec![SUBJECT],

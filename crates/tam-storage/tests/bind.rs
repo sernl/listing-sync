@@ -19,9 +19,9 @@ use tam_storage::{
     NewJob, NewJobItem, ProductRepo, StorageError, WriteAttemptRepo,
 };
 use tam_types::{
-    Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
-    JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, Uuid,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole,
+    InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule,
+    ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -69,9 +69,11 @@ fn product(seed: u8) -> CanonicalProduct {
                 id: FileId(Uuid([seed.wrapping_add(1); 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: ContentHash([seed; 32]),
-                byte_len: 4,
-                scan: ScanOutcome::Pending,
+                bytes: FileBytes::Held {
+                    hash: ContentHash([seed; 32]),
+                    byte_len: 4,
+                    scan: ScanOutcome::Pending,
+                },
             },
             vec![],
         ),

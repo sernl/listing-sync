@@ -30,10 +30,10 @@ use tam_taxonomy::listing::{project_listing_with_overrides, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
 use tam_taxonomy::TES_MAIN_AGE_RANGES;
 use tam_types::{
-    Actor, CanonicalTermId, ContentHash, CurrencyRule, FileId, FileKind, FileRole, ImportedPrice,
-    ImportedTerm, InventoryId, JobEventPayload, JobId, ListingCopy, MappingId, Money, OrgId,
-    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, TermKind,
-    Timestamp, Title, Uuid,
+    Actor, CanonicalTermId, ContentHash, CurrencyRule, FileBytes, FileId, FileKind, FileRole,
+    ImportedPrice, ImportedTerm, InventoryId, JobEventPayload, JobId, ListingCopy, MappingId,
+    Money, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Stamp,
+    SystemComponent, TermKind, Timestamp, Title, Uuid,
 };
 
 /// The import never uploads, so its adapter's file source is a refusal.
@@ -473,9 +473,11 @@ where
                 id: FileId(fresh_uuid()),
                 role: FileRole::Payload,
                 kind: stored.kind,
-                hash: stored.hash,
-                byte_len: stored.byte_len,
-                scan: ScanOutcome::Clean { at: run.now },
+                bytes: FileBytes::Held {
+                    hash: stored.hash,
+                    byte_len: stored.byte_len,
+                    scan: ScanOutcome::Clean { at: run.now },
+                },
             });
         }
         if cover.is_none() {
@@ -483,9 +485,11 @@ where
                 id: FileId(fresh_uuid()),
                 role: FileRole::Cover,
                 kind: FileKind::Image,
-                hash: ingested.cover.hash,
-                byte_len: ingested.cover.byte_len,
-                scan: ScanOutcome::Clean { at: run.now },
+                bytes: FileBytes::Held {
+                    hash: ingested.cover.hash,
+                    byte_len: ingested.cover.byte_len,
+                    scan: ScanOutcome::Clean { at: run.now },
+                },
             });
         }
     }

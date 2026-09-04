@@ -14,9 +14,9 @@ use tam_engine::breaker::{run_breaker, BREAKER_MIN_SAMPLE};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
 use tam_storage::{HaltRepo, JobRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
 use tam_types::{
-    Actor, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Stamp, SystemComponent, Timestamp, Title, Uuid,
+    Actor, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId, JobId,
+    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    ScanOutcome, Stamp, SystemComponent, Timestamp, Title, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
@@ -72,9 +72,11 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
                         id: FileId(Uuid([0x03; 16])),
                         role: FileRole::Payload,
                         kind: FileKind::Pdf,
-                        hash: ContentHash([0x04; 32]),
-                        byte_len: 4,
-                        scan: ScanOutcome::Pending,
+                        bytes: FileBytes::Held {
+                            hash: ContentHash([0x04; 32]),
+                            byte_len: 4,
+                            scan: ScanOutcome::Pending,
+                        },
                     },
                     vec![],
                 ),

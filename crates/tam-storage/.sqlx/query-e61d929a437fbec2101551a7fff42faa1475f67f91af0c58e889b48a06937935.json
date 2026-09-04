@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO product_file_observation (org_id, file_id, observed_by_device, observed_at, recorded_at, observed_hash, observed_byte_len, scan_state, scan_signature, scan_failure_code, scanned_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Bytea",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e61d929a437fbec2101551a7fff42faa1475f67f91af0c58e889b48a06937935"
+}

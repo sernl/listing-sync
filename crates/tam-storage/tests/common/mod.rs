@@ -4,7 +4,7 @@
 use sqlx::PgPool;
 use tam_domain::{CanonicalProduct, DeclarationSource, GradeDeclaration};
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
     PriceIntent, ProductFile, ProductId, ScanOutcome, Title, Uuid,
 };
 
@@ -29,9 +29,11 @@ pub(crate) fn minimal_product() -> CanonicalProduct {
                 id: FileId(Uuid([0x21; 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: ContentHash([0x51; 32]),
-                byte_len: 4,
-                scan: ScanOutcome::Pending,
+                bytes: FileBytes::Held {
+                    hash: ContentHash([0x51; 32]),
+                    byte_len: 4,
+                    scan: ScanOutcome::Pending,
+                },
             },
             vec![],
         ),

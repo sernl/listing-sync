@@ -11,10 +11,11 @@ use tam_domain::{
     AgeInterval, CanonicalProduct, DeclarationSource, GradeDeclaration, RightsDeclaration,
     TermKind, VocabularyId, VocabularyPath,
 };
-use tam_storage::ProductRepo;
+use tam_storage::{ProductFileSourceRepo, ProductRepo};
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, ListingCopy,
-    OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
+    CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId,
+    ListingCopy, Observation, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome,
+    Timestamp, Title, Uuid,
 };
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -38,9 +39,11 @@ fn file(
         id: FileId(Uuid([id_byte; 16])),
         role,
         kind,
-        hash: ContentHash([hash_byte; 32]),
-        byte_len: 4,
-        scan,
+        bytes: FileBytes::Held {
+            hash: ContentHash([hash_byte; 32]),
+            byte_len: 4,
+            scan,
+        },
     }
 }
 
@@ -270,6 +273,42 @@ async fn tenant_b_sees_nothing_of_tenant_a(pool: PgPool) {
         .await
         .expect("tenant A inserts the aggregate");
 
+    // One observation for A, so the probe below has a row to fail to hide.
+    // Written through the repository rather than by raw SQL, because a table
+    // whose only rows arrived by a path that bypasses the policy would prove
+    // nothing about the path that does not.
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(ORG_A.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "INSERT INTO device \
+         (org_id, id, name, os, arch, app_version, first_seen_at, last_seen_at) \
+         VALUES ($1, 'device-a', 'laptop', 'linux', 'x86_64', '0.2.0', now(), now())",
+    )
+    .bind(db_uuid(ORG_A.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the device inserts");
+    tx.commit().await.expect("the device commits");
+    ProductFileSourceRepo::new(pool.clone())
+        .observe(
+            ORG_A,
+            FileId(Uuid([0x21; 16])),
+            &Observation {
+                device: "device-a".to_owned(),
+                hash: ContentHash([0x51; 32]),
+                byte_len: 4,
+                scan: ScanOutcome::Pending,
+                observed_at: Timestamp(1),
+            },
+            Timestamp(1),
+        )
+        .await
+        .expect("tenant A records an observation");
+
     let found = repo
         .get(ORG_A, PRODUCT_1)
         .await
@@ -279,7 +318,13 @@ async fn tenant_b_sees_nothing_of_tenant_a(pool: PgPool) {
         "positive control: tenant A must see its own row, or every assertion below is vacuous"
     );
 
-    for table in ["product", "product_file", "blob", "grade_declaration"] {
+    for table in [
+        "product",
+        "product_file",
+        "product_file_observation",
+        "blob",
+        "grade_declaration",
+    ] {
         let a_rows = visible_rows(&pool, table, Some(ORG_A))
             .await
             .expect("the pinned probe runs");

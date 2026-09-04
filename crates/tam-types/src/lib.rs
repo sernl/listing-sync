@@ -393,14 +393,122 @@ pub enum ScanOutcome {
     Failed { code: FailureCode },
 }
 
+/// What one device saw when it fetched a file we do not hold.
+///
+/// Every field is the device's word. The instant is the device's own reading
+/// rather than ours, which is the rule migration 0045 set for a
+/// device-originated row: the seller's assertion and our receipt are two
+/// facts, and the receipt is stamped where the row is written rather than
+/// carried here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Observation {
+    /// Which of the seller's machines saw it.
+    pub device: String,
+    /// The digest of the bytes handed onward after the unwrap decision — the
+    /// sole entry where a bundle reduces to one file, the bundle otherwise —
+    /// and never the container. A marketplace that re-zips a bundle with
+    /// different timestamps changes the container's digest while the entry's
+    /// is unchanged, so digesting the container would stall a single-file
+    /// resource on a mismatch that means nothing.
+    pub hash: ContentHash,
+    pub byte_len: u64,
+    /// The scan the device ran, recorded as the device's and never restated
+    /// as a verdict of ours, because we did not see the bytes.
+    pub scan: ScanOutcome,
+    pub observed_at: Timestamp,
+}
+
+/// Where a product file's bytes are, and therefore who vouches for them.
+///
+/// The two arms are the whole of what integrity means for a file. `Held` is
+/// bytes in our object store, whose digest the server computed itself. Under
+/// D27 a migrated file's bytes never reach us: they are fetched from the
+/// marketplace holding them, on the seller's own device, under the seller's
+/// own session, and uploaded to the target in the same run. So `Sourced` names
+/// the resource instead and carries what a device reported about it.
+///
+/// One value rather than a nullable pair because the states are exclusive and
+/// the database says so: `product_file_blob_or_source` admits a row that is
+/// blob-backed or marketplace-sourced and neither both nor neither. Expressing
+/// that here makes the rejected row unconstructible rather than merely
+/// rejected, which is the difference between learning at compile time and
+/// learning from a constraint violation in a transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileBytes {
+    Held {
+        hash: ContentHash,
+        byte_len: u64,
+        scan: ScanOutcome,
+    },
+    Sourced {
+        marketplace: Marketplace,
+        /// Which of the seller's connections can fetch it, so a revoked
+        /// connection is visibly the reason a file became unreachable.
+        connection: ConnectionId,
+        /// How that marketplace addresses the resource, in the spelling its
+        /// own adapter takes.
+        resource: String,
+        /// Which file inside the resource, where the marketplace hands over a
+        /// bundle. `None` is the bundle whole, and its presence is what says
+        /// an unwrap happened.
+        entry: Option<String>,
+        /// The name and type of the bytes handed onward after the unwrap
+        /// decision: the entry's own where `entry` is present, the bundle's
+        /// and `application/zip` where it is absent. Never the wrapper's name
+        /// against the entry's bytes, which is how a seller's worksheet
+        /// reaches their own storefront named as a zip.
+        payload_file_name: String,
+        payload_content_type: String,
+        observed: Observation,
+    },
+}
+
+impl FileBytes {
+    /// The digest of this file's bytes, whoever vouched for it.
+    ///
+    /// For the callers that only need to name the content — deduplication, a
+    /// diff, a log line — and never for one deciding whether to trust it. A
+    /// caller that cares which of the two it has must match, because that
+    /// distinction is the entire reason these are two arms.
+    #[must_use]
+    pub const fn digest(&self) -> ContentHash {
+        match self {
+            Self::Held { hash, .. } => *hash,
+            Self::Sourced { observed, .. } => observed.hash,
+        }
+    }
+
+    #[must_use]
+    pub const fn byte_len(&self) -> u64 {
+        match self {
+            Self::Held { byte_len, .. } => *byte_len,
+            Self::Sourced { observed, .. } => observed.byte_len,
+        }
+    }
+
+    /// What is known about this file being clean.
+    ///
+    /// A reference rather than a copy so the caller sees the whole outcome,
+    /// and deliberately not distinguishing whose scan it was: the publish gate
+    /// asks only whether a file has been found clean, and Q-b decided the
+    /// device's answer is acceptable and advisory. A caller wanting to know
+    /// who scanned it matches on the arm.
+    #[must_use]
+    pub const fn scan(&self) -> &ScanOutcome {
+        match self {
+            Self::Held { scan, .. } => scan,
+            Self::Sourced { observed, .. } => &observed.scan,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductFile {
     pub id: FileId,
     pub role: FileRole,
     pub kind: FileKind,
-    pub hash: ContentHash,
-    pub byte_len: u64,
-    pub scan: ScanOutcome,
+    pub bytes: FileBytes,
 }
 
 /// A product with no payload cannot be listed anywhere, so the empty case is

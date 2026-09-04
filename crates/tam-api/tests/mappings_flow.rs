@@ -20,8 +20,9 @@ use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, Veri
 use tam_marketplace::{RemoteLifecycle, RemoteListingId};
 use tam_storage::{ProductRepo, SessionRepo, SessionToken};
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, ListingCopy, MappingId, OrgId, PayloadSet,
-    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Title, UserId, Uuid,
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, ListingCopy, MappingId, OrgId,
+    PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Title,
+    UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -93,9 +94,11 @@ async fn seed_product(pool: &PgPool, org: OrgId, product: ProductId) {
                         id: FileId(Uuid(product.0 .0)),
                         role: FileRole::Payload,
                         kind: FileKind::Pdf,
-                        hash: ContentHash([0x51; 32]),
-                        byte_len: 4,
-                        scan: ScanOutcome::Pending,
+                        bytes: FileBytes::Held {
+                            hash: ContentHash([0x51; 32]),
+                            byte_len: 4,
+                            scan: ScanOutcome::Pending,
+                        },
                     },
                     vec![],
                 ),

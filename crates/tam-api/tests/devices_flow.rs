@@ -19,7 +19,7 @@ use tam_api::{
     router, APIError, APIErrorCode, APIErrorKind, AppState, Config, WallClock, SESSION_COOKIE,
 };
 use tam_storage::{SessionRepo, SessionToken};
-use tam_types::{Marketplace, OrgId, Timestamp, UserId, Uuid};
+use tam_types::{FileBytes, Marketplace, OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -920,9 +920,11 @@ async fn seed_claimable(app: &PgPool) {
                         id: tam_types::FileId(Id([0x03; 16])),
                         role: tam_types::FileRole::Payload,
                         kind: tam_types::FileKind::Pdf,
-                        hash: tam_types::ContentHash([0x04; 32]),
-                        byte_len: 4,
-                        scan: tam_types::ScanOutcome::Pending,
+                        bytes: FileBytes::Held {
+                            hash: tam_types::ContentHash([0x04; 32]),
+                            byte_len: 4,
+                            scan: tam_types::ScanOutcome::Pending,
+                        },
                     },
                     vec![],
                 ),
@@ -1861,9 +1863,11 @@ async fn seed_tpt_claimable(app: &PgPool) {
                         id: tam_types::FileId(Id([0x13; 16])),
                         role: tam_types::FileRole::Payload,
                         kind: tam_types::FileKind::Pdf,
-                        hash: tam_types::ContentHash([0x14; 32]),
-                        byte_len: 4,
-                        scan: tam_types::ScanOutcome::Clean { at: NOW },
+                        bytes: FileBytes::Held {
+                            hash: tam_types::ContentHash([0x14; 32]),
+                            byte_len: 4,
+                            scan: tam_types::ScanOutcome::Clean { at: NOW },
+                        },
                     },
                     vec![],
                 ),
@@ -1871,9 +1875,11 @@ async fn seed_tpt_claimable(app: &PgPool) {
                     id: tam_types::FileId(Id([0x15; 16])),
                     role: tam_types::FileRole::Cover,
                     kind: tam_types::FileKind::Image,
-                    hash: tam_types::ContentHash([0x16; 32]),
-                    byte_len: 4,
-                    scan: tam_types::ScanOutcome::Clean { at: NOW },
+                    bytes: FileBytes::Held {
+                        hash: tam_types::ContentHash([0x16; 32]),
+                        byte_len: 4,
+                        scan: tam_types::ScanOutcome::Clean { at: NOW },
+                    },
                 }),
                 previews: vec![],
                 subjects: vec![subject],

@@ -1,0 +1,143 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pf.kind, pf.hash, b.byte_len AS \"byte_len?\", pf.scan_state, pf.scan_signature, pf.scanned_at, pf.scan_failure_code, pf.source_marketplace, pf.source_connection, pf.source_resource, pf.source_entry, pf.observed_hash, pf.observed_byte_len, pf.observed_by_device, pf.observed_at, pf.asserted_scan_state, pf.asserted_scan_signature, pf.asserted_scanned_at, pf.asserted_scan_failure_code, pf.payload_file_name, pf.payload_content_type FROM product_file pf LEFT JOIN blob b ON b.org_id = pf.org_id AND b.hash = pf.hash WHERE pf.org_id = $1 AND pf.id = $2 AND pf.deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "byte_len?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "scan_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "scan_signature",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "scanned_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "scan_failure_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "source_marketplace",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "source_connection",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "source_resource",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "source_entry",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "observed_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 12,
+        "name": "observed_byte_len",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 13,
+        "name": "observed_by_device",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "observed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "asserted_scan_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "asserted_scan_signature",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "asserted_scanned_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 18,
+        "name": "asserted_scan_failure_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 19,
+        "name": "payload_file_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 20,
+        "name": "payload_content_type",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "9de475e83bcbf70a24e750df1ae5a0a87e4ac732f5cbf6a297c694d57cf0a960"
+}

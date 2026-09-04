@@ -17,6 +17,7 @@ pub mod blobs;
 mod codec;
 pub mod connections;
 pub mod device;
+pub mod file_source;
 pub mod job_reads;
 pub mod jobs;
 pub mod labels;
@@ -38,7 +39,9 @@ pub use backoffice::{
     OrgDetail, OrgSummary, SignupsRepo, SubscriptionRecord, SyncHealth,
 };
 pub use billing::{BillingRepo, SubscriptionState};
-pub use blobs::{describe_files, BlobError, BlobRepo, PipelineFileSource, TenantBlobSink};
+pub use blobs::{
+    describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
+};
 pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,
     ConnectionRepo, ConnectionRow,
@@ -47,6 +50,7 @@ pub use device::{
     DeviceHeartbeat, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
     DeviceSessionReport, DeviceSessionStatus,
 };
+pub use file_source::ProductFileSourceRepo;
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
     JobListRow, JobReadRepo, JobSnapshot, LedgerCursor, MappingSeed,

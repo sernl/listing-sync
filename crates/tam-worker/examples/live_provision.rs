@@ -67,7 +67,7 @@ use tam_storage::{
     ProductRepo, SessionRepo, TaxonomyRepo,
 };
 use tam_types::{
-    CanonicalTermId, ContentHash, CopyFormat, CurrencyRule, FileId, FileKind, FileRole,
+    CanonicalTermId, ContentHash, CopyFormat, CurrencyRule, FileBytes, FileId, FileKind, FileRole,
     InventoryId, JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule,
     ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, Uuid,
 };
@@ -445,9 +445,11 @@ fn fixture_product(
                 id: FileId(seeded(at, 0x11)),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: stored.payload,
-                byte_len: stored.payload_len,
-                scan: ScanOutcome::Clean { at },
+                bytes: FileBytes::Held {
+                    hash: stored.payload,
+                    byte_len: stored.payload_len,
+                    scan: ScanOutcome::Clean { at },
+                },
             },
             vec![],
         ),
@@ -458,9 +460,11 @@ fn fixture_product(
             id: FileId(seeded(at, 0x12)),
             role: FileRole::Cover,
             kind: FileKind::Image,
-            hash: stored.cover,
-            byte_len: stored.cover_len,
-            scan: ScanOutcome::Clean { at },
+            bytes: FileBytes::Held {
+                hash: stored.cover,
+                byte_len: stored.cover_len,
+                scan: ScanOutcome::Clean { at },
+            },
         }),
         previews: vec![],
         subjects: vec![SUBJECT],
@@ -709,13 +713,19 @@ async fn remove(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
         .get(ORG, record.mapping.product)
         .await?
         .ok_or("the mapped product has gone")?;
+    // `digest` rather than a match on the arm, and this is the one place the
+    // verified-versus-asserted distinction genuinely does not change the
+    // answer: the key covers the bytes that will be uploaded, and both arms
+    // describe exactly those bytes. It is the same reasoning `job_reads`
+    // applies in SQL, where the equivalent select coalesces the two columns.
     let payload_hash = product
         .product
         .payload
         .iter()
         .next()
         .ok_or("the mapped product carries no payload file")?
-        .hash;
+        .bytes
+        .digest();
 
     let (job, item) = enqueue_one(
         pool,

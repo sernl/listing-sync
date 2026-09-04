@@ -26,9 +26,9 @@ use tam_storage::{
     TaxonomyRepo,
 };
 use tam_types::{
-    AttemptId, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
-    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
-    ScanOutcome, Timestamp, Title, TransportClass, UserId, Uuid,
+    AttemptId, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole,
+    InventoryId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
+    ProductId, ScanOutcome, Timestamp, Title, TransportClass, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -87,9 +87,11 @@ async fn provision(pool: &PgPool) {
                         id: FileId(Uuid([0x21; 16])),
                         role: FileRole::Payload,
                         kind: FileKind::Pdf,
-                        hash: ContentHash([0x51; 32]),
-                        byte_len: 4,
-                        scan: ScanOutcome::Pending,
+                        bytes: FileBytes::Held {
+                            hash: ContentHash([0x51; 32]),
+                            byte_len: 4,
+                            scan: ScanOutcome::Pending,
+                        },
                     },
                     vec![],
                 ),

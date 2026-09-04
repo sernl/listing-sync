@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use tam_domain::CanonicalProduct;
 use tam_storage::{Colour, LabelRepo, ProductRepo};
 use tam_types::{
-    ContentHash, FileId, FileKind, FileRole, OrgId, PayloadSet, ProductFile, ProductId,
+    ContentHash, FileBytes, FileId, FileKind, FileRole, OrgId, PayloadSet, ProductFile, ProductId,
     ScanOutcome, Timestamp, Uuid,
 };
 
@@ -29,9 +29,11 @@ fn second_product() -> CanonicalProduct {
             id: FileId(Uuid([0x22; 16])),
             role: FileRole::Payload,
             kind: FileKind::Pdf,
-            hash: ContentHash([0x52; 32]),
-            byte_len: 4,
-            scan: ScanOutcome::Pending,
+            bytes: FileBytes::Held {
+                hash: ContentHash([0x52; 32]),
+                byte_len: 4,
+                scan: ScanOutcome::Pending,
+            },
         },
         vec![],
     );

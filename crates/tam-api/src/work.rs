@@ -31,7 +31,7 @@ use tam_storage::{
     describe_files, BlobRepo, Charged, ClaimPolicy, ConnectionFactsRepo, DeviceClaim, DeviceRef,
     LeaseRepo,
 };
-use tam_types::{FailureDetail, Timestamp};
+use tam_types::{FailureDetail, FileBytes, Timestamp};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
@@ -156,6 +156,54 @@ fn reconcile_subject(leased: &tam_storage::LeasedItem) -> Option<ReconcileSubjec
 
 /// What the device is to do, or `None` where the item turned out not to be the
 /// device's to run.
+/// One described file as the work order states it.
+///
+/// The length is fallible rather than saturating, and the two arms differ in
+/// what a failure would mean. On the held branch it is our own blob's length,
+/// so a value that will not fit is a corrupt row. On the sourced branch it is
+/// the number the device checks the fetched bytes against, and saturating it
+/// to `i64::MAX` would hand the device a length nothing can match: a storage
+/// fault would surface on the seller's machine as the marketplace having
+/// served the wrong bytes. Refusing here says what actually happened.
+fn manifest_for(file: tam_storage::StoredFile) -> Result<PayloadManifest, String> {
+    let source = match file.bytes {
+        FileBytes::Held { hash, byte_len, .. } => PayloadSource::ControlPlane {
+            committed: Committed {
+                hash,
+                byte_len: length(byte_len, "a stored blob")?,
+            },
+        },
+        FileBytes::Sourced {
+            marketplace,
+            resource,
+            entry,
+            observed,
+            ..
+        } => PayloadSource::Marketplace {
+            marketplace,
+            resource,
+            entry,
+            // The device verifies against what a device observed, never
+            // against a commitment of ours, because we never held these bytes
+            // to commit to them.
+            expected: Some(Committed {
+                hash: observed.hash,
+                byte_len: length(observed.byte_len, "a device's observation")?,
+            }),
+        },
+    };
+    Ok(PayloadManifest {
+        file: file.id,
+        file_name: file.file_name,
+        content_type: file.content_type,
+        source,
+    })
+}
+
+fn length(byte_len: u64, whose: &str) -> Result<i64, String> {
+    i64::try_from(byte_len).map_err(|_| format!("{whose} states a byte length that cannot be sent"))
+}
+
 async fn work_order(
     state: &AppState,
     org: tam_types::OrgId,
@@ -183,28 +231,19 @@ async fn work_order(
     };
     // The server commits to the bytes before they move: the device fetches
     // them separately and checks what arrived against these hashes and
-    // lengths, so a truncated transfer is caught on the device. Every file
-    // this route describes is one we hold, so every manifest it states is a
-    // control-plane source; a marketplace-sourced file is the seller's and is
-    // named by its locator rather than described from a blob we do not have.
+    // lengths, so a truncated transfer is caught on the device. A
+    // marketplace-sourced file is named by its locator instead: we hold no
+    // blob to describe it from, and what the device checks against is the
+    // digest another device asserted rather than one we committed to.
     let preparation = preparation_for(leased, operation, projected);
     let payload = match preparation.projected.as_ref() {
         Some(listing) => describe_files(&state.pool, org, &listing.files)
             .await
             .map_err(|error| state.internal(&error.to_string()))?
             .into_iter()
-            .map(|file| PayloadManifest {
-                file: file.id,
-                file_name: file.file_name,
-                content_type: file.content_type,
-                source: PayloadSource::ControlPlane {
-                    committed: Committed {
-                        hash: file.hash,
-                        byte_len: file.byte_len,
-                    },
-                },
-            })
-            .collect(),
+            .map(manifest_for)
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(|error| state.internal(&error))?,
         None => Vec::new(),
     };
     // The seller's own declaration, off the connection they linked. The device
@@ -312,12 +351,27 @@ pub(crate) async fn payload(
                 .kind(APIErrorKind::NotFound),
         ));
     };
+    // This route serves bytes we hold. A marketplace-sourced file has none
+    // here by construction, and its manifest tells the device where they are,
+    // so asking us for them is a device on a path it should not be on rather
+    // than a file that has gone missing.
+    let FileBytes::Held { hash, .. } = described.bytes else {
+        return Err(APIError::new(
+            StatusCode::NOT_FOUND,
+            APIErrorEntry::new(
+                "this file names a marketplace resource rather than a stored blob; \
+                 its bytes are fetched on the device under the seller's own session",
+            )
+            .code(APIErrorCode::ResourceMissing)
+            .kind(APIErrorKind::NotFound),
+        ));
+    };
     let bytes = BlobRepo::new(
         state.pool.clone(),
         LocalObjectStore::new(blobs.root.clone()),
         blobs.kek.clone(),
     )
-    .get(context.org, described.hash)
+    .get(context.org, hash)
     .await
     .map_err(|error| state.internal(&format!("{error:?}")))?;
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes))

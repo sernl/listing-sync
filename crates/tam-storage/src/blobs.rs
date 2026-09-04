@@ -9,7 +9,7 @@
 use sqlx::PgPool;
 use tam_pipeline::store::{ObjectStore, StoreError};
 use tam_secrets::{open_bytes, seal_bytes, BlobAad, Kek, Sealed};
-use tam_types::{ContentHash, FileId, OrgId, Timestamp};
+use tam_types::{ContentHash, FileBytes, FileId, Marketplace, Observation, OrgId, Timestamp};
 
 use crate::codec::{hash_hex, hash_to_db, timestamp_to_db, uuid_to_db};
 use crate::StorageError;
@@ -221,7 +221,22 @@ impl<S: ObjectStore> tam_marketplace::FileSource for PipelineFileSource<S> {
         })?;
         drop(tx);
         let row = row.ok_or(tam_marketplace::FileSourceError::Missing(file))?;
-        let hash = crate::codec::hash_from_db(&row.hash).map_err(|error| {
+        // A marketplace-sourced file has no blob to resolve, and saying
+        // `Missing` would be false: the file is here, its bytes are not, and
+        // they are the seller's device's to fetch under the seller's own
+        // session. Only a server-side upload path reaches this at all, so this
+        // is the refusal that names why rather than a case to support.
+        let Some(stored) = row.hash else {
+            return Err(tam_marketplace::FileSourceError::Unreadable {
+                file,
+                detail: "this file names a marketplace resource rather than a stored blob. \
+                         Its bytes are the seller's, held by the marketplace, and never \
+                         ours: a server-side path has reached for bytes D27 says the \
+                         server must not hold"
+                    .to_owned(),
+            });
+        };
+        let hash = crate::codec::hash_from_db(&stored).map_err(|error| {
             tam_marketplace::FileSourceError::Unreadable {
                 file,
                 detail: error.to_string(),
@@ -292,24 +307,29 @@ fn decode_object(wrapped_dek: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Sealed 
 /// One stored file, as the payload manifest needs to describe it.
 ///
 /// The name and the content type are derived from the file's kind exactly as
-/// [`PipelineFileSource::fetch`] derives them, so the manifest describes the
-/// same bytes the upload would send under the same name. The hash and the
-/// length are the commitment: a device that fetched the bytes checks what
-/// arrived against these before it uploads anything.
+/// [`PipelineFileSource::fetch`] derives them for a blob-backed file, so the
+/// manifest describes the same bytes the upload would send under the same
+/// name; a sourced file carries the name and type the producer recorded for
+/// the bytes handed onward after the unwrap decision — the entry's where there
+/// is one, the bundle's otherwise — rather than a name derived from a digest
+/// we do not have.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredFile {
     pub id: FileId,
     pub file_name: String,
     pub content_type: String,
-    pub hash: ContentHash,
-    pub byte_len: i64,
+    pub bytes: FileBytes,
 }
 
 /// Describes the stated files, in the order asked for, skipping any the tenant
 /// does not hold.
 ///
-/// One join keyed on the tenant: `product_file` carries the kind and the hash,
-/// and `blob` carries the length against that hash.
+/// The join onto `blob` is a LEFT one because a marketplace-sourced file has
+/// no blob row by construction. An inner join would not merely omit its length
+/// — it would drop the file from the answer entirely, which is how a sourced
+/// file reached the manifest builder as nothing at all before this fork.
+/// Which arm a row is in is decided by `hash`, and the schema's
+/// `product_file_blob_or_source` CHECK is what makes that decision total.
 pub async fn describe_files(
     pool: &PgPool,
     org: OrgId,
@@ -320,8 +340,16 @@ pub async fn describe_files(
     crate::pin_org(&mut tx, org).await?;
     for file in files {
         let row = sqlx::query!(
-            "SELECT pf.kind, pf.hash, b.byte_len \
-             FROM product_file pf JOIN blob b ON b.org_id = pf.org_id AND b.hash = pf.hash \
+            "SELECT pf.kind, pf.hash, b.byte_len AS \"byte_len?\", \
+                    pf.scan_state, pf.scan_signature, pf.scanned_at, pf.scan_failure_code, \
+                    pf.source_marketplace, pf.source_connection, pf.source_resource, \
+                    pf.source_entry, pf.observed_hash, pf.observed_byte_len, \
+                    pf.observed_by_device, pf.observed_at, \
+                    pf.asserted_scan_state, pf.asserted_scan_signature, \
+                    pf.asserted_scanned_at, pf.asserted_scan_failure_code, \
+                    pf.payload_file_name, pf.payload_content_type \
+             FROM product_file pf \
+             LEFT JOIN blob b ON b.org_id = pf.org_id AND b.hash = pf.hash \
              WHERE pf.org_id = $1 AND pf.id = $2 AND pf.deleted_at IS NULL",
             uuid_to_db(org.0),
             uuid_to_db(file.0),
@@ -329,15 +357,123 @@ pub async fn describe_files(
         .fetch_optional(&mut *tx)
         .await?;
         let Some(row) = row else { continue };
-        let hash = crate::codec::hash_from_db(&row.hash)?;
-        described.push(StoredFile {
-            id: *file,
-            file_name: format!("{}.{}", crate::codec::hash_hex(hash), extension(&row.kind)),
-            content_type: content_type(&row.kind),
-            hash,
-            byte_len: row.byte_len,
-        });
+        let described_file = match (row.hash, row.byte_len) {
+            (Some(hash), Some(byte_len)) => {
+                let hash = crate::codec::hash_from_db(&hash)?;
+                StoredFile {
+                    id: *file,
+                    // Synthesised, because a blob-backed file has no name of
+                    // its own: it was uploaded as bytes and is named by what
+                    // it is. A sourced file does have one and uses it below.
+                    file_name: format!("{}.{}", crate::codec::hash_hex(hash), extension(&row.kind)),
+                    content_type: content_type(&row.kind),
+                    bytes: FileBytes::Held {
+                        hash,
+                        byte_len: byte_len.try_into().map_err(|_| StorageError::CorruptRow {
+                            reason: format!("blob byte_len {byte_len} is negative"),
+                        })?,
+                        scan: crate::codec::scan_from_db(
+                            required(row.scan_state, "scan_state")?.as_str(),
+                            row.scan_signature,
+                            row.scanned_at,
+                            row.scan_failure_code.as_deref(),
+                        )?,
+                    },
+                }
+            }
+            // A blob-backed row whose blob has gone is not a sourced file and
+            // must not be described as one; it is the same missing file the
+            // inner join used to skip, and it keeps being skipped.
+            (Some(_), None) => continue,
+            (None, _) => {
+                let (marketplace, resource) = sourced(
+                    row.source_marketplace.as_deref(),
+                    row.source_resource.as_deref(),
+                )?;
+                let observed_byte_len = required(row.observed_byte_len, "observed_byte_len")?;
+                let payload_file_name = required(row.payload_file_name, "payload_file_name")?;
+                let payload_content_type =
+                    required(row.payload_content_type, "payload_content_type")?;
+                StoredFile {
+                    id: *file,
+                    // The producer's own name and type, never synthesised: it
+                    // is the one thing here we could not derive, and deriving
+                    // it is how a worksheet reaches a storefront named as a
+                    // zip.
+                    file_name: payload_file_name.clone(),
+                    content_type: payload_content_type.clone(),
+                    bytes: FileBytes::Sourced {
+                        marketplace,
+                        connection: tam_types::ConnectionId(crate::codec::uuid_from_db(required(
+                            row.source_connection,
+                            "source_connection",
+                        )?)),
+                        resource,
+                        entry: row.source_entry,
+                        payload_file_name,
+                        payload_content_type,
+                        observed: Observation {
+                            device: required(row.observed_by_device, "observed_by_device")?,
+                            hash: crate::codec::hash_from_db(&required(
+                                row.observed_hash,
+                                "observed_hash",
+                            )?)?,
+                            byte_len: observed_byte_len.try_into().map_err(|_| {
+                                StorageError::CorruptRow {
+                                    reason: format!(
+                                        "observed_byte_len {observed_byte_len} is negative"
+                                    ),
+                                }
+                            })?,
+                            scan: crate::codec::scan_from_db(
+                                required(row.asserted_scan_state, "asserted_scan_state")?.as_str(),
+                                row.asserted_scan_signature,
+                                row.asserted_scanned_at,
+                                row.asserted_scan_failure_code.as_deref(),
+                            )?,
+                            observed_at: crate::codec::timestamp_from_db(required(
+                                row.observed_at,
+                                "observed_at",
+                            )?),
+                        },
+                    },
+                }
+            }
+        };
+        described.push(described_file);
     }
     tx.commit().await?;
     Ok(described)
+}
+
+/// Reads the source branch's two identifying columns.
+///
+/// Every column here is guaranteed present by `product_file_blob_or_source`,
+/// so a missing one is a corrupt row rather than a case to handle, and saying
+/// so names the constraint that was supposed to prevent it.
+fn sourced(
+    marketplace: Option<&str>,
+    resource: Option<&str>,
+) -> Result<(Marketplace, String), StorageError> {
+    let raw = marketplace.ok_or_else(|| StorageError::CorruptRow {
+        reason: "a file with no hash names no source marketplace, which \
+                 product_file_blob_or_source forbids"
+            .to_owned(),
+    })?;
+    let marketplace = crate::connections::marketplace_from_db(raw)?;
+    let resource = resource.ok_or_else(|| StorageError::CorruptRow {
+        reason: "a file with no hash names no source resource, which \
+                 product_file_blob_or_source forbids"
+            .to_owned(),
+    })?;
+    Ok((marketplace, resource.to_owned()))
+}
+
+/// One column of the source branch, which the CHECK guarantees is present.
+fn required<T>(value: Option<T>, column: &str) -> Result<T, StorageError> {
+    value.ok_or_else(|| StorageError::CorruptRow {
+        reason: format!(
+            "a file with no hash has no {column}, which product_file_blob_or_source forbids"
+        ),
+    })
 }

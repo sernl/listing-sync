@@ -12,7 +12,7 @@ use super::TptBaseProduct;
 use crate::product::canonical::ProductIdentity;
 use crate::RightsDeclaration;
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
     ProductFile, ProductId, ScanOutcome, Timestamp, Uuid,
 };
 
@@ -71,10 +71,12 @@ pub(crate) fn file(role: FileRole) -> ProductFile {
         id: FileId(Uuid([0x11; 16])),
         role,
         kind: FileKind::Pdf,
-        hash: ContentHash([0x22; 32]),
-        byte_len: 2048,
-        scan: ScanOutcome::Clean {
-            at: Timestamp(1_700_000_000_000),
+        bytes: FileBytes::Held {
+            hash: ContentHash([0x22; 32]),
+            byte_len: 2048,
+            scan: ScanOutcome::Clean {
+                at: Timestamp(1_700_000_000_000),
+            },
         },
     }
 }

@@ -9,8 +9,8 @@ use sqlx::PgPool;
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
 use tam_storage::{ClaimPolicy, DeviceRef, JobRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
 use tam_types::{
-    Actor, ContentHash, CopyFormat, InventoryId, JobId, MappingId, OrgId, Stamp, SystemComponent,
-    Timestamp, Uuid,
+    Actor, ContentHash, CopyFormat, FileBytes, InventoryId, JobId, MappingId, OrgId, Stamp,
+    SystemComponent, Timestamp, Uuid,
 };
 
 pub(crate) const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -62,9 +62,11 @@ pub(crate) async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                         id: tam_types::FileId(Uuid([0x03; 16])),
                         role: tam_types::FileRole::Payload,
                         kind: tam_types::FileKind::Pdf,
-                        hash: ContentHash([0x04; 32]),
-                        byte_len: 4,
-                        scan: tam_types::ScanOutcome::Pending,
+                        bytes: FileBytes::Held {
+                            hash: ContentHash([0x04; 32]),
+                            byte_len: 4,
+                            scan: tam_types::ScanOutcome::Pending,
+                        },
                     },
                     vec![],
                 ),

@@ -40,9 +40,9 @@ use tam_storage::{
     NewJobItem, ProductRepo, RateBudgetRepo, TaxonomyRepo,
 };
 use tam_types::{
-    Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId,
-    JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, UserId, Uuid,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole,
+    InventoryId, JobId, ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule,
+    ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title, UserId, Uuid,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -565,9 +565,11 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
                 id: FileId(Uuid([0x21; 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: ContentHash([0x51; 32]),
-                byte_len: 13,
-                scan: ScanOutcome::Clean { at: NOW },
+                bytes: FileBytes::Held {
+                    hash: ContentHash([0x51; 32]),
+                    byte_len: 13,
+                    scan: ScanOutcome::Clean { at: NOW },
+                },
             },
             vec![],
         ),
@@ -575,9 +577,11 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
             id: FileId(Uuid([0x22; 16])),
             role: FileRole::Cover,
             kind: FileKind::Image,
-            hash: ContentHash([0x52; 32]),
-            byte_len: 4,
-            scan: ScanOutcome::Clean { at: NOW },
+            bytes: FileBytes::Held {
+                hash: ContentHash([0x52; 32]),
+                byte_len: 4,
+                scan: ScanOutcome::Clean { at: NOW },
+            },
         }),
         previews: vec![],
         subjects: vec![SUBJECT],

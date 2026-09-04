@@ -406,8 +406,16 @@ impl Serialize for PayloadManifest {
     /// reads as our server being broken rather than as a client being too old.
     /// Failing at the envelope is louder and truer. The cost is real and is
     /// the reason the window has an end condition rather than a hope: the
-    /// item stays leased until its lease expires. Nothing emits a marketplace
-    /// source yet, and nothing may until every device has updated.
+    /// item stays leased until its lease expires.
+    ///
+    /// The manifest builder does now emit a marketplace source for a file that
+    /// names one, so the protection is no longer that nothing produces the
+    /// shape. It is that nothing produces such a *file* yet — no import has
+    /// written a sourced row — and that when one does, the per-device gate
+    /// decides who may be handed it: a device below the shim is not offered
+    /// the item at all and takes the idle path, rather than being handed an
+    /// envelope it cannot decode. The fleet-wide condition remains, but it is
+    /// the condition for retiring this shim rather than for emitting.
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
         let legacy = match &self.source {

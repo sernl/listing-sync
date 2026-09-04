@@ -197,10 +197,21 @@ impl ProductRepo {
 
         let files = sqlx::query_as!(
             FileRow,
-            "SELECT f.id, f.role, f.kind, f.hash, b.byte_len AS \"byte_len!\", \
-             f.scan_state, f.scan_signature, f.scanned_at, f.scan_failure_code \
+            // A LEFT JOIN, because a marketplace-sourced file has no blob row
+            // and an inner one would not merely omit its length — it would
+            // drop the file from the product entirely, so a device-imported
+            // product would read back with its payload missing everywhere the
+            // catalogue is read from, the console and the manifest builder
+            // included.
+            "SELECT f.id, f.role, f.kind, f.hash, b.byte_len AS \"byte_len?\", \
+             f.scan_state, f.scan_signature, f.scanned_at, f.scan_failure_code, \
+             f.source_marketplace, f.source_connection, f.source_resource, f.source_entry, \
+             f.observed_hash, f.observed_byte_len, f.observed_by_device, f.observed_at, \
+             f.asserted_scan_state, f.asserted_scan_signature, \
+             f.asserted_scanned_at, f.asserted_scan_failure_code, \
+             f.payload_file_name, f.payload_content_type \
              FROM product_file f \
-             JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash \
+             LEFT JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash \
              WHERE f.org_id = $1 AND f.product_id = $2 AND f.deleted_at IS NULL \
              ORDER BY f.position",
             org_db,
@@ -561,6 +572,96 @@ struct FileWrite {
     at: DateTime<Utc>,
 }
 
+/// Writes a marketplace-sourced file and its first observation.
+///
+/// One statement for the row, because the exactly-one CHECK is per statement,
+/// and the observation appended in the same transaction so the history holds
+/// every observation including the one the file's own columns record.
+///
+/// There is no blob to compare a length against here, which is the whole
+/// difference: the blob-backed branch asserts `blob.byte_len` matches the
+/// file's before it writes, and that assertion is the only thing standing
+/// between a mismatched length and a manifest that lies to a device. Nothing
+/// on this branch can make the same promise, so it does not pretend to — the
+/// length is the device's report and is recorded as such.
+async fn insert_sourced_file(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    write: &FileWrite,
+    position: i32,
+    file: &ProductFile,
+) -> Result<(), StorageError> {
+    let FileWrite {
+        org: org_db,
+        product: product_db,
+        at: at_db,
+    } = *write;
+    let tam_types::FileBytes::Sourced {
+        marketplace,
+        connection,
+        resource,
+        entry,
+        payload_file_name,
+        payload_content_type,
+        observed,
+    } = &file.bytes
+    else {
+        return Err(StorageError::Inconsistent {
+            reason: "insert_sourced_file called for a file that holds its own bytes".to_owned(),
+        });
+    };
+    let asserted = ScanColumns::from_outcome(&observed.scan)?;
+    let observed_byte_len =
+        i64::try_from(observed.byte_len).map_err(|_| StorageError::Inconsistent {
+            reason: format!(
+                "observed byte length {} exceeds the column range",
+                observed.byte_len
+            ),
+        })?;
+    sqlx::query!(
+        "INSERT INTO product_file \
+         (org_id, id, product_id, position, role, kind, created_at, \
+          source_marketplace, source_connection, source_resource, source_entry, \
+          observed_hash, observed_byte_len, \
+          asserted_scan_state, asserted_scan_signature, asserted_scan_failure_code, \
+          asserted_scanned_at, observed_by_device, observed_at, recorded_at, \
+          payload_file_name, payload_content_type) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+                 $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+        org_db,
+        uuid_to_db(file.id.0),
+        product_db,
+        position,
+        file_role_to_db(file.role),
+        file_kind_to_db(file.kind),
+        at_db,
+        crate::codec::marketplace_to_db(*marketplace),
+        uuid_to_db(connection.0),
+        resource,
+        entry.as_deref(),
+        hash_to_db(observed.hash),
+        observed_byte_len,
+        asserted.state,
+        asserted.signature,
+        asserted.failure_code,
+        asserted.scanned_at,
+        observed.device,
+        timestamp_to_db(observed.observed_at)?,
+        at_db,
+        payload_file_name,
+        payload_content_type,
+    )
+    .execute(&mut **tx)
+    .await?;
+    crate::file_source::append(
+        tx,
+        tam_types::OrgId(crate::codec::uuid_from_db(org_db)),
+        file.id,
+        observed,
+        crate::codec::timestamp_from_db(at_db),
+    )
+    .await
+}
+
 async fn insert_file(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     write: &FileWrite,
@@ -581,11 +682,25 @@ async fn insert_file(
             ),
         });
     }
-    let hash = hash_to_db(file.hash);
-    let byte_len = i64::try_from(file.byte_len).map_err(|_| StorageError::Inconsistent {
-        reason: format!("byte length {} exceeds the column range", file.byte_len),
+    // The two arms are two different statements rather than one with more
+    // columns, because `product_file_blob_or_source` is checked per statement:
+    // a sourced row has to arrive with its whole group, and a blob-backed one
+    // has to arrive with none of it.
+    let (hash, byte_len, scan) = match &file.bytes {
+        tam_types::FileBytes::Held {
+            hash,
+            byte_len,
+            scan,
+        } => (*hash, *byte_len, scan),
+        tam_types::FileBytes::Sourced { .. } => {
+            return insert_sourced_file(tx, write, position, file).await;
+        }
+    };
+    let hash = hash_to_db(hash);
+    let byte_len = i64::try_from(byte_len).map_err(|_| StorageError::Inconsistent {
+        reason: format!("byte length {byte_len} exceeds the column range"),
     })?;
-    let object_key = format!("blob/{}", hash_hex(file.hash));
+    let object_key = format!("blob/{}", hash_hex(crate::codec::hash_from_db(&hash)?));
 
     // dek_key_version 0 is the not-yet-encrypted sentinel; M1f assigns real
     // envelope-encryption versions when the file pipeline lands.
@@ -617,7 +732,7 @@ async fn insert_file(
         });
     }
 
-    let scan = ScanColumns::from_outcome(&file.scan)?;
+    let scan = ScanColumns::from_outcome(scan)?;
     sqlx::query!(
         "INSERT INTO product_file \
          (org_id, id, product_id, position, role, kind, hash, \
@@ -786,12 +901,26 @@ struct FileRow {
     id: uuid::Uuid,
     role: String,
     kind: String,
-    hash: Vec<u8>,
-    byte_len: i64,
-    scan_state: String,
+    hash: Option<Vec<u8>>,
+    byte_len: Option<i64>,
+    scan_state: Option<String>,
     scan_signature: Option<String>,
     scanned_at: Option<DateTime<Utc>>,
     scan_failure_code: Option<String>,
+    source_marketplace: Option<String>,
+    source_connection: Option<uuid::Uuid>,
+    source_resource: Option<String>,
+    source_entry: Option<String>,
+    observed_hash: Option<Vec<u8>>,
+    observed_byte_len: Option<i64>,
+    observed_by_device: Option<String>,
+    observed_at: Option<DateTime<Utc>>,
+    asserted_scan_state: Option<String>,
+    asserted_scan_signature: Option<String>,
+    asserted_scanned_at: Option<DateTime<Utc>>,
+    asserted_scan_failure_code: Option<String>,
+    payload_file_name: Option<String>,
+    payload_content_type: Option<String>,
 }
 
 struct GradeRow {
@@ -832,26 +961,79 @@ fn decode_residue(row: ResidueRow) -> Result<ImportedTerm, StorageError> {
     })
 }
 
+/// One row into a file, choosing its arm by whether the server holds a digest.
+///
+/// `product_file_blob_or_source` is what makes the choice total: a row has a
+/// hash and no source group, or a source group and no hash, so there is no
+/// third case to represent and none to guess at. Every `missing` below names
+/// the constraint that was supposed to prevent it, because reaching one means
+/// the row is corrupt rather than that the branch needs handling.
 fn decode_file(row: FileRow) -> Result<(FileRole, ProductFile), StorageError> {
     let role = file_role_from_db(&row.role)?;
+    let bytes = match row.hash {
+        Some(hash) => tam_types::FileBytes::Held {
+            hash: hash_from_db(&hash)?,
+            byte_len: u64::try_from(missing(row.byte_len, "byte_len")?).map_err(|_| {
+                StorageError::CorruptRow {
+                    reason: "negative blob byte_len".to_owned(),
+                }
+            })?,
+            scan: scan_from_db(
+                &missing(row.scan_state, "scan_state")?,
+                row.scan_signature,
+                row.scanned_at,
+                row.scan_failure_code.as_deref(),
+            )?,
+        },
+        None => tam_types::FileBytes::Sourced {
+            marketplace: crate::connections::marketplace_from_db(&missing(
+                row.source_marketplace,
+                "source_marketplace",
+            )?)?,
+            connection: tam_types::ConnectionId(uuid_from_db(missing(
+                row.source_connection,
+                "source_connection",
+            )?)),
+            resource: missing(row.source_resource, "source_resource")?,
+            entry: row.source_entry,
+            payload_file_name: missing(row.payload_file_name, "payload_file_name")?,
+            payload_content_type: missing(row.payload_content_type, "payload_content_type")?,
+            observed: tam_types::Observation {
+                device: missing(row.observed_by_device, "observed_by_device")?,
+                hash: hash_from_db(&missing(row.observed_hash, "observed_hash")?)?,
+                byte_len: u64::try_from(missing(row.observed_byte_len, "observed_byte_len")?)
+                    .map_err(|_| StorageError::CorruptRow {
+                        reason: "negative observed byte_len".to_owned(),
+                    })?,
+                scan: scan_from_db(
+                    &missing(row.asserted_scan_state, "asserted_scan_state")?,
+                    row.asserted_scan_signature,
+                    row.asserted_scanned_at,
+                    row.asserted_scan_failure_code.as_deref(),
+                )?,
+                observed_at: crate::codec::timestamp_from_db(missing(
+                    row.observed_at,
+                    "observed_at",
+                )?),
+            },
+        },
+    };
     Ok((
         role,
         ProductFile {
             id: FileId(uuid_from_db(row.id)),
             role,
             kind: file_kind_from_db(&row.kind)?,
-            hash: hash_from_db(&row.hash)?,
-            byte_len: u64::try_from(row.byte_len).map_err(|_| StorageError::CorruptRow {
-                reason: format!("negative blob byte_len {}", row.byte_len),
-            })?,
-            scan: scan_from_db(
-                &row.scan_state,
-                row.scan_signature,
-                row.scanned_at,
-                row.scan_failure_code.as_deref(),
-            )?,
+            bytes,
         },
     ))
+}
+
+/// A column the exactly-one CHECK guarantees is present on the branch taken.
+fn missing<T>(value: Option<T>, column: &str) -> Result<T, StorageError> {
+    value.ok_or_else(|| StorageError::CorruptRow {
+        reason: format!("{column} is absent on a row product_file_blob_or_source admitted"),
+    })
 }
 
 fn partition_files(

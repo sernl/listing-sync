@@ -25,9 +25,9 @@ use tam_storage::{
 };
 use tam_sync_worker::drain_request;
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, JobId, ListingCopy,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, Uuid,
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId, JobId,
+    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    ScanOutcome, Timestamp, Title, Uuid,
 };
 
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -93,9 +93,11 @@ async fn seed(pool: &PgPool, tag: u8) -> (ProductId, MappingId) {
                         id: FileId(Uuid([tag.wrapping_add(0x60); 16])),
                         role: FileRole::Payload,
                         kind: FileKind::Pdf,
-                        hash: ContentHash([tag; 32]),
-                        byte_len: 4,
-                        scan: ScanOutcome::Clean { at: NOW },
+                        bytes: FileBytes::Held {
+                            hash: ContentHash([tag; 32]),
+                            byte_len: 4,
+                            scan: ScanOutcome::Clean { at: NOW },
+                        },
                     },
                     vec![],
                 ),

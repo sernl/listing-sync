@@ -23,9 +23,9 @@ use tam_storage::{
     AnalyticsRepo, MappingRepo, MetricSnapshot, ProductRepo, SessionRepo, SessionToken,
 };
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, InventoryId, ListingCopy, MappingId,
-    OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp,
-    Title, UserId, Uuid,
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId, ListingCopy,
+    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
+    Timestamp, Title, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -77,9 +77,11 @@ fn product(org: OrgId, id: MappingId) -> tam_domain::CanonicalProduct {
                 id: FileId(Uuid([seed.wrapping_add(0x10); 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: ContentHash([seed; 32]),
-                byte_len: 4,
-                scan: ScanOutcome::Pending,
+                bytes: FileBytes::Held {
+                    hash: ContentHash([seed; 32]),
+                    byte_len: 4,
+                    scan: ScanOutcome::Pending,
+                },
             },
             vec![],
         ),

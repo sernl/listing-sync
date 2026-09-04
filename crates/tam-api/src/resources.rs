@@ -218,6 +218,23 @@ pub struct FileView {
     pub kind: String,
     pub byte_len: u64,
     pub scan: String,
+    /// Who vouched for `scan`.
+    ///
+    /// `"server"` where we scanned the bytes ourselves, `"device"` where a
+    /// seller's machine did and we never held them. Rendering the two the same
+    /// way would put a device's assertion in our own voice, which is the
+    /// distinction `hash` and `observed_hash` exist to keep and which Q-b
+    /// decided explicitly: the device's scan is acceptable and advisory, and
+    /// we do not restate it as a clean bill of ours.
+    pub scan_vouched_by: String,
+}
+
+/// Who vouched for a file's scan, from which arm holds its bytes.
+fn scan_vouched_by(bytes: &tam_types::FileBytes) -> &'static str {
+    match bytes {
+        tam_types::FileBytes::Held { .. } => "server",
+        tam_types::FileBytes::Sourced { .. } => "device",
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -317,8 +334,9 @@ pub(crate) async fn product_view(
             id: file.id.0,
             role: role_str(file.role).to_owned(),
             kind: kind_str(file.kind).to_owned(),
-            byte_len: file.byte_len,
-            scan: scan_str(&file.scan).to_owned(),
+            byte_len: file.bytes.byte_len(),
+            scan: scan_str(file.bytes.scan()).to_owned(),
+            scan_vouched_by: scan_vouched_by(&file.bytes).to_owned(),
         })
         .collect();
     if let Some(cover) = &aggregate.cover {
@@ -326,8 +344,9 @@ pub(crate) async fn product_view(
             id: cover.id.0,
             role: role_str(cover.role).to_owned(),
             kind: kind_str(cover.kind).to_owned(),
-            byte_len: cover.byte_len,
-            scan: scan_str(&cover.scan).to_owned(),
+            byte_len: cover.bytes.byte_len(),
+            scan: scan_str(cover.bytes.scan()).to_owned(),
+            scan_vouched_by: scan_vouched_by(&cover.bytes).to_owned(),
         });
     }
     for preview in &aggregate.previews {
@@ -335,8 +354,9 @@ pub(crate) async fn product_view(
             id: preview.id.0,
             role: role_str(preview.role).to_owned(),
             kind: kind_str(preview.kind).to_owned(),
-            byte_len: preview.byte_len,
-            scan: scan_str(&preview.scan).to_owned(),
+            byte_len: preview.bytes.byte_len(),
+            scan: scan_str(preview.bytes.scan()).to_owned(),
+            scan_vouched_by: scan_vouched_by(&preview.bytes).to_owned(),
         });
     }
     let grades = GradesView {

@@ -16,7 +16,7 @@ use tam_domain::{
 use tam_marketplace::{RemoteLifecycle, RemoteListingId};
 use tam_storage::{MappingAdd, MappingRepo, PastedBind, ProductRepo};
 use tam_types::{
-    ContentHash, FileId, FileKind, FileRole, InventoryId, MappingId, OrgId, PayloadSet,
+    ContentHash, FileBytes, FileId, FileKind, FileRole, InventoryId, MappingId, OrgId, PayloadSet,
     PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Uuid,
 };
 
@@ -43,9 +43,11 @@ fn second_product() -> CanonicalProduct {
             id: FileId(Uuid([0x22; 16])),
             role: FileRole::Payload,
             kind: FileKind::Pdf,
-            hash: ContentHash([0x52; 32]),
-            byte_len: 4,
-            scan: ScanOutcome::Pending,
+            bytes: FileBytes::Held {
+                hash: ContentHash([0x52; 32]),
+                byte_len: 4,
+                scan: ScanOutcome::Pending,
+            },
         },
         vec![],
     );

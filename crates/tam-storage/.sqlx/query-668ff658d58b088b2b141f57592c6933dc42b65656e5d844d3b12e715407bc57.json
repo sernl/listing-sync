@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.id AS mapping_id, m.product_id, m.sever_generation, m.binding_state, m.lifecycle_state, m.remote_id_kind, m.remote_url, m.remote_numeric_id, f.hash FROM mapping m JOIN product_file f ON f.org_id = m.org_id AND f.product_id = m.product_id WHERE m.org_id = $1 AND m.inventory = $2 AND m.id = ANY($3) AND f.role = 'payload' AND f.deleted_at IS NULL ORDER BY m.id, f.position",
+  "query": "SELECT m.id AS mapping_id, m.product_id, m.sever_generation, m.binding_state, m.lifecycle_state, m.remote_id_kind, m.remote_url, m.remote_numeric_id, COALESCE(f.hash, f.observed_hash) AS \"hash!\" FROM mapping m JOIN product_file f ON f.org_id = m.org_id AND f.product_id = m.product_id WHERE m.org_id = $1 AND m.inventory = $2 AND m.id = ANY($3) AND f.role = 'payload' AND f.deleted_at IS NULL ORDER BY m.id, f.position",
   "describe": {
     "columns": [
       {
@@ -45,7 +45,7 @@
       },
       {
         "ordinal": 8,
-        "name": "hash",
+        "name": "hash!",
         "type_info": "Bytea"
       }
     ],
@@ -65,8 +65,8 @@
       true,
       true,
       true,
-      false
+      null
     ]
   },
-  "hash": "dbb579e6f34dca2c1d526165872474bebf30510faaf12a68e800e241c7804f26"
+  "hash": "668ff658d58b088b2b141f57592c6933dc42b65656e5d844d3b12e715407bc57"
 }

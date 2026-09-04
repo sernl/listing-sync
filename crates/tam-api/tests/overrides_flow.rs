@@ -19,7 +19,7 @@ use tam_api::resources::OverridesView;
 use tam_api::{router, AppState, Config, SESSION_COOKIE};
 use tam_domain::{CanonicalTerm, TermKind};
 use tam_storage::{SessionRepo, SessionToken, TaxonomyRepo};
-use tam_types::{CanonicalTermId, OrgId, Timestamp, UserId, Uuid};
+use tam_types::{CanonicalTermId, FileBytes, OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -544,9 +544,11 @@ async fn seed_projectable(pool: &PgPool, org: OrgId, seed: u8) -> tam_storage::L
                         id: tam_types::FileId(Uuid([seed.wrapping_add(2); 16])),
                         role: tam_types::FileRole::Payload,
                         kind: tam_types::FileKind::Pdf,
-                        hash: tam_types::ContentHash([seed.wrapping_add(3); 32]),
-                        byte_len: 4,
-                        scan: tam_types::ScanOutcome::Clean { at: NOW },
+                        bytes: FileBytes::Held {
+                            hash: tam_types::ContentHash([seed.wrapping_add(3); 32]),
+                            byte_len: 4,
+                            scan: tam_types::ScanOutcome::Clean { at: NOW },
+                        },
                     },
                     vec![],
                 ),
@@ -554,9 +556,11 @@ async fn seed_projectable(pool: &PgPool, org: OrgId, seed: u8) -> tam_storage::L
                     id: tam_types::FileId(Uuid([seed.wrapping_add(4); 16])),
                     role: tam_types::FileRole::Cover,
                     kind: tam_types::FileKind::Image,
-                    hash: tam_types::ContentHash([seed.wrapping_add(5); 32]),
-                    byte_len: 4,
-                    scan: tam_types::ScanOutcome::Clean { at: NOW },
+                    bytes: FileBytes::Held {
+                        hash: tam_types::ContentHash([seed.wrapping_add(5); 32]),
+                        byte_len: 4,
+                        scan: tam_types::ScanOutcome::Clean { at: NOW },
+                    },
                 }),
                 previews: vec![],
                 subjects: vec![TERM],

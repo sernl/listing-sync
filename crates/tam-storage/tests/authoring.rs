@@ -16,8 +16,9 @@ use tam_domain::{
 };
 use tam_storage::{AnsweredElection, ElectionRepo, ProductEdit, ProductRepo};
 use tam_types::{
-    ContentHash, CopyFormat, Currency, FileId, FileKind, FileRole, InventoryId, ListingCopy, Money,
-    OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
+    ContentHash, CopyFormat, Currency, FileBytes, FileId, FileKind, FileRole, InventoryId,
+    ListingCopy, Money, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome,
+    Timestamp, Title, Uuid,
 };
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -52,9 +53,11 @@ fn product(org: OrgId, id: ProductId, hash: ContentHash, byte_len: u64) -> Canon
                 id: FileId(Uuid([0x21; 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash,
-                byte_len,
-                scan: ScanOutcome::Clean { at: T0 },
+                bytes: FileBytes::Held {
+                    hash,
+                    byte_len,
+                    scan: ScanOutcome::Clean { at: T0 },
+                },
             },
             vec![],
         ),

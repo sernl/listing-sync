@@ -37,8 +37,8 @@ use tam_storage::{
     TptBaseRepo,
 };
 use tam_types::{
-    Actor, CanonicalTermId, ContentHash, CopyFormat, FileId, FileRole, InventoryId, JobId,
-    ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileRole, InventoryId,
+    JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
     ProductId, ScanOutcome, Stamp, Timestamp, Title, Uuid,
 };
 
@@ -129,11 +129,16 @@ impl FileHandle {
             id: FileId(fresh_uuid()),
             role,
             kind,
-            hash,
-            byte_len: self.byte_len,
-            // The pipeline scanned the bytes before they were stored, and a
-            // handle exists only because that scan passed.
-            scan: ScanOutcome::Clean { at: now },
+            // Held: a handle names bytes this tenant has already uploaded, and
+            // the create refuses one whose hash we do not hold, so there is no
+            // route from this constructor to a sourced file.
+            bytes: FileBytes::Held {
+                hash,
+                byte_len: self.byte_len,
+                // The pipeline scanned the bytes before they were stored, and
+                // a handle exists only because that scan passed.
+                scan: ScanOutcome::Clean { at: now },
+            },
         })
     }
 }
@@ -1411,7 +1416,7 @@ mod tests {
             .resolve(FileRole::Payload, tam_types::Timestamp(9))
             .expect("a well-formed handle resolves");
         assert_eq!(
-            (file.role, file.kind, file.byte_len),
+            (file.role, file.kind, file.bytes.byte_len()),
             (FileRole::Payload, tam_types::FileKind::Pdf, 9),
             "the handle's own kind and length reach the catalogue row"
         );

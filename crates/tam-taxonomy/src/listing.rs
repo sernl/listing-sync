@@ -296,7 +296,7 @@ pub fn project_listing_with_overrides(
 
     // Gate four: every payload scanned clean before any byte leaves.
     for file in product.payload.iter() {
-        if !matches!(file.scan, ScanOutcome::Clean { .. }) {
+        if !matches!(file.bytes.scan(), ScanOutcome::Clean { .. }) {
             return Err(ProjectionBlocked::ScanIncomplete { file: file.id });
         }
     }
@@ -352,7 +352,7 @@ mod tests {
         TermKind, VocabularyId, VocabularyPath,
     };
     use tam_types::{
-        CanonicalTermId, ContentHash, CopyFormat, Currency, FileId, FileKind, FileRole,
+        CanonicalTermId, ContentHash, CopyFormat, Currency, FileBytes, FileId, FileKind, FileRole,
         InventoryId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, ProductFile,
         ProductId, ScanOutcome, Timestamp, Title, Uuid,
     };
@@ -369,9 +369,11 @@ mod tests {
             id: FileId(Uuid([0x21; 16])),
             role: FileRole::Payload,
             kind: FileKind::Pdf,
-            hash: ContentHash([0x51; 32]),
-            byte_len: 4,
-            scan,
+            bytes: FileBytes::Held {
+                hash: ContentHash([0x51; 32]),
+                byte_len: 4,
+                scan,
+            },
         }
     }
 
@@ -380,9 +382,11 @@ mod tests {
             id: FileId(Uuid([0x22; 16])),
             role: FileRole::Cover,
             kind: FileKind::Image,
-            hash: ContentHash([0x52; 32]),
-            byte_len: 4,
-            scan: ScanOutcome::Clean { at: NOW },
+            bytes: FileBytes::Held {
+                hash: ContentHash([0x52; 32]),
+                byte_len: 4,
+                scan: ScanOutcome::Clean { at: NOW },
+            },
         }
     }
 

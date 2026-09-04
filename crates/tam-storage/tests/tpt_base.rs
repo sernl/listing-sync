@@ -14,7 +14,7 @@ use tam_domain::product::{
 use tam_domain::{CanonicalProduct, DeclarationSource, GradeDeclaration, RightsDeclaration};
 use tam_storage::{ProductRepo, TptBaseRecord, TptBaseRepo};
 use tam_types::{
-    ContentHash, CopyFormat, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, ListingCopy, OrgId, PayloadSet,
     PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, Uuid,
 };
 
@@ -62,9 +62,11 @@ fn sample(org: OrgId, id: ProductId) -> CanonicalProduct {
                 id: FileId(Uuid([0x31; 16])),
                 role: FileRole::Payload,
                 kind: FileKind::Pdf,
-                hash: ContentHash([0x51; 32]),
-                byte_len: 2048,
-                scan: ScanOutcome::Clean { at: AT },
+                bytes: FileBytes::Held {
+                    hash: ContentHash([0x51; 32]),
+                    byte_len: 2048,
+                    scan: ScanOutcome::Clean { at: AT },
+                },
             },
             vec![],
         ),
