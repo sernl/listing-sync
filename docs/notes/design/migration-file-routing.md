@@ -3,7 +3,7 @@
 How a seller's Tes catalogue reaches TeachersPayTeachers with no file upload by the seller, and where the bytes are at every moment.
 
 - date: 2026-09-04
-- status: design accepted as the plan of record. S1, the redirect fix with its re-issued hop, and S2 are built; S3 and S4 are unblocked. Every founder decision in the last section is taken: Q-c to Q-h adopted by silence on 2026-09-04, Q-a and Q-b decided on 2026-09-04
+- status: design accepted as the plan of record, and partly landed. On `main` at 2108cd0f: S1 with its compatibility shim, the same-host redirect policy, S2's marketplace-backed file source, and the session broker's deletion with its role. Staged above it: the re-issued marketplace-named hop, and S3's C1 and C5. In flight: the two-armed `FileBytes` and the locator it is written through, which land together because the type and the writes that consume it are in different crates. S4 is unblocked and unstarted. Every founder decision in the last section is taken: Q-c to Q-h adopted by silence on 2026-09-04, Q-a and Q-b decided on 2026-09-04
 - decisions it implements: D1 (the seller's device is the only thing that opens a connection to a no-API marketplace), D27 (file ingest moves to the device so the bytes are on the seller's machine at upload time and never on our servers)
 - what it continues: `desktop-data-plane.md`'s interim payload fetch, which this ends; `engine-driver-split.md` steps 10a, 10b, 14 and 15; `tpt-vocabulary-rebase.md`, whose mapping work this consumes unchanged
 
@@ -198,6 +198,54 @@ What is new is a `product_file_source` row written beside each `product_file`, f
 With the read on the device, its canonicalisation leg goes and its enqueue half stays, because minting the create and removal jobs, lowering the intent and deriving the idempotency key are pure ledger work.
 The recommendation is to fold that enqueue into the import route's own transaction, so the device saying the catalogue is complete is what mints the create job, which deletes the poller, its key, its store root and its broker lease outright.
 
+### How a file says where its bytes are
+
+`tam_types::ProductFile` carried `hash`, `byte_len` and `scan` beside each other, which cannot describe a file whose bytes we do not hold.
+It now carries one value, `FileBytes`, with two arms: `Held { hash, byte_len, scan }` for bytes in our object store, and `Sourced { marketplace, connection, resource, entry, payload_file_name, payload_content_type, observed }` for bytes the seller's marketplace holds, where `observed` is what one device reported — its device, digest, length, scan and its own instant.
+
+Two arms rather than nullable fields because there are two claims, not one claim sometimes absent.
+`hash` is a digest the server computed over bytes it holds; `observed_hash` is a digest a device asserted over bytes we never held; and a schema or a type that let one stand where the other is expected would let a device's word be read as our verification.
+The database says the same thing in `product_file_blob_or_source`, which admits a row that is blob-backed or marketplace-sourced and neither both nor neither, so the type makes the rejected row unconstructible rather than merely rejected — the difference between learning at compile time and learning from a constraint violation inside a transaction.
+`byte_len` and `scan` moved inside the arms for the same reason: the held length is the input to the blob assertion and the sourced one is the device's report, and the two verdicts have two authors.
+
+A product with a sourced payload is unwritable without this, which is what settled it.
+`PayloadSet` is non-empty by construction, so the product insert must be handed a payload file and will write whatever it is handed; and `product_payload_nonempty`, a deferred trigger in `0003_catalogue.sql`, closes the same invariant in SQL, so a product and its first payload must land in one transaction and no separate write path can create one.
+A device-imported product is mixed — a sourced payload and a blob-backed cover — so one insert must write both, and only the type can tell it which is which.
+
+### What must be settled before anything produces a sourced file
+
+Five requirements, each with its decision, recorded here because a wrong reading of any of them is silent rather than loud.
+
+What `expected` digests: the bytes handed onward after the unwrap decision — the sole entry where a bundle reduces to one file, the bundle otherwise — and never the container.
+A marketplace that re-zips a bundle with different timestamps changes the container's digest while the entry's is unchanged, so digesting the container would stall a single-file resource on a mismatch that means nothing.
+
+What an unwrapped file is called: the name and content type come from the entry, recorded by the producer at import time and carried in the manifest, never from the wrapper.
+A device that unwraps and finds the manifest's name disagreeing with the entry's refuses by name rather than uploading a worksheet as a zip.
+
+What `entry: Some(_)` means to a device today: nothing, and it must therefore be refused by name rather than ignored.
+Ignoring it would upload the bundle while the manifest says an entry, which is the wrong-bytes case wearing the right digest's name.
+
+What the two marketplace requests per sourced file cost: they are charged to the source marketplace's rate window, the same shape `driver.rs` corrected once already.
+Fetching the seller's own file is a marketplace request like any other, and an unbilled one is a ceiling that does not hold.
+
+Which devices may be handed a sourced item: only one whose `app_version` is at or past the S1 shim.
+The rule is per claiming device rather than fleet-wide — the claim already names the device and reads its row — so a device below the shim is not handed such an item and takes the idle path that already exists, leaving the item for a device that can run it, rather than an up-to-date machine being penalised for a stale sibling.
+The fleet-wide condition is real but it is the condition for retiring the shim, not for emitting.
+A tenant whose only devices are old must not see an item wait in silence: the item's view says it is waiting for a device at or past that version, and the console says to update the desktop application.
+
+### The cover travels inside the page
+
+An earlier draft had the device upload the derived cover through the upload route and hand back a file handle.
+It carries in the page instead, base64 beside the resource it belongs to, for two reasons found while building it.
+The page becomes atomic, so a resource is described and its cover stored together or not at all rather than leaving an orphaned blob behind a failed page.
+And the upload route runs the ingest pipeline over whatever it is given, which for an image this pass has already produced means generating a cover of a cover.
+
+### A correction about the coverage number
+
+This note said the device-side import was the natural caller for `measure_one`, and that was wrong about where the call goes though right about where the data comes from.
+`measure_one` takes an import run, opens a taxonomy repository on its pool and computes coverage against the canonical terms and the projection edges, none of which a device has.
+What is true is better: every field of a `MeasureReport` already falls out of `import_one`'s own row report when the server applies a page, so the founder's kill-gate number is an aggregation in the import route rather than a second walk of the seller's shop.
+
 That is the broker's last consumer that matters, and it answers open question 3 of `engine-driver-split.md` by removing the consumer rather than re-pointing it.
 Nothing here blocks the deletion and the deletion blocks nothing here.
 Step 15 already built the device-reported connection writer and the gate ran positive on 2026-09-04, so what remains for the deletion is the founder's words on the five items step 14 lists, not this work.
@@ -274,18 +322,33 @@ This note previously said the choice between a fourth request-authentication var
 It did not wait: it was taken as the variant, before the probe, on the team lead's decision under the founder's direction to build the seller's path now.
 The reasoning stands on its own and the probe would not have overturned it — a host constant has to be maintained against a host the marketplace can re-point without telling anybody, and fails closed in a way that reads as an outage, while the variant names what the request is rather than where it goes.
 What the probe now supplies is confirmation rather than a decision, and the first live run is the probe: every way the hop can disappoint us fails closed with a distinct sentence naming which, so what comes back is a diagnosis rather than a failure.
-What matters until then is that a declined hop is a named refusal and never an ambiguity, and that is a defect avoided rather than a detail.
+What matters either way is that a declined hop is a named refusal and never an ambiguity, and that is a defect avoided rather than a detail.
 `classify_read_bytes` has no 3xx arm, so a declined hop fell to its catch-all and became `AdapterError::Ambiguous`, which is the arm that halts a tenant's inventory and waits for an operator.
 The first seller whose migration reached a bundle download would have had their whole inventory halted by a hop we deliberately decline, on a condition that is expected and permanent until the re-issue exists.
 The named refusal lives in the download flow rather than in the shared classifier, because a 3xx is legitimate elsewhere on this adapter — the draft manifest's same-origin redirect to `?error=notfound` is followed by the client and never reaches a classifier — so a blanket arm would be a claim about routes nobody has measured.
-The shape is worth remembering past this slice: when the re-issue lands, a failure of the *second* hop reaches the same catch-all by the same route, and the same halt is available to be walked into again.
+The shape recurred inside the re-issue rather than past it: a failure of the *second* hop reaches the same catch-all by the same route, so that hop's status range and the archive's magic bytes are both decided before the shared classifier sees the body.
 Still owed a founder run, though no longer a gate on a decision: the redirect leg on their own Windows machine, one published resource, read-only, recording the location's host and scheme, whether the signed url fetches with no cookies, and the byte count against the known size.
 
-S3, the device imports the catalogue, two and a half to four days, and the first slice a seller can feel.
-The desktop pass with its discarding sink and its screen, the import route, the import split, the locator migration, serde on the imported listing, and the console mirror.
-Verified by the apply half reproducing the row report today's import produces for the same listing; by the same page posted twice creating one product; by a page naming another tenant's resource being refused; and by the discarding sink asserted to write no blob row, which is the decision's own property and the thing a wrong implementation gets wrong.
+S3, the device imports the catalogue, and the first slice a seller can feel.
+It is six commits rather than one, and where each stands is recorded here because the order between them turned out to matter.
+
+C1, serde on the import read vocabulary, done.
+C5, the device pass, done: enumerate, and per resource read the listing, fetch the bundle through the re-issued hop, decide what the payload is, probe, scan, render the cover, hash the bytes handed onward, and post the page, keeping nothing.
+Its own property is asserted directly — everything posted is serialised and the seller's bytes are absent from it in raw and encoded form — and it is really the type that holds it, since the observation has no field those bytes could occupy.
+
+C2, the locator and the type, joint with the storage stream, because the type is in one crate and the writes that consume it are in another and they cannot land apart without a broken build between them.
+C3, the import split, follows it: the apply half loses the marketplace read and the ingest, and gains what a device observed.
+C6, the per-device version gate, lands before C4, and that ordering is a correction rather than a preference: C2 makes the manifest builder able to emit a marketplace source, so a sourced row created before the gate exists could be handed to a device that cannot decode it, which is the compatibility defect the S1 shim exists to prevent, re-created one layer up.
+C4, the route, last, and it carries the coverage aggregation.
+C7, the console, follows C4's route.
+
 Gated on a founder probe: enumerate once from the device and compare the count against the Tes dashboard, because the live run of 2026-08-28 saw both dashboard routes answer an empty array with HTTP 200 on an authed session, suspected to be site-context scoping.
 Whatever that probe answers, the interface must never render an empty enumeration as "no listings", because an empty shop and a failed read are indistinguishable and the wrong one of the two is far more expensive.
+The device pass already keeps them apart: a refused catalogue is its own failure that posts nothing, and an empty one still posts a completing page, so a seller is never left watching an import that cannot end.
+
+One dependency is worth stating plainly rather than leaving to be discovered.
+S3's pass downloads every bundle in order to measure it, which is the leg the redirect work left failing closed until the marketplace-named hop could be re-issued.
+That re-issue is built, so the dependency is discharged; before it was, S3 could be built and proven against cassettes but could not have imported a real catalogue at all.
 
 S4, the migrate flow, one and a half to two and a half days.
 The defaults step, the import, the review with its two new gates, publish all, and the sync worker's read leg deleted with its enqueue folded into the import's completion.
