@@ -8,6 +8,10 @@
 
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
 use tam_engine_driver::driver::VerifyPolicy;
+use tam_engine_driver::import::{
+    ContentType, Cover, FileName, ImportPage, Locator, ObservedFile, ObservedResource, Reason,
+    SkippedResource,
+};
 use tam_engine_driver::vocabulary::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, Committed,
     GrantKind, ItemPreparation, ItemVerdict, LandingEffect, LeaseRef, LeasedItem, LedgerAnswer,
@@ -15,10 +19,13 @@ use tam_engine_driver::vocabulary::{
     ReconcileSubject, SettleEnvelope, WorkOrder,
 };
 use tam_marketplace::{
-    CreateStrategy, FormId, IdempotencyKey, LifecycleTransition, ListingState, RemoteLifecycle,
-    RemoteListingId,
+    CreateStrategy, FormId, IdempotencyKey, ImportedListing, LifecycleTransition, ListingState,
+    RemoteLifecycle, RemoteListingId,
 };
-use tam_types::{FailureCode, FailureDetail, InventoryId, JobId, MappingId, OrgId, Uuid};
+use tam_types::{
+    ContentHash, CopyFormat, FailureCode, FailureDetail, FileKind, ImportedPrice, InventoryId,
+    JobId, MappingId, OrgId, ScanOutcome, Timestamp, Uuid,
+};
 
 fn lease() -> LeaseRef {
     LeaseRef {
@@ -726,4 +733,188 @@ fn order_fixture(reconcile: Option<ReconcileSubject>) -> WorkOrder {
         server_deadline_ms: 1_756_000_600_000,
         next_poll_ms: 10_000,
     }
+}
+
+/// One PNG, small enough to be a cover and real enough to pass the check.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn cover() -> Cover {
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.extend_from_slice(b"IHDR and not much else");
+    Cover::encode(&png).expect("the fixture is a PNG within the ceiling")
+}
+
+fn listing() -> ImportedListing {
+    ImportedListing {
+        remote: RemoteListingId::Tes {
+            url: "https://www.tes.com/teaching-resource/-13549794".to_owned(),
+        },
+        title: "Fractions practice".to_owned(),
+        body: "A worksheet.".to_owned(),
+        body_format: CopyFormat::Markdown,
+        native: Vec::new(),
+        rights: None,
+        price: ImportedPrice::Free,
+        state: Some(ListingState::Live),
+    }
+}
+
+/// One observed file on each side of the unwrap decision.
+///
+/// `entry` present is a bundle that reduced to one file and `entry` absent is
+/// the bundle whole, and the two are not interchangeable: the name and digest
+/// describe the bytes handed onward, so a device that read one arm as the
+/// other would upload a worksheet named as a zip or the reverse.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn observed(entry: Option<&str>) -> ObservedFile {
+    ObservedFile {
+        payload_file_name: FileName::new("worksheet.pdf").expect("a plain name"),
+        payload_content_type: ContentType::new("application/pdf").expect("a media type"),
+        kind: FileKind::Pdf,
+        hash: ContentHash([0x5A; 32]),
+        byte_len: 4_096,
+        scan: ScanOutcome::Clean {
+            at: Timestamp(1_756_000_000_000),
+        },
+        entry: entry.map(|path| FileName::new(path).expect("a plain entry name")),
+    }
+}
+
+/// A page survives the round trip over both file arms and a skipped resource.
+///
+/// The device serialises this and `tam-api` deserialises it, and since C4a
+/// they are one definition rather than two that agree today. A field that
+/// serialises but cannot be read back is a page the server rejects after the
+/// device has already done the work of reading the seller's shop.
+#[test]
+fn an_import_page_round_trips_over_both_file_arms_and_a_skip() {
+    let page = ImportPage {
+        request: Uuid([0x71; 16]),
+        resources: vec![
+            ObservedResource {
+                locator: Locator::from_resource_id(13_549_794),
+                listing: listing(),
+                file: observed(None),
+                cover_png: cover(),
+            },
+            ObservedResource {
+                locator: Locator::from_resource_id(13_549_795),
+                listing: listing(),
+                file: observed(Some("worksheet.pdf")),
+                cover_png: cover(),
+            },
+        ],
+        skipped: vec![SkippedResource {
+            locator: Locator::from_resource_id(13_549_796),
+            why: Reason::truncating("the bundle download was refused"),
+        }],
+        complete: true,
+    };
+
+    let wire = serde_json::to_string(&page).expect("a page serialises");
+    let decoded: ImportPage = serde_json::from_str(&wire).expect("and reads back");
+    assert_eq!(decoded, page);
+    assert_eq!(
+        decoded.resources[0].file.entry, None,
+        "the bundle-whole arm keeps its absent entry, which is what says no unwrap happened"
+    );
+    assert!(
+        decoded.resources[1].file.entry.is_some(),
+        "and the unwrapped arm keeps its entry, which is what says one did"
+    );
+}
+
+/// The page's guarantees are re-checked on the way in, not just on the way out.
+///
+/// The server is the side that has never seen the device, so a page is only as
+/// trustworthy as what its types refuse. Each of these is a payload trying to
+/// arrive in a field that describes one.
+#[test]
+fn a_page_field_that_carries_a_payload_is_refused_on_the_way_in() {
+    let smuggled: Result<Cover, _> =
+        tam_engine_driver::import::base64(b"%PDF-1.7 a payload").try_into();
+    assert!(
+        smuggled.is_err(),
+        "a cover is checked for its magic bytes on decode, so the field cannot carry a pdf"
+    );
+
+    let oversized: Result<Cover, _> = {
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.resize(tam_engine_driver::import::COVER_BYTES_MAX + 1, 0);
+        tam_engine_driver::import::base64(&png).try_into()
+    };
+    assert!(
+        oversized.is_err(),
+        "and the ceiling holds on the way in, so it cannot carry a large one either"
+    );
+
+    let separator: Result<FileName, _> = "../../etc/passwd".to_owned().try_into();
+    assert!(
+        separator.is_err(),
+        "a file name is a name: a separator would make it a path"
+    );
+
+    let long: Result<FileName, _> = "n"
+        .repeat(tam_engine_driver::import::NAME_MAX + 1)
+        .try_into();
+    assert!(long.is_err(), "and it is bounded");
+
+    let traversal: Result<FileName, _> = "..".to_owned().try_into();
+    assert!(
+        traversal.is_err(),
+        "`..` carries no separator, so the separator rule never saw it, and it is a traversal \
+         component wherever a consumer joins it to a path"
+    );
+
+    let media: Result<ContentType, _> =
+        tam_engine_driver::import::base64(b"%PDF-1.7 a payload").try_into();
+    assert!(
+        media.is_err(),
+        "a media type is a type and a subtype, so the field cannot carry an encoded payload"
+    );
+
+    let mid_padded: Result<Cover, _> = "iVBORw0KGgo=Zg==Zg==Zg==".to_owned().try_into();
+    assert!(
+        mid_padded.is_err(),
+        "padding outside the final chunk is refused, so a cover cannot hold an encoding our own \
+         decoder reads and a browser's atob rejects"
+    );
+}
+
+/// A page from a newer device still decodes, and a page missing a field a
+/// newer server added still decodes.
+///
+/// The direction that hurts is a required field added here against an
+/// already-shipped desktop: that device fails to post after walking the
+/// seller's entire shop, and every retry fails identically. The convention in
+/// the module's documentation is that any field added after the first shipped
+/// desktop takes `serde(default)`; these two assertions are what hold that
+/// convention to something rather than leaving it a sentence.
+#[test]
+fn a_page_decodes_across_a_version_skew_in_both_directions() {
+    let page = ImportPage {
+        request: Uuid([0x71; 16]),
+        resources: Vec::new(),
+        skipped: Vec::new(),
+        complete: true,
+    };
+    let mut encoded: serde_json::Value =
+        serde_json::to_value(&page).expect("a page serialises to json");
+    let object = encoded.as_object_mut().expect("a page is an object");
+
+    object.insert("pages_walked".to_owned(), serde_json::Value::from(17_i64));
+    let newer: ImportPage = serde_json::from_value(encoded.clone())
+        .expect("a field this server does not know is dropped rather than refused");
+    assert_eq!(newer, page);
+
+    let object = encoded.as_object_mut().expect("a page is an object");
+    object.remove("pages_walked");
+    let decoded: ImportPage =
+        serde_json::from_value(encoded).expect("and the page without it is unchanged");
+    assert_eq!(decoded, page);
 }

@@ -26,6 +26,7 @@
 #[cfg(any(test, feature = "testing"))]
 pub mod conformance;
 pub mod driver;
+pub mod import;
 #[cfg(any(test, feature = "testing"))]
 pub mod memory;
 pub mod ports;
