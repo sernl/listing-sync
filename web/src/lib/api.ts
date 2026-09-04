@@ -291,6 +291,21 @@ export interface EventView {
 
 export type ItemDetail = ItemView & { events: EventView[] };
 
+/** What a surface knows about the seller's declaration for one marketplace.
+ *
+ *  Three states, and the third is this field being absent altogether. A seller
+ *  who has not declared is `undeclared`, which is a fact about them; a surface
+ *  that does not serve declarations omits the field, which is a fact about the
+ *  surface. Never render "not declared" on an absent field: on the operator's
+ *  view that would state something false about every seller.
+ *
+ *  Read whatever state the connection is in: a declaration made before any
+ *  device linked, or standing while the connection needs a fresh sign-in, is
+ *  still on record and the seller looking to check it must see it. */
+export type AuthorshipView =
+	| { state: 'undeclared' }
+	| { state: 'declared'; name: string; attested_at: number };
+
 export interface ConnectionView {
 	id: string;
 	marketplace: Marketplace;
@@ -301,6 +316,9 @@ export interface ConnectionView {
 	status: ConnectionStatus;
 	created_at: number;
 	updated_at: number;
+	/// The seller's own authorship declaration for this marketplace, absent
+	/// where none stands.
+	authorship?: AuthorshipView;
 }
 
 export interface QueueItem {
@@ -1198,6 +1216,21 @@ export const api = {
 	revokeDevice: (device: string) => post<DeviceView>(`/v1/devices/${device}/revoke`, {}),
 
 	connections: () => request<{ connections: ConnectionView[] }>('/v1/connections'),
+	/** Declare who holds the copyright in the work sent to one marketplace.
+	 *
+	 *  The path segment is the marketplace's own serde name — `Tpt`, `Tes`,
+	 *  `Etsy` — which is the spelling the generated vocabulary and the device
+	 *  heartbeat already use; anything else is a 404. Declaring again replaces
+	 *  what stands, and the answer is the declaration as stored rather than as
+	 *  sent. A marketplace whose automation runs server-side under our own
+	 *  token refuses with 422: no device composes a write for it and nothing
+	 *  would read the declaration back. */
+	declareAuthorship: (marketplace: Marketplace, name: string) =>
+		post<{ marketplace: Marketplace; name: string; attested_at: number }>(
+			`/v1/connections/${marketplace}/authorship`,
+			{ name }
+		),
+
 	revoke: (connection: string) =>
 		post<{ connections: number; elapsed_ms: number }>(
 			`/v1/connections/${connection}/revoke`,

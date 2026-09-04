@@ -570,6 +570,22 @@ The copyright declaration TPT's product form requires is the seller's own statem
 - A marketplace whose transport class is `OfficialApi` is refused `422`, in the shape the heartbeat already refuses one. Its automation runs server-side under a sanctioned token, no device composes a write for it, and nothing would read the declaration back.
 - What the screen has to say, which the route cannot: an unattested TPT connection does not fail loudly. The run reaches the submit and the adapter refuses on the declaration, which settles the item `Failed` and terminal, so declaring afterwards does not bring it back. That is the founder item step 14 raised and did not answer, and it is unchanged by this step.
 
+The declaration screen's copy, drafted by the team and replaceable by the founder.
+This record stated the contract and the consequence and no wording for a seller, so the screen uses the following provisionally.
+
+The heading is "Who made this work", and the field is labelled "Your name, as the copyright holder", with the hint that TPT asks every listing to name who holds the copyright, and this is what we will answer with.
+The saved state reads "Declared by {name}" with the date, beside a control reading "Change".
+
+The TPT row alone carries the consequence, and it is written as what happens rather than as advice to be careful: "Until this is declared, anything sent to TPT fails. It does not wait and it is not retried, and declaring afterwards does not send it again — you would need to send it once more yourself."
+The Tes row carries the reassurance instead: "Tes does not ask who holds the copyright, so nothing here is held up waiting for this."
+Etsy carries no control at all, since the route refuses a sanctioned marketplace and its automation runs server-side under our own token.
+
+Two things the copy deliberately does not say.
+It does not call the declaration a legal agreement or a warranty, because it is the seller's statement of a fact TPT's own form asks for, and dressing it as consent to terms would misdescribe what they are doing.
+And it does not tell a seller to declare before sending; it tells them what happens if they do not, which is the same information without instructing them how to run their own catalogue.
+
+One founder item the console raises and does not take: whether an operator sees a seller's declaration on the organisation page, where the field is omitted today rather than served as `undeclared` — taking it is a query change rather than a grant, since migration 0037 already grants the backoffice pool table-level `SELECT` on `connection` and `OrgDetail`'s query simply does not select the two authorship columns, so what is being decided is whether the seller's own statement about their work belongs on an operator's screen at all.
+
 One defect this step found and fixed, which is the reason the decisive test would have failed even with a writer in place.
 `ConnectionFactsRepo::authorship_for` read on a pool with no tenant pin, correctly for the cross-tenant lease scan it was written for, and step 14 then called it from the API path — where the pool is `tam_app`, which is neither superuser nor BYPASSRLS and reads `connection` under forced row-level security.
 An unpinned read there matches nothing on a fresh pooled connection and raises on one whose transaction-local pin has reverted to the empty string, so until this commit no work order could carry an attestation at all, whatever wrote the row.

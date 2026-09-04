@@ -18,6 +18,7 @@ use sqlx::PgPool;
 use tam_types::{Marketplace, OrgId, Timestamp};
 
 use crate::codec::{marketplace_to_db, timestamp_from_db, timestamp_to_db, uuid_to_db};
+use crate::connections::marketplace_from_db;
 use crate::{pin_org, StorageError};
 
 /// Who a seller attested authorship to, and when they attested it.
@@ -91,6 +92,56 @@ impl ConnectionFactsRepo {
                 (Some(_) | None, _) => None,
             }
         }))
+    }
+
+    /// Every authorship declaration this tenant holds, whatever state each
+    /// connection stands in.
+    ///
+    /// This serves the console and not the claim, and the difference is the
+    /// state filter. `authorship_for` reads only a `linked` connection because
+    /// a write cannot leave a device without one, which is the claim's
+    /// question. A seller's question is different: they declared, and they
+    /// want to see that it is on record. A declaration made before any device
+    /// linked, or standing while the connection is `needs_reauth` or
+    /// `revoked`, is still theirs and still stored, and hiding it behind the
+    /// claim's predicate would show them nothing at exactly the moment they
+    /// look to check.
+    ///
+    /// Every marketplace in one read rather than one read per row: the
+    /// connections page renders a row per marketplace, and a per-marketplace
+    /// read would make the page cost a query per connection.
+    pub async fn declarations(
+        &self,
+        org: OrgId,
+    ) -> Result<Vec<(Marketplace, AuthorshipRecord)>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT marketplace, authorship_name, authorship_attested_at FROM connection \
+             WHERE org_id = $1 AND authorship_name IS NOT NULL \
+             ORDER BY marketplace",
+            uuid_to_db(org.0),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .filter_map(|row| {
+                // Both halves or neither, as `authorship_for` reads them: a
+                // name without an instant cannot say when the seller attested.
+                let attested_at = row.authorship_attested_at?;
+                let name = row.authorship_name?;
+                Some(marketplace_from_db(&row.marketplace).map(|marketplace| {
+                    (
+                        marketplace,
+                        AuthorshipRecord {
+                            name,
+                            attested_at: timestamp_from_db(attested_at),
+                        },
+                    )
+                }))
+            })
+            .collect()
     }
 
     /// Whether this tenant's linked connection still has no named account.

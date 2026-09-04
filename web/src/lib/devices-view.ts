@@ -8,7 +8,7 @@
 // running, and the two failures Vendoo's own reviews generate most anger over
 // are a missed run and a silently dropped connection. Both are observability.
 
-import type { ConnectionView, DeviceSessionView, DeviceView } from '$lib/api';
+import type { AuthorshipView, ConnectionView, DeviceSessionView, DeviceView } from '$lib/api';
 import { present } from '$lib/connection-status';
 import { TRANSPORT_OF } from '$lib/inventory';
 import type { ConnectionStatus, Marketplace, TransportClass } from '$lib/generated/vocab';
@@ -273,6 +273,13 @@ export interface MarketplaceRow {
 	signIn: MarketplaceSignIn;
 	/** The stored connection record, where the branch has one. */
 	connection: ConnectionView | null;
+	/** The seller's own declaration of who holds the copyright, on whichever
+	 *  branch the marketplace runs. It is a fact about the seller rather than
+	 *  about a server-held session, so it is read off the connection list for
+	 *  every marketplace and not off `connection`, which is null on the device
+	 *  branch by construction. Undefined where the list carries no row for this
+	 *  marketplace, or a row from a surface that serves no declarations. */
+	authorship?: AuthorshipView;
 	/** The machine holding this login has not checked in inside the window, so
 	 *  scheduled work for this marketplace is not running. */
 	quiet: boolean;
@@ -299,14 +306,13 @@ export function marketplaceRows(
 	return states.map((signIn) => {
 		const transport = TRANSPORT_OF[signIn.marketplace];
 		const holder = rows.find((row) => row.device.id === signIn.device?.id);
+		const stored = connections.find((entry) => entry.marketplace === signIn.marketplace);
 		return {
 			marketplace: signIn.marketplace,
 			transport,
 			signIn,
-			connection:
-				transport === 'OfficialApi'
-					? (connections.find((entry) => entry.marketplace === signIn.marketplace) ?? null)
-					: null,
+			connection: transport === 'OfficialApi' ? (stored ?? null) : null,
+			authorship: stored?.authorship,
 			quiet: holder?.standing === 'quiet',
 			wipeOutstandingOn: rows
 				.filter(

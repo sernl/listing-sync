@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT marketplace, authorship_name, authorship_attested_at FROM connection WHERE org_id = $1 AND authorship_name IS NOT NULL ORDER BY marketplace",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "marketplace",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "authorship_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "authorship_attested_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "2fcc42a162e9440448d3946ea5fb143cf6b995402b2a837d03c2b05924523528"
+}

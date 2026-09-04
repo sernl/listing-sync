@@ -339,6 +339,81 @@ describe('the authoring endpoints', () => {
 		expect(seen[0].body).toEqual({ inventory: 'Tpt', axis: 'subject', from_term: 't1' });
 	});
 
+	it("puts the marketplace's own serde name in the path, not a lowercased one", async () => {
+		const seen: Array<{ url: string; method?: string; body: unknown }> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				seen.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+				return jsonResponse(200, {
+					marketplace: 'Tpt',
+					name: 'A Teacher',
+					attested_at: 5000
+				});
+			})
+		);
+		const stored = await api.declareAuthorship('Tpt', 'A Teacher');
+		expect(seen[0].method).toBe('POST');
+		// The server matches the segment against the serde name; `tpt` is a 404.
+		expect(seen[0].url).toBe('/v1/connections/Tpt/authorship');
+		expect(seen[0].body).toEqual({ name: 'A Teacher' });
+		expect(stored.name).toBe('A Teacher');
+	});
+
+	it('sends every marketplace under its own serde spelling', async () => {
+		const seen: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) => {
+				seen.push(url);
+				return jsonResponse(200, { marketplace: 'Tes', name: 'x', attested_at: 1 });
+			})
+		);
+		await api.declareAuthorship('Tes', 'x');
+		await api.declareAuthorship('Etsy', 'x');
+		expect(seen).toEqual([
+			'/v1/connections/Tes/authorship',
+			'/v1/connections/Etsy/authorship'
+		]);
+	});
+
+	it('tells an undeclared connection apart from one whose surface serves none', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				jsonResponse(200, {
+					connections: [
+						{
+							id: 'c1',
+							marketplace: 'Tpt',
+							transport: 'SellerDevice',
+							state: 'linked',
+							status: 'connected',
+							created_at: 1,
+							updated_at: 1,
+							authorship: { state: 'undeclared' }
+						},
+						{
+							id: 'c2',
+							marketplace: 'Etsy',
+							transport: 'OfficialApi',
+							state: 'linked',
+							status: 'connected',
+							created_at: 1,
+							updated_at: 1
+						}
+					]
+				})
+			)
+		);
+		const view = await api.connections();
+		// Served and undeclared: a fact about the seller.
+		expect(view.connections[0].authorship).toEqual({ state: 'undeclared' });
+		// Not served at all: a fact about the surface, and never to be rendered
+		// as "not declared".
+		expect(view.connections[1].authorship).toBeUndefined();
+	});
+
 	it('reads one marketplace vocabulary per inventory', async () => {
 		const seen: string[] = [];
 		vi.stubGlobal(

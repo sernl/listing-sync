@@ -1,6 +1,12 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { api, type ConnectionView, type DeviceSessionView, type DeviceView } from '$lib/api';
+	import {
+		ApiFailure,
+		api,
+		type ConnectionView,
+		type DeviceSessionView,
+		type DeviceView
+	} from '$lib/api';
 	import {
 		currentSessionToken,
 		listBrowserSessions,
@@ -20,6 +26,7 @@
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import { MARKETPLACE_NAME } from '$lib/platforms';
+	import type { Marketplace } from '$lib/generated/vocab';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
 
@@ -51,6 +58,59 @@
 
 	const devices = $derived(registry.data?.devices ?? []);
 	const connections = $derived(linked.data?.connections ?? []);
+
+	// One declaration form at a time, opened on the row it belongs to, so a
+	// name cannot be typed against a marketplace the seller is not looking at.
+	let declaringFor = $state<Marketplace | null>(null);
+	let declaredName = $state('');
+	let declaring = $state(false);
+	let declareRefusal = $state<string | null>(null);
+
+	/** The standing declaration on a row, or null where the seller has made
+	 *  none. Read off the row's own `authorship` rather than off `connection`,
+	 *  which is null on the two device-branch rows this control belongs to.
+	 *  Absent means the connections list carried no row for the marketplace at
+	 *  all, which on this surface is a seller who has not declared, the same as
+	 *  `undeclared`; the operator's view is where the two must not read alike. */
+	function declaredOn(row: MarketplaceRow): { name: string; attested_at: number } | null {
+		const held = row.authorship;
+		return held !== undefined && held.state === 'declared' ? held : null;
+	}
+
+	function openDeclaration(row: MarketplaceRow) {
+		declaringFor = row.marketplace;
+		declaredName = declaredOn(row)?.name ?? '';
+		declareRefusal = null;
+	}
+
+	function cancelDeclaration() {
+		declaringFor = null;
+		declareRefusal = null;
+	}
+
+	/** Records who holds the copyright in what this marketplace is sent.
+	 *
+	 *  The seller's own statement rather than a fact about the link, so it
+	 *  neither links nor unlinks: a marketplace with no connection gets one in
+	 *  `unlinked`, and an existing row keeps whatever state it stands in. */
+	async function declare(marketplace: Marketplace) {
+		const name = declaredName.trim();
+		if (name.length === 0) {
+			return;
+		}
+		declaring = true;
+		declareRefusal = null;
+		try {
+			await api.declareAuthorship(marketplace, name);
+			await queryClient.invalidateQueries({ queryKey: queryKeys.connections });
+			declaringFor = null;
+		} catch (failure) {
+			declareRefusal =
+				failure instanceof ApiFailure ? failure.message : 'That declaration was not saved.';
+		} finally {
+			declaring = false;
+		}
+	}
 	const rows = $derived(marketplaceRows(devices, connections, now));
 	const waiting = $derived(needingAttention(rows));
 	const summary = $derived(deviceSummary(deviceRows(devices, now)));
@@ -251,9 +311,79 @@
 							</button>
 						{/if}
 					{:else}
+						<button
+							class="btn small"
+							type="button"
+							onclick={() => openDeclaration(row)}
+						>
+							{declaredOn(row) ? 'Change' : 'Declare'}
+						</button>
 						<a class="btn small" href="#machines">Your machines</a>
 					{/if}
 				</div>
+
+				{#if row.transport !== 'OfficialApi'}
+					<div class="row sub">
+						<span class="what">
+							<span class="t">Who made this work</span>
+							{#if declaredOn(row)}
+								<span class="s">
+									Declared by {declaredOn(row)?.name}, {agoLabel(
+										declaredOn(row)?.attested_at ?? now,
+										now
+									)}.
+								</span>
+							{:else}
+								<span class="s">
+									Not declared yet. TPT asks every listing to name who holds the copyright, and
+									this is what we answer with.
+								</span>
+							{/if}
+							{#if row.marketplace === 'Tpt'}
+								<span class="s">
+									Until this is declared, anything sent to TPT fails. It does not wait and it is
+									not retried, and declaring afterwards does not send it again — you would need
+									to send it once more yourself.
+								</span>
+							{:else}
+								<span class="s">
+									{MARKETPLACE_NAME[row.marketplace]} does not ask who holds the copyright, so
+									nothing here is held up waiting for this.
+								</span>
+							{/if}
+						</span>
+					</div>
+
+					{#if declaringFor === row.marketplace}
+						<div class="row sub">
+							<label class="what">
+								<span class="s">Your name, as the copyright holder</span>
+								<input
+									type="text"
+									maxlength="200"
+									placeholder="The name that should appear as the copyright holder"
+									disabled={declaring}
+									bind:value={declaredName}
+								/>
+							</label>
+							<span class="grow"></span>
+							<button class="btn small" type="button" disabled={declaring} onclick={cancelDeclaration}>
+								Cancel
+							</button>
+							<button
+								class="cta small"
+								type="button"
+								disabled={declaring || declaredName.trim().length === 0}
+								onclick={() => void declare(row.marketplace)}
+							>
+								{declaring ? 'Saving…' : 'Save'}
+							</button>
+						</div>
+						{#if declareRefusal !== null}
+							<p class="refusal">{declareRefusal}</p>
+						{/if}
+					{/if}
+				{/if}
 			{/each}
 			<p class="foot-note">
 				Linking is disabled because nothing on the server does it yet: the API serves the

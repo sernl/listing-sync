@@ -380,6 +380,34 @@ describe('the merged marketplace rows', () => {
 		expect(rowOf(rows, 'Tpt').connection).toBeNull();
 	});
 
+	it('carry the declaration on the branch whose connection record they do not', () => {
+		const rows = marketplaceRows(
+			[device({ sessions: [session('Tpt')] })],
+			[
+				{
+					...connection('Tpt'),
+					authorship: { state: 'declared', name: 'A Teacher', attested_at: NOW - 1_000 }
+				},
+				{ ...connection('Tes'), authorship: { state: 'undeclared' } },
+				connection('Etsy')
+			],
+			NOW
+		);
+		expect(rowOf(rows, 'Tpt').authorship).toEqual({
+			state: 'declared',
+			name: 'A Teacher',
+			attested_at: NOW - 1_000
+		});
+		expect(rowOf(rows, 'Tpt').connection).toBeNull();
+		expect(rowOf(rows, 'Tes').authorship).toEqual({ state: 'undeclared' });
+		expect(rowOf(rows, 'Etsy').authorship).toBeUndefined();
+	});
+
+	it('leave the declaration undefined where no connection row exists for the marketplace', () => {
+		const rows = marketplaceRows([device({ sessions: [session('Tpt')] })], [], NOW);
+		expect(rowOf(rows, 'Tpt').authorship).toBeUndefined();
+	});
+
 	it('report a login held on a machine that has gone quiet', () => {
 		const quiet = device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tes')] });
 		const rows = marketplaceRows([quiet], [], NOW);

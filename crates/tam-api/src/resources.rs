@@ -17,8 +17,9 @@ use tam_domain::registry::listing_url::{listing_url, parse_listing_url, UrlRefus
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
-    ConnectionRepo, DrainStats, ElectionRepo, LabelRepo, LedgerCursor, MappingRepo, NewAnswer,
-    OpenElection, OverrideRepo, PastedBind, ProductRepo, StorageError, TaxonomyRepo,
+    ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo, LabelRepo, LedgerCursor,
+    MappingRepo, NewAnswer, OpenElection, OverrideRepo, PastedBind, ProductRepo, StorageError,
+    TaxonomyRepo,
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
@@ -396,6 +397,33 @@ pub struct ConnectionView {
     pub status: ConnectionStatus,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// The seller's own authorship declaration for this marketplace, absent
+    /// where none stands.
+    ///
+    /// Read whatever state the connection is in, unlike the claim's own read:
+    /// a declaration made before any device linked, or standing while the
+    /// connection needs a fresh sign-in, is still on record and a seller
+    /// looking to check it must see it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorship: Option<AuthorshipView>,
+}
+
+/// What this surface knows about the seller's declaration for one marketplace.
+///
+/// Three states rather than two, and the third is the absence of this whole
+/// field. A seller who has not declared is `undeclared`, which is a fact about
+/// them; a surface that does not serve declarations at all omits the field,
+/// which is a fact about the surface. Collapsing those into one `null` would
+/// have the operator view state "no declaration" about every seller, which is
+/// false about all of them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum AuthorshipView {
+    Undeclared,
+    Declared {
+        name: String,
+        attested_at: Timestamp,
+    },
 }
 
 pub(crate) async fn list_connections(
@@ -407,10 +435,39 @@ pub(crate) async fn list_connections(
         .list(context.org, now)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    // One read for every declaration this tenant holds, rather than one per
+    // row: the page renders a row per marketplace and a per-row read would
+    // make it cost a query per connection.
+    // A list rather than a map: the closed marketplace set is three, so a
+    // linear find costs less than the ordering a map would need.
+    let declared: Vec<(Marketplace, AuthorshipView)> = ConnectionFactsRepo::new(state.pool.clone())
+        .declarations(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .into_iter()
+        .map(|(marketplace, record)| {
+            (
+                marketplace,
+                AuthorshipView::Declared {
+                    name: record.name,
+                    attested_at: record.attested_at,
+                },
+            )
+        })
+        .collect();
     Ok(Json(ConnectionsView {
         connections: rows
             .into_iter()
             .map(|row| ConnectionView {
+                // Always a value on the seller's own surface: this endpoint
+                // serves declarations, so a marketplace with none is
+                // `undeclared` rather than unknown.
+                authorship: Some(
+                    declared
+                        .iter()
+                        .find(|(marketplace, _)| *marketplace == row.marketplace)
+                        .map_or(AuthorshipView::Undeclared, |(_, view)| view.clone()),
+                ),
                 id: row.id,
                 marketplace: row.marketplace,
                 transport: row.marketplace.transport_class(),

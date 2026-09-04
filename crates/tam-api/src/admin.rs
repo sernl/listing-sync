@@ -243,6 +243,17 @@ pub(crate) async fn org_detail(
                 status: row.status,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
+                // The operator surface does not serve the seller's own
+                // authorship declaration, and `None` says exactly that: the
+                // field is omitted rather than reported as `undeclared`, which
+                // would state something false about every seller. It is the
+                // seller's statement about their own work rather than a fact
+                // about the link, so whether an operator sees it is a founder
+                // decision rather than an oversight. Nothing stands in the way
+                // of taking it: migration 0037 grants this pool table-level
+                // SELECT on `connection` and the backoffice query simply does
+                // not select the two authorship columns.
+                authorship: None,
             })
             .collect(),
         halts: detail
