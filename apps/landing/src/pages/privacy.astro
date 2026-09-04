@@ -71,9 +71,19 @@ import { supportEmail } from '../site.js';
 
 			<h2>Contact</h2>
 			<p>
-				Until this page is replaced, questions go to <a class="link" href={`mailto:${supportEmail}`}
-					>{supportEmail}</a
-				>.
+				{
+					supportEmail ? (
+						<Fragment>
+							Until this page is replaced, questions go to{' '}
+							<a class="link" href={`mailto:${supportEmail}`}>
+								{supportEmail}
+							</a>
+							.
+						</Fragment>
+					) : (
+						'A contact address goes here before this page is replaced.'
+					)
+				}
 			</p>
 		</div>
 	</section>

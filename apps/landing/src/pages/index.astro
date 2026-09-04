@@ -1,56 +1,49 @@
 ---
 import Base from '../layouts/Base.astro';
-import {
-	availability,
-	downloadUrl,
-	marketplaces,
-	transportWording,
-	waitlistHref
-} from '../site.js';
+import Faq from '../components/Faq.astro';
+import Migrations from '../components/Migrations.astro';
+import Pricing from '../components/Pricing.astro';
+import { availability, downloadUrl, loginUrl } from '../site.js';
 
-const title = 'Teachouse — one catalogue, every marketplace you sell on';
+const title = 'Teachouse \u2014 sell the same resource on TPT and TES without listing it twice';
 const description =
-	'Teachouse holds your teaching resources once and keeps TeachersPayTeachers, Tes and other marketplaces matching it, and is built so the marketplace work runs from your own computer under your own login.';
+	'Teachouse keeps one copy of each teaching resource, maps it to what TPT and TES each ask for, and keeps both listings matching it on a schedule. Every marketplace request is sent from your own computer, under your own login.';
 
-const faqs = [
+const features = [
 	{
-		q: 'Do I need to install anything?',
-		a: 'For TeachersPayTeachers and Tes, yes: a small Windows app you install once. Neither marketplace publishes an interface for tools like this one, so Teachouse is built to do that work from your own computer, in your own session, and the app is the part built to do it. Your catalogue, your mapping decisions and your results live on our side and are visible in any browser.'
+		label: 'Cross-listing',
+		h: 'One catalogue, both marketplaces',
+		p: 'Write a resource once, or bring in what you already sell. Teachouse turns your subjects, year levels and licence wording into what TPT and TES each ask for, proposing a best fit and leaving you the decisions that are genuinely yours to make.'
 	},
 	{
-		q: 'Do you get my TeachersPayTeachers or Tes password?',
-		a: 'No. You sign in to each marketplace yourself, in a window on your own computer, and what is stored is the session that sign-in creates, never your password. Teachouse is built so the marketplace work runs from your own machine, under your own login.'
+		label: 'Sync',
+		h: 'Change it once, and it changes everywhere',
+		p: 'Move a price, fix a title, upload a new version. Teachouse works out what each marketplace needs, does it on the schedule you set, and reports each marketplace\u2019s result on its own rather than as one number.'
 	},
 	{
-		q: 'What happens to a listing when I change it?',
-		a: 'Teachouse edits the listing that is already there. It does not delete your listing and create a new one, which is the thing that would cost you its address, its reviews and the followers attached to it.'
+		label: 'Migrations',
+		h: 'Move a whole shop in one go',
+		p: 'Already selling everything on one marketplace? A migration puts that catalogue on the other one as a single piece of work, at a fixed price quoted before we start, with every mapping there for you to check afterwards.'
 	},
 	{
-		q: 'Which marketplaces work today?',
-		a: 'TeachersPayTeachers and Tes. Etsy is next, and it works differently: Etsy publishes an official interface and issues a token for tools like this one, so that work runs on our servers rather than on your computer.'
-	},
-	{
-		q: 'What does it cost?',
-		a: 'That is not decided yet, and we would rather say so than put a number on this page we would have to take back. Ask to be told and you will hear about pricing before anything is charged for.'
-	},
-	{
-		q: 'Are you part of TeachersPayTeachers, Tes or Etsy?',
-		a: 'No. Teachouse is an independent tool, none of them endorses it, and your relationship with each marketplace stays your own.'
+		label: 'Where it runs',
+		h: 'The marketplace work runs on your computer',
+		p: 'TPT and TES publish no interface for tools like this one, so Teachouse sends every request to them from your own machine, in your own session. Your resource files never pass through us. This split is our design choice about where a request should come from. It is not required by any law, and we do not present it as one.'
 	}
 ];
 
-const shots = [
+const steps = [
 	{
-		label: 'Your catalogue',
-		caption: 'Every resource you sell, in one list, with the marketplaces it is on.'
+		h: 'Connect',
+		p: 'Install the app on the computer that will do the marketplace work, then sign in to TPT and TES yourself, in your own session. Nobody here ever sees a marketplace password.'
 	},
 	{
-		label: 'The listing editor',
-		caption: 'The shared form on one side, each marketplace on the other, differences marked.'
+		h: 'Map',
+		p: 'Bring your catalogue in, look over the field mappings once, and set the rules you want reused. Teachouse asks you rather than guessing when the answer is yours to give.'
 	},
 	{
-		label: 'What happened',
-		caption: "Each marketplace's result reported on its own, rather than as one number."
+		h: 'Sync',
+		p: 'Pick a schedule and let it run. Every create, edit and publish is written down, so you can see what was sent and what came back for each listing.'
 	}
 ];
 ---
@@ -58,61 +51,61 @@ const shots = [
 <Base title={title} description={description}>
 	<section class="hero">
 		<div class="wrap">
-			<p class="eyebrow">For teacher-resource sellers</p>
-			<h1>One catalogue. Every marketplace you sell on.</h1>
+			<p class="eyebrow">For TPT and TES sellers</p>
+			<h1>Sell the same resource on both marketplaces without listing it twice.</h1>
 			<p class="sell">
-				Teachouse holds each of your teaching resources once, then keeps TeachersPayTeachers,
-				Tes and other marketplaces matching it — and it is built so the marketplace work runs
+				Teachouse keeps one copy of each resource, maps it to what TPT and TES each ask for, and
+				keeps both listings matching it on a schedule. Every request to a marketplace is sent
 				from your own computer, under your own login.
 			</p>
 			<div class="actions">
-				<a class="cta large" href={waitlistHref}>Ask to be told when it opens</a>
+				<a class="cta large" href={loginUrl}>Start free</a>
 				<a class="btn large" href="#how">See how it works</a>
 			</div>
-			<p class="under">{availability}</p>
+			<p class="under">Your resource files never pass through us.</p>
+		</div>
+	</section>
+
+	<section class="section" id="features">
+		<div class="wrap">
+			<h2>One catalogue. Both marketplaces. One place to change it.</h2>
+			<div class="grid-2">
+				{
+					features.map((feature) => (
+						<div class="panel feature">
+							<h3>{feature.h}</h3>
+							<p>{feature.p}</p>
+							<span class="tag">{feature.label}</span>
+						</div>
+					))
+				}
+			</div>
 		</div>
 	</section>
 
 	<section class="section" id="how">
 		<div class="wrap">
 			<h2>How it works</h2>
-			<p class="lede">Three steps, and the third one is the one that saves the evenings.</p>
+			<p class="lede">Three steps. {availability}</p>
 			<div class="grid-3">
-				<div class="panel step">
-					<span class="n" aria-hidden="true">1</span>
-					<h3>Bring your catalogue in</h3>
-					<p>
-						Import what you already sell, or write a resource once in Teachouse. Your title,
-						description, price, preview and files live in one place that no marketplace owns.
-					</p>
-				</div>
-				<div class="panel step">
-					<span class="n" aria-hidden="true">2</span>
-					<h3>Map it once</h3>
-					<p>
-						Every marketplace wants its own subjects, year levels, resource types and licence
-						wording. Teachouse translates yours into each one, and asks you rather than guessing
-						when the answer is genuinely yours to give.
-					</p>
-				</div>
-				<div class="panel step">
-					<span class="n" aria-hidden="true">3</span>
-					<h3>Publish, and keep it matching</h3>
-					<p>
-						Change a price or upload a new version once. Teachouse works out what each
-						marketplace needs, does it on a schedule, and reports each marketplace's result on
-						its own rather than as one number.
-					</p>
-				</div>
+				{
+					steps.map((step, index) => (
+						<div class="panel step">
+							<span class="n" aria-hidden="true">{index + 1}</span>
+							<h3>{step.h}</h3>
+							<p>{step.p}</p>
+						</div>
+					))
+				}
 			</div>
 			<p class="aside">
-				One thing to know before you start: TeachersPayTeachers and Tes work needs a small
-				Windows app, installed once, because Teachouse is built to do that work on your own
-				computer, under your own login. You manage everything else in a browser.
+				One thing to know before you start: the TPT and TES work needs a small app, installed
+				once, because Teachouse is built to do that work on your own computer under your own
+				login. You manage everything else in a browser.{' '}
 				{
 					downloadUrl ? (
 						<a class="link" href={downloadUrl}>
-							Download Teachouse for Windows
+							Download Teachouse
 						</a>
 					) : (
 						<span class="pending">Download link to come.</span>
@@ -122,127 +115,21 @@ const shots = [
 		</div>
 	</section>
 
-	<section class="section" id="screens">
-		<div class="wrap">
-			<h2>What you will be looking at</h2>
-			<p class="lede">
-				The console is built and in private testing. These are the three screens you spend your
-				time in; the pictures go in when there is a real catalogue worth photographing.
-			</p>
-			<div class="grid-3">
-				{
-					shots.map((shot) => (
-						<figure class="shot">
-							<div class="frame" role="presentation">
-								<span class="bar" aria-hidden="true" />
-								<span class="label">{shot.label}</span>
-							</div>
-							<figcaption>{shot.caption}</figcaption>
-						</figure>
-					))
-				}
-			</div>
-		</div>
-	</section>
+	<Pricing />
+	<Migrations />
+	<Faq />
 
-	<section class="section" id="where">
+	<section class="section closing">
 		<div class="wrap">
-			<h2>Built so your login stays on your device</h2>
+			<h2>Put your catalogue on both marketplaces</h2>
 			<p class="lede">
-				This is the part most cross-listing tools get wrong, so it is worth being exact about.
-			</p>
-			<div class="grid-2">
-				<div class="panel">
-					<h3 style="margin:0 0 8px;font-size:16px">Marketplaces with no official API</h3>
-					<p style="margin:0 0 12px;color:var(--muted)">
-						TeachersPayTeachers and Tes are in this group today. Teachouse is built so that the
-						requests to them are composed and sent on your own computer, signed in as you, in
-						your own session, and the Windows app is the part built to do it.
-					</p>
-					<p style="margin:0;color:var(--muted)">
-						You sign in to each marketplace yourself, and the app keeps that session on your
-						machine, in the operating system's keychain. Our side holds your catalogue, your
-						mapping decisions and the record of what was done.
-					</p>
-				</div>
-				<div class="panel">
-					<h3 style="margin:0 0 8px;font-size:16px">Marketplaces with an official API</h3>
-					<p style="margin:0 0 12px;color:var(--muted)">
-						Etsy is in this group. Where a marketplace publishes an interface for tools like
-						this one and issues a token for the purpose, that work runs on our servers over
-						that interface, on the schedule you set.
-					</p>
-					<p style="margin:0;color:var(--muted)">
-						Which group a marketplace is in is recorded in the product and shown on the
-						marketplace itself, so you can always see where a piece of work runs.
-					</p>
-				</div>
-			</div>
-			<p class="under" style="margin-top:16px;color:var(--ink);font-size:13.5px">
-				This split is our design choice about where a request should come from. It is not
-				required by any law, and we do not present it as one.
-			</p>
-		</div>
-	</section>
-
-	<section class="section" id="marketplaces">
-		<div class="wrap">
-			<h2>Marketplaces</h2>
-			<p class="lede">
-				What Teachouse connects to, and where the work runs for each one.
-			</p>
-			<div class="panel">
-				<div class="rows">
-					{
-						marketplaces.map((m) => (
-							<div class="row">
-								<span class="who">{m.name}</span>
-								<span class="how">{transportWording[m.transport]}</span>
-								<span class={m.status === 'Working today' ? 'pill ok' : 'pill mut'}>
-									{m.status}
-								</span>
-							</div>
-						))
-					}
-				</div>
-			</div>
-		</div>
-	</section>
-
-	<section class="section" id="faq">
-		<div class="wrap">
-			<h2>Questions</h2>
-			<p class="lede">The six we are asked first.</p>
-			<div class="panel">
-				<dl class="faq">
-					{
-						faqs.map((item) => (
-							<div class="qa">
-								<dt>{item.q}</dt>
-								<dd>{item.a}</dd>
-							</div>
-						))
-					}
-				</dl>
-			</div>
-		</div>
-	</section>
-
-	<section class="section" id="waitlist">
-		<div class="wrap">
-			<h2>Ask to be told when it opens</h2>
-			<p class="lede">
-				Teachouse is in private testing and is not open to everyone yet. Tell us what you sell
-				and where you sell it, and you will hear when there is a place for you — and before
-				anything is charged for.
+				Start on the free tier, connect one marketplace, and look at your own listings in
+				Teachouse before you decide anything.
 			</p>
 			<div class="actions">
-				<a class="cta large" href={waitlistHref}>Ask to be told when it opens</a>
+				<a class="cta large" href={loginUrl}>Start free</a>
 			</div>
-			<p class="under">
-				This opens your email program. There is no form, no tracking and no third party on this
-				page.
-			</p>
+			<p class="under">One marketplace, 20 resources and manual sync, with no card.</p>
 		</div>
 	</section>
 </Base>

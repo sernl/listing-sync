@@ -1,16 +1,19 @@
 ---
-import { signInUrl, waitlistHref } from '../site.js';
+import { loginUrl } from '../site.js';
 ---
 
 <header class="site-head">
 	<div class="wrap">
-		<a class="wordmark" href="/"><span class="leaf" aria-hidden="true">T</span> Teachouse</a>
+		<a class="wordmark" href="/">
+			<img class="leaf" src="/favicon.svg" alt="" width="26" height="26" /> Teachouse
+		</a>
 		<nav class="site-nav" aria-label="Primary">
 			<a href="/#how">How it works</a>
-			<a href="/#marketplaces">Marketplaces</a>
+			<a href="/pricing/">Pricing</a>
+			<a href="/#migrations">Migrations</a>
 			<a href="/#faq">Questions</a>
-			<a href={signInUrl}>Sign in</a>
-			<a class="cta" href={waitlistHref}>Ask to be told</a>
+			<a class="btn" href={loginUrl}>Sign in</a>
+			<a class="cta" href={loginUrl}>Start free</a>
 		</nav>
 	</div>
 </header>

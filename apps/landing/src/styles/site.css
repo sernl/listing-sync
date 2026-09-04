@@ -1,4 +1,5 @@
-/* The marketing surface. Tokens are transcribed from `web/src/app.css` so the
+/* The marketing surface. Tokens are transcribed from
+   `web/src/lib/styles/tokens.css`, which `web/src/app.css` imports, so the
    landing page and the console are visibly one product; the component classes
    below are this site's own, because the console's are dashboard furniture. */
 
@@ -25,26 +26,36 @@
 }
 
 :root {
-	--ground: #faf7f2;
-	--card: #ffffff;
-	--ink: #1f1a17;
-	--muted: #8a7f76;
-	--faint: #b5aa9f;
-	--line: #ebe4db;
+	/* Palette one, "Kauri", from the console design spec: a bleached-floorboard
+	   ground, rimu heartwood, one pohutukawa flower. Every token below carries
+	   the console's value under the console's name, except `--muted-strong`,
+	   which is this site's own. */
+	--ground: #f7f2e9;
+	--card: #fffdf9;
+	--rail: #f2e9da;
+	--ink: #241a12;
+	--muted: #7c6b5b;
+	/* --muted measures 4.24:1 on --rail and fails AA; this is for text there. */
+	--muted-strong: #6b5b4c;
+	--line: #e4d8c4;
+	--primary: #6b4423;
 	--accent: #c2543a;
-	--accent-deep: #a84630;
-	--accent-soft: #f7e9e4;
+	--accent-deep: #a8442c;
+	--accent-soft: #f7e7e1;
 	--ok: #3e7a4e;
-	--ok-soft: #e9f2eb;
-	--warn: #b98324;
-	--warn-soft: #f8efdc;
-	--bad: #a93a2b;
-	--bad-soft: #f9e7e3;
-	--hover: #f2ede5;
-	--serif: 'Fraunces', Georgia, 'Times New Roman', serif;
-	--sans: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
+	--warn: #b0761a;
+	--warn-soft: #f8efda;
+	--hover: #f1e9db;
+	--serif: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+	--sans: 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
 	--gutter: 24px;
-	--measure: 1080px;
+	--measure: 1140px;
+	/* One very diffuse shadow and a hairline ring rather than a border, which is
+	   what gives a section card its lift without a visible edge. */
+	--lift: 0 24px 70px -45px color-mix(in srgb, var(--ink) 42%, transparent);
+	--ring: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
+	--r-card: 2rem;
+	--r-pill: 999px;
 }
 
 *,
@@ -148,17 +159,12 @@ a {
 	gap: 9px;
 }
 
+/* The mark carries its own rounded square and its own ground, so this sets
+   only the size it is drawn at. */
 .wordmark .leaf {
 	width: 26px;
 	height: 26px;
-	border-radius: 8px;
-	background: var(--accent);
-	color: #fff;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 14px;
-	font-family: var(--serif);
+	display: block;
 }
 
 .site-nav {
@@ -171,8 +177,8 @@ a {
 }
 
 .site-nav a {
-	padding: 7px 10px;
-	border-radius: 8px;
+	padding: 8px 12px;
+	border-radius: var(--r-pill);
 	color: var(--muted);
 	font-weight: 500;
 }
@@ -190,10 +196,10 @@ a {
 	align-items: center;
 	justify-content: center;
 	gap: 8px;
-	border-radius: 8px;
+	border-radius: var(--r-pill);
 	font-weight: 600;
 	font-size: 14px;
-	padding: 10px 18px;
+	padding: 10px 20px;
 	border: 1px solid var(--line);
 	background: var(--card);
 	color: var(--ink);
@@ -235,20 +241,19 @@ main {
 }
 
 .section {
-	padding: 56px 0;
-	border-top: 1px solid var(--line);
+	padding: 84px 0;
 }
 
-.section:first-child {
-	border-top: 0;
-}
-
-.section > .wrap > h2 {
+.section > .wrap > h2,
+.section > .wrap > .section-title {
 	font-family: var(--serif);
 	font-weight: 600;
-	font-size: 27px;
-	letter-spacing: -0.01em;
-	margin: 0 0 6px;
+	font-size: clamp(26px, 3.4vw, 36px);
+	line-height: 1.15;
+	letter-spacing: -0.015em;
+	text-wrap: balance;
+	max-width: 24ch;
+	margin: 0 0 10px;
 }
 
 .section .lede {
@@ -260,17 +265,18 @@ main {
 /* Hero */
 
 .hero {
-	padding: 72px 0 60px;
+	padding: 88px 0 64px;
 }
 
 .hero h1 {
 	font-family: var(--serif);
 	font-weight: 600;
-	font-size: clamp(34px, 5.2vw, 50px);
-	line-height: 1.1;
-	letter-spacing: -0.02em;
+	font-size: clamp(32px, 5.4vw, 54px);
+	line-height: 1.08;
+	letter-spacing: -0.025em;
+	text-wrap: balance;
 	margin: 0 0 18px;
-	max-width: 18ch;
+	max-width: 20ch;
 }
 
 .hero p.sell {
@@ -280,14 +286,14 @@ main {
 	margin: 0 0 26px;
 }
 
-.hero .actions {
+.actions {
 	display: flex;
 	gap: 12px;
 	flex-wrap: wrap;
 	align-items: center;
 }
 
-.hero .under {
+.under {
 	font-size: 13.5px;
 	color: var(--ink);
 	margin: 16px 0 0;
@@ -312,9 +318,9 @@ main {
 
 .panel {
 	background: var(--card);
-	border: 1px solid var(--line);
-	border-radius: 12px;
-	padding: 20px;
+	border-radius: var(--r-card);
+	box-shadow: var(--lift), var(--ring);
+	padding: 28px;
 	min-width: 0;
 }
 
@@ -334,9 +340,9 @@ main {
 	font-family: var(--serif);
 	font-size: 13px;
 	font-weight: 600;
-	width: 28px;
-	height: 28px;
-	border-radius: 9px;
+	width: 30px;
+	height: 30px;
+	border-radius: var(--r-pill);
 	background: var(--accent-soft);
 	color: var(--accent-deep);
 	display: inline-flex;
@@ -357,62 +363,15 @@ main {
 	font-size: 14.5px;
 }
 
-/* Marketplace rows */
-
-.rows {
-	display: flex;
-	flex-direction: column;
-	gap: 0;
-}
-
-.row {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	padding: 14px 4px;
-	border-top: 1px solid var(--line);
-	flex-wrap: wrap;
-}
-
-.row:first-child {
-	border-top: 0;
-}
-
-.row .who {
-	font-weight: 600;
-	font-size: 15px;
-	min-width: 190px;
-}
-
-.row .how {
-	color: var(--muted);
-	font-size: 14px;
-	flex: 1 1 260px;
-}
-
-.pill {
+.pill.draft {
 	font-size: 11.5px;
 	font-weight: 600;
-	border-radius: 999px;
+	border-radius: var(--r-pill);
 	padding: 4px 10px;
 	white-space: nowrap;
-	background: var(--hover);
-	color: var(--muted);
-}
-
-.pill.ok {
-	background: var(--ok-soft);
-	color: var(--ok);
-}
-
-.pill.mut {
-	background: var(--hover);
-	color: var(--muted);
-}
-
-.pill.draft {
 	background: var(--warn-soft);
-	color: var(--warn);
+	/* Bare --warn measures 3.37:1 here; this is the mix .notice already uses. */
+	color: color-mix(in srgb, var(--warn) 78%, var(--ink));
 }
 
 .notice {
@@ -442,46 +401,6 @@ main {
 .pending {
 	color: var(--ink);
 	white-space: nowrap;
-}
-
-/* Placeholder frames, standing in for console screenshots. */
-
-.shot {
-	margin: 0;
-}
-
-.shot .frame {
-	position: relative;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	aspect-ratio: 4 / 3;
-	background: var(--card);
-	border: 1px dashed var(--line);
-	border-radius: 12px;
-	overflow: hidden;
-}
-
-.shot .bar {
-	position: absolute;
-	top: 0;
-	left: 0;
-	right: 0;
-	height: 26px;
-	background: var(--hover);
-	border-bottom: 1px solid var(--line);
-}
-
-.shot .label {
-	font-family: var(--serif);
-	font-size: 17px;
-	color: var(--ink);
-}
-
-.shot figcaption {
-	margin-top: 10px;
-	font-size: 13.5px;
-	color: var(--muted);
 }
 
 /* Questions */
@@ -583,6 +502,253 @@ main {
 	max-width: 76ch;
 }
 
+.site-foot .tagline {
+	margin: 10px 0 0;
+}
+
+.site-foot .legal {
+	display: flex;
+	gap: 4px 18px;
+	flex-wrap: wrap;
+}
+
+/* Features */
+
+.feature h3 {
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 19px;
+	letter-spacing: -0.012em;
+	text-wrap: balance;
+	margin: 0 0 8px;
+}
+
+.feature p {
+	margin: 0 0 16px;
+	color: var(--muted);
+	font-size: 15px;
+}
+
+.tag {
+	display: inline-flex;
+	align-items: center;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--primary);
+	background: var(--rail);
+	border-radius: var(--r-pill);
+	padding: 4px 11px;
+}
+
+/* Pricing */
+
+.trial {
+	margin: 0 0 24px;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--primary);
+}
+
+.tiers {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 16px;
+	align-items: stretch;
+}
+
+.tier {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	padding: 24px;
+}
+
+.tier.featured {
+	box-shadow: var(--lift), inset 0 0 0 2px var(--accent);
+}
+
+.tier .badge {
+	position: absolute;
+	top: -11px;
+	left: 24px;
+	background: var(--accent);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	border-radius: var(--r-pill);
+	padding: 4px 12px;
+}
+
+.tier h3,
+.wide-body h3 {
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 20px;
+	letter-spacing: -0.01em;
+	margin: 0 0 6px;
+}
+
+.persona {
+	margin: 0 0 16px;
+	color: var(--muted);
+	font-size: 14px;
+}
+
+.tier .persona {
+	min-height: 3.5em;
+}
+
+.price {
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 34px;
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+	margin: 0;
+}
+
+.price .per {
+	font-family: var(--sans);
+	font-size: 14px;
+	font-weight: 500;
+	letter-spacing: 0;
+	color: var(--muted);
+}
+
+.price.small {
+	font-size: 20px;
+}
+
+.cadence {
+	margin: 4px 0 18px;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.bridge {
+	margin: 0 0 10px;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.ticks {
+	list-style: none;
+	margin: 0 0 22px;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+	font-size: 14px;
+	color: var(--muted);
+}
+
+.ticks li {
+	position: relative;
+	padding-left: 24px;
+}
+
+.ticks li::before {
+	content: '';
+	position: absolute;
+	left: 2px;
+	top: 0.35em;
+	width: 10px;
+	height: 5px;
+	border-left: 2px solid var(--ok);
+	border-bottom: 2px solid var(--ok);
+	transform: rotate(-45deg);
+}
+
+.wide {
+	width: 100%;
+	margin-top: auto;
+}
+
+.wide-panel {
+	margin-top: 20px;
+	background: var(--rail);
+	display: flex;
+	gap: 28px;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.wide-body {
+	flex: 1 1 440px;
+}
+
+.wide-body p {
+	margin: 0;
+	font-size: 15px;
+	max-width: 68ch;
+}
+
+.wide-panel .persona,
+.wide-body p {
+	color: var(--muted-strong);
+}
+
+.wide-act {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+/* Migrations */
+
+.bands {
+	display: flex;
+	flex-direction: column;
+	margin-bottom: 4px;
+}
+
+.band {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px 24px;
+	flex-wrap: wrap;
+	padding: 13px 0;
+	border-top: 1px solid var(--line);
+	font-size: 15px;
+}
+
+.band:first-child {
+	border-top: 0;
+	padding-top: 0;
+}
+
+.band .size {
+	color: var(--muted);
+}
+
+.band .cost {
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.rules {
+	margin: 22px 0;
+	padding-left: 20px;
+	color: var(--muted);
+	font-size: 14.5px;
+	max-width: 78ch;
+}
+
+.rules li {
+	margin-bottom: 8px;
+}
+
+@media (max-width: 1060px) {
+	.tiers {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
 @media (max-width: 860px) {
 	.grid-3,
 	.grid-2 {
@@ -590,10 +756,46 @@ main {
 	}
 
 	.hero {
-		padding: 48px 0 40px;
+		padding: 56px 0 44px;
 	}
 
 	.section {
-		padding: 44px 0;
+		padding: 56px 0;
+	}
+
+	.tier .persona {
+		min-height: 0;
+	}
+}
+
+@media (max-width: 620px) {
+	.tiers {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (max-width: 420px) {
+	:root {
+		--gutter: 16px;
+		--r-card: 1.25rem;
+	}
+
+	.panel {
+		padding: 20px;
+	}
+
+	.tier {
+		padding: 20px;
+	}
+
+	.site-head .wrap {
+		gap: 8px;
+		padding-top: 10px;
+		padding-bottom: 10px;
+	}
+
+	.site-nav {
+		gap: 4px;
+		font-size: 13px;
 	}
 }

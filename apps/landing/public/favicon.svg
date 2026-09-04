@@ -1,4 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Teachouse">
-  <rect width="32" height="32" rx="9" fill="#c2543a"/>
-  <text x="16" y="22" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="19" font-weight="600" fill="#ffffff">T</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="Teachouse">
+  <rect width="96" height="96" rx="22" fill="#6B4423" />
+  <!-- gable roof -->
+  <path d="M15 46 L48 19 L81 46" fill="none" stroke="#F7F2E9" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- pohutukawa flower at the apex -->
+  <circle cx="48" cy="19" r="5.5" fill="#C2543A" />
+  <!-- open book, left page -->
+  <path d="M45 58 C39 54 30 52.5 22 54 L22 74 C30 72.5 39 74 45 78 Z" fill="#F7F2E9" />
+  <!-- open book, right page -->
+  <path d="M51 58 C57 54 66 52.5 74 54 L74 74 C66 72.5 57 74 51 78 Z" fill="#F2E9DA" />
+  <!-- spine -->
+  <path d="M48 58 L48 78" fill="none" stroke="#C2543A" stroke-width="3" stroke-linecap="round" />
 </svg>

@@ -3,102 +3,125 @@
 The public site a teacher-seller reaches before signing up.
 
 - date: 2026-09-03
-- status: built and building green under `just landing-check`, which now runs inside `just pre-push`; amended 2026-09-04 to remove the pricing section and stand a waitlist in its place, by founder decision to park payments
-- placeholders: the legal text, the support and waitlist addresses, the console origin and the desktop download URL are all still placeholders the founder must replace before the site goes live
-- paths: `apps/landing/`, and the `landing-check` and `landing-dev` recipes in the justfile
+- status: built and green under `just landing-check`, which runs inside `just pre-push`; rewritten 2026-09-05 to carry the founder's approved prices at `/` and at a new `/pricing`, and re-based on `tam-server` serving the build rather than on a static host of its own
+- placeholders: the legal text and the support address are what the founder must still replace, and the desktop download URL is still null
+- paths: `apps/landing/`, `nix/landing.nix`, and the `landing-check` and `landing-dev` recipes in the justfile
 
 ## What it is, and why it is a separate build
 
 D28 names "Astro or a prerendered SvelteKit route" for this page, and the research it rests on names Astro without the disjunction.
 `docs/research/rethink/tanstack-and-astro-fit.md` recommends, twice, "a separate Astro 7 site on Cloudflare Pages rather than as a route inside a SPA whose root layout sets `ssr = false`", and it offers the prerendered SvelteKit route only as the smaller answer if the founder is certain there will never be a blog or a help-content programme.
 The SvelteKit alternative also lands inside `web/`, which this work does not touch.
-Astro 7.2.10 it is, pinned exactly, and the site ships no JavaScript at all: no framework island, no analytics, no third-party script.
+The recommendation's "separate Astro 7 site" half is what we took; its Cloudflare Pages half is not, for the reason the deployment section below gives.
+Astro 7.2.10 it is, pinned exactly.
+The site ships one script of its own and nothing else: no framework island, no analytics, no third-party script, and no request to any host but the one serving it.
 
 The reason for keeping it out of the console is the console's own shape.
 `web/src/routes/+layout.ts` turns off both server rendering and prerendering, which SvelteKit's documentation calls a large negative for performance and search.
 That is the right trade for a logged-in dashboard and the wrong one for the page that has to rank and convert.
 
-The whole home page is 10 KB of HTML and 7 KB of CSS, plus two self-hosted font files.
+The whole home page is 12 KB of HTML and 9 KB of CSS, plus 360 bytes of script and two self-hosted font files.
 
 ## Structure
 
-The site is three pages.
+The site is four pages: `/`, `/pricing`, `/privacy` and `/terms`.
 
-The home page carries a hero, then five sections that the header and footer link to by anchor: how it works, what you will be looking at, where the work happens, marketplaces, and questions, closing on the waitlist.
-The hero states in one sentence what the product does and where the work runs, asks to be told when it opens, and prints the availability sentence underneath so no visitor infers a general release from a marketing page.
-"How it works" is three steps — bring the catalogue in, map it once, publish and keep it matching — followed by the sentence naming the Windows app that TeachersPayTeachers and Tes work needs, and the download link beside it.
-"What you will be looking at" is three placeholder frames captioned with the screen each will hold; they carry no image, and the caption says the pictures go in when there is a real catalogue to photograph.
-"Where the work happens" is the D1 and D30 section, and is described on its own below.
-"Marketplaces" is a row per marketplace naming where its work runs and what its status is, driven from the same transport split the registry encodes.
-"Questions" is six question-and-answer pairs, rendered open rather than collapsed, because this is the page that has to rank and a collapsed answer is worth less to a search engine than an open one.
-The closing section is the waitlist, and it is the only call to action on the page.
+`/` runs in heyretro's order with its two content-marketing blocks dropped, since we have no template library to promote.
+A sticky header, a hero, four feature blocks, how it works in three steps, pricing, migrations, questions, a closing call to action, then the footer.
+The header carries three anchors into the home page — how it works, migrations, questions — with pricing as a page link, and the two buttons on the right.
+Both buttons go to `/login`, which the landing build holds no file for and which therefore falls through to the console.
 
-`/privacy` and `/terms` are placeholder pages, described below.
+The hero is a badge, a one-line headline, a two-sentence subhead naming the mechanism, two buttons, and one reassurance line underneath: "Your resource files never pass through us."
+An earlier draft said "never leave your computer", which is false: a resource file is uploaded to TPT or TES, and the upload is one of the requests the seller's own machine sends.
+The four feature blocks are the four things the product does — cross-list to TPT and TES from one catalogue, change a listing once and have it change everywhere, move a whole shop in one go, and run the marketplace work on the seller's own computer — each a heading, one or two sentences, and a small label beneath.
+How it works is three steps, connect, map and sync, followed by the sentence naming the app that TPT and TES work needs.
+The closing call to action repeats the hero's button with the free tier's terms under it, and appears on `/` only.
+
+`/pricing` is the pricing, migrations and questions sections and nothing else.
+It is the same three components the home page renders, so the two pages cannot disagree about a price.
 
 ## Copy decisions
 
-The one-sentence claim is that Teachouse holds each teaching resource once and keeps the marketplaces matching it, with the marketplace work running from the seller's own computer under their own login.
-It leads with the catalogue rather than with cross-listing because the catalogue is the thing the seller does not have today, and the research finds the seller-side inventory shape vacant in the teacher space while the marketplace-side importer shape is occupied.
-
-D30 supplies the heading of the device section verbatim: "your login never leaves your device".
-The section then says what our servers do not do — never hold the marketplace password, never open a marketplace session on the seller's behalf — and what they do hold, which is the catalogue, the mapping decisions and the record of what was done.
-It closes with the sentence D30 requires: this split is our design choice about where a request should come from, it is not required by any law, and we do not present it as one.
-No wording anywhere on the site claims a legal requirement, a compliance obligation, or a marketplace's approval.
+TPT and TES are written in capitals throughout, and the two marketplaces are the only ones named.
+Etsy is not on the site: it is a later branch under D1, and the research advice was that it belongs in a "coming" line at most, never in a feature block or a tier's marketplace list.
 
 Marketplaces are named in words only.
-There is no marketplace logo anywhere on the site, because a logo on a marketing page reads as an endorsement, and the footer states plainly that Teachouse is independent, is not affiliated with any of them, and is endorsed by none of them.
+There is no marketplace logo anywhere on the site, because a logo on a marketing page reads as an endorsement, and the footer states plainly that Teachouse is independent and endorsed by neither.
 
 There are no testimonials, no seller counts, no time-saved figures and no comparison table.
-Nothing on the site is a number that has not been measured, which for a product with no public sellers means no numbers at all.
+Nothing on the site is a number that has not been measured, which for a product with no public sellers means the only numbers are prices.
 
-The availability sentence is the only claim on the site about whether a seller can use it today, and it is one editable string, so the founder can move it from private testing to general release in one place.
-
-There is no pricing on the site and no checkout, because payments are parked.
-The site asks to be told rather than asking to be paid, and the waitlist is a `mailto:` rather than a posted form: a form needs a backend that does not exist, and a hosted form service would put a seller's address with a third party and break the page's property of making no third-party request at all.
-The waitlist copy says what the seller will hear about and when, and it states that pricing will be known before anything is charged for, which is a promise the parked decision can actually keep.
-
-The site says that TeachersPayTeachers and Tes work needs a Windows app installed once.
-It is said in "How it works" rather than buried, because a seller who learns it after signing up learns it as a surprise, and because the device story the site tells is not credible without it.
-The download link is driven from one value that is null today, so the sentence stands and the link reads "Download link to come" rather than pointing at nothing.
+The device claim is made positively and never as an absolute.
+The site says that TPT and TES publish no interface for tools like this one, so every request to them is sent from the seller's own machine under their own login, and that resource files never pass through us — which is D1's no-API branch and D27.
+No sentence claims a legal requirement, a compliance obligation, or a marketplace's approval, which is what D30 forbids.
+The block says so affirmatively as well: "This split is our design choice about where a request should come from. It is not required by any law, and we do not present it as one."
+That wording dropped out with the device section the 2026-09-04 site carried, and was restored on 2026-09-05 into the fourth feature block, which is where the device claim now lives.
 
 Every answer in "Questions" is checked against the code rather than written from the design notes.
-The claim that a change edits the listing already there rather than deleting and recreating it rests on the connector contract's `revise`, which addresses an existing `RemoteListingId`, and on the absence of any delist-and-relist path anywhere in `crates/`; removal is a separate verb that a ledger row has to authorise.
+The claim that a change edits the listing already there rather than deleting and recreating it rests on the connector contract's `revise`, which addresses an existing `RemoteListingId`, and on the absence of any delist-and-relist path anywhere in `crates/`.
+The migration answer promises only what the founder approved: a fixed band price quoted before work starts, and 30 days of Studio to review the mappings.
+The re-runs-of-failed-items promise the research proposed is not on the page, because it was not among the terms the founder approved.
 
-The status pill on a marketplace row is green only for the two marketplaces whose full create, publish and revise path has been proven live.
-Etsy reads "Next" rather than "Working", because its connect path is designed and not built.
+The site says that TPT and TES work needs a small app, installed once.
+It is said in "How it works" rather than buried, because a seller who learns it after signing up learns it as a surprise, and because the device story is not credible without it.
+The download link is driven from one value that is null today, so the sentence stands and the link reads "Download link to come" rather than pointing at nothing.
+
+## Pricing and migrations
+
+The prices are the founder's, approved 2026-09-05, in USD only.
+USD because TPT is a US marketplace and TES is UK-centred, so NZD is neither buyer's currency and quoting it puts an FX conversion in front of a small ticket.
+
+Four tiers: Free, then Solo at $12 a month or $120 a year, Studio at $24 or $240, and Publisher at $48 or $480.
+Free is one marketplace, 20 resources and manual sync.
+The paid tiers differ on resources kept in sync (100, 400, unlimited), marketplaces (2, all, all), sync frequency (daily, every six hours, hourly), devices (1, 2, 3) and the migration allowance (50, 200, 500 resources migrated a year).
+The allowance is worded "50 resources migrated a year" rather than "50 migrations", because the unit is resources and the shorter phrasing reads as a count of jobs.
+
+Migrations are five fixed bands — $49, $79, $129, $199, and $299 for the first 500 resources plus $0.25 for each resource beyond 500 — quoted before work starts.
+The founder ruled on that last band on 2026-09-05, because "501+ $299 plus $0.25 per resource" also reads as $0.25 on every resource, and the two readings differ by $125 at 600 resources.
+The first band is labelled "50 resources or fewer" rather than the approved "0-50", because nobody orders a migration of no resources.
+Three rules combine them with the tiers: every migration includes 30 days of Studio, a subscriber's yearly allowance is consumed first and anything past it is half the band price, and an annual plan bought within 30 days credits the migration price in full.
+
+The block follows heyretro's structure, which is where the shape comes from and not the numbers.
+The heading names the metering unit, the trial is stated once above the cards rather than repeated inside each, exactly one card is badged, and the top tier gets a full-width panel of its own below the row as well as its card.
+The trial line reads "14-day Studio trial." and no more: which paid plans it attaches to is not something the founder has said, and a Studio trial sold beside Publisher would be a downgrade rather than a trial.
+heyretro's monthly-and-yearly toggle is not built, because it needs JavaScript; each card carries its annual price as the caption under its monthly one instead.
 
 ## Where the code holds each decision
 
-Everything the founder replaces lives in `apps/landing/src/site.js`, and nowhere else.
-That file holds the console origin, the sign-in URL, the support address, the waitlist address, the desktop download URL, the availability sentence and the marketplace list with its transport class.
-`downloadUrl` is null, and a null renders as "Download link to come" rather than as a link, so no broken download can ship by being forgotten.
-`waitlistHref` is the one value to change when the waitlist stops being a `mailto:`; nothing else on the site knows how a waitlist entry travels.
-The marketplace transport wording matches `InventoryId::transport_class` in `crates/tam-domain/src/registry/mod.rs`, where TeachersPayTeachers and Tes are `SellerDevice` and Etsy is `OfficialApi`; if a marketplace's class changes there, this file changes with it.
+`apps/landing/src/pricing.js` holds every price, tier feature line, migration band and combining rule.
+`/` and `/pricing` both import it, which is what makes the two pages incapable of disagreeing, and changing a number is one edit in one file.
 
-`apps/landing/src/styles/site.css` transcribes the console's design tokens from `web/src/app.css` unchanged — the same ground, ink, accent, line and state colours, and the same Fraunces and Instrument Sans pairing — so the two surfaces read as one product.
-The component classes below the tokens are this site's own, because the console's are dashboard furniture and none of it applies to a marketing page.
+`apps/landing/src/site.js` holds what the founder must supply and nothing else: the login path, the support address, the desktop download URL and the availability sentence.
+`downloadUrl` is null, and a null renders as "Download link to come" rather than as a link, so no broken download can ship by being forgotten.
+The login path is `/login` rather than an origin, because the console is served from this same origin, which is also what keeps the site working under `default-src 'self'`.
+
+`apps/landing/public/app-redirect.js` is the site's only script, loaded from our own origin on every page.
+The desktop app opens this origin too and has no use for a marketing page, and `window.__TAURI__` is the one signal available before the console loads, so the script sends that window to `/app`.
+It is an external file rather than an inline block so that the policy needs no hash for it.
+
+`apps/landing/src/styles/site.css` carries palette one, "Kauri", from the console design spec, under the same token names and values the console uses in `web/src/lib/styles/tokens.css`, so the two surfaces read as one product.
+`--accent-deep` and `--hover` had each drifted by a shade and were realigned to the console's `#a8442c` and `#f1e9db` on 2026-09-05; `--muted-strong` is this site's own, and the contrast item below says why.
+The shape language is heyretro's: fully round buttons and badges, 2rem section cards, one very diffuse shadow with a hairline inset ring instead of a border, and headings semibold with tightened tracking and a balanced wrap.
+The component classes are this site's own, because the console's are dashboard furniture.
 
 The two fonts are self-hosted rather than fetched from Google's CDN, which is what the console does.
 The latin subsets and both SIL Open Font License texts are in `apps/landing/public/fonts/`, with a note recording where each file came from and how to refresh it.
-The page therefore makes no third-party request at all.
+The page therefore makes no third-party request at all, and the server's policy permits `fonts.gstatic.com` without the site needing it.
+
+The favicon is `apps/landing/public/favicon.svg`, a copy of the product mark at `web/static/email/teachouse-mark.svg`.
+It is a copy rather than a reference because the two trees build separately; if the mark changes, this copy changes with it.
+The header and footer wordmarks draw the same file as an `<img>` beside the word "Teachouse", with an empty `alt` because the word beside it already names the product.
 
 ## Placeholders the founder must replace
 
-Seven items, all but two of them in `apps/landing/src/site.js`.
+Three items.
 
-1. `waitlistEmail`, which assumes `hello@teachouse.io`. This is where every waitlist entry lands, so it wants an address the founder actually reads. Replacing the `mailto:` with a posted form means changing `waitlistHref` and nothing else.
-2. `downloadUrl`, which is null. No public download page URL exists yet: releases go to CrabNebula Cloud on the `beta` channel, and CrabNebula's own documentation says a channelled release is not listed on an application's public page, while the GitHub releases beside them are in a private repository. Either publish a release to the unchannelled production stream, whose public page can then be linked, or host a download page of our own.
-3. `consoleOrigin`, which assumes `https://app.teachouse.io`. The console's host has not been settled anywhere in the repository, and this is the only guess on the site.
-4. `supportEmail`, which assumes `hello@teachouse.io`, and which appears in the footer and on both legal pages.
-5. `availability`, the one sentence about whether a seller can use Teachouse today.
-6. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
-7. The whole of `/terms`, which is a placeholder for counsel and not terms.
+1. `supportEmail` in `src/site.js`, which is null. Null renders no address at all rather than a `mailto:` that reaches nobody, so the footer drops the link and both legal pages say a contact address is still to come. `hello@teachouse.io` stood here until 2026-09-05 and was never monitored.
+2. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
+3. The whole of `/terms`, which is a placeholder for counsel and not terms.
 
-The three placeholder frames under "What you will be looking at" are not in this list because they are not a value to replace: they come out when there are real screenshots to put in, which needs the console running against a seeded catalogue.
-
-Pricing is not in this list either.
-It was removed rather than left unset, so there is no draft figure anywhere on the site to forget about.
-When payments are decided, the pricing section is written fresh against whatever D4 has become by then.
+`downloadUrl` is not in this list, because null is a working state rather than a wrong value: the sentence stands without it.
+No public download page URL exists yet, since releases go to CrabNebula Cloud on the `beta` channel and a channelled release is not listed on an application's public page, while the GitHub releases beside them are in a private repository.
 
 ## The two legal pages
 
@@ -106,30 +129,29 @@ Neither page contains invented legal text, and both say so at the top in a banne
 
 Each page instead does something useful for the founder's counsel: it sets down, as briefing material, the facts about the product that a drafter would otherwise have to be told, and then lists the questions the real document must answer.
 The privacy page records what identity data an account carries, that the no-API marketplace session and the resource files stay on the seller's device, that an official-API token is held server-side, what the catalogue and the analytics series contain, that a third-party merchant of record takes the payment, and that the site itself carries no analytics.
-The terms page records the independence from every marketplace, that the seller keeps their own relationship with each one, where each kind of request originates, the D4 metering shape, that a marketplace's own pricing rule is enforced as a publish gate rather than a warning, and that a decision the marketplace makes the seller's — a tax designation, a copyright assertion — is never filled in on the seller's behalf.
+The terms page records the independence from every marketplace, that the seller keeps their own relationship with each one, where each kind of request originates, the metering shape the published prices use, that a marketplace's own pricing rule is enforced as a publish gate rather than a warning, and that a decision the marketplace makes the seller's — a tax designation, a copyright assertion — is never filled in on the seller's behalf.
 
 These pages must be replaced in full, not edited.
 
-## Deployment to Cloudflare Pages
+## Deployment
 
-Nothing has been deployed, and no Cloudflare account has been touched.
-The steps below are the whole of it, and the free plan covers this site.
+The site is not deployed to a static host of its own, and no Cloudflare account has been touched.
+`tam-server` serves it, from the directory named by `--landing-dir`.
 
-1. In the Cloudflare dashboard, open Workers and Pages, create an application, choose Pages, and connect to the repository's Git host.
-2. Set the production branch to `main`.
-3. Set the framework preset to Astro, or leave it as none; the preset only fills the next two fields.
-4. Set the build command to `npm ci --no-audit --no-fund && npm run build`.
-5. Set the build output directory to `dist`.
-6. Set the root directory to `apps/landing`, which is what makes the two fields above resolve against this app rather than the repository root.
-7. Set the environment variable `NODE_VERSION` to `22`, matching `pkgs.nodejs_22` in the devShell.
-8. Deploy, and confirm the preview URL renders the home page with both fonts and no console error.
-9. In the project's custom domains, add `teachouse.io` and `www.teachouse.io`, and follow the dashboard's instruction to point the domain's nameservers or records at Cloudflare.
-10. Confirm that `https://teachouse.io/privacy/` and `https://teachouse.io/terms/` both resolve, since the build emits directory-style routes.
+`nix/landing.nix` builds `apps/landing` into a store path holding the `dist` tree, exposed as the flake package `teachouse-landing` and as the flake check `landing`.
+The NixOS module passes that package as `services.teachouse.landing.package`, and the unit passes its path to `tam-server --landing-dir`.
+`serving::Landing::load` reads the whole directory into memory once at start-up and refuses a directory with no `index.html`, so a broken or empty build fails the process rather than serving a 404 at the root.
 
-There is no server-side runtime, no Worker, no binding and no secret, so nothing in `wrangler.toml` is needed and none is committed.
-A pull-request preview deployment is on by default and is worth keeping, because it makes a copy change reviewable before it is public.
+Three tiers answer a request, in order, and `serving::route` decides between them.
+A path whose first segment parses as an API version goes to the API.
+A path the landing build holds a file for is answered from memory, resolving a directory route through its own `index.html`, which is what makes `/pricing`, `/privacy` and `/terms` work without the Astro build emitting extensionless files.
+Everything else is the console's, including `/app` and every route below it, and including `/login`, which is where both of the landing page's buttons go.
 
-The `site` value in `apps/landing/astro.config.mjs` is `https://teachouse.io`, and it is what the canonical link and the Open Graph URL are built from; if the domain changes, that one value changes with it.
+The landing page's Content-Security-Policy is computed by `landing_policy` from the files just read rather than written down twice: `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for each inline script found in the build, `style-src` adding `'unsafe-inline'` and `https://fonts.googleapis.com`, `font-src` adding `https://fonts.gstatic.com`, `img-src` adding `data:`, `connect-src 'self'` and `frame-ancestors 'none'`.
+The site carries no inline script, so no hash is emitted today.
+
+The `site` value in `apps/landing/astro.config.mjs` is `https://teachouse.stowiq.io`, the host actually serving the build, and it is what the canonical link and the Open Graph URL are built from.
+It moves to `https://teachouse.io` at the cutover, and that one value is the whole of the change.
 
 ## Open items, each a founder decision
 
@@ -137,21 +159,40 @@ The site states where the marketplace work runs as what Teachouse is built to do
 No sentence claims that our servers never hold a marketplace login or never open a marketplace session, and no sentence says the desktop app is the only thing that reaches a marketplace, because both would be false today.
 Two paths run at once, for different traffic.
 On the device, `apps/desktop/src-tauri/src/work.rs` composes and issues marketplace requests on the seller's machine, under the session the login webview filed in the operating system's keychain.
-On our side, two binaries still reach a no-API marketplace under a seller's session.
-Corrected 2026-09-04: `crates/tam-sync-worker` is no longer one of them and the gateway is no longer the shape.
-Its Tes read leg moved to the seller's device under D1, leaving the crate the enqueue half with no marketplace edge and no poll loop.
-What remains is a cookie jar rather than a broker lease: `crates/tam-canary` builds a Tes adapter over a direct transport from a cookie-jar path, and `crates/tam-import` builds a Tpt one over `TAM_TPT_COOKIE_JAR` for the operator manifest drain.
+On our side, two binaries still reach a no-API marketplace under a seller's session: `crates/tam-canary` builds a Tes adapter over a direct transport from a cookie-jar path, and `crates/tam-import` builds a Tpt one over `TAM_TPT_COOKIE_JAR` for the operator manifest drain.
+Corrected 2026-09-04: `crates/tam-sync-worker` is no longer one of them and the gateway is no longer the shape, because its Tes read leg moved to the seller's device under D1, leaving the crate the enqueue half with no marketplace edge and no poll loop.
 So the positive claim is true, and neither the absolute nor an exclusivity claim is.
-The absolute wording, including D30's "your login never leaves your device" as a heading, returns only when no server-side path reaches a marketplace under a seller's session, and this paragraph is the reminder so nobody has to hold it in their head.
-Check the claim against the tree rather than against this paragraph, and check it wider than the gateway, because the gateway going away is not the same as the paths going away: the question is which processes construct a marketplace adapter for a no-API marketplace at all, whether the session arrives over a broker lease or out of a cookie jar on our own disk.
+The absolute wording, including D30's "your login never leaves your device", returns only when no server-side path reaches a marketplace under a seller's session, and this paragraph is the reminder so nobody has to hold it in their head.
+Check the claim against the tree rather than against this paragraph, and check it wider than the gateway: the question is which processes construct a marketplace adapter for a no-API marketplace at all, whether the session arrives over a broker lease or out of a cookie jar on our own disk.
+
+The published price list meters differently from D4.
+D4 says meter connected marketplaces with a catalogue cap on the entry tier; the prices the founder approved on 2026-09-05 meter resources kept in sync at every tier, name that unit in the pricing heading, and carry marketplaces as a second axis.
+The later decision governs what shipped, and D4's row in `docs/notes/design/vendoo-for-teachers-rethink.md` has not been amended to match.
+
+The `/terms` placeholder briefly contradicted `/pricing` about metering, and no longer does.
+It described the D4 shape to counsel, as "subscription is metered by connected marketplaces, with a cap on catalogue size at the entry tier", while the price list on the same site meters resources; the sentence was corrected on 2026-09-05 to name resources kept in sync with marketplaces as a second axis per tier.
+That is the one edit made to a page whose rule is replacement rather than editing, because two live pages disagreeing about what a seller is billed for is worse than the exception; counsel's replacement must not reintroduce the old shape.
+
+The site publishes no way to reach us.
+`supportEmail` is null, which is the right state while no monitored address exists, but a page that takes money with no contact route is not a state to launch in; one founder value closes it.
+
+There is no monthly-and-yearly toggle.
+heyretro has one and it needs JavaScript, and the site's one script is the desktop redirect; each card carries its annual price as a caption instead, which loses the comparison heyretro's toggle gives but costs no script.
+A toggle becomes reasonable if the site ever takes a second script for another reason.
+
+No marketplace logo appears on the site, and none should be added.
+A logo on a marketing page reads as an endorsement, our own footer says we have none, and the trade-name line beside it is doing the work a logo would undo.
 
 Body text set in `--muted` does not clear the WCAG AA contrast minimum for normal text.
-Measured on this palette, `--muted` is 3.90:1 on `--card` and 3.65:1 on `--ground` against a 4.5:1 requirement, and it is used for the section ledes (`.section .lede`), the hero's opening sell line (`.hero p.sell`), the install aside under "How it works" (`.aside`), the step copy (`.step p`), the marketplace transport column (`.row .how`), the FAQ answers (`.faq dd`), the screenshot captions (`.shot figcaption`), the footer and its navigation (`.site-foot`, `.site-nav a`) and the muted status pill (`.pill.mut`).
-It is left alone here because these tokens are transcribed unchanged from `web/src/app.css` and diverging on the marketing site would break the one-product reading the transcription buys; the fix belongs in the console's palette, where a token between `--muted` and `--ink` would serve both surfaces.
-The `--faint` uses were not left alone, because at 2.28:1 they were carrying the availability sentence, the marketplace-independence disclaimer and the D30 design-choice line, and a disclosure nobody can read is not a disclosure; those are now `--ink`.
+Corrected 2026-09-05: an earlier version of this paragraph said `--muted` was 3.90:1 on `--card` and 3.65:1 on `--ground` and therefore failed, and both figures were wrong.
+Measured under WCAG 2.x relative luminance, `#7c6b5b` is 5.03:1 on `#fffdf9` and 4.58:1 on `#f7f2e9`, so every place `--muted` sits on a card or on the ground passes AA for normal text.
+The arithmetic was checked against the two published reference pairs, `#767676` on white at 4.54:1 and `#595959` on white at 7.00:1, and reproduces both exactly.
 
-The `/terms` placeholder still records the D4 metering shape as briefing material for counsel, and that is deliberate: the metering axis is a design decision that survives payments being parked, and the page is a brief rather than a public offer.
-It is named here so that a later reader does not mistake it for pricing that escaped the removal.
+Two combinations did fail, and the wrong paragraph above hid them; both are fixed.
+`--muted` on `--rail` is 4.24:1, which is the Publisher panel's lead line and body copy, the largest block of selling copy in the pricing section and present on both pages; `--muted-strong` (`#6b5b4c`, 5.41:1 on `--rail`) now carries that text, and it is the one token on this site that the console does not have.
+`--warn` on `--warn-soft` is 3.37:1, which was the "Draft placeholder" chip on both legal pages, the one element there whose whole job is to be noticed; it now takes the same `color-mix(in srgb, var(--warn) 78%, var(--ink))` that `.notice` beside it already used, measuring 4.63:1.
+Both fixes are inside this stylesheet, so neither disturbs a token the console shares.
+The `--faint` token is gone from this stylesheet: at 2.28:1 it was carrying the disclaimer lines, and a disclosure nobody can read is not a disclosure.
 
 There is no type-check step, only the build.
 `astro check` would require `@astrojs/check` and `typescript` as dependencies, and the standing instruction is to report a dependency beyond the framework itself rather than add it; the build already fails on a template or import error, and the site has no application logic for a type checker to find a fault in.

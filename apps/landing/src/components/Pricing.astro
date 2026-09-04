@@ -1,0 +1,56 @@
+---
+import { loginUrl } from '../site.js';
+import { tiers, topTier, trialLine } from '../pricing.js';
+
+const { level = 2 } = Astro.props;
+const Heading = level === 1 ? 'h1' : 'h2';
+---
+
+<section class="section" id="pricing">
+	<div class="wrap">
+		<Heading class="section-title">Choose a plan by how many resources you keep in sync</Heading>
+		<p class="lede">
+			Pay monthly or take a year and get two months free. You can cancel from the billing screen,
+			and prices are in US dollars.
+		</p>
+		<p class="trial">{trialLine}</p>
+
+		<div class="tiers">
+			{
+				tiers.map((tier) => (
+					<div class={tier.featured ? 'panel tier featured' : 'panel tier'}>
+						{tier.featured && <span class="badge">Most popular</span>}
+						<h3>{tier.name}</h3>
+						<p class="persona">{tier.persona}</p>
+						<p class="price">
+							{tier.monthly}
+							<span class="per"> /month</span>
+						</p>
+						<p class="cadence">{tier.cadence}</p>
+						{tier.bridge && <p class="bridge">{tier.bridge}</p>}
+						<ul class="ticks">
+							{tier.features.map((feature) => (
+								<li>{feature}</li>
+							))}
+						</ul>
+						<a class={tier.featured ? 'cta wide' : 'btn wide'} href={loginUrl}>
+							{tier.cta}
+						</a>
+					</div>
+				))
+			}
+		</div>
+
+		<div class="panel wide-panel">
+			<div class="wide-body">
+				<h3>{topTier.name}</h3>
+				<p class="persona">{topTier.lead}</p>
+				<p>{topTier.body}</p>
+			</div>
+			<div class="wide-act">
+				<p class="price small">{topTier.price}</p>
+				<a class="cta" href={loginUrl}>Start free</a>
+			</div>
+		</div>
+	</div>
+</section>

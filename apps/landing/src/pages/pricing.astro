@@ -1,0 +1,16 @@
+---
+import Base from '../layouts/Base.astro';
+import Faq from '../components/Faq.astro';
+import Migrations from '../components/Migrations.astro';
+import Pricing from '../components/Pricing.astro';
+
+const title = 'Pricing — Teachouse';
+const description =
+	'Teachouse plans priced by how many resources you keep in sync, from a free tier to unlimited, with fixed-price one-off migrations. Prices in US dollars.';
+---
+
+<Base title={title} description={description}>
+	<Pricing level={1} />
+	<Migrations />
+	<Faq />
+</Base>

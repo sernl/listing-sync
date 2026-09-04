@@ -37,8 +37,9 @@ import { supportEmail } from '../site.js';
 					issued for the purpose.
 				</li>
 				<li>
-					Subscription is metered by connected marketplaces, with a cap on catalogue size at the
-					entry tier, and is billed through a third-party merchant of record.
+					Subscription is metered by the number of resources kept in sync, with connected
+					marketplaces as a second axis at each tier, and is billed through a third-party
+					merchant of record.
 				</li>
 				<li>
 					Some marketplace rules are enforced as a step the seller must clear before publishing
@@ -63,9 +64,19 @@ import { supportEmail } from '../site.js';
 
 			<h2>Contact</h2>
 			<p>
-				Until this page is replaced, questions go to <a class="link" href={`mailto:${supportEmail}`}
-					>{supportEmail}</a
-				>.
+				{
+					supportEmail ? (
+						<Fragment>
+							Until this page is replaced, questions go to{' '}
+							<a class="link" href={`mailto:${supportEmail}`}>
+								{supportEmail}
+							</a>
+							.
+						</Fragment>
+					) : (
+						'A contact address goes here before this page is replaced.'
+					)
+				}
 			</p>
 		</div>
 	</section>

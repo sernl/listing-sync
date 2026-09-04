@@ -185,6 +185,7 @@
             nodejs = pkgs.nodejs_22;
             inherit coreWasm;
           };
+          teachouseLanding = pkgs.callPackage ./nix/landing.nix { nodejs = pkgs.nodejs_22; };
           tamAuth = pkgs.callPackage ./nix/tam-auth.nix { nodejs = pkgs.nodejs_22; };
           teachouseMigrations = pkgs.callPackage ./nix/migrations.nix { };
         in
@@ -195,6 +196,7 @@
             tam-worker = serviceBin "tam-worker";
             tam-auth = tamAuth;
             teachouse-console = teachouseConsole;
+            teachouse-landing = teachouseLanding;
             teachouse-migrations = teachouseMigrations;
             teachouse-core-wasm = coreWasm;
           };
@@ -202,11 +204,12 @@
           checks = {
             inherit bin;
 
-            # The two deployed artefacts no Rust lane covers. The console's own
+            # The three deployed artefacts no Rust lane covers. The console's own
             # source gates — the vocabulary freshness diff, svelte-check and
             # vitest — stay in `just web-check`, because they judge the source
             # rather than the artefact; this proves the artefact builds.
             console = teachouseConsole;
+            landing = teachouseLanding;
             tam-auth = tamAuth;
 
             # The default --ignore yanked stands. Measured: -n leaves the
