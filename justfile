@@ -233,9 +233,16 @@ db-test-all: db-wait db-verify
 # learn that before the database lane than after it.
 pre-push: auth-check check web-check landing-check db-verify db-test-all check-portable
 
-# Regenerate the client's vocabulary from the closed Rust enums
+# Regenerate the client's vocabulary from the closed Rust enums.
+#
+# Through a temporary file, because `> vocab.ts` truncates the file before cargo
+# runs: a compile failure would leave the vocabulary empty, and the next
+# `web-check` would then compare a correct tree against nothing. `cat` rather
+# than `mv` so the file keeps its own mode instead of mktemp's 0600.
 web-typegen:
-    cargo run -p tam-api --bin typegen > web/src/lib/generated/vocab.ts
+    vocab="$(mktemp)"; trap 'rm -f "$vocab"' EXIT; \
+        cargo run -p tam-api --bin typegen > "$vocab" \
+        && cat "$vocab" > web/src/lib/generated/vocab.ts
 
 # The browser's copy of the core: the same rules the API answers with, compiled
 # to wasm32 and bound for the browser. Generated output is gitignored and built
@@ -307,8 +314,17 @@ web-wasm-fixtures:
 
 # The web lane: lockfile install, vocabulary freshness, types, tests, build
 web-check: web-wasm
-    cargo run -p tam-api --bin typegen | diff -u web/src/lib/generated/vocab.ts - \
-        || (echo "vocab.ts is stale; run just web-typegen" && exit 1)
+    # Into a file rather than a pipe. A pipe discards typegen's own exit status,
+    # so a crate that does not compile reaches `diff` as empty input, the whole
+    # vocabulary reads as deleted, and the recipe reports "vocab.ts is stale" —
+    # which is false, and sends the reader to `just web-typegen` to fix a file
+    # that was never wrong. Observed twice on 2026-09-05, both times an uncached
+    # sqlx query in another slice's crate.
+    vocab="$(mktemp)"; trap 'rm -f "$vocab"' EXIT; \
+        { cargo run -p tam-api --bin typegen > "$vocab" \
+            || { echo "typegen did not build, so the vocabulary was not checked; the compiler's error is above" >&2; exit 1; }; }; \
+        diff -u web/src/lib/generated/vocab.ts "$vocab" \
+        || { echo "vocab.ts is stale; run just web-typegen" >&2; exit 1; }
     cd web && npm ci --no-audit --no-fund
     cd web && npx svelte-kit sync && npx svelte-check --fail-on-warnings
     cd web && npx vitest run

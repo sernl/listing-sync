@@ -240,17 +240,26 @@
 	color: var(--muted);
 }
 
-.search input {
+/* `input[type='search']` rather than `input`: app.css carries a global
+   `input[type='search']` field style at the same specificity, and app.css
+   imports this sheet at its own top, so at a tie that rule wins on source order
+   and the top bar's input draws its own bordered white box inside the pill.
+   The attribute here takes the specificity to (0,2,1) and settles it.
+
+   `flex: 1` rather than `width: 100%`, because 100% of a flex container is the
+   whole container, so the input overflowed past the magnifier and the pill's
+   right edge showed as a stub beyond it. */
+.search input[type='search'] {
+	flex: 1;
 	border: 0;
 	background: none;
 	outline: none;
 	font: inherit;
 	color: var(--text);
-	width: 100%;
 	min-width: 0;
 }
 
-.search input::placeholder {
+.search input[type='search']::placeholder {
 	color: var(--faint);
 }
 
@@ -258,7 +267,7 @@
    a ring on the input alone would sit inside the border and read as a doubled
    edge. This control advertises ctrl-K, so it is reached by keyboard by design
    and a border-colour change is too weak on its own. */
-.search input:focus-visible {
+.search input[type='search']:focus-visible {
 	outline: none;
 }
 

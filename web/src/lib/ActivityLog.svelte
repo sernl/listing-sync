@@ -29,7 +29,7 @@
 </script>
 
 <div class="log-head">
-	<span class="search">
+	<span class="log-search">
 		<Icon name="search" size={15} />
 		<label class="sr-only" for="log-search">Search this log</label>
 		<input id="log-search" type="search" placeholder="Search this log…" bind:value={query} />
