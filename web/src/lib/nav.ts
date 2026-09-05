@@ -19,6 +19,13 @@ export interface NavItem {
 	icon: IconName;
 	/** Marks a destination that exists as a route and not yet as a feature. */
 	soon?: true;
+	/** Paths this destination answers for besides its own `href`.
+	 *
+	 *  A route's place in the URL is not always its place in the navigation.
+	 *  `/sync/requests/<id>` is the one case: it lives under `/sync` because a
+	 *  sync request is what carries an import, but what the seller is looking at
+	 *  is an import, so it belongs under Import. */
+	owns?: readonly string[];
 }
 
 export type SectionId = 'crosslist' | 'automations' | 'marketplaces' | 'account' | 'admin';
@@ -53,7 +60,7 @@ export const SECTIONS: readonly NavSection[] = [
 		items: [
 			{ href: '/inventory', label: 'Resources', icon: 'layout-list' },
 			{ href: '/labels', label: 'Labels', icon: 'tag', soon: true },
-			{ href: '/import', label: 'Import', icon: 'download', soon: true },
+			{ href: '/import', label: 'Import', icon: 'download', soon: true, owns: ['/sync/requests'] },
 			{ href: '/analytics', label: 'Analytics', icon: 'chart-line' },
 			{ href: '/templates', label: 'Template Manager', icon: 'layout-template', soon: true },
 			{ href: '/export', label: 'Export', icon: 'file-down', soon: true }
@@ -173,6 +180,28 @@ export const ALL_DESTINATIONS: readonly NavItem[] = [
 
 const ALL_ITEMS = ALL_DESTINATIONS;
 
+/** Every path prefix a destination answers for: its own href, then anything it
+ *  owns. */
+function claims(item: NavItem): readonly string[] {
+	return item.owns === undefined ? [item.href] : [item.href, ...item.owns];
+}
+
+/** The length of the longest claim this path falls under, or null where the
+ *  destination does not answer for it at all.
+ *
+ * Length rather than a boolean, because resolution is longest-match: it is what
+ * keeps `/sync/<id>` on Marketplace Sync while `/sync/requests/<id>` goes to
+ * Import, and `/admin/orgs/<id>` on Organisations rather than Overview. */
+function claimed(pathname: string, item: NavItem): number | null {
+	let best: number | null = null;
+	for (const claim of claims(item)) {
+		if (isCurrent(pathname, claim) && (best === null || claim.length > best)) {
+			best = claim.length;
+		}
+	}
+	return best;
+}
+
 /** The section the rail lights, and whose pages the card lists, or `null` where
  *  the path belongs to no section.
  *
@@ -190,8 +219,9 @@ export function sectionFor(pathname: string, operator = false): NavSection | nul
 	let best: { section: NavSection; length: number } | null = null;
 	for (const section of sections) {
 		for (const item of section.items) {
-			if (isCurrent(pathname, item.href) && (best === null || item.href.length > best.length)) {
-				best = { section, length: item.href.length };
+			const length = claimed(pathname, item);
+			if (length !== null && (best === null || length > best.length)) {
+				best = { section, length };
 			}
 		}
 	}
@@ -278,13 +308,14 @@ export function isCurrent(pathname: string, href: string): boolean {
  *  longest matching destination wins, so `/sync/<id>` reads as Marketplace
  *  Sync rather than as the first nav entry that happens to prefix it. */
 export function breadcrumbFor(pathname: string): string {
-	let best: NavItem | null = null;
+	let best: { item: NavItem; length: number } | null = null;
 	for (const item of ALL_ITEMS) {
-		if (isCurrent(pathname, item.href) && (best === null || item.href.length > best.href.length)) {
-			best = item;
+		const length = claimed(pathname, item);
+		if (length !== null && (best === null || length > best.length)) {
+			best = { item, length };
 		}
 	}
-	return best?.label ?? 'Console';
+	return best?.item.label ?? 'Console';
 }
 
 /** Where a path from the old information architecture now lives.

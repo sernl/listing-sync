@@ -219,7 +219,20 @@ describe('the section the rail lights', () => {
 
 	it('follows a detail page to its parent section', () => {
 		expect(sectionFor('/inventory/9f2c8a11')?.id).toBe('crosslist');
-		expect(sectionFor('/sync/requests/9f2c8a11')?.id).toBe('automations');
+		expect(sectionFor('/sync/9f2c8a11')?.id).toBe('automations');
+	});
+
+	// An import's detail page sits under `/sync` in the URL because a sync
+	// request carries it, but what the seller is looking at is an import.
+	it('follows an import detail page to Import rather than to Marketplace Sync', () => {
+		expect(sectionFor('/sync/requests/9f2c8a11')?.id).toBe('crosslist');
+		expect(breadcrumbFor('/sync/requests/9f2c8a11')).toBe('Import');
+	});
+
+	it('leaves every other path under /sync on Marketplace Sync', () => {
+		expect(sectionFor('/sync')?.id).toBe('automations');
+		expect(sectionFor('/sync/9f2c8a11')?.id).toBe('automations');
+		expect(breadcrumbFor('/sync/9f2c8a11')).toBe('Marketplace Sync');
 	});
 
 	it('reaches a section with no page list through its landing path alone', () => {
@@ -301,6 +314,14 @@ describe('the breadcrumb', () => {
 
 	it('names the parent of a detail page rather than the home path', () => {
 		expect(breadcrumbFor('/sync/9f2c8a11')).toBe('Marketplace Sync');
+	});
+
+	it('lets a destination claim a path that is not under its own href', () => {
+		const importItem = SECTIONS.flatMap((section) => section.items).find(
+			(item) => item.href === '/import'
+		);
+		expect(importItem?.owns).toEqual(['/sync/requests']);
+		expect(breadcrumbFor('/sync/requests')).toBe('Import');
 	});
 
 	it('names the operator page rather than its group', () => {

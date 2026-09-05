@@ -52,8 +52,17 @@ button {
 	border: 0;
 }
 
+/* `inline-flex` rather than the default box, because `Button.svelte` takes an
+   `icon` as a first-class part of the catalogue: left inline, the glyph and the
+   label are two inline boxes that stack, and on the `<a>` form — which is what
+   the component emits whenever `href` is set — the pill's own background breaks
+   apart and the label spills outside it. Every other icon-bearing control in
+   the console already sets its own; these are the ones that did not. */
 .cta,
 .btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
 	border-radius: 8px;
 	font-weight: 600;
 	font-size: 13px;
@@ -135,8 +144,10 @@ button {
 
 .page-head h1 {
 	margin: 0;
-	font-size: 19px;
+	font-family: var(--display);
+	font-size: 28px;
 	font-weight: 600;
+	line-height: 1.15;
 	letter-spacing: -0.01em;
 	text-wrap: balance;
 }
@@ -277,12 +288,23 @@ button {
 	margin-top: 14px;
 }
 
+/* The card the specification's catalogue describes: a soft shadow and no
+   border, at the card radius, with room to breathe. The bordered no-shadow
+   variant is `.panel.bare`, which the Marketplaces grid uses — Vendoo draws
+   that one grid the same way and it is the only place a border reads better
+   than a shadow, because those cards sit in a grid rather than stacked. */
 .panel {
 	background: var(--card);
-	border: 1px solid var(--line);
-	border-radius: 12px;
-	padding: 16px;
+	border: 1px solid transparent;
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-2);
+	padding: 28px;
 	min-width: 0;
+}
+
+.panel.bare {
+	border-color: var(--line);
+	box-shadow: none;
 }
 
 /* The page-level rhythm. Reached only panel-after-panel before, so a panel
@@ -291,19 +313,22 @@ button {
 .band + .panel,
 .attn + .panel,
 .panel + .panel {
-	margin-top: 14px;
+	margin-top: 24px;
 }
 
 .panel h2 {
 	margin: 0;
-	font-size: 14px;
+	font-family: var(--display);
+	font-size: 24px;
 	font-weight: 600;
+	line-height: 1.2;
+	letter-spacing: -0.01em;
 }
 
 .panel .desc {
 	color: var(--muted);
-	font-size: 12.5px;
-	margin: 2px 0 12px;
+	font-size: 13px;
+	margin: 4px 0 16px;
 }
 
 .head-row {
@@ -631,10 +656,21 @@ th.num {
 	color: var(--muted);
 }
 
+/* Flex rather than block, because Tailwind's preflight sets `svg { display:
+   block }`: a blockified glyph inside a `text-align: center` box ignores the
+   alignment and sits hard left, which is what the empty state's icon was
+   doing on all five pages that render one. */
 .placeholder .big {
 	font-size: 22px;
-	display: block;
+	display: flex;
+	justify-content: center;
 	margin-bottom: 8px;
+}
+
+/* `.actions` is a flex row, and a flex row does not inherit `text-align`
+   either, so the empty state's own actions need saying too. */
+.placeholder .actions {
+	justify-content: center;
 }
 
 .placeholder b {
