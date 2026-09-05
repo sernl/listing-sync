@@ -480,6 +480,12 @@ The build itself still awaits an explicit founder go on the plan.
 | D29 | New. Build infrastructure runs on NixOS. Windows bundles cross-compile locally through `cargo-xwin`, and release builds run on a GitHub Windows runner where the MSI and the signing step are native. macOS builds use free minutes on GitHub or Codemagic; no macOS virtual machine is used, because Apple's software licence agreement forbids macOS on non-Apple hardware. Android builds from NixOS through `androidenv`, and the first Play upload is done by hand, because Tauri does not automate an Android release. | 2026-09-03 |
 | D30 | New. The user-facing wording is "your login never leaves your device", carried on the connect flow, the marketplace badge and the publish progress. It never claims a legal requirement, because no statute imposes this architecture: the reasons are the United States computer-access line on request origin and the credential-custody question, and both are presented as our design choice rather than as law. | 2026-09-02 |
 
+Amended 2026-09-05: D4's metering axis is superseded by the prices the founder approved that day, and the 2026-09-05 decision governs wherever the two differ.
+Metering is by resources kept in sync at every tier, with connected marketplaces retained as a second axis rather than as the primary one: Solo carries 100 resources and two marketplaces, Studio 400 resources and every available marketplace, Publisher unlimited resources and every available marketplace, and the free tier 20 resources on one marketplace.
+Each paid tier also carries an annual migration allowance, of 50, 200 and 500 resources respectively.
+D4's choice of Paddle and its rejection of Stripe Managed Payments are untouched by this amendment.
+The prices themselves, and the rules by which a one-off migration combines with a tier, are recorded in `docs/notes/design/console-redesign-plan.md`.
+
 ### Questions answered from the sources rather than put to the founder
 
 Should we follow PrimeLister's server-side credential storage: no, and the source recommends the same; it is evidence to note, not a pattern to adopt (`vendoo-architecture-and-market.md`, open question 1).
