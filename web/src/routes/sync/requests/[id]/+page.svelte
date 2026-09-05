@@ -102,7 +102,7 @@
 		{@const rows = resourceRows(request)}
 		{@const anyCoverage = rows.some((row) => row.coverage !== null)}
 		<PageHead
-			icon="⇄"
+			icon="refresh-cw"
 			title={`${isDeviceImport(request) ? 'Import' : 'Request'} ${request.request.slice(0, 8)}…`}
 			description={`${platformTitle(request.source)} → ${platformTitle(request.target)}`}
 		>
@@ -203,7 +203,7 @@
 			</Panel>
 		{/if}
 	{:else if refusal !== null}
-		<PageHead icon="⇄" title="Import" description="This import could not be read." />
+		<PageHead icon="refresh-cw" title="Import" description="This import could not be read." />
 		<Panel>
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">⇄</span>

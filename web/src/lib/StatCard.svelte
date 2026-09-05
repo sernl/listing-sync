@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import Icon from '$lib/Icon.svelte';
+	import type { IconName } from '$lib/icons';
 
 	let {
 		icon,
@@ -9,7 +11,7 @@
 		sub,
 		children
 	}: {
-		icon: string;
+		icon: IconName;
 		/** `ok`, `warn` or `bad`; the accent tint when omitted. */
 		tone?: string;
 		tag?: string;
@@ -21,7 +23,7 @@
 
 <div class="stat">
 	{#if tag}<span class="tag">{tag}</span>{/if}
-	<div class="ico {tone}" aria-hidden="true">{icon}</div>
+	<div class="ico {tone}"><Icon name={icon} size={16} /></div>
 	<div class="n">{@render children()}</div>
 	<div class="lbl">{label}</div>
 	{#if sub}<div class="sub">{sub}</div>{/if}

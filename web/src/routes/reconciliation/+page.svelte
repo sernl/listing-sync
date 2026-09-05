@@ -104,7 +104,7 @@
 
 <div class="page">
 	<PageHead
-		icon="☰"
+		icon="circle-question-mark"
 		title="Reconciliation"
 		description="The few questions sync cannot answer for you."
 	>

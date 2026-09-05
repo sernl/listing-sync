@@ -336,7 +336,7 @@
 	{#if product.isPending}
 		<p class="quiet">Loading the listing…</p>
 	{:else if product.isError || product.data === undefined}
-		<PageHead icon="▤" title="Listing" description="This listing could not be read." />
+		<PageHead icon="layout-list" title="Listing" description="This listing could not be read." />
 		<Panel>
 			<div class="placeholder">
 				<span class="big" aria-hidden="true">⌕</span>
@@ -348,7 +348,7 @@
 		{@const stored = product.data}
 		{@const status = rowStatus(mappings)}
 		<PageHead
-			icon="▤"
+			icon="layout-list"
 			title={stored.title}
 			description={`${formatPrice(stored.price)} · updated ${agoLabel(stored.updated_at, Date.now())}`}
 		>

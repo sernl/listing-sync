@@ -58,7 +58,7 @@
 
 <div class="page">
 	<PageHead
-		icon="◔"
+		icon="chart-line"
 		title="Analytics"
 		description="What each marketplace reports, and how old every figure is."
 	/>

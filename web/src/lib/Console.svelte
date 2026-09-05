@@ -7,17 +7,20 @@
 	import { api } from '$lib/api';
 	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
+	import Icon from '$lib/Icon.svelte';
 	import ImpersonationBanner from '$lib/ImpersonationBanner.svelte';
 	import { normaliseQuery } from '$lib/listings-view';
 	import {
-		ADMIN_GROUP,
-		MOBILE_TABS,
-		NAV_GROUPS,
-		SETTINGS_ITEM,
+		ADMIN_SECTION,
+		CREATE_TAB,
+		HOME_ITEM,
+		PHONE_BAR,
+		SECTIONS,
 		breadcrumbFor,
 		initialsOf,
 		isCurrent,
-		searchHref
+		searchHref,
+		sectionFor
 	} from '$lib/nav';
 	import { queryKeys } from '$lib/query';
 
@@ -28,11 +31,6 @@
 		queryKey: queryKeys.connections,
 		queryFn: () => api.connections()
 	}));
-	const drain = createQuery(() => ({
-		queryKey: queryKeys.drainStats,
-		queryFn: () => api.drainStats()
-	}));
-
 	// The operator probe: one read of the cheapest operator route, cached for
 	// the session. A 401 is the deliberate blank refusal every non-operator
 	// gets, so it is not retried and never surfaces as a fault -- it is simply
@@ -89,7 +87,25 @@
 	const orgName = $derived(organisation.data?.name);
 	const initials = $derived(initialsOf(orgName));
 	const links = $derived(connections.data?.connections ?? []);
-	const openQuestions = $derived(drain.data?.open ?? null);
+
+	// Which section the rail lights and whose pages the card lists. The
+	// operator's own section joins the rail only for a human the probe
+	// admitted, and is asked for by name here so a non-operator on an `/admin`
+	// path still lands on a section that exists rather than on a card of
+	// destinations that answer 401.
+	const operator = $derived(verdict === 'operator');
+	const section = $derived(sectionFor(pathname, operator));
+	// The card renders only for a section that has pages. The home path and the
+	// open-questions queue belong to no section at all, and on those the rail
+	// lights nothing rather than claiming one.
+	const card = $derived(section !== null && section.items.length > 0 ? section : null);
+	// Account sits at the foot of the rail beside Help, which is where the
+	// founder's own sketch and Vendoo both put it; the rest run under the mark.
+	const railSections = $derived([
+		...SECTIONS.filter((entry) => entry.id !== 'account'),
+		...(operator ? [ADMIN_SECTION] : [])
+	]);
+	const accountSection = $derived(SECTIONS.find((entry) => entry.id === 'account'));
 
 	/** The dot beside a marketplace in the top bar. `checking` earns no colour
 	 *  on purpose: it is linked and unverified, which is nothing to report. */
@@ -141,7 +157,9 @@
 
 <svelte:window onkeydown={shortcut} />
 
-<div class="app">
+<svelte:head><title>{crumb} · Teachouse</title></svelte:head>
+
+<div class="app" class:no-nav={card === null}>
 	{#if impersonation}
 		<ImpersonationBanner
 			who={impersonation.who}
@@ -151,61 +169,109 @@
 		/>
 	{/if}
 
-	<aside class="side">
-		<div class="wordmark"><span class="leaf" aria-hidden="true">T</span> Teachouse</div>
+	<nav class="rail" aria-label="Sections">
+		<a class="mark" href={HOME_ITEM.href} aria-label={HOME_ITEM.label}>
+			<img src="/favicon.svg" alt="" width="34" height="34" />
+		</a>
 
-		{#each NAV_GROUPS as group (group.label)}
-			<div class="group-label" id={`nav-${group.label}`}>{group.label}</div>
-			<nav aria-labelledby={`nav-${group.label}`}>
-				{#each group.items as item (item.href)}
+		{#each railSections as entry (entry.id)}
+			<a
+				class="rail-item"
+				href={entry.href}
+				aria-current={entry.id === section?.id ? 'page' : undefined}
+				aria-label={entry.label}
+				title={entry.label}
+			>
+				<Icon name={entry.icon} size={20} />
+			</a>
+		{/each}
+
+		<span class="rail-gap"></span>
+
+		<a class="rail-item" href="/guides" aria-label="Help and guides" title="Help and guides">
+			<Icon name="circle-question-mark" size={20} />
+		</a>
+
+		{#if accountSection}
+			<a
+				class="rail-item"
+				href={accountSection.href}
+				aria-current={accountSection.id === section?.id ? 'page' : undefined}
+				aria-label={accountSection.label}
+				title={accountSection.label}
+			>
+				<Icon name={accountSection.icon} size={20} />
+			</a>
+		{/if}
+	</nav>
+
+	{#if card}
+		<div class="nav-card">
+			<div class="nav-top">
+				<h2>{card.label}</h2>
+			</div>
+
+			{#if card.primary}
+				<a class="cta nav-primary" href={card.primary.href}>
+					<Icon name={card.primary.icon} size={16} />
+					{card.primary.label}
+				</a>
+			{/if}
+
+			<!-- Named directly rather than by `aria-labelledby`: the title it would
+			     point at is hidden below the tablet breakpoint, and whether a hidden
+			     element still supplies a name is not something to depend on. -->
+			<nav aria-label={card.label}>
+				{#each card.items as item (item.href)}
 					<a
 						class="nav-item"
 						href={item.href}
 						aria-current={isCurrent(pathname, item.href) ? 'page' : undefined}
 					>
-						<i class="ico" aria-hidden="true">{item.icon}</i>
+						<span class="ico"><Icon name={item.icon} size={16} /></span>
 						{item.label}
 						{#if item.soon}
 							<span class="chip">soon</span>
-						{:else if item.count === 'reconciliation' && openQuestions !== null && openQuestions > 0}
-							<span class="chip count">{openQuestions}</span>
 						{/if}
 					</a>
 				{/each}
 			</nav>
-		{/each}
 
-		{#if verdict === 'operator'}
-			<div class="group-label" id={`nav-${ADMIN_GROUP.label}`}>{ADMIN_GROUP.label}</div>
-			<nav aria-labelledby={`nav-${ADMIN_GROUP.label}`}>
-				{#each ADMIN_GROUP.items as item (item.href)}
-					<a
-						class="nav-item"
-						href={item.href}
-						aria-current={isCurrent(pathname, item.href) ? 'page' : undefined}
-					>
-						<i class="ico" aria-hidden="true">{item.icon}</i>
-						{item.label}
-					</a>
-				{/each}
-			</nav>
-		{/if}
-
-		<div class="foot">
-			<nav aria-label="Account">
-				<a
-					class="nav-item"
-					href={SETTINGS_ITEM.href}
-					aria-current={isCurrent(pathname, SETTINGS_ITEM.href) ? 'page' : undefined}
-				>
-					<i class="ico" aria-hidden="true">{SETTINGS_ITEM.icon}</i>
-					{SETTINGS_ITEM.label}
-				</a>
-				<button class="nav-item" type="button" onclick={onLogout}>
-					<i class="ico" aria-hidden="true">⇥</i>
+			{#if card.id === 'account'}
+				<button class="nav-item nav-foot" type="button" onclick={onLogout}>
+					<span class="ico"><Icon name="log-out" size={16} /></span>
 					Log out
 				</button>
-			</nav>
+			{/if}
+		</div>
+	{/if}
+
+	<main class="region">
+		<div class="top">
+			<span class="conn">
+				{#each links as link (link.id)}
+					<span title={present(link.status).explanation}>
+						<span class="dot {DOT[present(link.status).tone]}"></span>{link.marketplace}
+						{link.status}
+					</span>
+				{/each}
+			</span>
+			<span class="grow"></span>
+			<form class="search" role="search" onsubmit={submitSearch}>
+				<Icon name="search" size={15} />
+				<label class="sr-only" for="console-search">Search resources</label>
+				<input
+					id="console-search"
+					name="q"
+					type="search"
+					placeholder="Search resources…"
+					bind:this={searchBox}
+					bind:value={query}
+					oninput={typed}
+				/>
+				<kbd>ctrl K</kbd>
+			</form>
+			<a class="cta" href={CREATE_TAB.href}>{CREATE_TAB.label}</a>
 			<a class="account" href="/settings">
 				<span class="avatar" aria-hidden="true">{initials}</span>
 				<span class="who">
@@ -222,53 +288,27 @@
 				</span>
 			</a>
 		</div>
-	</aside>
-
-	<main class="main">
-		<div class="top">
-			<a class="top-mark" href="/" aria-label="Dashboard">
-				<span class="leaf" aria-hidden="true">T</span>
-			</a>
-			<span class="crumb">Console / <b>{crumb}</b></span>
-			<span class="grow"></span>
-			<span class="conn">
-				{#each links as link (link.id)}
-					<span title={present(link.status).explanation}>
-						<span class="dot {DOT[present(link.status).tone]}"></span>{link.marketplace}
-						{link.status}
-					</span>
-				{/each}
-			</span>
-			<form class="search" role="search" onsubmit={submitSearch}>
-				<span aria-hidden="true">⌕</span>
-				<label class="sr-only" for="console-search">Search items</label>
-				<input
-					id="console-search"
-					name="q"
-					type="search"
-					placeholder="Search items…"
-					bind:this={searchBox}
-					bind:value={query}
-					oninput={typed}
-				/>
-				<kbd>ctrl K</kbd>
-			</form>
-			<a class="cta" href="/inventory/new">New item</a>
-		</div>
 
 		{@render children()}
 	</main>
 
 	<nav class="tabbar" aria-label="Sections">
-		{#each MOBILE_TABS as tab (tab.href)}
-			<a
-				class="tab"
-				href={tab.href}
-				aria-current={isCurrent(pathname, tab.href) ? 'page' : undefined}
-			>
-				<i class="ico" aria-hidden="true">{tab.icon}</i>
-				<span>{tab.label}</span>
-			</a>
+		{#each PHONE_BAR as tab (tab.href)}
+			{#if tab.create}
+				<a class="tab-create" href={tab.href}>
+					<span class="ring"><Icon name={tab.icon} size={18} /></span>
+					<span>{tab.label}</span>
+				</a>
+			{:else}
+				<a
+					class="tab-item"
+					href={tab.href}
+					aria-current={isCurrent(pathname, tab.href) ? 'page' : undefined}
+				>
+					<span class="ico"><Icon name={tab.icon} size={19} /></span>
+					<span>{tab.label}</span>
+				</a>
+			{/if}
 		{/each}
 	</nav>
 </div>

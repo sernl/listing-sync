@@ -208,7 +208,7 @@
 
 <div class="page">
 	<PageHead
-		icon="✚"
+		icon="circle-plus"
 		title="New item"
 		description="Author the item once, on the same fields TPT asks for, and choose which marketplaces carry it."
 	>

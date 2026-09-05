@@ -17,7 +17,7 @@
 
 <div class="page">
 	<PageHead
-		icon="⌂"
+		icon="building-2"
 		title="Organisations"
 		description="Every tenant on the platform, newest first, with what each holds."
 	/>

@@ -17,7 +17,7 @@
 
 <div class="page">
 	<PageHead
-		icon="◉"
+		icon="activity"
 		title="Marketplace status"
 		description="Whether each marketplace is accepting work right now."
 	>

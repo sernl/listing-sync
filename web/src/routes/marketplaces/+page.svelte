@@ -234,7 +234,7 @@
 
 <div class="page">
 	<PageHead
-		icon="⚲"
+		icon="store"
 		title="Marketplaces"
 		description="Every marketplace once, where its login lives, and whether it can be written to right now."
 	/>

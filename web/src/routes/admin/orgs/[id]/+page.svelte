@@ -38,7 +38,7 @@
 
 <div class="page">
 	<PageHead
-		icon="⌂"
+		icon="building-2"
 		title={view?.org.name ?? 'Organisation'}
 		description={view === undefined ? 'Reading this tenant…' : `Tenant ${view.org.org}`}
 	>
@@ -53,14 +53,14 @@
 		<Panel><p class="quiet">This organisation could not be read.</p></Panel>
 	{:else if view !== undefined}
 		<div class="cards">
-			<StatCard icon="▤" label="Products" sub="not deleted">{view.org.products}</StatCard>
-			<StatCard icon="⇄" label="Mappings" sub="listings bound to a marketplace">
+			<StatCard icon="layout-list" label="Products" sub="not deleted">{view.org.products}</StatCard>
+			<StatCard icon="refresh-cw" label="Mappings" sub="listings bound to a marketplace">
 				{view.org.mappings}
 			</StatCard>
-			<StatCard icon="⚲" label="Connections" sub="marketplace links held">
+			<StatCard icon="store" label="Connections" sub="marketplace links held">
 				{view.org.connections}
 			</StatCard>
-			<StatCard icon="☺" label="Users" sub={`provisioned ${agoLabel(view.org.created_at, now)}`}>
+			<StatCard icon="users" label="Users" sub={`provisioned ${agoLabel(view.org.created_at, now)}`}>
 				{view.org.users}
 			</StatCard>
 		</div>

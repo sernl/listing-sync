@@ -28,17 +28,17 @@
 
 <div class="page">
 	<PageHead
-		icon="◈"
+		icon="layout-dashboard"
 		title="Platform overview"
 		description="Every tenant at once. Read-only: nothing on this page writes anything."
 	/>
 
 	<div class="cards">
-		<StatCard icon="⇄" label="Sync runs" sub="across every tenant">
+		<StatCard icon="refresh-cw" label="Sync runs" sub="across every tenant">
 			{ledger?.jobs ?? '—'}
 		</StatCard>
 		<StatCard
-			icon="▤"
+			icon="layout-list"
 			tag="in flight"
 			label="Items moving"
 			sub="queued, leased, running or verifying"
@@ -46,7 +46,7 @@
 			{ledger === undefined ? '—' : inFlight}
 		</StatCard>
 		<StatCard
-			icon={parked > 0 ? '⏸' : '✓'}
+			icon={parked > 0 ? 'pause' : 'circle-check'}
 			tone={parked > 0 ? 'warn' : 'ok'}
 			label="Parked items"
 			sub={ledger === undefined
@@ -56,7 +56,7 @@
 			{ledger === undefined ? '—' : parked}
 		</StatCard>
 		<StatCard
-			icon={(ledger?.failed ?? 0) > 0 ? '✕' : '✓'}
+			icon={(ledger?.failed ?? 0) > 0 ? 'circle-x' : 'circle-check'}
 			tone={(ledger?.failed ?? 0) > 0 ? 'bad' : 'ok'}
 			label="Failed items"
 			sub={ledger === undefined

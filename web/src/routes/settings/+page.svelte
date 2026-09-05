@@ -279,7 +279,7 @@
 
 <div class="page">
 	<PageHead
-		icon="⚙"
+		icon="sliders-horizontal"
 		title="Settings"
 		description="Organisation, profile, passkeys, devices and billing."
 	/>

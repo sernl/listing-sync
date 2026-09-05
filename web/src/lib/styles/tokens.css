@@ -1,0 +1,79 @@
+/* The console's colour, type and shape tokens.
+ *
+ * Kauri: Waipoua forest and the sand below it. Rimu heartwood carries the
+ * primary action, a pohutukawa flower carries the accent, and paua shell
+ * carries the additive tier, which leaves the four status colours as the only
+ * other saturated things on a screen. That separation is the point: this
+ * console's failures are per-marketplace and long-lived, so a status has to
+ * win the eye against everything else on the page.
+ *
+ * The two alternates the palette proof offered, Pohutukawa and Tussock, are
+ * recorded in the design specification rather than commented out here; a
+ * commented-out palette is a second source of truth nothing checks.
+ *
+ * Names are stable: `--card`, `--ink` and `--serif` are the sheet's original
+ * spellings and stay as aliases of `--surface`, `--text` and `--display`,
+ * because renaming them across 2000 lines of component rules would be a
+ * separate change from choosing a palette.
+ */
+
+:root {
+	/* grounds, lightest to the card the content sits on */
+	--ground: #f7f2e9;
+	--nav: #ece1cd;
+	--surface: #fffdf9;
+	--card: var(--surface);
+	--hover: #f1e9db;
+
+	/* action tiers */
+	--primary: #6b4423;
+	--accent: #c2543a;
+	/* The accent as ink. `--accent` is the fill the palette was chosen on and
+	   stays exactly as it is; at 14px on `--accent-soft` it reaches only 3.78,
+	   so accent-coloured text takes this instead and clears 4.97. */
+	--accent-ink: #a5462f;
+	--accent-deep: var(--accent-ink);
+	--accent-soft: #f7e7e1;
+	--additive: #3e5a8c;
+	--additive-soft: #e7ecf5;
+
+	/* ink */
+	--text: #241a12;
+	--ink: var(--text);
+	--muted: #726254;
+	--faint: #756c62;
+	--line: #e4d8c4;
+
+	/* State, and only state. Every one of these is darker than the palette proof
+	   showed, because a status badge is 10.5px uppercase and so earns no
+	   large-text allowance: each now clears 4.5 on its own soft ground. */
+	--ok: #3a7249;
+	--ok-soft: #e9f1ea;
+	--warn: #8f5f14;
+	--warn-soft: #f8efda;
+	--bad: #9e3423;
+	--bad-soft: #f7e4df;
+	--soon: #6e655d;
+	--soon-soft: #efeae1;
+
+	/* type */
+	--display: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+	--serif: var(--display);
+	--sans: 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+
+	/* radius, layered by what the shape contains */
+	--r-region: 20px;
+	--r-card: 16px;
+	--r-panel: 12px;
+	--r-field: 8px;
+	--r-pill: 999px;
+
+	/* shadow, tinted with the palette's own ink so a warm ground never carries
+	   a cold shadow */
+	--sh-1: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent);
+	--sh-2: 0 4px 14px color-mix(in srgb, var(--text) 8%, transparent);
+
+	/* the two fixed measures the shell's grid is built from */
+	--rail-w: 56px;
+	--nav-w: 216px;
+}

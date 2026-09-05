@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Icon from '$lib/Icon.svelte';
+
 	let {
 		who,
 		stopping,
@@ -15,7 +17,7 @@
 </script>
 
 <div class="impersonating" role="alert">
-	<span class="mark" aria-hidden="true">⧉</span>
+	<span class="mark"><Icon name="copy" size={14} /></span>
 	<span class="said">
 		Signed in as <b>{who}</b>. Everything on this screen is their workspace, and every
 		action you take is taken as them.

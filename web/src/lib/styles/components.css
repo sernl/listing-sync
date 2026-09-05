@@ -1,0 +1,528 @@
+/* The component catalogue the redrawn pages are built from.
+ *
+ * The four button tiers are the console's existing `.cta` and `.btn` retuned
+ * rather than a second set beside them: `.cta` was already the one top action
+ * on a page and `.btn` was already the neutral one, so a parallel system would
+ * have meant every page carrying two button vocabularies through the redraw.
+ * Those two rules stay in `app.css` with the rest of what pages still use;
+ * what is here is the tiers they did not have and the components that are new.
+ */
+
+/* --- buttons ------------------------------------------------------------- */
+
+/* Additive and confirming: adding a label, sending a request, running a bulk
+   verb over a selection. Paua blue, which is the one hue no status uses. */
+.cta.add {
+	background: var(--additive);
+	border-color: var(--additive);
+}
+
+.cta.add:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--additive) 84%, #000);
+	border-color: color-mix(in srgb, var(--additive) 84%, #000);
+}
+
+/* Tertiary: a label with no box, for an action that must not compete. */
+.btn.quiet {
+	border-color: transparent;
+	background: none;
+	color: var(--accent-deep);
+}
+
+.btn.quiet:hover:not(:disabled) {
+	background: var(--accent-soft);
+}
+
+/* A disabled control states its reason in a `title`, which is the discipline
+   `$lib/bulk-verbs` already enforces; the fill says it is not a fault. */
+.cta:disabled,
+.btn:disabled {
+	background: var(--soon-soft);
+	border-color: var(--line);
+	color: var(--soon);
+	opacity: 1;
+}
+
+/* --- status badge -------------------------------------------------------- */
+
+.status {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	border-radius: var(--r-pill);
+	padding: 3px 9px 3px 7px;
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+	white-space: nowrap;
+	background: var(--soon-soft);
+	color: var(--soon);
+}
+
+.status i {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
+	flex: none;
+}
+
+.status.ok {
+	background: var(--ok-soft);
+	color: var(--ok);
+}
+
+.status.warn {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+
+.status.bad {
+	background: var(--bad-soft);
+	color: var(--bad);
+}
+
+.status.run {
+	background: var(--accent-soft);
+	color: var(--accent-ink);
+}
+
+/* Which branch a marketplace runs on is a recorded fact rather than a state,
+   so it takes an outline and no dot: D1 requires it on every marketplace row,
+   and it must not read as one more thing that can go wrong. */
+.status.flat {
+	background: none;
+	border: 1px solid var(--line);
+	color: var(--muted);
+	padding-left: 9px;
+}
+
+.status.flat i {
+	display: none;
+}
+
+/* --- toggle -------------------------------------------------------------- */
+
+.toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	min-height: 44px;
+	cursor: pointer;
+	font-size: 13.5px;
+}
+
+.toggle input {
+	position: absolute;
+	opacity: 0;
+	width: 0;
+	height: 0;
+}
+
+.toggle .track {
+	width: 36px;
+	height: 20px;
+	border-radius: var(--r-pill);
+	background: var(--faint);
+	position: relative;
+	flex: none;
+	transition: background 120ms ease;
+}
+
+.toggle .track::after {
+	content: '';
+	position: absolute;
+	inset: 2px auto 2px 2px;
+	width: 16px;
+	border-radius: 50%;
+	background: #fff;
+	transition: transform 120ms ease;
+}
+
+.toggle input:checked + .track {
+	background: var(--ok);
+}
+
+.toggle input:checked + .track::after {
+	transform: translateX(16px);
+}
+
+.toggle input:focus-visible + .track {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.toggle input:disabled + .track {
+	background: var(--soon-soft);
+	border: 1px solid var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.toggle .track,
+	.toggle .track::after {
+		transition: none;
+	}
+}
+
+/* --- counted tab bar ----------------------------------------------------- */
+
+/* Distinct from `.tabs`/`.tab`, which the create form uses with
+   `aria-selected`: these are navigation between filtered views of one list and
+   carry a count, and conflating them would give the form a count it has no
+   figure for. */
+.tab-bar {
+	display: grid;
+	grid-auto-flow: column;
+	grid-auto-columns: 1fr;
+	border-bottom: 1px solid var(--line);
+	margin-bottom: 14px;
+	overflow-x: auto;
+}
+
+.tab-bar button {
+	padding: 9px 8px 10px;
+	text-align: center;
+	font-size: 13.5px;
+	color: var(--muted);
+	background: none;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	margin-bottom: -1px;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.tab-bar button:hover {
+	color: var(--text);
+}
+
+.tab-bar button[aria-current='true'] {
+	color: var(--text);
+	font-weight: 600;
+	border-bottom-color: var(--accent);
+}
+
+/* On a phone four equal columns cut the longest label mid-word, so the tabs
+   take their own width and the bar scrolls instead. */
+@media (max-width: 620px) {
+	.tab-bar {
+		grid-auto-columns: max-content;
+	}
+
+	.tab-bar button {
+		padding-inline: 14px;
+	}
+}
+
+/* --- inline banner ------------------------------------------------------- */
+
+/* Every failure in this console is inline and never a modal: a per-marketplace
+   failure is long-lived and belongs on the page that owns it. */
+.banner {
+	display: flex;
+	align-items: flex-start;
+	gap: 11px;
+	padding: 13px 15px;
+	border-radius: var(--r-panel);
+	background: var(--additive-soft);
+	margin-bottom: 14px;
+}
+
+.banner > .ico {
+	display: grid;
+	flex: none;
+	margin-top: 1px;
+	color: var(--additive);
+}
+
+.banner .say {
+	min-width: 0;
+	flex: 1;
+}
+
+.banner .t {
+	font-weight: 700;
+	font-size: 13.5px;
+}
+
+.banner p {
+	margin: 3px 0 0;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.banner .act {
+	align-self: center;
+	flex: none;
+}
+
+.banner.warn {
+	background: var(--warn-soft);
+}
+
+.banner.warn > .ico {
+	color: var(--warn);
+}
+
+.banner.bad {
+	background: var(--bad-soft);
+}
+
+.banner.bad > .ico {
+	color: var(--bad);
+}
+
+.banner.ok {
+	background: var(--ok-soft);
+}
+
+.banner.ok > .ico {
+	color: var(--ok);
+}
+
+/* On a phone the action drops below the sentence rather than squeezing it into
+   a column two words wide. */
+@media (max-width: 620px) {
+	.banner {
+		flex-wrap: wrap;
+	}
+
+	.banner .say {
+		flex: 1 1 100%;
+	}
+
+	.banner .act {
+		flex: 1 1 100%;
+		align-self: stretch;
+	}
+
+	.banner .act .btn,
+	.banner .act .cta {
+		width: 100%;
+		justify-content: center;
+	}
+}
+
+/* --- row card ------------------------------------------------------------ */
+
+.row-card {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	padding: 10px 12px 10px 10px;
+	box-shadow: var(--sh-1);
+	min-width: 0;
+}
+
+.row-card + .row-card {
+	margin-top: 10px;
+}
+
+.row-card .thumb {
+	width: 68px;
+	height: 68px;
+	border-radius: 10px;
+	background: var(--soon-soft);
+	color: var(--soon);
+	display: grid;
+	place-items: center;
+	flex: none;
+	overflow: hidden;
+}
+
+.row-card .thumb img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.row-card .who {
+	flex: 1;
+	min-width: 0;
+}
+
+.row-card .who .t {
+	font-size: 15.5px;
+	font-weight: 600;
+	line-height: 1.25;
+	overflow-wrap: anywhere;
+}
+
+.row-card .meta {
+	font-size: 12.5px;
+	color: var(--muted);
+	margin-top: 3px;
+	font-variant-numeric: tabular-nums;
+}
+
+.row-card .strip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+	margin-top: 7px;
+}
+
+.row-card .kebab {
+	flex: none;
+	width: 32px;
+	height: 32px;
+	border-radius: 8px;
+	display: grid;
+	place-items: center;
+	color: var(--muted);
+	background: none;
+	border: 0;
+}
+
+.row-card .kebab:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+@media (max-width: 620px) {
+	.row-card {
+		align-items: flex-start;
+	}
+
+	.row-card .thumb {
+		width: 52px;
+		height: 52px;
+	}
+
+	.row-card .kebab {
+		width: 44px;
+		height: 44px;
+	}
+}
+
+/* --- dropdown menu ------------------------------------------------------- */
+
+.menu-anchor {
+	position: relative;
+	display: inline-flex;
+}
+
+.menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: 30;
+	min-width: 200px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	box-shadow: var(--sh-2);
+	padding: 4px;
+	display: flex;
+	flex-direction: column;
+}
+
+.menu button {
+	text-align: left;
+	background: none;
+	border: 0;
+	border-radius: 6px;
+	padding: 9px 10px;
+	font-size: 14px;
+	color: var(--text);
+	min-height: 38px;
+}
+
+.menu button:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+.menu button:disabled {
+	color: var(--soon);
+	cursor: not-allowed;
+}
+
+/* --- dashed add card ----------------------------------------------------- */
+
+.add-card {
+	border: 1px dashed color-mix(in srgb, var(--accent) 40%, var(--line));
+	border-radius: var(--r-card);
+	background: none;
+	padding: 26px 20px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	text-align: center;
+	color: var(--text);
+	min-height: 150px;
+}
+
+.add-card:hover {
+	background: color-mix(in srgb, var(--accent-soft) 45%, transparent);
+}
+
+.add-card .ring {
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	background: var(--accent-soft);
+	color: var(--accent-ink);
+	display: grid;
+	place-items: center;
+}
+
+.add-card .t {
+	font-weight: 600;
+	font-size: 14px;
+}
+
+.add-card .why {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+/* --- activity log -------------------------------------------------------- */
+
+.log-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.log-count {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.log-row {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	padding: 10px 2px;
+	border-top: 1px solid var(--line);
+	flex-wrap: wrap;
+}
+
+.log-row:first-of-type {
+	border-top: 0;
+}
+
+.log-row .what {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+}
+
+.log-row .at {
+	font-size: 12px;
+	color: var(--faint);
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}

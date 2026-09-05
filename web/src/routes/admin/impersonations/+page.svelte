@@ -26,7 +26,7 @@
 
 <div class="page">
 	<PageHead
-		icon="⧉"
+		icon="copy"
 		title="Impersonations"
 		description="Every time an identity admin signed in as somebody else, newest first."
 	/>
@@ -37,7 +37,7 @@
 		<Panel><p class="quiet">The audit trail could not be read.</p></Panel>
 	{:else if events === undefined}
 		<Placeholder
-			icon="⧉"
+			icon="copy"
 			headline="The identity audit trail is not visible from here"
 			body="This database carries no identity schema, so there is no record to read. That is
 				not the same as nobody having been impersonated."

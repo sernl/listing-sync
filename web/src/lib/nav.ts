@@ -1,64 +1,133 @@
-// The console shell's own model: the grouped sidebar, the breadcrumb the top
-// bar shows, the paths the old information architecture used, and the two
+// The console shell's own model: the icon rail's sections, the page list each
+// one opens, the paths the old information architecture used, and the two
 // small renderings the account card and the search box need. Pure, so it
 // tests without a component.
+//
+// A section model rather than a flat group list, because the rail and the
+// secondary navigation card are two renderings of one structure: the rail
+// shows the sections, the card shows the current section's pages. A flat list
+// cannot say which glyph owns which pages.
 
-/** A count a nav chip may carry. Only the reconciliation queue has an
- *  endpoint that answers one cheaply and honestly, so it is the only name
- *  here: a chip with no real figure behind it is a `soon` chip instead. */
-export type NavCount = 'reconciliation';
+import type { IconName } from '$lib/icons';
 
 export interface NavItem {
 	href: string;
 	label: string;
-	/** The glyph the mockup gives this destination. */
-	icon: string;
+	/** The Lucide glyph this destination is drawn with. A closed union rather
+	 *  than a string, so a name that is not shipped stops the lane instead of
+	 *  rendering an empty box. */
+	icon: IconName;
 	/** Marks a destination that exists as a route and not yet as a feature. */
 	soon?: true;
-	count?: NavCount;
 }
 
-export interface NavGroup {
+export type SectionId = 'crosslist' | 'automations' | 'marketplaces' | 'account' | 'admin';
+
+export interface NavSection {
+	id: SectionId;
+	/** The rail glyph's accessible name, and the navigation card's title. */
 	label: string;
+	icon: IconName;
+	/** Where the rail glyph itself lands. */
+	href: string;
+	/** The section-primary button, directly beneath the card's title. */
+	primary?: NavItem;
+	/** The pages the card lists. Empty for a section that has none, which
+	 *  renders with no card at all and a correspondingly wider content
+	 *  region. */
 	items: readonly NavItem[];
 }
 
-export const NAV_GROUPS: readonly NavGroup[] = [
+/** The three sections the founder named, then Account. In rail order.
+ *
+ * Marketplaces carries no page list on purpose: its connections, browser
+ * extensions and downloads are three headings on one scrolling page, which is
+ * how Vendoo's own equivalent reads and what the founder's list describes. */
+export const SECTIONS: readonly NavSection[] = [
 	{
-		label: 'Workspace',
+		id: 'crosslist',
+		label: 'Crosslist',
+		icon: 'package',
+		href: '/inventory',
+		primary: { href: '/inventory/new', label: 'New resource', icon: 'circle-plus' },
 		items: [
-			{ href: '/', label: 'Dashboard', icon: '▦' },
-			{ href: '/inventory', label: 'Inventory', icon: '▤' },
-			{ href: '/marketplaces', label: 'Marketplaces', icon: '⚲' },
-			{ href: '/analytics', label: 'Analytics', icon: '◔' },
-			{ href: '/reconciliation', label: 'Reconciliation', icon: '☰', count: 'reconciliation' }
+			{ href: '/inventory', label: 'Resources', icon: 'layout-list' },
+			{ href: '/labels', label: 'Labels', icon: 'tag', soon: true },
+			{ href: '/import', label: 'Import', icon: 'download', soon: true },
+			{ href: '/analytics', label: 'Analytics', icon: 'chart-line' },
+			{ href: '/templates', label: 'Template Manager', icon: 'layout-template', soon: true },
+			{ href: '/export', label: 'Export', icon: 'file-down', soon: true }
 		]
 	},
 	{
+		id: 'automations',
 		label: 'Automations',
-		items: [{ href: '/sync', label: 'Sync', icon: '⇄' }]
-	},
-	{
-		label: 'Buyer',
-		items: [{ href: '/purchases', label: 'Purchases', icon: '◨', soon: true }]
-	},
-	{
-		label: 'Crosslist',
-		items: [{ href: '/templates', label: 'Templates', icon: '❏', soon: true }]
-	},
-	// Last, so it renders at the foot of the sidebar beside the account card:
-	// Vendoo keeps its status page in the profile menu and its help centre in a
-	// help menu, and none of these four is a crosslisting tool.
-	{
-		label: 'Help',
+		icon: 'waves-horizontal',
+		// A landing page of its own, unlike the other sections, whose rail glyph
+		// lands on their first page. `/automations` lists the three as cards, so
+		// it is a destination `SECTION_LANDINGS` names rather than one of the
+		// items below.
+		href: '/automations',
 		items: [
-			{ href: '/resources', label: 'Resources', icon: '≣', soon: true },
-			{ href: '/notifications', label: 'Notifications', icon: '◷', soon: true },
-			{ href: '/status', label: 'Status', icon: '◉' },
-			{ href: '/help', label: 'Help', icon: '?', soon: true }
+			{ href: '/automations/sharing', label: 'Marketplace Sharing', icon: 'share-2', soon: true },
+			{
+				href: '/automations/migration',
+				label: 'Marketplace Migration',
+				icon: 'arrow-right-left',
+				soon: true
+			},
+			// The sync list stays at `/sync` rather than moving under
+			// `/automations/`, because `/sync/<id>` and `/sync/requests/<id>` are
+			// its detail pages and a list that left its own children behind would
+			// break both the breadcrumb and the lit nav entry.
+			{ href: '/sync', label: 'Marketplace Sync', icon: 'refresh-cw' }
+		]
+	},
+	{
+		id: 'marketplaces',
+		label: 'Marketplaces',
+		icon: 'store',
+		href: '/marketplaces',
+		items: []
+	},
+	{
+		id: 'account',
+		label: 'Account',
+		icon: 'circle-user',
+		href: '/settings',
+		items: [
+			{ href: '/settings', label: 'Preferences', icon: 'sliders-horizontal' },
+			{ href: '/settings/subscription', label: 'Subscription', icon: 'credit-card' },
+			{ href: '/notifications', label: 'Notifications', icon: 'bell', soon: true },
+			{ href: '/status', label: 'Status', icon: 'activity' },
+			{ href: '/guides', label: 'Help and guides', icon: 'book-open', soon: true }
 		]
 	}
 ];
+
+/** The two destinations no section lists.
+ *
+ * `/app` is the console's home, which the desktop app and the public site both
+ * navigate to; it answers with the Resources list rather than a dashboard of
+ * its own, so it is named for what it shows. It keeps its own entry rather than
+ * being folded into the Crosslist page list because the path is real and the
+ * breadcrumb has to resolve it, and it lands on the same screen `/inventory`
+ * does. The reconciliation queue is reached from the Marketplace Sync screen,
+ * which carries its count; the rail carries no badge of its own, because two
+ * places showing one figure is one place too many. */
+export const HOME_ITEM: NavItem = {
+	href: '/app',
+	label: 'Resources',
+	icon: 'layout-list'
+};
+
+export const OPEN_QUESTIONS_ITEM: NavItem = {
+	href: '/reconciliation',
+	label: 'Open questions',
+	icon: 'circle-question-mark'
+};
+
+const PINNED: readonly NavItem[] = [HOME_ITEM, OPEN_QUESTIONS_ITEM];
 
 /** The operator's own group, rendered under the others and only for a human
  *  the operator probe admitted.
@@ -68,66 +137,130 @@ export const NAV_GROUPS: readonly NavGroup[] = [
  *  conditional item mixed into the same list is one `if` away from leaking a
  *  destination that answers 401. Its destinations still refuse a
  *  non-operator on their own — the hiding is courtesy, never the fence. */
-export const ADMIN_GROUP: NavGroup = {
+export const ADMIN_SECTION: NavSection = {
+	id: 'admin',
 	label: 'Admin',
+	icon: 'shield-check',
+	href: '/admin',
 	items: [
-		{ href: '/admin', label: 'Overview', icon: '◈' },
-		{ href: '/admin/orgs', label: 'Organisations', icon: '⌂' },
-		{ href: '/admin/health', label: 'Sync health', icon: '❤' },
-		{ href: '/admin/failures', label: 'Failed writes', icon: '✕' },
-		{ href: '/admin/users', label: 'Identity users', icon: '☺' },
-		{ href: '/admin/impersonations', label: 'Impersonations', icon: '⧉' }
+		{ href: '/admin', label: 'Overview', icon: 'layout-dashboard' },
+		{ href: '/admin/orgs', label: 'Organisations', icon: 'building-2' },
+		{ href: '/admin/health', label: 'Sync health', icon: 'heart-pulse' },
+		{ href: '/admin/failures', label: 'Failed writes', icon: 'circle-x' },
+		{ href: '/admin/users', label: 'Identity users', icon: 'users' },
+		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' }
 	]
 };
 
-/** Pinned below the groups, beside the account card. */
-export const SETTINGS_ITEM: NavItem = { href: '/settings', label: 'Account Settings', icon: '⚙' };
+/** A section whose landing path no page of its own covers is still a
+ *  destination — Marketplaces is the whole of it — so it is named here rather
+ *  than being reachable and nameless. Without this the breadcrumb answers
+ *  "Console" on that page and a redirect aimed at it looks like a redirect to
+ *  nothing. */
+const SECTION_LANDINGS: readonly NavItem[] = [...SECTIONS, ADMIN_SECTION]
+	.filter((section) => !section.items.some((item) => item.href === section.href))
+	.map((section) => ({ href: section.href, label: section.label, icon: section.icon }));
 
-const ALL_ITEMS: readonly NavItem[] = [
-	...NAV_GROUPS.flatMap((group) => group.items),
-	...ADMIN_GROUP.items,
-	SETTINGS_ITEM
+/** Every destination this model names, however it is reached. The one list the
+ *  breadcrumb, the redirect table's own test and the tab bar all read, so a
+ *  destination cannot be reachable in the shell and absent from the model. */
+export const ALL_DESTINATIONS: readonly NavItem[] = [
+	...SECTIONS.flatMap((section) => section.items),
+	...ADMIN_SECTION.items,
+	...SECTION_LANDINGS,
+	...PINNED
 ];
 
-/** The bottom bar the console shows below the phone breakpoint, and the one
- *  navigation on that viewport: the sidebar's fourteen destinations do not fit
- *  on a phone, so five carry it and the rest are reached from the screens that
- *  link to them.
+const ALL_ITEMS = ALL_DESTINATIONS;
+
+/** The section the rail lights, and whose pages the card lists, or `null` where
+ *  the path belongs to no section.
  *
- *  Derived, not sourced. No public Vendoo page names its app's tab bar,
- *  because its help centre teaches mobile navigation in screenshots rather
- *  than prose (`docs/research/rethink/vendoo-console-cross-reference.md:161`
- *  and `:195`). The set below is chosen from what that section does source:
- *  the verb split, which keeps one item's work on the phone and drops
- *  importing and the many-item bulk verbs, and the app's one attested path,
- *  "Settings > Marketplaces". Replace it against the founder's own reading of
- *  the app.
+ * The longest matching page wins before the section's own landing path is
+ * considered, so `/settings/subscription` opens Account rather than whichever
+ * section happens to list a shorter prefix.
  *
- *  Each tab's destination and glyph are looked up rather than written again,
- *  so a renamed route renames its tab or stops the lane. The label is the
- *  tab's own, because a tab is about sixty pixels wide and "Account Settings"
- *  is not. */
-const TAB_LABELS: readonly { href: string; label: string }[] = [
-	{ href: '/inventory', label: 'Inventory' },
-	{ href: '/marketplaces', label: 'Marketplaces' },
-	{ href: '/sync', label: 'Sync' },
-	{ href: '/analytics', label: 'Analytics' },
-	{ href: '/settings', label: 'Account' }
-];
+ * `null` rather than a fallback, because the home path and the open-questions
+ * queue belong to no section and a fallback lit Crosslist on both: the rail
+ * claimed a section the seller was not in, and the card offered six pages none
+ * of which was the one on screen. A path that belongs to no section has to be
+ * sayable, and only a nullable answer says it. */
+export function sectionFor(pathname: string, operator = false): NavSection | null {
+	const sections = operator ? [...SECTIONS, ADMIN_SECTION] : SECTIONS;
+	let best: { section: NavSection; length: number } | null = null;
+	for (const section of sections) {
+		for (const item of section.items) {
+			if (isCurrent(pathname, item.href) && (best === null || item.href.length > best.length)) {
+				best = { section, length: item.href.length };
+			}
+		}
+	}
+	if (best !== null) {
+		return best.section;
+	}
+	// No page matched, so the landing paths decide: a section with no page list
+	// of its own is reachable only this way.
+	return sections.find((section) => isCurrent(pathname, section.href)) ?? null;
+}
 
 /** Destinations matched exactly rather than by prefix, because each one has
- *  sibling destinations of its own beneath it in the same sidebar: every path
- *  is under `/`, and every operator page is under `/admin`. A prefix match on
- *  either would light two entries at once. */
-const EXACT_ONLY: readonly string[] = ['/', '/admin'];
+ *  sibling destinations of its own beneath it in the same model: every
+ *  operator page is under `/admin`, and Subscription is under `/settings`. A
+ *  prefix match on either would light two entries at once. */
+const EXACT_ONLY: readonly string[] = ['/admin', '/settings'];
 
-export const MOBILE_TABS: readonly NavItem[] = TAB_LABELS.map(({ href, label }) => {
-	const destination = ALL_ITEMS.find((item) => item.href === href);
-	if (destination === undefined) {
-		throw new Error(`the ${label} tab points at ${href}, which the sidebar does not hold`);
-	}
-	return { ...destination, label };
-});
+/** The bottom bar the console shows below the phone breakpoint, and the one
+ *  navigation on that viewport. It mirrors the rail exactly rather than
+ *  choosing its own five destinations: the rail is already down to four
+ *  sections, four fits a phone, and a tab bar that disagreed with the rail
+ *  would be a second information architecture to keep true.
+ *
+ *  This is the Android app's navigation too, because that build shows this
+ *  same console (`apps/desktop/src-tauri/tauri.conf.json`).
+ *
+ *  Derived from `SECTIONS`, so a renamed section renames its tab or stops the
+ *  lane at module load rather than rotting silently. */
+export const MOBILE_TABS: readonly NavItem[] = SECTIONS.map((section) => ({
+	href: section.href,
+	label: section.label,
+	icon: section.icon
+}));
+
+export interface PhoneTab extends NavItem {
+	/** The create action. Drawn as a filled button rather than as a tab,
+	 *  because it is the one thing on the bar that is not a place to go. */
+	create?: true;
+}
+
+/** The create action the phone bar carries, taken from the Crosslist section's
+ *  own primary rather than written again, so the phone button and the two
+ *  desktop ones cannot come to open different screens. */
+const createAction = SECTIONS.find((section) => section.id === 'crosslist')?.primary;
+if (createAction === undefined) {
+	throw new Error('the phone bar carries the Crosslist create action, which that section has none of');
+}
+
+export const CREATE_TAB: PhoneTab = {
+	href: createAction.href,
+	// The section-primary's own words, so the three create controls — the
+	// navigation card, the top strip and this — cannot come to read differently.
+	label: createAction.label,
+	// A bare plus rather than the card's `circle-plus`: the button is already a
+	// filled circle, and a ring inside a disc reads as a mistake.
+	icon: 'plus',
+	create: true
+};
+
+/** The phone bar: the four section tabs with the create action in the middle.
+ *
+ * Composed from `MOBILE_TABS` rather than listed again, so the four navigation
+ * tabs stay exactly what the rail says they are and only their spacing
+ * changes. */
+export const PHONE_BAR: readonly PhoneTab[] = [
+	...MOBILE_TABS.slice(0, 2),
+	CREATE_TAB,
+	...MOBILE_TABS.slice(2)
+];
 
 /** Whether a nav destination is the one the browser is on.
  *
@@ -141,9 +274,9 @@ export function isCurrent(pathname: string, href: string): boolean {
 	return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-/** The word after `Console /` in the top bar. The longest matching
- *  destination wins, so `/sync/<id>` reads as Sync rather than as the first
- *  nav entry that happens to prefix it. */
+/** The page's own name, which the shell sets the document title from. The
+ *  longest matching destination wins, so `/sync/<id>` reads as Marketplace
+ *  Sync rather than as the first nav entry that happens to prefix it. */
 export function breadcrumbFor(pathname: string): string {
 	let best: NavItem | null = null;
 	for (const item of ALL_ITEMS) {
@@ -164,7 +297,16 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
 	{ from: '/connections', to: '/marketplaces' },
 	{ from: '/settings/devices', to: '/marketplaces' },
 	{ from: '/queue', to: '/reconciliation' },
-	{ from: '/library', to: '/resources' }
+	// The help placeholder was `/library`, then `/resources`; it is `/guides`
+	// now, because "Resources" is what the catalogue is called and two
+	// destinations cannot share a name. A seller who reads Resources in the
+	// navigation and types the path means the catalogue, so `/resources` lands
+	// there rather than on the placeholder it used to serve.
+	{ from: '/library', to: '/guides' },
+	{ from: '/resources', to: '/inventory' },
+	// `/help` and `/guides` were two placeholders for one thing, and nothing
+	// pointed at `/help` any more.
+	{ from: '/help', to: '/guides' }
 ];
 
 export function legacyDestination(pathname: string): string | null {

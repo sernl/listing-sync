@@ -1,0 +1,563 @@
+/* The shell the console is drawn in: an icon rail, a secondary navigation
+ * card, and a rounded content region, inset from the viewport on every side.
+ *
+ * Four bands rather than a sidebar, because the founder's navigation is three
+ * sections and a section's pages: the rail carries the sections, the card
+ * carries the current section's pages, and neither can express the other. The
+ * model both read from is `$lib/nav`.
+ *
+ * This sheet is also the phone layout for the Android build, which shows this
+ * same console: below the phone breakpoint the rail and the card give way to a
+ * four-tab bar mirroring the rail, and every target is at least 44px.
+ */
+
+.app {
+	display: grid;
+	grid-template-columns: var(--rail-w) var(--nav-w) minmax(0, 1fr);
+	gap: 10px;
+	padding: 10px;
+	min-height: 100vh;
+	align-items: stretch;
+}
+
+/* A section with no page list of its own — Marketplaces — renders no card, and
+   the content region takes the width back rather than leaving a gap. */
+.app.no-nav {
+	grid-template-columns: var(--rail-w) minmax(0, 1fr);
+}
+
+/* --- the icon rail ------------------------------------------------------- */
+
+.rail {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	padding: 6px 0;
+}
+
+/* The mark carries its own rounded square and its own ground, so this sets
+   only the size it is drawn at. */
+.rail .mark {
+	display: block;
+	width: 34px;
+	height: 34px;
+	margin-bottom: 10px;
+	flex: none;
+}
+
+.rail-item {
+	width: 36px;
+	height: 36px;
+	border-radius: 10px;
+	display: grid;
+	place-items: center;
+	color: var(--muted);
+	flex: none;
+	border: 0;
+	background: none;
+	padding: 0;
+}
+
+.rail-item:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+.rail-item[aria-current='page'] {
+	background: var(--accent-soft);
+	color: var(--accent-ink);
+}
+
+.rail-gap {
+	flex: 1;
+}
+
+/* --- the secondary navigation card --------------------------------------- */
+
+.nav-card {
+	background: var(--nav);
+	border-radius: var(--r-card);
+	padding: 14px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.nav-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 2px 6px 8px;
+}
+
+.nav-top h2 {
+	margin: 0;
+	font-family: var(--display);
+	font-size: 20px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.nav-primary {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	margin: 0 0 12px;
+	height: 38px;
+	padding: 0 14px;
+}
+
+.nav-item {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-height: 40px;
+	padding: 0 10px;
+	border-radius: 10px;
+	color: var(--text);
+	font-size: 13.5px;
+	border: 0;
+	background: none;
+	text-align: left;
+	width: 100%;
+}
+
+.nav-item .ico {
+	color: var(--muted);
+	display: grid;
+	flex: none;
+}
+
+.nav-item:hover {
+	background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.nav-item[aria-current='page'] {
+	background: var(--accent-soft);
+	color: var(--accent-ink);
+	font-weight: 600;
+}
+
+.nav-item[aria-current='page'] .ico {
+	color: var(--accent-ink);
+}
+
+/* Bottom-anchored, and only under Account. */
+.nav-foot {
+	margin-top: auto;
+}
+
+.chip {
+	margin-left: auto;
+	font: 600 10px var(--sans);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	padding: 1px 7px;
+	background: var(--surface);
+	flex: none;
+}
+
+/* --- the content region -------------------------------------------------- */
+
+.region {
+	background: var(--surface);
+	border-radius: var(--r-region);
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	overflow: hidden;
+}
+
+/* The strip above the page's own header band: what the shell owns rather than
+   the page — the search this console's board reads its query from, the
+   marketplace dots, the create action, and the account card. */
+.top {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 20px;
+	border-bottom: 1px solid var(--line);
+	flex-wrap: wrap;
+}
+
+.grow {
+	flex: 1;
+}
+
+.conn {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	font-size: 11.5px;
+	color: var(--muted);
+	flex-wrap: wrap;
+}
+
+.conn > span {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	white-space: nowrap;
+}
+
+.dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--faint);
+	flex: none;
+}
+
+.dot.ok {
+	background: var(--ok);
+}
+
+.dot.warn {
+	background: var(--warn);
+}
+
+.dot.bad {
+	background: var(--bad);
+}
+
+.search {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	background: var(--ground);
+	border: 1px solid var(--line);
+	border-radius: var(--r-pill);
+	padding: 0 12px;
+	height: 36px;
+	min-width: 200px;
+	color: var(--muted);
+}
+
+.search input {
+	border: 0;
+	background: none;
+	outline: none;
+	font: inherit;
+	color: var(--text);
+	width: 100%;
+	min-width: 0;
+}
+
+.search input::placeholder {
+	color: var(--faint);
+}
+
+/* The ring is moved to the box rather than removed: the input fills the box, so
+   a ring on the input alone would sit inside the border and read as a doubled
+   edge. This control advertises ctrl-K, so it is reached by keyboard by design
+   and a border-colour change is too weak on its own. */
+.search input:focus-visible {
+	outline: none;
+}
+
+.search:focus-within {
+	border-color: var(--accent);
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.search kbd {
+	font: 600 10px var(--sans);
+	color: var(--faint);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	padding: 1px 5px;
+	background: var(--surface);
+	flex: none;
+}
+
+.account {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-width: 0;
+	color: inherit;
+}
+
+.avatar {
+	width: 30px;
+	height: 30px;
+	border-radius: 9px;
+	background: var(--accent-soft);
+	color: var(--accent-deep);
+	display: grid;
+	place-items: center;
+	font: 600 11.5px var(--sans);
+	flex: none;
+}
+
+.account .who {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	line-height: 1.25;
+}
+
+.account .who .org {
+	font-size: 12.5px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 150px;
+}
+
+.account .who .plan {
+	font-size: 10.5px;
+	color: var(--muted);
+}
+
+/* The page's own body, inside the content region.
+ *
+ * It lives here rather than in `app.css` because its two responsive overrides
+ * are in this sheet: `app.css` imports this one at its own top, so a `.page`
+ * rule left there is emitted after both of them, and at identical specificity
+ * the later rule wins at every width. That is what made the phone's 96px
+ * bottom padding — the clearance for the fixed tab bar — dead. */
+.page {
+	padding: 26px 28px 40px;
+	min-width: 0;
+	overflow-wrap: break-word;
+}
+
+/* --- the phone tab bar --------------------------------------------------- */
+
+/* Rendered on every viewport and shown only below the phone breakpoint, where
+   it is the whole navigation. Four tabs mirroring the rail exactly, composed in
+   `$lib/nav` from the same section list, with the create action between the
+   second and third so it sits in the middle. */
+.tabbar {
+	display: none;
+}
+
+/* --- responsive ---------------------------------------------------------- */
+
+/* The rail and the card are anchored to the viewport rather than to the
+   document. Without this `.app`'s grid stretches them to the content height, so
+   on a page taller than the screen the sections, the create button and the Help
+   control all scroll away, and `.rail-gap` pushes Help to the foot of the
+   document instead of the foot of the screen. Only above the tablet breakpoint,
+   where the two are columns; below it the card is a horizontal strip and the
+   rail is gone. */
+@media (min-width: 1081px) {
+	.rail,
+	.nav-card {
+		position: sticky;
+		top: 10px;
+		height: calc(100vh - 20px);
+	}
+
+	.nav-card {
+		overflow-y: auto;
+	}
+}
+
+/* The middle width: the rail stays, the navigation card gives way to a
+   horizontal scroller of the same items under the top strip. */
+@media (max-width: 1080px) {
+	.app,
+	.app.no-nav {
+		grid-template-columns: var(--rail-w) minmax(0, 1fr);
+	}
+
+	/* The card and the region stack in the second column, so the rail has to
+	   span both rows. Without the span the region auto-places under the rail
+	   and renders one letter wide, which is what a two-column grid does with
+	   three children. */
+	.app:not(.no-nav) > .rail {
+		grid-row: span 2;
+	}
+
+	/* Rows are sized here rather than left to `auto`: a grid taller than its
+	   content stretches auto rows by default, which gave the collapsed
+	   navigation card a third of the screen. */
+	.app:not(.no-nav) {
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+
+	.nav-card,
+	.region {
+		grid-column: 2;
+	}
+
+	.nav-card {
+		flex-direction: row;
+		align-items: center;
+		gap: 6px;
+		overflow-x: auto;
+		padding: 8px 10px;
+	}
+
+	/* The page list is wrapped in its own `nav` for the landmark, and a block
+	   element inside a flex row keeps its children stacked, so the wrapper has
+	   to become a row as well. */
+	.nav-card > nav {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex: none;
+	}
+
+	.nav-top {
+		display: none;
+	}
+
+	.nav-item,
+	.nav-primary {
+		width: auto;
+		white-space: nowrap;
+		flex: none;
+		margin: 0;
+	}
+
+	.nav-foot {
+		margin-top: 0;
+	}
+
+	.page {
+		padding-left: 16px;
+		padding-right: 16px;
+	}
+}
+
+@media (max-width: 620px) {
+	.app,
+	.app.no-nav {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 8px;
+		padding: 6px 6px 0;
+	}
+
+	/* The rail and the card both go: the tab bar is the navigation, and the
+	   section's pages are reached from the screens that link to them. */
+	.rail,
+	.nav-card {
+		display: none;
+	}
+
+	.region {
+		border-radius: var(--r-card);
+	}
+
+	.top {
+		padding: 10px 12px;
+		gap: 10px;
+	}
+
+	/* The per-marketplace dots go: the Marketplaces tab is where that reads
+	   now, and the strip is the top strip's widest part. The search stays and
+	   takes a row of its own, because it is the only search the catalogue board
+	   has and the board reads its query from the URL this box writes. */
+	.top .conn,
+	.search kbd {
+		display: none;
+	}
+
+	.top .search {
+		flex: 1 1 100%;
+		order: 3;
+		height: 44px;
+	}
+
+	/* The foot clears the fixed tab bar rather than sitting under it. */
+	.page {
+		padding: 18px 14px 96px;
+	}
+
+	.tabbar {
+		display: grid;
+		grid-template-columns: repeat(5, 1fr);
+		position: fixed;
+		inset: auto 0 0;
+		z-index: 20;
+		background: color-mix(in srgb, var(--ground) 94%, #fff);
+		border-top: 1px solid var(--line);
+		padding-bottom: env(safe-area-inset-bottom);
+	}
+
+	/* 9.5px rather than 10px, and a hair of negative tracking: a fifth column
+	   leaves about 78px per cell at 390px, and "Marketplaces" and "New
+	   resource" both clip at 10px. Shrinking the label is the smaller loss
+	   than ellipsing it. */
+	.tab-item {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 3px;
+		padding: 8px 1px 7px;
+		min-height: 52px;
+		font-size: 9.5px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		color: var(--muted);
+		overflow: hidden;
+	}
+
+	.tab-item .ico {
+		display: grid;
+		line-height: 1;
+	}
+
+	.tab-item span {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
+	}
+
+	.tab-item[aria-current='page'] {
+		color: var(--accent-ink);
+	}
+
+	/* The create action, in the middle. It is the one item on the bar that goes
+	   nowhere in the navigation, so it is drawn as a filled disc rather than a
+	   glyph: the fill is what separates it from the four tabs, which carry no
+	   fill in any state. It takes no `aria-current`, because it is never
+	   "the page you are on". The cell is the target, about 78 by 52 at 390px,
+	   so the 30px disc is what is seen rather than what is pressed. */
+	.tab-create {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 3px;
+		padding: 6px 1px 7px;
+		min-height: 52px;
+		font-size: 9.5px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		color: var(--accent-ink);
+		overflow: hidden;
+	}
+
+	.tab-create .ring {
+		width: 30px;
+		height: 30px;
+		border-radius: 50%;
+		background: var(--accent);
+		color: #fff;
+		display: grid;
+		place-items: center;
+		flex: none;
+	}
+
+	.tab-create span:last-child {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
+	}
+}

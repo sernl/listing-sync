@@ -1,30 +1,14 @@
 @import 'tailwindcss';
+@import './lib/styles/tokens.css';
+@import './lib/styles/shell.css';
+@import './lib/styles/components.css';
 
-/* The console's design system, transcribed from the approved mockup. Every
-   token and component class lives here rather than in a component `<style>`
-   block, because a global sheet is what lets one class describe the same
-   thing on every page. */
-
-:root {
-	--ground: #faf7f2;
-	--card: #ffffff;
-	--ink: #1f1a17;
-	--muted: #8a7f76;
-	--faint: #b5aa9f;
-	--line: #ebe4db;
-	--accent: #c2543a;
-	--accent-deep: #a84630;
-	--accent-soft: #f7e9e4;
-	--ok: #3e7a4e;
-	--ok-soft: #e9f2eb;
-	--warn: #b98324;
-	--warn-soft: #f8efdc;
-	--bad: #a93a2b;
-	--bad-soft: #f9e7e3;
-	--hover: #f2ede5;
-	--serif: 'Fraunces', Georgia, 'Times New Roman', serif;
-	--sans: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
-}
+/* The console's design system. A class here describes the same thing on every
+   page, which is what a global sheet buys over a component `<style>` block.
+   Three concerns have been lifted into `lib/styles/`: the tokens, the shell
+   the console is drawn in, and the component catalogue the redrawn pages are
+   built from. What remains below is the page-level classes, which move out as
+   each page is redrawn onto the catalogue. */
 
 html {
 	background: var(--ground);
@@ -68,299 +52,6 @@ button {
 	border: 0;
 }
 
-.app {
-	display: grid;
-	grid-template-columns: 240px 1fr;
-	min-height: 100vh;
-}
-
-.side {
-	border-right: 1px solid var(--line);
-	background: var(--ground);
-	display: flex;
-	flex-direction: column;
-	padding: 20px 12px 12px;
-	position: sticky;
-	top: 0;
-	height: 100vh;
-	overflow-y: auto;
-}
-
-.wordmark {
-	font-family: var(--serif);
-	font-weight: 600;
-	font-size: 17px;
-	letter-spacing: 0.01em;
-	padding: 2px 10px 18px;
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-
-.wordmark .leaf {
-	width: 22px;
-	height: 22px;
-	border-radius: 7px;
-	background: var(--accent);
-	color: #fff;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 12px;
-	font-family: var(--serif);
-}
-
-.group-label {
-	font-size: 10.5px;
-	font-weight: 600;
-	letter-spacing: 0.12em;
-	color: var(--faint);
-	text-transform: uppercase;
-	padding: 14px 10px 6px;
-}
-
-.side nav {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-
-.nav-item {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	padding: 7px 10px;
-	border-radius: 8px;
-	border: 0;
-	background: none;
-	color: var(--ink);
-	text-align: left;
-	width: 100%;
-	position: relative;
-}
-
-.nav-item:hover {
-	background: var(--hover);
-}
-
-.nav-item[aria-current='page'] {
-	background: var(--accent-soft);
-	color: var(--accent-deep);
-	font-weight: 600;
-}
-
-.nav-item[aria-current='page']::before {
-	content: '';
-	position: absolute;
-	left: -12px;
-	top: 6px;
-	bottom: 6px;
-	width: 3px;
-	border-radius: 0 3px 3px 0;
-	background: var(--accent);
-}
-
-.nav-item .ico {
-	width: 16px;
-	text-align: center;
-	opacity: 0.75;
-	font-style: normal;
-}
-
-.nav-item[aria-current='page'] .ico {
-	opacity: 1;
-}
-
-.chip {
-	margin-left: auto;
-	font-size: 10px;
-	font-weight: 600;
-	padding: 2px 7px;
-	border-radius: 999px;
-	background: var(--hover);
-	color: var(--muted);
-}
-
-.chip.count {
-	background: var(--accent-soft);
-	color: var(--accent-deep);
-}
-
-.side .foot {
-	margin-top: auto;
-	padding-top: 14px;
-}
-
-.account {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	border: 1px solid var(--line);
-	background: var(--card);
-	border-radius: 10px;
-	padding: 9px 10px;
-	margin-top: 8px;
-	width: 100%;
-	text-align: left;
-	color: inherit;
-}
-
-.avatar {
-	width: 28px;
-	height: 28px;
-	border-radius: 8px;
-	background: var(--accent-soft);
-	color: var(--accent-deep);
-	font-weight: 600;
-	font-size: 12px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	flex: none;
-}
-
-.account .who {
-	line-height: 1.2;
-	min-width: 0;
-}
-
-.account .who .org {
-	font-weight: 600;
-	font-size: 12.5px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.account .who .plan {
-	font-size: 11px;
-	color: var(--muted);
-}
-
-.top {
-	display: flex;
-	align-items: center;
-	gap: 14px;
-	padding: 12px 28px;
-	border-bottom: 1px solid var(--line);
-	background: color-mix(in srgb, var(--ground) 88%, #fff);
-	position: sticky;
-	top: 0;
-	z-index: 5;
-	flex-wrap: wrap;
-}
-
-/* The wordmark repeated in the top bar, shown only on the phone, where the
-   sidebar that carries it is hidden and the dashboard would otherwise have no
-   link at all. */
-.top-mark {
-	display: none;
-	align-items: center;
-	text-decoration: none;
-}
-
-.top-mark .leaf {
-	width: 22px;
-	height: 22px;
-	border-radius: 7px;
-	background: var(--accent);
-	color: #fff;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 12px;
-	font-family: var(--serif);
-}
-
-.crumb {
-	font-size: 13px;
-	color: var(--muted);
-}
-
-.crumb b {
-	color: var(--ink);
-	font-weight: 600;
-}
-
-.grow {
-	flex: 1;
-}
-
-.conn {
-	display: flex;
-	gap: 12px;
-	font-size: 12px;
-	color: var(--muted);
-	align-items: center;
-	flex-wrap: wrap;
-}
-
-.dot {
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	display: inline-block;
-	margin-right: 5px;
-	background: var(--faint);
-}
-
-.dot.ok {
-	background: var(--ok);
-}
-
-.dot.warn {
-	background: var(--warn);
-}
-
-.dot.bad {
-	background: var(--bad);
-}
-
-.search {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	border: 1px solid var(--line);
-	background: var(--card);
-	border-radius: 8px;
-	padding: 6px 10px;
-	font-size: 12.5px;
-	color: var(--muted);
-	min-width: 180px;
-}
-
-.search input {
-	border: 0;
-	background: none;
-	color: var(--ink);
-	font: inherit;
-	min-width: 0;
-	flex: 1;
-}
-
-.search input::placeholder {
-	color: var(--muted);
-}
-
-.search input:focus-visible {
-	outline: 2px solid var(--accent);
-	outline-offset: 0;
-	border-radius: 4px;
-}
-
-.search:focus-within {
-	border-color: var(--accent);
-}
-
-.search kbd {
-	font: 600 10px var(--sans);
-	color: var(--faint);
-	border: 1px solid var(--line);
-	border-radius: 4px;
-	padding: 1px 5px;
-	background: var(--ground);
-}
-
 .cta,
 .btn {
 	border-radius: 8px;
@@ -402,9 +93,11 @@ button {
 	font-size: 12px;
 }
 
+/* The fill and the ink are `lib/styles/components.css`'s; only the cursor is
+   here, because that sheet is imported above this one and an `opacity` set here
+   would win on source order and fade text the specification keeps solid. */
 .cta:disabled,
 .btn:disabled {
-	opacity: 0.5;
 	cursor: not-allowed;
 }
 
@@ -413,18 +106,6 @@ button {
 	font-weight: 600;
 	text-decoration: underline;
 	text-underline-offset: 2px;
-}
-
-.main {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-
-.page {
-	padding: 26px 28px 40px;
-	min-width: 0;
-	overflow-wrap: break-word;
 }
 
 .page-head {
@@ -471,6 +152,30 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 10px;
+}
+
+/* The header band's help control. `margin-left: auto` as well, so it sits at
+   the far right whether or not the page gave the band any actions. */
+.page-help {
+	margin-left: auto;
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	border: 1px solid var(--line);
+	display: grid;
+	place-items: center;
+	color: var(--muted);
+	flex: none;
+	align-self: center;
+}
+
+.head-aside + .page-help {
+	margin-left: 0;
+}
+
+.page-help:hover {
+	background: var(--hover);
+	color: var(--text);
 }
 
 .tag-note {
@@ -1128,6 +833,28 @@ dl.facts dd:last-child {
 	margin-bottom: 0;
 }
 
+/* The wordmark, which since the shell was redrawn appears only on the
+   signed-out screens: inside the console the mark sits on the rail instead,
+   and is styled with it. */
+.wordmark {
+	display: inline-flex;
+	align-items: center;
+	gap: 9px;
+	font-family: var(--display);
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	color: var(--text);
+}
+
+/* The mark carries its own rounded square and its own ground, so this sets
+   only the size it is drawn at. */
+.wordmark .leaf {
+	display: block;
+	width: 28px;
+	height: 28px;
+}
+
 .auth {
 	min-height: 100vh;
 	display: flex;
@@ -1251,45 +978,6 @@ dl.facts dd:last-child {
 }
 
 @media (max-width: 980px) {
-	.app {
-		grid-template-columns: 1fr;
-	}
-
-	.side {
-		position: static;
-		height: auto;
-		flex-direction: row;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 4px;
-	}
-
-	.side nav {
-		flex-direction: row;
-		flex-wrap: wrap;
-	}
-
-	.nav-item {
-		width: auto;
-	}
-
-	.nav-item[aria-current='page']::before {
-		display: none;
-	}
-
-	.side .foot {
-		margin: 0;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex-wrap: wrap;
-	}
-
-	.account {
-		margin-top: 0;
-		width: auto;
-	}
-
 	.cards {
 		grid-template-columns: repeat(2, 1fr);
 	}
@@ -1297,115 +985,18 @@ dl.facts dd:last-child {
 	.band {
 		grid-template-columns: 1fr;
 	}
-
-	.page,
-	.top {
-		padding-left: 16px;
-		padding-right: 16px;
-	}
 }
 
-/* The tab bar. Rendered on every viewport and shown only below the phone
-   breakpoint, where it is the whole navigation: the sidebar's fourteen
-   destinations do not fit, so `MOBILE_TABS` carries five and the rest are
-   reached from the screens that link to them. Which five is derived rather
-   than sourced, and `$lib/nav` records why. */
-.tabbar {
-	display: none;
-}
-
-/* The phone layout. Below this width the sidebar is replaced by the tab bar,
-   the inventory table becomes one card per item, and the verbs Vendoo's own
-   app does not carry — importing and the many-item bulk actions — are hidden
-   rather than disabled, because they are absent here rather than broken
+/* The phone layout's page-level half. The shell's own half — the rail and the
+   navigation card giving way to the tab bar — is in `lib/styles/shell.css`.
+   Here the inventory table becomes one card per item, and the verbs Vendoo's
+   own app does not carry — importing and the many-item bulk actions — are
+   hidden rather than disabled, because they are absent here rather than broken
    (`docs/research/rethink/vendoo-console-cross-reference.md:178` and `:180`). */
 @media (max-width: 620px) {
 	.cards,
 	.tes-band {
 		grid-template-columns: 1fr;
-	}
-
-	.app {
-		grid-template-columns: 1fr;
-	}
-
-	.side {
-		display: none;
-	}
-
-	.top {
-		padding: 10px 14px;
-		gap: 10px;
-	}
-
-	.top-mark {
-		display: inline-flex;
-	}
-
-	/* The per-marketplace status dots go, because the Marketplaces tab is
-	   where that now reads and the strip is the top bar's widest part. The
-	   search box stays and takes a row of its own: it is the only search the
-	   inventory board has, which reads its query from the URL this box
-	   writes. */
-	.top .conn {
-		display: none;
-	}
-
-	.top .search {
-		flex: 1 1 100%;
-		order: 3;
-	}
-
-	.top .search kbd {
-		display: none;
-	}
-
-	.page {
-		padding: 18px 14px 96px;
-	}
-
-	.tabbar {
-		display: grid;
-		grid-template-columns: repeat(5, 1fr);
-		position: fixed;
-		inset: auto 0 0;
-		z-index: 20;
-		background: color-mix(in srgb, var(--ground) 94%, #fff);
-		border-top: 1px solid var(--line);
-		padding-bottom: env(safe-area-inset-bottom);
-	}
-
-	.tab {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 3px;
-		padding: 8px 2px 7px;
-		min-height: 52px;
-		font-size: 9.5px;
-		font-weight: 600;
-		letter-spacing: 0.01em;
-		color: var(--muted);
-		text-decoration: none;
-		overflow: hidden;
-	}
-
-	.tab .ico {
-		font-size: 15px;
-		font-style: normal;
-		line-height: 1;
-	}
-
-	.tab span {
-		max-width: 100%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.tab[aria-current='page'] {
-		color: var(--accent);
 	}
 
 	/* One card per item, on the table the desktop already renders: the rows

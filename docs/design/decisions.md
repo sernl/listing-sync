@@ -430,3 +430,18 @@ The kill switch and the subscription gate become the entitlement token described
 The full decision set, the evidence, and the re-baselined plan are in `../notes/design/vendoo-for-teachers-rethink.md`, which records thirty decisions D1 to D30 taken across four rounds on 2026-09-02 and 2026-09-03.
 This entry is D1.
 The build awaits an explicit founder go on that plan.
+
+## The Lucide icon set, approved as a web dependency, 2026-09-05
+
+The console takes the Lucide icon set as a web dependency — `@lucide/svelte`, under the ISC licence — approved by the founder on 2026-09-05.
+The alternative rejected was a hand-copied path map carrying no dependency at all.
+The reason is that the set is maintained and tree-shaken, and its icon names form a closed type, so a typo fails the web lane instead of rendering an empty box.
+Adding a dependency is a founder decision rather than a way to make a build pass, and this entry is that gate passed for this one dependency.
+
+## Marketplace names and logos, shown under a disclaimer, 2026-09-05
+
+The Marketplaces page shows each marketplace's official name and logo to identify it, under a footer disclaimer that the names and logos belong to their owners and that Teachouse is not affiliated with or endorsed by them.
+The founder approved this on 2026-09-05 knowing that Etsy and Shopify both state that use of their logo needs written permission, and that eleven of the candidate marketplaces publish no brand page at all.
+The alternative rejected was wordmark tiles set in our own typeface.
+The founder's stated intent is to approach each marketplace in due course.
+The brand survey behind those facts sits in the marketplace catalogue, which is outside this repository; the decision is recorded in `../notes/design/console-redesign-plan.md`.

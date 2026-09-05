@@ -17,7 +17,7 @@
 
 <div class="page">
 	<PageHead
-		icon="✕"
+		icon="circle-x"
 		title="Failed and stranded writes"
 		description="Write attempts that recorded a failure, and attempts stranded in flight whose run is gone. Stranded first, then newest, across every tenant."
 	>

@@ -1,4 +1,7 @@
 node_modules
-/.svelte-kit
+# Unanchored on purpose: `svelte-kit sync` run with a working directory below
+# `web/` writes a second, useless `.svelte-kit` there, and a leading slash would
+# only cover the one at the app root.
+.svelte-kit
 /build
 /src/lib/core/generated

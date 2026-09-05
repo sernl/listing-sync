@@ -47,6 +47,16 @@
 
 	const queryClient = useQueryClient();
 
+	// The label narrows what the server sends rather than what this page shows,
+	// because it is a clause in the catalogue's own page query; the other two
+	// filters read fields already loaded.
+	//
+	// Declared here rather than with the other filter state below, because
+	// `createQuery` evaluates its options callback during initialisation and
+	// that callback reads this: left below, it was read inside its temporal
+	// dead zone and the whole board threw before it mounted.
+	let label = $state<string | 'all'>('all');
+
 	const catalogue = createQuery(() => ({
 		queryKey: queryKeys.catalogue(label === 'all' ? null : label),
 		queryFn: () =>
@@ -106,10 +116,6 @@
 	let selected = $state<Set<string>>(new Set());
 	let marketplace = $state<InventoryId | 'all'>('all');
 	let standing = $state<StandingFilter>('all');
-	// The label narrows what the server sends rather than what this page shows,
-	// because it is a clause in the catalogue's own page query; the other two
-	// filters read fields already loaded.
-	let label = $state<string | 'all'>('all');
 	let crossListing = $state(false);
 	let deleting = $state(false);
 	let markingListed = $state(false);
@@ -287,7 +293,7 @@
 
 <div class="page">
 	<PageHead
-		icon="▤"
+		icon="layout-list"
 		title="Inventory"
 		description="Every item once, and what each marketplace is doing with it."
 	>

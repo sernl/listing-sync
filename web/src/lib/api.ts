@@ -55,7 +55,7 @@ export class ApiFailure extends Error {
 	}
 
 	code(): APIErrorCode | undefined {
-		return this.body?.errors[0]?.code;
+		return this.body?.errors?.[0]?.code;
 	}
 }
 

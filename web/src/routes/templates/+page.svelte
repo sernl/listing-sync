@@ -164,7 +164,7 @@
 
 <div class="page">
 	<PageHead
-		icon="❏"
+		icon="layout-template"
 		title="Templates"
 		description="Your own answers to how this catalogue's words map onto each marketplace's."
 	/>

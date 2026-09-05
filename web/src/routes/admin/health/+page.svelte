@@ -45,7 +45,7 @@
 
 <div class="page">
 	<PageHead
-		icon="❤"
+		icon="heart-pulse"
 		title="Sync health"
 		description="The ledger across every tenant, in the states the database actually stores."
 	/>
@@ -56,10 +56,10 @@
 		<Panel><p class="quiet">The ledger could not be read.</p></Panel>
 	{:else}
 		<div class="cards">
-			<StatCard icon="⇄" label="Sync runs" sub="every tenant">{count('jobs')}</StatCard>
-			<StatCard icon="▤" label="Items" sub="every run, every tenant">{count('items')}</StatCard>
+			<StatCard icon="refresh-cw" label="Sync runs" sub="every tenant">{count('jobs')}</StatCard>
+			<StatCard icon="layout-list" label="Items" sub="every run, every tenant">{count('items')}</StatCard>
 			<StatCard
-				icon={(ledger?.settled ?? 0) > 0 ? '✓' : '·'}
+				icon={(ledger?.settled ?? 0) > 0 ? 'circle-check' : 'minus'}
 				tone="ok"
 				label="Settled"
 				sub="finished, with an outcome"
@@ -67,7 +67,7 @@
 				{count('settled')}
 			</StatCard>
 			<StatCard
-				icon={(ledger?.failed ?? 0) > 0 ? '✕' : '✓'}
+				icon={(ledger?.failed ?? 0) > 0 ? 'circle-x' : 'circle-check'}
 				tone={(ledger?.failed ?? 0) > 0 ? 'bad' : 'ok'}
 				label="Failed"
 				sub="settled with a failure"

@@ -168,7 +168,7 @@
 
 <div class="page">
 	<PageHead
-		icon="⇄"
+		icon="refresh-cw"
 		title="Sync"
 		description="Queued and completed runs, with live progress while one is under way."
 	/>

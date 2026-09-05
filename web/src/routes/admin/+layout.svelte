@@ -33,7 +33,7 @@
 {:else if reason === 'unconfigured'}
 	<div class="page">
 		<Placeholder
-			icon="◈"
+			icon="layout-dashboard"
 			headline="This deployment serves no operator surface"
 			body="It was started without a backoffice database, so it serves none of it rather
 				than half of it. Nothing is wrong with your account."
@@ -42,7 +42,7 @@
 {:else if reason === 'not-an-operator'}
 	<div class="page">
 		<Placeholder
-			icon="◈"
+			icon="layout-dashboard"
 			headline="This account does not operate the platform"
 			body="The operator marking is granted on the box by hand and is separate from
 				anything inside the product. If you should have it, ask the person who runs
@@ -52,7 +52,7 @@
 {:else}
 	<div class="page">
 		<Placeholder
-			icon="◈"
+			icon="layout-dashboard"
 			headline="The operator surface could not be read"
 			body="The request did not come back with an answer we can act on. Reloading is
 				the only thing worth trying from here."

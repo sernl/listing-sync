@@ -82,7 +82,7 @@
 	{#if job}
 		{@const run = job}
 		<PageHead
-			icon="⇄"
+			icon="refresh-cw"
 			title={`Run ${run.job.slice(0, 8)}…`}
 			description={`${run.inventory} · started ${agoLabel(run.created_at, Date.now())}`}
 		>

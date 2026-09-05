@@ -161,14 +161,14 @@
 
 <div class="page">
 	<PageHead
-		icon="☺"
+		icon="users"
 		title="Identity users"
 		description="Accounts in the identity service. These are not platform users: the two planes number their people separately."
 	/>
 
 	{#if listRefusal === 'not-identity-admin'}
 		<Placeholder
-			icon="☺"
+			icon="users"
 			headline="Your identity account is not an identity admin"
 			body="Operating the platform and administering the identity service are two markings,
 				granted separately and by hand. You hold the first, which is what let you reach
@@ -177,7 +177,7 @@
 		/>
 	{:else if listRefusal === 'unreadable'}
 		<Placeholder
-			icon="☺"
+			icon="users"
 			headline="The identity accounts could not be listed"
 			body="The identity service did not answer with something we can act on. Reloading is
 				the only thing worth trying from here."

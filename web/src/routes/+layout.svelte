@@ -39,7 +39,9 @@
 		<Console onLogout={logout}>{@render children()}</Console>
 	{:else}
 		<div class="auth">
-			<div class="wordmark"><span class="leaf" aria-hidden="true">T</span> Teachouse</div>
+			<div class="wordmark">
+				<img class="leaf" src="/favicon.svg" alt="" width="28" height="28" /> Teachouse
+			</div>
 			{@render children()}
 		</div>
 	{/if}
