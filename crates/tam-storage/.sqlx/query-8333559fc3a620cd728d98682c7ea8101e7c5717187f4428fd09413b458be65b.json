@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, title, price_kind, price_minor_units, price_currency, created_at, updated_at, ARRAY(SELECT l.name FROM product_label pl JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id WHERE pl.org_id = product.org_id AND pl.product_id = product.id ORDER BY lower(l.name)) AS \"labels!\" FROM product WHERE org_id = $1 AND deleted_at IS NULL AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) ORDER BY created_at, id LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "price_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "price_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "labels!",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "8333559fc3a620cd728d98682c7ea8101e7c5717187f4428fd09413b458be65b"
+}

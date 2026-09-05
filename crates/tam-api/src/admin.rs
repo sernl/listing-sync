@@ -45,7 +45,11 @@ fn storage_fault(state: &AppState, error: &tam_storage::StorageError) -> APIErro
 /// condition so the client can tell an unconfigured operator surface from a
 /// fault, which is the difference between a page that explains itself and one
 /// that reports an error nobody can act on.
-fn backoffice(state: &AppState) -> Result<PgPool, APIError> {
+///
+/// Shared with `marketplace_requests`, whose operator listing is the one route
+/// outside this module that reads across tenants: one refusal, so a deployment
+/// without a backoffice database answers every operator route the same way.
+pub(crate) fn backoffice(state: &AppState) -> Result<PgPool, APIError> {
     state.backoffice.clone().ok_or_else(|| {
         APIError::new(
             StatusCode::SERVICE_UNAVAILABLE,

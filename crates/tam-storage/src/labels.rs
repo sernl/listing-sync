@@ -228,6 +228,96 @@ impl LabelRepo {
             .map(|row| decode(row.name, &row.colour))
             .collect()
     }
+
+    /// Gives one label a new name, keeping every item that carries it.
+    ///
+    /// One statement on the `label` row rather than a move between two rows:
+    /// `product_label` names the label by identifier, so the carriers follow
+    /// the rename without being visited and there is no window in which an
+    /// item carries neither name.
+    ///
+    /// The colour is recomputed, because it is derived from the name rather
+    /// than chosen. Keeping the old one would leave a label whose colour no
+    /// name explains, and the next writer to mint that name elsewhere would
+    /// disagree with this row about what colour it is.
+    ///
+    /// The refusal is the unique index's rather than a read before the write,
+    /// so two renames racing onto one name cannot both be told it is free.
+    pub async fn rename(
+        &self,
+        org: OrgId,
+        from: &str,
+        to: &str,
+    ) -> Result<LabelRename, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let renamed = sqlx::query!(
+            "UPDATE label SET name = $3, colour = $4 \
+              WHERE org_id = $1 AND lower(name) = lower($2) \
+             RETURNING name, colour",
+            uuid_to_db(org.0),
+            from,
+            to,
+            Colour::of_name(to).as_str(),
+        )
+        .fetch_optional(&mut *tx)
+        .await;
+        let row = match renamed {
+            Ok(row) => row,
+            Err(sqlx::Error::Database(database)) if database.constraint() == Some(ONE_PER_NAME) => {
+                return Ok(LabelRename::Taken)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let Some(row) = row else {
+            return Ok(LabelRename::Missing);
+        };
+        let record = decode(row.name, &row.colour)?;
+        tx.commit().await?;
+        Ok(LabelRename::Renamed(record))
+    }
+
+    /// Removes one label from this organisation's vocabulary, and with it from
+    /// every item carrying it.
+    ///
+    /// The carriers go by `product_label`'s cascade, which migration 0046
+    /// argues for: the alternative is a filter offering a label no item can be
+    /// found by, or an item carrying a label with no name.
+    ///
+    /// Answers whether a label of that name was there to remove, so a client
+    /// that asks twice is told the second time rather than shown a success
+    /// that did nothing.
+    pub async fn delete(&self, org: OrgId, name: &str) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let removed = sqlx::query!(
+            "DELETE FROM label WHERE org_id = $1 AND lower(name) = lower($2) RETURNING id",
+            uuid_to_db(org.0),
+            name,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(removed.is_some())
+    }
+}
+
+/// The unique index migration 0046 folds label names under, named here because
+/// its violation is the rename's own refusal rather than a fault.
+const ONE_PER_NAME: &str = "label_one_per_name";
+
+/// What a rename did, which the caller must branch on rather than infer from
+/// a row count: a name nobody holds and a name somebody else holds are
+/// different answers to the seller, and both move zero rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelRename {
+    /// The label carries the new name, and every item that carried it still
+    /// does.
+    Renamed(LabelRecord),
+    /// This organisation has no label of the old name.
+    Missing,
+    /// Another label of this organisation already carries the new name.
+    Taken,
 }
 
 /// Drops the labels this write left on no item at all.

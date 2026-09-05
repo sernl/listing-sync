@@ -240,4 +240,24 @@ async fn the_status_page_needs_no_session(pool: PgPool) {
         inventories.iter().all(|entry| entry["halted"] == false),
         "a fresh fleet has no halts"
     );
+    // D1's badge, on the one surface that needs no session: the status page
+    // renders a row per inventory whether or not a connection stands behind
+    // it, so the branch must be readable there and not only from a
+    // connection listing.
+    let branches: Vec<(&str, &str)> = inventories
+        .iter()
+        .filter_map(|entry| Some((entry["inventory"].as_str()?, entry["transport"].as_str()?)))
+        .collect();
+    assert_eq!(
+        branches,
+        vec![
+            ("TesGb", "SellerDevice"),
+            ("TesUs", "SellerDevice"),
+            ("TesNz", "SellerDevice"),
+            ("Etsy", "OfficialApi"),
+            ("Tpt", "SellerDevice"),
+        ],
+        "every row carries the branch its marketplace falls in, and Etsy is \
+         the only one of them that runs under a token we hold"
+    );
 }

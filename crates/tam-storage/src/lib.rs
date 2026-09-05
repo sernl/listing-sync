@@ -23,6 +23,7 @@ pub mod jobs;
 pub mod labels;
 pub mod lowering;
 mod mapping;
+pub mod marketplace_requests;
 pub mod operators;
 pub mod org;
 pub mod overrides;
@@ -65,7 +66,7 @@ pub use jobs::{
     AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
     REAUTH_REQUIRED, REVIVABLE_GATES,
 };
-pub use labels::{Colour, LabelRecord, LabelRepo};
+pub use labels::{Colour, LabelRecord, LabelRename, LabelRepo};
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
@@ -73,10 +74,17 @@ pub use mapping::{
     BoundListing, LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, PastedBind,
     RecordedLoss,
 };
+pub use marketplace_requests::{
+    MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
+    MarketplaceRequestWrite, NewMarketplaceRequest, PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX,
+    REQUESTS_PER_ORG_MAX,
+};
 pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo};
 pub use overrides::OverrideRepo;
-pub use product::{ProductEdit, ProductRecord, ProductRepo, ProductSummary};
+pub use product::{
+    ExportedListing, ExportedResource, ProductEdit, ProductRecord, ProductRepo, ProductSummary,
+};
 pub use pruning::{PruneRepo, PruneReport};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub use tpt_base::{TptBaseRecord, TptBaseRepo};

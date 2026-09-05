@@ -23,8 +23,10 @@ pub mod blocking;
 pub mod catalogue;
 pub mod devices;
 pub mod error;
+pub mod export;
 pub mod import;
 pub mod jobs;
+pub mod marketplace_requests;
 pub mod openapi;
 pub mod org;
 pub mod paddle;
@@ -34,13 +36,14 @@ pub mod resources;
 pub mod session;
 pub mod stream;
 pub mod taxonomy;
+pub mod text;
 pub mod version;
 pub mod vocabulary;
 pub mod work;
 
 use axum::{
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -192,6 +195,7 @@ pub fn router(state: AppState) -> Router {
             "/{version}/products",
             get(resources::list_products).post(catalogue::create_product),
         )
+        .route("/{version}/products/export", get(export::export_catalogue))
         .route(
             "/{version}/products/{product}",
             get(resources::product_view)
@@ -207,6 +211,13 @@ pub fn router(state: AppState) -> Router {
             get(resources::product_labels).put(resources::set_product_labels),
         )
         .route("/{version}/labels", get(resources::list_labels))
+        // Named by the label's own text, because that is how a label is
+        // identified everywhere else on this surface: the client never learns
+        // an identifier for one.
+        .route(
+            "/{version}/labels/{name}",
+            patch(resources::rename_label).delete(resources::delete_label),
+        )
         .route(
             "/{version}/vocabulary/{inventory}",
             get(vocabulary::vocabulary_view),
@@ -261,6 +272,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/connections/{connection}/revoke",
             post(resources::revoke_connection),
+        )
+        // Beside the connections it is about: what a seller asks for when the
+        // marketplace they sell on is not one of the three there is a
+        // connection for.
+        .route(
+            "/{version}/marketplace-requests",
+            post(marketplace_requests::create),
         )
         .route(
             "/{version}/reconciliation/items",
@@ -319,6 +337,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/impersonations",
             get(admin::impersonations),
+        )
+        .route(
+            "/{version}/admin/marketplace-requests",
+            get(marketplace_requests::list_all),
         )
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)

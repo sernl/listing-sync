@@ -6,13 +6,15 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use tam_domain::{
     AgeInterval, CanonicalProduct, DeclarationSource, GradeDeclaration, RightsDeclaration,
     TermKind, VocabularyId, VocabularyPath,
 };
+use tam_marketplace::RemoteListingId;
 use tam_types::{
-    CanonicalTermId, FileId, FileRole, ImportedTerm, ListingCopy, OrgId, PayloadSet, PriceIntent,
-    ProductFile, ProductId, Timestamp, Title,
+    CanonicalTermId, FileId, FileRole, ImportedTerm, InventoryId, ListingCopy, OrgId, PayloadSet,
+    PriceIntent, ProductFile, ProductId, Timestamp, Title,
 };
 
 use crate::codec::{
@@ -21,6 +23,7 @@ use crate::codec::{
     price_from_db, scan_from_db, term_kind_from_db, term_kind_to_db, timestamp_from_db,
     timestamp_to_db, uuid_from_db, uuid_to_db, PriceColumns, ScanColumns,
 };
+use crate::mapping::remote_id_from_db;
 use crate::{pin_org, StorageError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +41,46 @@ pub struct ProductSummary {
     pub price: PriceIntent,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// One resource as the catalogue export writes it: the product's own columns,
+/// the labels it carries and one entry per marketplace listing.
+///
+/// A shape of its own rather than a composition of [`ProductSummary`],
+/// `LabelRepo::for_product` and `MappingRepo::list_for_product`, because that
+/// composition cost two transactions and roughly eighteen statements for every
+/// resource in the catalogue: `list_for_product` hydrates each mapping's field
+/// mismatches and binding candidates, and an export reads neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedResource {
+    pub id: ProductId,
+    pub title: Title,
+    pub price: PriceIntent,
+    /// The seller's own labels, ordered as the console lists them.
+    pub labels: Vec<String>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub listings: Vec<ExportedListing>,
+}
+
+/// One marketplace listing of one resource, in the terms an export renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedListing {
+    pub inventory: InventoryId,
+    /// The stored spellings, which are what `MappingHead` publishes and what
+    /// the console's listing vocabulary is read from.
+    pub binding_state: String,
+    pub lifecycle_state: String,
+    /// Decoded only while the binding is `bound`, as `MappingHead` does it: a
+    /// severed mapping still carries remote-id columns, and the console reads
+    /// severed as not listed.
+    pub remote: Option<RemoteListingId>,
+    /// The price the seller set for this inventory by hand.
+    ///
+    /// Absent where the rule converts the catalogue price instead, because a
+    /// converted rule records a rate rather than an amount and nothing in this
+    /// workspace derives the amount from it.
+    pub listed_price: Option<PriceIntent>,
 }
 
 /// One edit to a product's canonical fields. Every field is optional and an
@@ -1189,4 +1232,166 @@ impl ProductRepo {
             })
             .collect()
     }
+
+    /// One page of the catalogue as an export reads it, keyset-walked by
+    /// `(created_at, id)` exactly as [`Self::list_page`] is.
+    ///
+    /// Two statements for the whole page rather than two transactions for
+    /// every resource in it: the labels come back as an array beside their
+    /// product, and every listing on the page in one read keyed by the page's
+    /// product identifiers.
+    pub async fn export_page(
+        &self,
+        org: OrgId,
+        cursor: Option<crate::job_reads::LedgerCursor>,
+        limit: i64,
+    ) -> Result<Vec<ExportedResource>, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let (cursor_at, cursor_id) = match cursor {
+            Some(cursor) => (
+                Some(timestamp_to_db(cursor.created_at)?),
+                Some(uuid_to_db(cursor.id)),
+            ),
+            None => (None, None),
+        };
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query_as!(
+            ExportProductRow,
+            "SELECT id, title, price_kind, price_minor_units, price_currency, \
+             created_at, updated_at, \
+             ARRAY(SELECT l.name FROM product_label pl \
+                     JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id \
+                    WHERE pl.org_id = product.org_id AND pl.product_id = product.id \
+                    ORDER BY lower(l.name)) AS \"labels!\" \
+             FROM product \
+             WHERE org_id = $1 AND deleted_at IS NULL \
+               AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) \
+             ORDER BY created_at, id LIMIT $4",
+            org_db,
+            cursor_at,
+            cursor_id,
+            limit,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        if rows.is_empty() {
+            tx.commit().await?;
+            return Ok(vec![]);
+        }
+        let page: Vec<uuid::Uuid> = rows.iter().map(|row| row.id).collect();
+        let listings = sqlx::query_as!(
+            ExportListingRow,
+            "SELECT product_id, inventory, binding_state, lifecycle_state, \
+             remote_id_kind, remote_url, remote_numeric_id, \
+             price_rule_kind, price_explicit_kind, price_explicit_minor_units, \
+             price_explicit_currency \
+             FROM mapping WHERE org_id = $1 AND product_id = ANY($2) \
+             ORDER BY product_id, inventory",
+            org_db,
+            &page[..],
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        decode_export(rows, listings)
+    }
+}
+
+struct ExportProductRow {
+    id: uuid::Uuid,
+    title: String,
+    price_kind: String,
+    price_minor_units: Option<i64>,
+    price_currency: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    labels: Vec<String>,
+}
+
+struct ExportListingRow {
+    product_id: uuid::Uuid,
+    inventory: String,
+    binding_state: String,
+    lifecycle_state: String,
+    remote_id_kind: Option<String>,
+    remote_url: Option<String>,
+    remote_numeric_id: Option<i64>,
+    price_rule_kind: String,
+    price_explicit_kind: Option<String>,
+    price_explicit_minor_units: Option<i64>,
+    price_explicit_currency: Option<String>,
+}
+
+/// Joins the page's listings onto their products in memory, which is where
+/// that join belongs: reading them as one statement is the point of the second
+/// query, and the page is already bounded by its own limit.
+fn decode_export(
+    rows: Vec<ExportProductRow>,
+    listings: Vec<ExportListingRow>,
+) -> Result<Vec<ExportedResource>, StorageError> {
+    let mut by_product: HashMap<uuid::Uuid, Vec<ExportedListing>> = HashMap::new();
+    for listing in listings {
+        let product = listing.product_id;
+        by_product
+            .entry(product)
+            .or_default()
+            .push(decode_listing(listing)?);
+    }
+    rows.into_iter()
+        .map(|row| {
+            Ok(ExportedResource {
+                id: ProductId(uuid_from_db(row.id)),
+                title: Title(row.title),
+                price: price_from_db(&row.price_kind, row.price_minor_units, row.price_currency)?,
+                labels: row.labels,
+                created_at: timestamp_from_db(row.created_at),
+                updated_at: timestamp_from_db(row.updated_at),
+                listings: by_product.remove(&row.id).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn decode_listing(row: ExportListingRow) -> Result<ExportedListing, StorageError> {
+    let remote = if row.binding_state == "bound" {
+        let kind = row
+            .remote_id_kind
+            .as_deref()
+            .ok_or_else(|| StorageError::CorruptRow {
+                reason: format!(
+                    "bound mapping on product {} carries no remote id kind",
+                    row.product_id
+                ),
+            })?;
+        Some(remote_id_from_db(
+            kind,
+            row.remote_url,
+            row.remote_numeric_id,
+        )?)
+    } else {
+        None
+    };
+    let listed_price = if row.price_rule_kind == "explicit" {
+        let kind = row
+            .price_explicit_kind
+            .as_deref()
+            .ok_or_else(|| StorageError::CorruptRow {
+                reason: "explicit price rule without a price kind".to_owned(),
+            })?;
+        Some(price_from_db(
+            kind,
+            row.price_explicit_minor_units,
+            row.price_explicit_currency,
+        )?)
+    } else {
+        None
+    };
+    Ok(ExportedListing {
+        inventory: inventory_from_db(&row.inventory)?,
+        binding_state: row.binding_state,
+        lifecycle_state: row.lifecycle_state,
+        remote,
+        listed_price,
+    })
 }

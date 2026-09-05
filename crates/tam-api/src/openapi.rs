@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 63] = [
+pub const ROUTES: [Route; 68] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -171,6 +171,11 @@ pub const ROUTES: [Route; 63] = [
     },
     Route {
         method: "get",
+        path: "/{version}/products/export",
+        summary: "The whole catalogue as CSV, with its per-marketplace state",
+    },
+    Route {
+        method: "get",
         path: "/{version}/products/{product}",
         summary: "The product aggregate: files, subjects, verbatim grades",
     },
@@ -203,6 +208,16 @@ pub const ROUTES: [Route; 63] = [
         method: "get",
         path: "/{version}/labels",
         summary: "Every label this organisation uses, which the board's filter lists",
+    },
+    Route {
+        method: "patch",
+        path: "/{version}/labels/{name}",
+        summary: "Rename one label, keeping every item that carries it",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/labels/{name}",
+        summary: "Remove one label from the organisation and from every item",
     },
     Route {
         method: "get",
@@ -263,6 +278,11 @@ pub const ROUTES: [Route; 63] = [
         method: "post",
         path: "/{version}/connections/{connection}/revoke",
         summary: "Revoke a connection through the credential broker",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/marketplace-requests",
+        summary: "Ask for a marketplace this platform does not sell on yet",
     },
     Route {
         method: "get",
@@ -336,6 +356,11 @@ pub const ROUTES: [Route; 63] = [
     },
     Route {
         method: "get",
+        path: "/{version}/admin/marketplace-requests",
+        summary: "Operator: the marketplaces sellers have asked for, newest first",
+    },
+    Route {
+        method: "get",
         path: "/{version}/openapi.json",
         summary: "This document",
     },
@@ -400,13 +425,13 @@ mod tests {
             .and_then(|paths| paths.as_object())
             .map(serde_json::Map::len);
         // /v1/jobs, /v1/session, /v1/org, /v1/devices,
-        // /v1/devices/{device}/reads and /v1/products/{product}/labels each
-        // carry two operations, /v1/products carries two,
-        // /v1/products/{product} three and /v1/mappings/overrides three, so
-        // distinct paths are eleven fewer than the operations in the table.
+        // /v1/devices/{device}/reads, /v1/products/{product}/labels and
+        // /v1/labels/{name} each carry two operations, /v1/products carries
+        // two, /v1/products/{product} three and /v1/mappings/overrides three, so
+        // distinct paths are twelve fewer than the operations in the table.
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 11),
+            Some(ROUTES.len() - 12),
             "each operation lands in the document exactly once"
         );
     }

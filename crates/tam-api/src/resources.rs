@@ -17,9 +17,9 @@ use tam_domain::registry::listing_url::{listing_url, parse_listing_url, UrlRefus
 use tam_domain::registry::registry;
 use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
 use tam_storage::{
-    ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo, LabelRepo, LedgerCursor,
-    MappingRepo, NewAnswer, OpenElection, OverrideRepo, PastedBind, ProductRepo, StorageError,
-    TaxonomyRepo,
+    ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo, LabelRename, LabelRepo,
+    LedgerCursor, MappingRepo, NewAnswer, OpenElection, OverrideRepo, PastedBind, ProductRepo,
+    StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::check_native_ids;
 use tam_types::{
@@ -1036,6 +1036,41 @@ pub struct SetLabelsBody {
 /// say-so.
 const LABELS_PER_PRODUCT_MAX: usize = 20;
 
+/// The longest a label may be, shared by every route that accepts one so the
+/// rename cannot refuse a name the create path mints. Migration 0046 states
+/// the same bound on the column.
+const LABEL_MAX_CHARS: usize = 60;
+
+/// One label's text as it will be stored, or the refusal a seller can act on.
+///
+/// The character rules are the address path's, not taste: a label is addressed
+/// by its own text as one path segment, so a name carrying `/` would be
+/// reachable only as `%2F` and any intermediary that normalises the escape
+/// back turns the request into a path matching no route — a label a seller
+/// could create and then neither rename nor delete. Control characters go for
+/// the reason [`crate::text::is_typed_text`] states. Everything else a person
+/// might type is accepted, and a client sends it percent-encoded.
+fn validated_label(raw: &str) -> Result<String, APIError> {
+    let name = tam_storage::labels::normalise(raw);
+    if name.is_empty() {
+        return Err(validation("a label needs a word in it"));
+    }
+    if name.chars().count() > LABEL_MAX_CHARS {
+        return Err(validation(&format!(
+            "a label is at most {LABEL_MAX_CHARS} characters"
+        )));
+    }
+    if !crate::text::is_typed_text(&name) {
+        return Err(validation("a label cannot contain control characters"));
+    }
+    if name.contains('/') {
+        return Err(validation(
+            "a label cannot contain a slash, because a label is addressed by its own name",
+        ));
+    }
+    Ok(name)
+}
+
 fn labels_view(records: Vec<tam_storage::LabelRecord>) -> Json<LabelsView> {
     Json(LabelsView {
         labels: records
@@ -1085,13 +1120,7 @@ pub(crate) async fn set_product_labels(
     // stores what it is given.
     let mut names: Vec<String> = Vec::with_capacity(body.labels.len());
     for raw in &body.labels {
-        let name = tam_storage::labels::normalise(raw);
-        if name.is_empty() {
-            return Err(validation("a label needs a word in it"));
-        }
-        if name.chars().count() > 60 {
-            return Err(validation("a label is at most sixty characters"));
-        }
+        let name = validated_label(raw)?;
         if !names
             .iter()
             .any(|held: &String| held.eq_ignore_ascii_case(&name))
@@ -1116,6 +1145,72 @@ pub(crate) async fn list_labels(
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     Ok(labels_view(records))
+}
+
+/// The new name for a label, which is the whole of a rename: a label has no
+/// other field a seller may set, because the colour is derived from the name.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RenameLabelBody {
+    pub name: String,
+}
+
+/// Renames one label, keeping every item that carries it.
+///
+/// The label is addressed by its own text, matched the way the unique index
+/// matches it — case-insensitively — because that is the only identifier this
+/// surface ever gives a client for one. A name carrying anything a URL path
+/// reserves is percent-encoded by the client; `/` cannot appear in a name at
+/// all, which [`validated_label`] refuses at the point one is minted.
+///
+/// The answer is the label as stored: the name is trimmed on the way in and
+/// the colour is recomputed from it, so a client that rendered what it sent
+/// would show a colour this organisation's label does not have.
+pub(crate) async fn rename_label(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, name)): Path<(String, String)>,
+    Json(body): Json<RenameLabelBody>,
+) -> Result<Json<LabelView>, APIError> {
+    let to = validated_label(&body.name)?;
+    let from = tam_storage::labels::normalise(&name);
+    let outcome = LabelRepo::new(state.pool.clone())
+        .rename(context.org, &from, &to)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    match outcome {
+        LabelRename::Renamed(record) => Ok(Json(LabelView {
+            name: record.name,
+            colour: record.colour.as_str().to_owned(),
+        })),
+        LabelRename::Missing => Err(missing("no label of that name")),
+        // A refusal rather than a merge. Folding the two labels together
+        // would take every item off one of them, which is a bulk edit of the
+        // catalogue rather than the rename that was asked for, and no call
+        // here says whether that is what the seller meant.
+        LabelRename::Taken => Err(validation("that name is already one of your labels")),
+    }
+}
+
+/// Removes one label from this organisation, and with it from every item
+/// carrying it.
+///
+/// 204 rather than the emptied set: nothing of the label survives the call, so
+/// there is no representation to answer with.
+pub(crate) async fn delete_label(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, name)): Path<(String, String)>,
+) -> Result<StatusCode, APIError> {
+    let name = tam_storage::labels::normalise(&name);
+    let removed = LabelRepo::new(state.pool.clone())
+        .delete(context.org, &name)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if removed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(missing("no label of that name"))
+    }
 }
 
 /// Refuses with the same not-found another organisation's product gets, so a
@@ -1258,6 +1353,12 @@ pub struct StatusView {
 pub struct InventoryStatusView {
     pub inventory: InventoryId,
     pub marketplace: Marketplace,
+    /// Which branch of the automation rule this inventory's marketplace falls
+    /// in, spelled as [`ConnectionView::transport`] spells it. Served here as
+    /// well as there because the console's marketplace page renders a row per
+    /// inventory rather than per connection, and a row with no connection
+    /// behind it still carries the badge D1 requires.
+    pub transport: TransportClass,
     pub halted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -1286,6 +1387,7 @@ pub(crate) async fn status(State(state): State<AppState>) -> Result<Json<StatusV
                 InventoryStatusView {
                     inventory,
                     marketplace: inventory.marketplace(),
+                    transport: inventory.marketplace().transport_class(),
                     halted: halt.is_some(),
                     reason: halt.map(|halt| halt.reason.clone()),
                     raised_at: halt.map(|halt| halt.raised_at),

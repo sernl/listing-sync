@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT product_id, inventory, binding_state, lifecycle_state, remote_id_kind, remote_url, remote_numeric_id, price_rule_kind, price_explicit_kind, price_explicit_minor_units, price_explicit_currency FROM mapping WHERE org_id = $1 AND product_id = ANY($2) ORDER BY product_id, inventory",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "binding_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "lifecycle_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "remote_id_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "remote_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "remote_numeric_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "price_rule_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "price_explicit_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "price_explicit_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "price_explicit_currency",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "4864929b6fdccd790eb77a9435f0eadbadd04a01755f66239a1f3b9771fbf5e3"
+}

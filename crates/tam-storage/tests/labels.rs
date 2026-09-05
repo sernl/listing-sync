@@ -5,7 +5,7 @@
 
 use sqlx::PgPool;
 use tam_domain::CanonicalProduct;
-use tam_storage::{Colour, LabelRepo, ProductRepo};
+use tam_storage::{Colour, LabelRecord, LabelRename, LabelRepo, ProductRepo};
 use tam_types::{
     ContentHash, FileBytes, FileId, FileKind, FileRole, OrgId, PayloadSet, ProductFile, ProductId,
     ScanOutcome, Timestamp, Uuid,
@@ -372,5 +372,222 @@ async fn deleting_an_item_takes_its_labels_with_it(pool: PgPool) {
             .expect("the filtered page reads")
             .is_empty(),
         "the filter cannot find the deleted item by the label it used to carry"
+    );
+}
+
+/// A rename is a write on the one label row, so the items carrying it are
+/// carried across without being visited, and the colour follows the new name
+/// because it is derived from it.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_rename_keeps_every_carrier_and_takes_the_new_names_colour(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    let products = ProductRepo::new(pool.clone());
+    products
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the first product inserts");
+    products
+        .insert(ORG_A, &second_product(), NOW)
+        .await
+        .expect("the second product inserts");
+    let repo = LabelRepo::new(pool.clone());
+    for product in [PRODUCT_1, PRODUCT_2] {
+        repo.set_for_product(ORG_A, product, &["Autumn term".to_owned()], NOW)
+            .await
+            .expect("the item is labelled");
+    }
+
+    let renamed = repo
+        .rename(ORG_A, "autumn TERM", "Term one")
+        .await
+        .expect("the rename runs");
+    assert_eq!(
+        renamed,
+        LabelRename::Renamed(LabelRecord {
+            name: "Term one".to_owned(),
+            colour: Colour::of_name("Term one"),
+        }),
+        "the label is addressed by name the way the unique index folds it, and \
+         the stored colour is the one the new name earns"
+    );
+
+    assert_eq!(
+        names(&repo.list(ORG_A).await.expect("the vocabulary reads")),
+        vec!["Term one"],
+        "one label, under its new name"
+    );
+    for product in [PRODUCT_1, PRODUCT_2] {
+        assert_eq!(
+            names(
+                &repo
+                    .for_product(ORG_A, product)
+                    .await
+                    .expect("the item's labels read")
+            ),
+            vec!["Term one"],
+            "every item that carried the old name carries the new one"
+        );
+    }
+    assert_eq!(
+        products
+            .list_page(ORG_A, None, 50, Some("Term one"))
+            .await
+            .expect("the filtered page reads")
+            .len(),
+        2,
+        "the filter finds both items under the new name"
+    );
+}
+
+/// The two answers a rename gives that are not a rename, both of which move
+/// zero rows and mean different things to the seller.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_rename_onto_a_name_in_use_is_refused_and_an_unknown_one_is_reported(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the product inserts");
+    let repo = LabelRepo::new(pool.clone());
+    repo.set_for_product(
+        ORG_A,
+        PRODUCT_1,
+        &["Autumn term".to_owned(), "Bundle".to_owned()],
+        NOW,
+    )
+    .await
+    .expect("the item is labelled");
+
+    assert_eq!(
+        repo.rename(ORG_A, "Autumn term", "bundle")
+            .await
+            .expect("the refused rename is an answer rather than a fault"),
+        LabelRename::Taken,
+        "the unique index folds case, so a name differing only in case is in use"
+    );
+    assert_eq!(
+        names(&repo.list(ORG_A).await.expect("the vocabulary reads")),
+        vec!["Autumn term", "Bundle"],
+        "the refusal left both labels as they were"
+    );
+    assert_eq!(
+        repo.rename(ORG_A, "Spring term", "Term two")
+            .await
+            .expect("the rename runs"),
+        LabelRename::Missing,
+        "a label this organisation does not have is missing rather than taken"
+    );
+    assert_eq!(
+        repo.rename(ORG_A, "Autumn term", "AUTUMN TERM")
+            .await
+            .expect("the rename runs"),
+        LabelRename::Renamed(LabelRecord {
+            name: "AUTUMN TERM".to_owned(),
+            colour: Colour::of_name("AUTUMN TERM"),
+        }),
+        "a label may be renamed to its own name in another case: the row it \
+         would collide with is itself"
+    );
+}
+
+/// Deleting a label takes it off every item carrying it, by the cascade
+/// migration 0046 argues for, and leaves the rest of the vocabulary standing.
+#[sqlx::test(migrations = "./migrations")]
+async fn deleting_a_label_takes_it_off_every_item(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    let products = ProductRepo::new(pool.clone());
+    products
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the first product inserts");
+    products
+        .insert(ORG_A, &second_product(), NOW)
+        .await
+        .expect("the second product inserts");
+    let repo = LabelRepo::new(pool.clone());
+    for product in [PRODUCT_1, PRODUCT_2] {
+        repo.set_for_product(
+            ORG_A,
+            product,
+            &["Autumn term".to_owned(), "Bundle".to_owned()],
+            NOW,
+        )
+        .await
+        .expect("the item is labelled");
+    }
+
+    assert!(
+        repo.delete(ORG_A, "autumn term")
+            .await
+            .expect("the delete runs"),
+        "the label was there to remove, whatever case it was asked for in"
+    );
+    for product in [PRODUCT_1, PRODUCT_2] {
+        assert_eq!(
+            names(
+                &repo
+                    .for_product(ORG_A, product)
+                    .await
+                    .expect("the item's labels read")
+            ),
+            vec!["Bundle"],
+            "the removed label is off every item, and the other one is untouched"
+        );
+    }
+    assert!(
+        products
+            .list_page(ORG_A, None, 50, Some("Autumn term"))
+            .await
+            .expect("the filtered page reads")
+            .is_empty(),
+        "nothing can be found by a label that no longer exists"
+    );
+    assert!(
+        !repo
+            .delete(ORG_A, "Autumn term")
+            .await
+            .expect("the second delete runs"),
+        "asking again is answered rather than reported as a success that did nothing"
+    );
+}
+
+/// The fence around both writes: neither reaches a label of another tenant
+/// that happens to share a name.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_rename_and_a_delete_stop_at_the_tenant_fence(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-b', now())")
+        .bind(uuid::Uuid::from_bytes(ORG_B.0 .0))
+        .execute(&pool)
+        .await
+        .expect("org b seeds");
+    let products = ProductRepo::new(pool.clone());
+    products
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("org a's product inserts");
+    let repo = LabelRepo::new(pool.clone());
+    repo.set_for_product(ORG_A, PRODUCT_1, &["Autumn term".to_owned()], NOW)
+        .await
+        .expect("org a's item is labelled");
+
+    assert_eq!(
+        repo.rename(ORG_B, "Autumn term", "Term one")
+            .await
+            .expect("the rename runs"),
+        LabelRename::Missing,
+        "org b cannot rename a label it does not have, however org a spells its own"
+    );
+    assert!(
+        !repo
+            .delete(ORG_B, "Autumn term")
+            .await
+            .expect("the delete runs"),
+        "org b cannot delete a label it does not have"
+    );
+    assert_eq!(
+        names(&repo.list(ORG_A).await.expect("org a's vocabulary reads")),
+        vec!["Autumn term"],
+        "org a's label is untouched by either call"
     );
 }

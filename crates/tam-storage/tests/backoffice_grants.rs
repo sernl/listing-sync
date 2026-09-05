@@ -97,6 +97,30 @@ async fn seed_two_tenants(app: &PgPool) -> Result<(), sqlx::Error> {
         .bind(format!("ctm_{name}"))
         .execute(&mut *tx)
         .await?;
+        // One request per tenant, for the reason the subscription above gives:
+        // row-level security filters rows rather than denying the statement, so
+        // an empty table answers zero whether or not the read policy is there.
+        // The author is seeded with it, because `requested_by` references
+        // `app_user`.
+        sqlx::query(
+            "INSERT INTO app_user (id, org_id, email, created_at) \
+             VALUES ($1, $2, $3, now())",
+        )
+        .bind(uuid::Uuid::from_bytes([mark.wrapping_add(0x30); 16]))
+        .bind(org_uuid)
+        .bind(format!("{name}@example.test"))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO marketplace_request \
+             (org_id, id, requested_by, name, url, reason, created_at) \
+             VALUES ($1, $2, $3, 'Somewhere', 'https://somewhere.test', 'why', now())",
+        )
+        .bind(org_uuid)
+        .bind(uuid::Uuid::from_bytes([mark.wrapping_add(0x40); 16]))
+        .bind(uuid::Uuid::from_bytes([mark.wrapping_add(0x30); 16]))
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
     }
     Ok(())
@@ -145,6 +169,25 @@ async fn the_backoffice_role_reads_across_tenants_and_the_app_role_does_not(app:
         "migration 0039's grant and read policy together let this role see \
          both tenants' subscriptions past the fence migration 0038 raised"
     );
+
+    let unpinned_requests: i64 = sqlx::query_scalar("SELECT count(*) FROM marketplace_request")
+        .fetch_one(&app)
+        .await
+        .expect("the application role may run the query");
+    assert_eq!(
+        unpinned_requests, 0,
+        "the application role with no tenant pinned must see no marketplace \
+         request; without this contrast the backoffice count below proves nothing"
+    );
+    let requests: i64 = sqlx::query_scalar("SELECT count(*) FROM marketplace_request")
+        .fetch_one(&backoffice)
+        .await
+        .expect("the backoffice role may read what sellers have asked for");
+    assert_eq!(
+        requests, 2,
+        "migration 0055's grant and read policy together let this role see \
+         both tenants' requests, which is the whole point of the table"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -178,6 +221,17 @@ async fn the_backoffice_role_cannot_write_a_table_it_reads(app: PgPool) {
         "DELETE FROM write_attempt",
         "UPDATE billing_subscription SET status = 'active'",
         "DELETE FROM billing_subscription",
+        // The one table on this list any tenant can append to, which is what
+        // makes a read policy widened to FOR ALL worth catching here: an
+        // operator pool able to write it could rewrite what a seller asked
+        // for, in a table whose whole purpose is to carry a seller's words to
+        // a person.
+        "UPDATE marketplace_request SET name = 'rewritten'",
+        "DELETE FROM marketplace_request",
+        "INSERT INTO marketplace_request \
+             (org_id, id, requested_by, name, url, reason, created_at) \
+         VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'x', \
+             'https://x.test', 'y', now())",
         "INSERT INTO org_halt (org_id, raised_by, reason, raised_at) \
          VALUES (gen_random_uuid(), 'nobody', 'because', now())",
     ] {
@@ -226,6 +280,7 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "organisation",
         "app_user",
         "billing_subscription",
+        "marketplace_request",
     ] {
         let allowed = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)
