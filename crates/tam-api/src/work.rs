@@ -81,12 +81,12 @@ pub(crate) async fn claim(
         DeviceClaim::Empty => {
             return Ok(Json(ClaimView::Idle {
                 next_poll_ms: next_poll_ms(false),
-            }))
+            }));
         }
         DeviceClaim::HeldByAnotherDevice => {
             return Ok(Json(ClaimView::Held {
                 next_poll_ms: next_poll_ms(true),
-            }))
+            }));
         }
         DeviceClaim::Leased(item) => *item,
     };

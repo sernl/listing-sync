@@ -61,7 +61,7 @@ fn sample_product(org: OrgId) -> CanonicalProduct {
             body: "A worked example pack.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             file(
                 0x21,
                 FileRole::Payload,
@@ -76,7 +76,7 @@ fn sample_product(org: OrgId) -> CanonicalProduct {
                 0x51,
                 ScanOutcome::Clean { at: Timestamp(2) },
             )],
-        ),
+        )),
         cover: Some(file(
             0x23,
             FileRole::Cover,
@@ -238,7 +238,7 @@ async fn two_files_sharing_a_hash_share_one_blob(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_product_without_a_payload_cannot_commit(pool: PgPool) {
+async fn a_payload_less_product_commits_alone_and_not_with_a_mapping(pool: PgPool) {
     seed_fixture(&pool).await.expect("fixture rows insert");
 
     let mut tx = pool.begin().await.expect("transaction begins");
@@ -258,11 +258,14 @@ async fn a_product_without_a_payload_cannot_commit(pool: PgPool) {
     .execute(&mut *tx)
     .await
     .expect("the bare row inserts; the deferred trigger has not run yet");
-    let refused = tx.commit().await;
-    assert!(
-        refused.is_err(),
-        "the deferred payload trigger must refuse a payload-less product at commit"
-    );
+    tx.commit()
+        .await
+        .expect("a product no mapping names may carry no payload at all (D32)");
+
+    // The other direction — a mapping onto a product with no payload — is
+    // `mapping_add::a_mapping_onto_a_resource_with_no_file_is_refused_by_the_database`,
+    // which drives it through the repository rather than composing a `mapping`
+    // insert by hand here; the column list is the repository's to know.
 }
 
 #[sqlx::test(migrations = "./migrations")]

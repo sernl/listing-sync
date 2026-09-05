@@ -22,8 +22,9 @@ use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_domain::registry::{
-    registry, AxisBinding, Cardinality, CountCap, Delegation, FieldDirection, FieldSpec,
-    InventoryRegistry, LengthCap, NativeField, NativeVocabulary, NonDelegable,
+    registry, AxisBinding, Cardinality, CountCap, Delegation, FieldDirection, FieldGroup,
+    FieldSpec, FormPlacement, InventoryRegistry, LengthCap, NativeField, NativeVocabulary,
+    NonDelegable,
 };
 use tam_domain::TermKind;
 use tam_types::{CopyFormat, FieldKey, InventoryId, LengthUnit, Marketplace};
@@ -179,6 +180,12 @@ pub struct VocabularyView {
     pub marketplace: Marketplace,
     pub canonical: Vec<CanonicalFieldView>,
     pub natives: Vec<NativeFieldView>,
+    /// The sections of this platform's own authoring form, in the order it
+    /// renders them, so a form built from this payload reads as a form rather
+    /// than as a list of wire names. Empty where no form capture placed any
+    /// of this inventory's fields, which is Etsy: the entries there come from
+    /// a published API reference, which names fields and not screens.
+    pub groups: Vec<FieldGroupView>,
     pub axes: Vec<AxisView>,
     /// Axes this inventory was measured to lack. An axis here is a disclosed
     /// loss the form states up front; an axis merely absent from `axes` is
@@ -222,7 +229,7 @@ pub struct DelegationView {
 }
 
 impl DelegationView {
-    const fn of(delegation: Delegation) -> Self {
+    pub(crate) const fn of(delegation: Delegation) -> Self {
         match delegation {
             Delegation::ByOptIn => Self {
                 kind: DelegationKind::ByOptIn,
@@ -264,9 +271,61 @@ impl NativeValueView {
     }
 }
 
+/// One section of a platform's own authoring form: the key `placement.group`
+/// carries, and the words to head it with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldGroupView {
+    pub token: String,
+    pub heading: String,
+}
+
+impl FieldGroupView {
+    fn of(group: FieldGroup) -> Self {
+        Self {
+            token: group.token().to_owned(),
+            heading: group.heading().to_owned(),
+        }
+    }
+}
+
+/// Where a field sits on the platform's own form: which section holds it, and
+/// where in that section it goes.
+///
+/// Absent where no capture placed the field, which is not the same as
+/// unplaceable: a read-only field the form has no control for, an item type
+/// chosen before the form, and an opaque upload handle all carry none, and a
+/// form renders no control for any of them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlacementView {
+    /// The `token` of one entry in the payload's own `groups`.
+    pub group: String,
+    /// Position within that group. Orders fields inside one section and
+    /// nothing across sections; `groups` is the order of the sections.
+    pub ordinal: u8,
+}
+
+impl PlacementView {
+    fn of(placement: FormPlacement) -> Self {
+        Self {
+            group: placement.group.token().to_owned(),
+            ordinal: placement.ordinal,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeFieldView {
     pub name: String,
+    /// The words to head this control with: the platform's own, where a
+    /// capture recorded them, and the wire name itself where none did.
+    ///
+    /// Always present, so a form never has to decide what to show. The
+    /// fallback is the same one [`NativeValueView`] already makes for a
+    /// value: a name nobody captured stands in for itself rather than
+    /// becoming a reading invented here.
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<PlacementView>,
     pub direction: DirectionView,
     pub required: bool,
     pub vocabulary: VocabularyKind,
@@ -281,6 +340,8 @@ impl NativeFieldView {
     fn of(inventory: InventoryId, native: NativeField) -> Self {
         Self {
             name: native.name.to_owned(),
+            label: native.label.unwrap_or(native.name).to_owned(),
+            placement: native.placement.map(PlacementView::of),
             direction: DirectionView::of(native.direction),
             required: native.required,
             vocabulary: VocabularyKind::of(native.vocabulary),
@@ -486,6 +547,7 @@ pub fn view(inventory: InventoryId) -> VocabularyView {
             .copied()
             .map(|native| NativeFieldView::of(inventory, native))
             .collect(),
+        groups: entry.groups().into_iter().map(FieldGroupView::of).collect(),
         axes: entry
             .equivalence_axes
             .iter()
@@ -497,9 +559,11 @@ pub fn view(inventory: InventoryId) -> VocabularyView {
     }
 }
 
-/// The wire spelling of an inventory in a path segment: the same token the
-/// JSON bodies carry, so a client holds one vocabulary rather than two.
-fn parse_inventory(raw: &str) -> Option<InventoryId> {
+/// The wire spelling of an inventory in a path segment or a query value:
+/// the same token the JSON bodies carry, so a client holds one vocabulary
+/// rather than two, and every route that names an inventory spells it the
+/// same way.
+pub(crate) fn parse_inventory(raw: &str) -> Option<InventoryId> {
     InventoryId::ALL
         .into_iter()
         .find(|inventory| serde_json::to_value(inventory).ok() == Some(raw.into()))
@@ -527,6 +591,7 @@ mod tests {
         parse_inventory, view, BodyWire, CardinalityKind, DelegationKind, NativeValueView,
         NonDelegableReason, PayloadFileRule, VocabularyKind,
     };
+    use tam_domain::registry::{registry, FieldDirection};
     use tam_domain::TermKind;
     use tam_types::InventoryId;
 
@@ -770,5 +835,158 @@ mod tests {
             None,
             "a spelling this server never issues is not accepted"
         );
+    }
+
+    /// A control headed `mainType` is not a form a teacher can fill in, so
+    /// every field reaches the client with words. The fallback is the wire
+    /// name and never a reading invented on the way out, which is the same
+    /// rule a value with no captured label follows.
+    #[test]
+    fn every_native_reaches_the_form_with_words_to_head_it_with() {
+        for inventory in InventoryId::ALL {
+            let rendered = view(inventory);
+            let entry = registry(inventory);
+            for field in &rendered.natives {
+                assert!(
+                    !field.label.is_empty(),
+                    "{inventory:?}'s {} is rendered with a heading, so it must have one",
+                    field.name
+                );
+                let Some(native) = entry.native(&field.name) else {
+                    panic!("{} is served from its own registry entry", field.name);
+                };
+                assert_eq!(
+                    field.label,
+                    native.label.unwrap_or(native.name),
+                    "{} either shows the capture's own words or its own wire name",
+                    field.name
+                );
+            }
+        }
+    }
+
+    /// The Tes form renders as Tes's uploader, not as TPT's create page. The
+    /// headings and their order are the wizard's own, and the licence — the
+    /// one field anywhere in the registry that a create is refused without —
+    /// lands in the step named for it.
+    #[test]
+    fn the_tes_form_renders_as_the_uploaders_own_five_steps() {
+        let rendered = view(InventoryId::TesGb);
+        let headings: Vec<(&str, &str)> = rendered
+            .groups
+            .iter()
+            .map(|group| (group.token.as_str(), group.heading.as_str()))
+            .collect();
+        assert_eq!(
+            headings.as_slice(),
+            [
+                ("tes_description", "Description"),
+                ("tes_files", "Add Files"),
+                ("tes_categories", "Categories"),
+                ("tes_licence", "Licence"),
+            ]
+            .as_slice(),
+            "the four steps that hold a native field, in the order the wizard walks them; \
+             Publish holds none"
+        );
+        let licence = native(&rendered, "licence");
+        assert_eq!(
+            (
+                licence.label.as_str(),
+                licence
+                    .placement
+                    .as_ref()
+                    .map(|placement| placement.group.as_str())
+            ),
+            ("Licence", Some("tes_licence")),
+            "the required field is headed and placed, so a form can ask for it"
+        );
+    }
+
+    /// The Tes payload has to be enough to render a Tes create on its own:
+    /// every field the adapter puts on the wire arrives with words to head it,
+    /// a vocabulary kind the control branches on, and a section to sit in.
+    /// This is the property that makes the form a rendering decision over data
+    /// the client already holds rather than a second registry in TypeScript.
+    #[test]
+    fn the_tes_payload_is_enough_to_render_a_tes_create() {
+        let rendered = view(InventoryId::TesGb);
+        let entry = registry(InventoryId::TesGb);
+        let written: Vec<&str> = entry
+            .natives
+            .iter()
+            .filter(|native| {
+                matches!(
+                    native.direction,
+                    FieldDirection::Written | FieldDirection::Both
+                )
+            })
+            .map(|native| native.name)
+            .collect();
+        assert_eq!(
+            written.len(),
+            8,
+            "the licence, both age fields, the type, the ages pointer, the description \
+             format, and the two category fields"
+        );
+        for name in written {
+            let field = native(&rendered, name);
+            assert!(
+                !field.label.is_empty() && field.placement.is_some(),
+                "{name} crosses onto the wire, so the form has to be able to head it and \
+                 place it"
+            );
+            assert!(
+                VocabularyKind::ALL.contains(&field.vocabulary),
+                "{name} states what is known about its values, so the control knows \
+                 whether to be a select or a disclosure"
+            );
+        }
+    }
+
+    /// Etsy's entries come from a published API reference, which names wire
+    /// fields and neither the words a seller reads nor the screen that holds
+    /// them. So it places nothing and labels nothing, and the form shows the
+    /// wire names rather than a reading nobody captured.
+    #[test]
+    fn etsy_places_no_field_because_no_form_of_its_own_was_captured() {
+        let rendered = view(InventoryId::Etsy);
+        assert!(
+            rendered.groups.is_empty(),
+            "no Etsy form has been captured, so there is no section to render"
+        );
+        for field in &rendered.natives {
+            assert_eq!(
+                (field.label.as_str(), field.placement.is_none()),
+                (field.name.as_str(), true),
+                "{} stands in for itself until a capture says otherwise",
+                field.name
+            );
+        }
+    }
+
+    /// Every placed field names a section the same payload lists, so a client
+    /// can group by `placement.group` with no second table and no orphans.
+    #[test]
+    fn every_placement_names_a_group_the_same_payload_carries() {
+        for inventory in InventoryId::ALL {
+            let rendered = view(inventory);
+            let tokens: Vec<&str> = rendered
+                .groups
+                .iter()
+                .map(|group| group.token.as_str())
+                .collect();
+            for field in &rendered.natives {
+                let Some(placement) = field.placement.as_ref() else {
+                    continue;
+                };
+                assert!(
+                    tokens.contains(&placement.group.as_str()),
+                    "{inventory:?} puts {} in {}, which its own group list omits",
+                    field.name,
+                    placement.group
+                );
+            }
+        }
     }
 }

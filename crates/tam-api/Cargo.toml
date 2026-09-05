@@ -9,6 +9,12 @@ pg-tests = []
 
 [dependencies]
 axum = "0.8"
+# The spreadsheet import's reader and writer. Here rather than in
+# `tam-import`, which is the marketplace catalogue import and is feature-gated
+# so that this crate can take its library half without acquiring a marketplace
+# adapter; a spreadsheet parser behind that gate would push both crates through
+# it for no reason. Both are read and written only by `import_batch`.
+calamine = { workspace = true }
 futures-util = { version = "0.3", default-features = false }
 hmac = { workspace = true }
 jsonwebtoken = { version = "9.3", default-features = false }
@@ -19,6 +25,14 @@ jsonwebtoken = { version = "9.3", default-features = false }
 # -i ring` already reaches it through `jsonwebtoken` and through `rustls` under
 # `sqlx`, so this edge adds no package to the graph and no code to the binary.
 ring = { version = "0.17", features = ["std"] }
+rust_xlsxwriter = { workspace = true }
+# Renamed, and the rename is the point rather than a preference: this crate
+# already carries `zip 2` as a dev-dependency for the archive-upload tests, and
+# with both in scope the lib test target has two candidates for the name and
+# refuses to link. The alias goes away when that dev-dependency does. The
+# version is `calamine`'s own, so the archive bounded in `import_batch::parse`
+# is parsed by the same reader that will decompress it.
+zip8 = { package = "zip", version = "8.6", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = { workspace = true }
@@ -46,7 +60,11 @@ tam-standards = { path = "../tam-standards" }
 tam-storage = { path = "../tam-storage" }
 tam-taxonomy = { path = "../tam-taxonomy" }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["time", "net", "io-util", "sync"] }
+# `rt` is named rather than inherited: `import_batch` puts the spreadsheet
+# parse on `spawn_blocking`, which lives behind that feature. It resolves today
+# through axum's own edge, and a dependency whose compilation relies on another
+# crate's feature selection is one that breaks when that crate changes its mind.
+tokio = { version = "1", features = ["time", "net", "io-util", "sync", "rt"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

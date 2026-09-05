@@ -18,6 +18,7 @@ mod codec;
 pub mod connections;
 pub mod device;
 pub mod file_source;
+pub mod import_batches;
 pub mod job_reads;
 pub mod jobs;
 pub mod labels;
@@ -38,7 +39,7 @@ pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{
     BackofficeRepo, DailyCount, FailedWrite, HaltRecord, IdentityAuditRepo, ImpersonationEvent,
-    OrgDetail, OrgSummary, SignupsRepo, SubscriptionRecord, SyncHealth,
+    ImportDrainRun, OrgDetail, OrgSummary, SignupsRepo, SubscriptionRecord, SyncHealth,
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
@@ -53,6 +54,11 @@ pub use device::{
     DeviceSessionReport, DeviceSessionStatus,
 };
 pub use file_source::ProductFileSourceRepo;
+pub use import_batches::{
+    BatchState, BatchWrite, ImportBatchDraftRecord, ImportBatchRecord, ImportBatchRepo,
+    ImportBatchRowRecord, NewImportBatch, NewImportBatchRow, RowFile, RowIntent, RowState,
+    SweepReport, BATCHES_LISTED_MAX,
+};
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
     JobListRow, JobReadRepo, JobSnapshot, LedgerCursor, MappingSeed,
@@ -81,10 +87,12 @@ pub use marketplace_requests::{
     REQUESTS_PER_ORG_MAX,
 };
 pub use operators::{OperatorRecord, OperatorRepo};
-pub use org::{OrgRecord, OrgRepo};
+pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    ExportedListing, ExportedResource, ProductEdit, ProductRecord, ProductRepo, ProductSummary,
+    ExportedListing, ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget,
+    ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary, ReplacedFiles,
+    StoredCover, ThumbnailChange,
 };
 pub use pruning::{PruneRepo, PruneReport};
 pub use resource_templates::{

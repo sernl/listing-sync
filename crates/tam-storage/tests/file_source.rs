@@ -93,7 +93,7 @@ fn sourced_product(device: &str, hash: ContentHash) -> CanonicalProduct {
             body: "Imported from the seller's Tes catalogue.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FILE,
                 role: FileRole::Payload,
@@ -109,7 +109,7 @@ fn sourced_product(device: &str, hash: ContentHash) -> CanonicalProduct {
                 },
             },
             vec![],
-        ),
+        )),
         cover: None,
         previews: vec![],
         subjects: vec![],

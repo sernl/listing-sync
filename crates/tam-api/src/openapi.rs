@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 73] = [
+pub const ROUTES: [Route; 87] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -57,7 +57,12 @@ pub const ROUTES: [Route; 73] = [
     Route {
         method: "patch",
         path: "/{version}/org",
-        summary: "Rename the calling organisation",
+        summary: "Rename the calling organisation, claim its slug, or both",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/org/slug/{slug}",
+        summary: "Whether a slug is free, advisory; the write's 409 is authoritative",
     },
     Route {
         method: "get",
@@ -161,6 +166,11 @@ pub const ROUTES: [Route; 73] = [
     },
     Route {
         method: "get",
+        path: "/{version}/uploads/{handle}",
+        summary: "One sealed image of this organisation's, by the handle an upload returned",
+    },
+    Route {
+        method: "get",
         path: "/{version}/products",
         summary: "Page the catalogue by opaque keyset cursor",
     },
@@ -173,6 +183,31 @@ pub const ROUTES: [Route; 73] = [
         method: "get",
         path: "/{version}/products/export",
         summary: "The whole catalogue as CSV, with its per-marketplace state",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/imports/template",
+        summary: "The import workbook, generated from the registry",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/imports",
+        summary: "Parse and hold a filled workbook; creates nothing",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/imports",
+        summary: "This organisation's spreadsheet imports, newest first",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/imports/{batch}",
+        summary: "One import with its row-by-row report and its warnings",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/imports/{batch}",
+        summary: "Abandon an open import, releasing its hold on the next one",
     },
     Route {
         method: "get",
@@ -193,6 +228,26 @@ pub const ROUTES: [Route; 73] = [
         method: "post",
         path: "/{version}/products/{product}/mappings",
         summary: "Add a marketplace to an existing product, as one unbound mapping",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/products/{product}/files",
+        summary: "Add one file to an existing product, naming a handle the upload returned",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/products/{product}/files/{file}",
+        summary: "Swap one file's bytes, keeping its role and redrawing the thumbnail here",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/products/{product}/files/{file}",
+        summary: "Retire one file, refusing the removal that would leave no payload",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/products/{product}/cover",
+        summary: "The bytes of one resource's cover, for a browser to draw",
     },
     Route {
         method: "get",
@@ -351,6 +406,16 @@ pub const ROUTES: [Route; 73] = [
     },
     Route {
         method: "get",
+        path: "/{version}/elections/delegation",
+        summary: "Which axes of which marketplaces the seller has handed to best fit",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/elections/delegation",
+        summary: "Tick or untick best fit for one marketplace, as durable revocable rules",
+    },
+    Route {
+        method: "get",
         path: "/{version}/admin/signups",
         summary: "Operator: signups per day from the identity and app planes",
     },
@@ -373,6 +438,11 @@ pub const ROUTES: [Route; 73] = [
         method: "get",
         path: "/{version}/admin/failed-writes",
         summary: "Operator: write attempts that failed or are stranded in flight",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/import-drain",
+        summary: "Operator: the import-drain measurement series per tenant",
     },
     Route {
         method: "get",
@@ -449,16 +519,36 @@ mod tests {
             .get("paths")
             .and_then(|paths| paths.as_object())
             .map(serde_json::Map::len);
-        // /v1/jobs, /v1/session, /v1/org, /v1/devices,
-        // /v1/devices/{device}/reads, /v1/products/{product}/labels,
-        // /v1/labels/{name} and /v1/templates each carry two operations,
-        // /v1/products carries two, and /v1/products/{product},
-        // /v1/mappings/overrides and /v1/templates/{template} each carry
-        // three, so distinct paths are fifteen fewer than the operations in
-        // the table.
+        // Derived from the table rather than restated as a number. A path
+        // carrying several methods is one entry in the document and several
+        // rows in the table -- `/{version}/products` takes a get and a post,
+        // `/{version}/mappings/overrides` three -- so the two counts differ by
+        // however many methods share a path. That is a fact of the table, and
+        // a hand-maintained offset beside it is a second copy of it that every
+        // route addition has to remember to update.
+        let mut distinct: Vec<&str> = ROUTES.iter().map(|route| route.path).collect();
+        distinct.sort_unstable();
+        distinct.dedup();
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 15),
+            Some(distinct.len()),
+            "every path the table names reaches the document"
+        );
+
+        // The half a count cannot see on its own: two rows with the same
+        // method on the same path collapse into one document entry, and the
+        // assertion above would still agree with itself while an operation
+        // had silently vanished.
+        let declared = ROUTES.len();
+        let mut operations: Vec<(&str, &str)> = ROUTES
+            .iter()
+            .map(|route| (route.path, route.method))
+            .collect();
+        operations.sort_unstable();
+        operations.dedup();
+        assert_eq!(
+            operations.len(),
+            declared,
             "each operation lands in the document exactly once"
         );
     }

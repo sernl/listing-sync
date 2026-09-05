@@ -53,6 +53,7 @@ pub mod scheduler;
 pub mod session;
 pub mod startup;
 pub mod state;
+#[cfg(desktop)]
 pub mod updater;
 pub mod webview_session;
 pub mod work;
@@ -114,8 +115,6 @@ pub fn run() {
     // build where this line is compiled out.
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
-    #[cfg(target_os = "android")]
-    let builder = builder.plugin(session_key_bridge());
     let built = builder
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
@@ -131,11 +130,12 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             let store = Arc::new(KeychainSessionStore::new());
             // The key source is filed in managed state by the plugin below,
-            // and plugins are initialised before this closure runs, so it is
-            // always there by now (tauri 2.11.5, `src/app.rs:2440` and
-            // `:2531`). Its absence would be a build-order fault rather than
-            // a runtime condition, so it fails start-up loudly through
-            // `startup` rather than degrading to a store that forgets.
+            // which is registered after `build` returns and before `run` is
+            // called, while this closure runs from inside `run` on the `Ready`
+            // event (tauri 2.11.5, `src/app.rs:1424`). So it is always there by
+            // now. Its absence would be a build-order fault rather than a
+            // runtime condition, so it fails start-up loudly through `startup`
+            // rather than degrading to a store that forgets.
             #[cfg(target_os = "android")]
             let store = Arc::new(EncryptedSessionStore::in_data_dir(
                 &data_dir,
@@ -252,6 +252,19 @@ pub fn run() {
     match app.path().app_data_dir() {
         Ok(data_dir) => startup::opening(&data_dir),
         Err(why) => startup::fatal(&why),
+    }
+    // Registered here rather than on the builder, and the placement is the
+    // whole point: a plugin added to the builder is initialised inside `build`
+    // (tauri 2.11.5, `src/app.rs:2440`), which is before `opening` has resolved
+    // the data directory, so a failure there reports to a stderr the Windows
+    // release build discards and to no file at all. Moving it after `opening`
+    // puts the one initialisation that talks to the Android Keystore inside the
+    // region that has a log. `AppHandle::plugin` initialises immediately
+    // (`src/app.rs:527`), so the key source is still managed before `setup`
+    // reads it on the `Ready` event.
+    #[cfg(target_os = "android")]
+    if let Err(why) = app.handle().plugin(session_key_bridge()) {
+        startup::fatal(&why);
     }
     // Two callbacks rather than one with a platform-dead branch: the desktop
     // build has nothing to do with the event, and naming a binding it never

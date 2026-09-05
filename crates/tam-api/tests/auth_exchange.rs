@@ -20,6 +20,7 @@ use http_body_util::BodyExt;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use sqlx::PgPool;
 use tam_api::auth::JWKS_REFETCH_COOLDOWN_MS;
+use tam_api::org::SlugPrompt;
 use tam_api::{
     router, APIError, APIErrorCode, AppState, AuthBridge, Config, JwkSet, JwksFuture, JwksSource,
     JwksUnavailable, Whoami, AUDIENCE, SESSION_COOKIE,
@@ -314,6 +315,63 @@ async fn a_first_assertion_provisions_a_tenant_and_mints_a_session(pool: PgPool)
         response.status(),
         StatusCode::OK,
         "the exchanged cookie authenticates like any other session"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_provisioned_tenant_carries_no_slug_and_the_gate_is_answered_here(pool: PgPool) {
+    let key = test_key();
+    let fetches = Arc::new(AtomicUsize::new(0));
+    let subject = uuid::Uuid::new_v4();
+    let token = assertion(&key.encoding, KID, &good_claims(subject));
+
+    let first = post_session(state(pool.clone(), Some(bridge(&key, &fetches))), &token).await;
+    assert_eq!(first.status, StatusCode::OK, "the first login provisions");
+    let identity: Whoami =
+        serde_json::from_slice(&first.body).expect("the exchange echoes the identity");
+    assert_eq!(
+        identity.slug, None,
+        "self-serve signup names the organisation `org-{{uuid}}` and claims no slug: a \
+         derived one would burn a handle the seller may want"
+    );
+    assert_eq!(
+        identity.slug_prompt,
+        SlugPrompt::Claim,
+        "an organisation created since the slug existed meets the gate, not the banner"
+    );
+
+    // The console's route load calls `/v1/whoami` before it renders anything,
+    // so the gate is answered by the same fields on the same shape. If it were
+    // answered anywhere later the seller would see the console flash before
+    // being sent away from it.
+    let request = Request::builder()
+        .uri("/v1/whoami")
+        .header(
+            header::COOKIE,
+            first
+                .set_cookie
+                .as_deref()
+                .and_then(|cookie| cookie.split(';').next())
+                .expect("the exchange set the session cookie"),
+        )
+        .body(Body::empty())
+        .expect("the probe builds");
+    let response = router(state(pool.clone(), None))
+        .oneshot(request)
+        .await
+        .expect("the router serves");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes();
+    let who: Whoami = serde_json::from_slice(&body).expect("whoami parses");
+    assert_eq!(
+        (who.slug, who.slug_prompt),
+        (None, SlugPrompt::Claim),
+        "whoami carries the same answer the exchange gave, so one gate serves both entries"
     );
 }
 

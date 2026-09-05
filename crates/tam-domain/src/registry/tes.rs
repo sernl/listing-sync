@@ -1,10 +1,21 @@
 //! The three Tes inventories: one account against one JSON API reached
 //! through the curriculum field (probe 04), so they share both axes and
 //! differ only in the key and in which age vocabulary the country selects.
+//!
+//! The `placement` on each field below is the uploader's five-step wizard,
+//! and two sources fix it. `docs/notes/probes/02-upload-request-shape.md`
+//! names the steps — Description, Add Files, Categories, Licence, Publish —
+//! and Tes's own author academy, quoted at
+//! `docs/research/rethink/cross-marketplace-mapping-tpt-base.md:39`, says what
+//! each holds: "title and description, file upload and resource type, tag and
+//! categorise, price or licence, preview and agree to the Author Code". The
+//! ordinal within a step is this file's own ordering and not a measurement;
+//! `ageRanges` and `yearGroups` share one because the country picks one of
+//! them and never both.
 
 use super::{
-    AxisBinding, CanonicalFields, Cardinality, Delegation, FieldDirection, InventoryRegistry,
-    NativeField, NativeVocabulary, NonDelegable,
+    AxisBinding, CanonicalFields, Cardinality, Delegation, FieldDirection, FieldGroup,
+    FormPlacement, InventoryRegistry, NativeField, NativeVocabulary, NonDelegable, TesStep,
 };
 use crate::TermKind;
 use tam_types::InventoryId;
@@ -46,6 +57,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // read back by the first-party import.
     NativeField {
         name: "licence",
+        label: Some("Licence"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Licence),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Both,
         required: true,
         vocabulary: NativeVocabulary::Closed(&[
@@ -79,6 +95,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // docs/design/data/tes-vocabulary.json rather than held here.
     NativeField {
         name: "curriculum",
+        label: Some("Curriculum"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Categories),
+            ordinal: 0,
+        }),
         direction: FieldDirection::ReadOnly,
         required: false,
         vocabulary: NativeVocabulary::Closed(&[
@@ -105,6 +126,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // docs/design/data/tes-vocabulary.json.
     NativeField {
         name: "mainType",
+        label: Some("Resource type"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Files),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Closed(&[
@@ -119,6 +145,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // on the other branch. No single closed set is on file.
     NativeField {
         name: "mainAge",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Categories),
+            ordinal: 2,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Numeric,
@@ -136,6 +167,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // back off the resource state, so it crosses in both directions.
     NativeField {
         name: "yearGroups",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Categories),
+            ordinal: 1,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Closed(&[
@@ -148,6 +184,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // else is uncaptured, and one written value is not evidence of a set.
     NativeField {
         name: "descriptionRawType",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Description),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,
@@ -163,6 +204,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // request and read back off the resource state.
     NativeField {
         name: "ageRanges",
+        label: Some("Main age range"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Categories),
+            ordinal: 1,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Closed(&["1", "2", "3", "4", "5", "6", "7"]),
@@ -179,6 +225,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // founder-supervised capture measures the refusal.
     NativeField {
         name: "categories",
+        label: Some("Subjects and topics"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Categories),
+            ordinal: 3,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Numeric,
@@ -190,6 +241,11 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
     // and Phase 4 turns it into an election with that value pre-selected.
     NativeField {
         name: "primaryCategory",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tes(TesStep::Categories),
+            ordinal: 4,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Numeric,

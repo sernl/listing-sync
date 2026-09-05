@@ -195,6 +195,10 @@ impl IdentityAuditRepo {
 pub struct OrgSummary {
     pub org: OrgId,
     pub name: String,
+    /// The handle the tenant claimed, or `None` while they have claimed none.
+    /// What lets an operator find a tenant from a slug quoted in a support
+    /// email, which the provisional `org-{uuid}` name never allowed.
+    pub slug: Option<String>,
     pub created_at: Timestamp,
     pub products: i64,
     pub mappings: i64,
@@ -266,6 +270,20 @@ pub struct FailedWrite {
     pub item_failure_detail: Option<String>,
 }
 
+/// One import-drain measurement, with the tenant that recorded it.
+///
+/// `payload` travels as it was written. It is `jsonb` at rest and nothing
+/// constrains its shape there, so parsing it here would turn one malformed
+/// historical row into a failed read of the whole series; the client narrows
+/// it instead and drops the row it cannot read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportDrainRun {
+    pub org: OrgId,
+    pub org_name: String,
+    pub org_seq: i64,
+    pub payload: serde_json::Value,
+}
+
 pub struct BackofficeRepo {
     pool: PgPool,
 }
@@ -285,7 +303,7 @@ impl BackofficeRepo {
     /// anything new.
     pub async fn orgs(&self) -> Result<Vec<OrgSummary>, StorageError> {
         let rows = sqlx::query!(
-            "SELECT o.id, o.name, o.created_at, \
+            "SELECT o.id, o.name, o.slug, o.created_at, \
                     (SELECT count(*) FROM product p \
                       WHERE p.org_id = o.id AND p.deleted_at IS NULL) AS \"products!\", \
                     (SELECT count(*) FROM mapping m WHERE m.org_id = o.id) AS \"mappings!\", \
@@ -301,6 +319,7 @@ impl BackofficeRepo {
             .map(|row| OrgSummary {
                 org: OrgId(uuid_from_db(row.id)),
                 name: row.name,
+                slug: row.slug,
                 created_at: timestamp_from_db(row.created_at),
                 products: row.products,
                 mappings: row.mappings,
@@ -314,7 +333,7 @@ impl BackofficeRepo {
     /// derived status the seller's own page renders, and its halts.
     pub async fn org(&self, org: OrgId, now: Timestamp) -> Result<Option<OrgDetail>, StorageError> {
         let Some(head) = sqlx::query!(
-            "SELECT o.id, o.name, o.created_at, \
+            "SELECT o.id, o.name, o.slug, o.created_at, \
                     (SELECT count(*) FROM product p \
                       WHERE p.org_id = o.id AND p.deleted_at IS NULL) AS \"products!\", \
                     (SELECT count(*) FROM mapping m WHERE m.org_id = o.id) AS \"mappings!\", \
@@ -417,6 +436,7 @@ impl BackofficeRepo {
             summary: OrgSummary {
                 org: OrgId(uuid_from_db(head.id)),
                 name: head.name,
+                slug: head.slug,
                 created_at: timestamp_from_db(head.created_at),
                 products: head.products,
                 mappings: head.mappings,
@@ -517,5 +537,37 @@ impl BackofficeRepo {
                 })
             })
             .collect()
+    }
+
+    /// Every tenant's import-drain series, ordered so the client can group it
+    /// without re-sorting: by organisation name, then by ledger position.
+    ///
+    /// Ordering by `org_seq` within a tenant is not cosmetic. The kill gate
+    /// compares a tenant's first migration against its tenth, so the position
+    /// of a row in its own tenant's series is the whole meaning of "first";
+    /// a global ordering would interleave tenants and make that meaningless.
+    pub async fn import_drain(&self, limit: i64) -> Result<Vec<ImportDrainRun>, StorageError> {
+        let rows = sqlx::query!(
+            // The `!` assertions are needed because the columns come through a
+            // view, and sqlx cannot carry NOT NULL inference across one. Every
+            // one of them is NOT NULL on `job_event` itself (migration 0005).
+            "SELECT d.org_id AS \"org_id!\", d.org_seq AS \"org_seq!\", \
+                    d.payload AS \"payload!\", o.name AS \"org_name!\" \
+             FROM import_drain_measurement d \
+             JOIN organisation o ON o.id = d.org_id \
+             ORDER BY o.name, d.org_seq LIMIT $1",
+            limit.clamp(1, MAX_ROWS),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ImportDrainRun {
+                org: OrgId(uuid_from_db(row.org_id)),
+                org_name: row.org_name,
+                org_seq: row.org_seq,
+                payload: row.payload,
+            })
+            .collect())
     }
 }

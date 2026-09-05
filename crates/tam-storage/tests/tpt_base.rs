@@ -57,7 +57,7 @@ fn sample(org: OrgId, id: ProductId) -> CanonicalProduct {
             body: "about it".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([0x31; 16])),
                 role: FileRole::Payload,
@@ -69,7 +69,7 @@ fn sample(org: OrgId, id: ProductId) -> CanonicalProduct {
                 },
             },
             vec![],
-        ),
+        )),
         cover: None,
         previews: vec![],
         subjects: vec![],

@@ -87,7 +87,7 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
             body: "Fixture".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([seed.wrapping_add(3); 16])),
                 role: FileRole::Payload,
@@ -99,7 +99,7 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
                 },
             },
             vec![],
-        ),
+        )),
         cover: None,
         previews: vec![],
         subjects: Vec::<CanonicalTermId>::new(),

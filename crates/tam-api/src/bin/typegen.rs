@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
+use tam_api::org::SlugPrompt;
 use tam_api::product::StandardsState;
 use tam_api::quota::QuotaKind;
 use tam_api::resources::{kind_str, role_str};
@@ -40,6 +41,8 @@ fn main() {
     out.push_str(&union("APIErrorCode", &APIErrorCode::ALL, serde_name));
     out.push('\n');
     out.push_str(&union("APIErrorKind", &APIErrorKind::ALL, serde_name));
+    out.push('\n');
+    out.push_str(&union("SlugPrompt", &SlugPrompt::ALL, serde_name));
     out.push('\n');
     out.push_str(&union("InventoryId", &InventoryId::ALL, serde_name));
     out.push('\n');

@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 40] = [
+const TENANT_TABLES: [&str; 42] = [
     "billing_subscription",
     "binding_candidate",
     "blob",
@@ -25,6 +25,8 @@ const TENANT_TABLES: [&str; 40] = [
     "field_mismatch",
     "grade_declaration",
     "grade_declaration_path",
+    "import_batch",
+    "import_batch_row",
     "job",
     "job_event",
     "job_item",
@@ -77,6 +79,59 @@ const GLOBAL_TABLES: [&str; 11] = [
     "standards_node",
     "user_session",
 ];
+
+/// How far the operator role reads past the tenant pin, table by table.
+///
+/// A closed world for the same reason the classification above is one: a
+/// backoffice policy added without a line here would widen that role's reach
+/// silently, and the reach of the one role that reads every tenant is the last
+/// thing that should move without a reviewer seeing it.
+///
+/// Every entry is `true` -- the whole table -- except `job_event`. Migration
+/// 0060 opens exactly the rows recording an import-drain measurement, because
+/// the operator console draws that series and has no business with the rest of
+/// a tenant's ledger. That asymmetry is the point of listing quals here rather
+/// than table names.
+const BACKOFFICE_READABLE: [(&str, &str); 11] = [
+    ("billing_subscription", "true"),
+    ("connection", "true"),
+    ("job", "true"),
+    ("job_event", "(kind = 'ImportDrainMeasured'::text)"),
+    ("job_item", "true"),
+    ("mapping", "true"),
+    ("marketplace_request", "true"),
+    ("org_halt", "true"),
+    ("org_inventory_halt", "true"),
+    ("product", "true"),
+    ("write_attempt", "true"),
+];
+
+/// The operator role's reach, asserted as a set rather than a sample.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_backoffice_role_reads_exactly_what_is_declared(pool: PgPool) {
+    let observed: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT tablename, qual FROM pg_policies \
+         WHERE schemaname = 'public' AND 'tam_backoffice' = ANY(roles) \
+         ORDER BY tablename",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("the policy query runs");
+
+    let observed: Vec<(String, String)> = observed
+        .into_iter()
+        .map(|(table, qual)| (table, qual.unwrap_or_default()))
+        .collect();
+    let declared: Vec<(String, String)> = BACKOFFICE_READABLE
+        .iter()
+        .map(|(table, qual)| ((*table).to_owned(), (*qual).to_owned()))
+        .collect();
+    assert_eq!(
+        observed, declared,
+        "the operator role's cross-tenant reach changed; a policy added, \
+         removed or widened here needs a line in BACKOFFICE_READABLE"
+    );
+}
 
 #[sqlx::test(migrations = "./migrations")]
 async fn every_table_is_classified_and_every_tenant_table_is_fenced(pool: PgPool) {

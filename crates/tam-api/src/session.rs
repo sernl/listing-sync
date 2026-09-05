@@ -329,9 +329,16 @@ pub(crate) async fn exchange(
         reason = "milliseconds to whole cookie seconds; truncation only shortens the cookie's life toward safety"
     )]
     let max_age = settled.expires_at.0.saturating_sub(now.0) / 1_000;
+    // A fresh signup reaches here having just had its organisation created,
+    // so this is the first answer that can tell the console whether the claim
+    // screen stands before it. Reading it here rather than leaving the client
+    // to a second call is what keeps the gate from flashing the console first.
+    let (slug, slug_prompt) = crate::org::slug_state(&state, settled.org).await?;
     let body = crate::Whoami {
         org: settled.org,
         user: settled.user,
+        slug,
+        slug_prompt,
     };
     Ok((
         [(

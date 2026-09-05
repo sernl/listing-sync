@@ -109,7 +109,22 @@
       "centers"
     ]
   },
-  "no_payload": {
+  "no_payload_for_marketplace": {
+    "copyright_declaration_id": 1,
+    "free": true,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ],
+    "for_marketplace": true
+  },
+  "no_payload_kept_here": {
     "copyright_declaration_id": 1,
     "free": true,
     "grades": [

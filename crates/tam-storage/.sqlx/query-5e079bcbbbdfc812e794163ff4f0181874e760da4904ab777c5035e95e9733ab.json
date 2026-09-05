@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pf.product_id, pf.hash FROM product_file pf JOIN product p ON p.org_id = pf.org_id AND p.id = pf.product_id WHERE pf.org_id = $1 AND pf.product_id = ANY($2::uuid[]) AND pf.role = 'cover' AND pf.deleted_at IS NULL AND pf.hash IS NOT NULL AND p.deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "hash",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "5e079bcbbbdfc812e794163ff4f0181874e760da4904ab777c5035e95e9733ab"
+}

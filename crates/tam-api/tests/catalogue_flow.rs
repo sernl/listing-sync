@@ -14,8 +14,11 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use sqlx::PgPool;
-use tam_api::catalogue::{CreatedProductView, DeletedProductView, UploadedView};
-use tam_api::resources::ProductView;
+use tam_api::catalogue::{
+    AddedFileView, CreatedProductView, DeletedProductView, RemovedFileView, ReplacedFileView,
+    ThumbnailView, UploadedView,
+};
+use tam_api::resources::{FileView, ProductView, ProductsPage};
 use tam_api::taxonomy::TermsView;
 use tam_api::vocabulary::VocabularyView;
 use tam_api::{router, APIError, APIErrorCode, AppState, BlobStore, Config, SESSION_COOKIE};
@@ -23,7 +26,11 @@ use tam_domain::product::{AnswerKey, TaxCode};
 use tam_storage::{
     ElectionRepo, MappingRepo, ProductRepo, SessionRepo, SessionToken, TaxonomyRepo, TptBaseRepo,
 };
-use tam_types::{CanonicalTermId, InventoryId, OrgId, ProductId, Timestamp, UserId, Uuid};
+use tam_types::{
+    CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId,
+    ListingCopy, OrgId, PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp,
+    Title, UserId, Uuid,
+};
 use tower::ServiceExt;
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -290,6 +297,243 @@ fn tpt_base() -> serde_json::Value {
         "copyright_declaration_id": 1,
         "status_user": 0
     })
+}
+
+/// A thumbnail hash naming bytes nobody uploaded is refused.
+///
+/// The sidecar's `thumbnail_hashes` travel as bare digests rather than as
+/// `FileHandle`s, so they missed the create's own held-bytes check and reached
+/// `product_tpt_base` unverified: four invented digests would have been stored
+/// and the TPT write would then have pointed at objects that do not exist.
+/// Nothing collected thumbnails when that gap opened, which is why it stood.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_thumbnail_hash_this_tenant_never_uploaded_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("thumb-unheld");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("thumbs"), "").await;
+    let mut body = create_body(&uploaded, "Invented thumbnails", &["Tpt"]);
+    let mut base = tpt_base();
+    base["thumbnail_mode"] = serde_json::json!(2);
+    base["thumbnail_hashes"] = serde_json::json!(["b".repeat(64)]);
+    body["tpt_base"] = base;
+    let (status, response) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = parse(&response);
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::UploadRejected));
+}
+
+/// A fifth thumbnail is refused by the form's own cap, not by the database.
+///
+/// Migration 0040 carries `array_length(thumbnail_hashes, 1) <= 4` as a CHECK,
+/// and reaching it would be a 500 rather than something a seller can act on.
+/// The model refuses first, through `Picker::Thumbnails` and `OverCap`, so this
+/// asserts the refusal arrives as a validation answer naming the control.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_fifth_thumbnail_is_refused_by_the_forms_own_cap(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("thumb-cap");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("cap"), "").await;
+    let mut body = create_body(&uploaded, "Five thumbnails", &["Tpt"]);
+    let mut base = tpt_base();
+    base["thumbnail_mode"] = serde_json::json!(2);
+    // Five distinct well-formed digests: the count is what is under test, so
+    // none of them may collide or be malformed.
+    base["thumbnail_hashes"] = serde_json::json!(["a", "b", "c", "d", "e"]
+        .map(|mark| mark.repeat(64))
+        .to_vec());
+    body["tpt_base"] = base;
+    let (status, response) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the database CHECK would have made this a 500"
+    );
+    let error: APIError = parse(&response);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::RequiredFieldMissing)
+    );
+    let refusals = error.errors[0]
+        .detail
+        .as_ref()
+        .map(|detail| detail["refusals"].to_string())
+        .unwrap_or_default();
+    assert!(
+        refusals.contains("Thumbnail"),
+        "and it names the control the seller would look at: {refusals}"
+    );
+}
+
+/// And a thumbnail hash that is not a digest at all never reaches the check
+/// above, because the model refuses it first.
+///
+/// `record_of` reads the sidecar block through `UploadRef::new` before any
+/// hash is looked up, so a malformed digest is an authoring refusal rather
+/// than an upload one. The two layers refuse different things and the order
+/// matters: this asserts the one that actually fires, so a change to either
+/// shows up here rather than in a message nobody reads.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_malformed_thumbnail_hash_is_refused_by_the_model_before_the_lookup(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("thumb-malformed");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("thumbs2"), "").await;
+    let mut body = create_body(&uploaded, "Malformed thumbnail", &["Tpt"]);
+    let mut base = tpt_base();
+    base["thumbnail_mode"] = serde_json::json!(2);
+    base["thumbnail_hashes"] = serde_json::json!(["not-a-digest"]);
+    body["tpt_base"] = base;
+    let (status, response) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = parse(&response);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::RequiredFieldMissing),
+        "the model refuses the shape before the create looks any hash up"
+    );
+    let refusals = error.errors[0]
+        .detail
+        .as_ref()
+        .map(|detail| detail["refusals"].to_string())
+        .unwrap_or_default();
+    assert!(
+        refusals.contains(r#""group":"files""#),
+        "and it is raised against the group that holds the thumbnails rather than \
+         another: {refusals}"
+    );
+}
+
+/// A title the domain will not hold is refused on both routes that set one.
+///
+/// `ProductName` caps a title at 80 UTF-16 units, measured from TPT's own
+/// form. The create checked only for blankness and reached the domain type
+/// solely when a TPT-base block happened to be present, so a create without
+/// one could store a title no marketplace would take — while the operator
+/// import, which builds the same type, refused it. The two paths agree now.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_title_over_the_forms_own_cap_is_refused_on_create_and_on_edit(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("long-title");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("title"), "").await;
+
+    let over = "a".repeat(81);
+    let body = create_body(&uploaded, &over, &["Tpt"]);
+    let (status, response) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "81 units is one over"
+    );
+    let error: APIError = parse(&response);
+    assert!(
+        error.errors[0].message.contains("80"),
+        "the refusal states the cap the seller is against: {}",
+        error.errors[0].message
+    );
+
+    // Eighty exactly is accepted, so the test pins the boundary rather than
+    // only that something long is refused.
+    let at_cap = create_body(&uploaded, &"a".repeat(80), &["Tpt"]);
+    let (status, created) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &at_cap,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "eighty units is within the cap"
+    );
+    let made: CreatedProductView = parse(&created);
+
+    let (status, _) = json_call(
+        state,
+        &TOKEN_A,
+        Method::PATCH,
+        &format!("/v1/products/{}", made.product.0.to_hyphenated()),
+        &serde_json::json!({ "title": over }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "and the edit route holds the same cap the create does"
+    );
+}
+
+/// D32 end to end: a resource is kept with no file, and pointing it at a
+/// marketplace is refused until one is uploaded.
+///
+/// This is the test the `add_mapping` refusal was written for and could not
+/// have until now — `CanonicalProduct.payload` was non-empty by construction,
+/// so the guard was a check that could not fire.
+///
+/// It overlaps `a_payload_less_create_is_a_validation_answer_rather_than_a_fault`
+/// on the create deliberately: that test holds both answers of the create rule
+/// against each other, and this one carries a create through to the read-back
+/// and the mapping refusal, which is the part no other test reaches.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_fileless_resource_is_kept_and_refuses_a_marketplace_until_a_file_arrives(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("fileless");
+    let state = configured(pool, &root);
+
+    // No payload, no marketplace: the Teachouse draft the founder asked for.
+    let (status, response) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &serde_json::json!({
+            "title": "Fractions, still being written",
+            "price": "Free",
+            "payload": [],
+            "inventories": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a resource may be kept here with no file"
+    );
+    let created: CreatedProductView = parse(&response);
+    assert!(created.mappings.is_empty());
+
+    // It reads back as carrying no file rather than as a corrupt row.
+    let path = format!("/v1/products/{}", created.product.0.to_hyphenated());
+    let (status, read) = get(state.clone(), &TOKEN_A, &path).await;
+    assert_eq!(status, StatusCode::OK, "and it reads back");
+    let view: ProductView = parse(&read);
+    assert!(
+        view.files.is_empty(),
+        "no file rows, rather than a fabricated one: {:?}",
+        view.files
+    );
+
+    // Pointing it at a marketplace is refused by name until a file exists.
+    let (status, refused) = json_call(
+        state,
+        &TOKEN_A,
+        Method::POST,
+        &format!("{path}/mappings"),
+        &serde_json::json!({ "inventory": "Tpt" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a marketplace listing needs a file buyers can download"
+    );
+    let error: APIError = parse(&refused);
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::PayloadMissing));
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -587,10 +831,71 @@ async fn one_tenants_uploads_and_products_are_invisible_to_another(pool: PgPool)
     );
 }
 
+/// A payload-less create is a validation answer rather than a fault, both ways.
+///
+/// The name is older than D32 and still describes what it protects: the
+/// deferred trigger must never reach a seller as a 500. What moved is the
+/// answer on one side of it. A create naming no marketplace is now created —
+/// a resource kept on Teachouse — and one naming a marketplace is refused 422.
+/// Holding both in one test is what stops the rule being satisfied by a server
+/// that refuses everything or one that accepts everything.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_payload_less_create_is_a_validation_answer_rather_than_a_fault(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("payloadless");
+    let state = configured(pool, &root);
+
+    let bare = |inventories: serde_json::Value| {
+        serde_json::json!({
+            "title": "No bytes",
+            "price": "Free",
+            "payload": [],
+            "inventories": inventories
+        })
+    };
+
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &bare(serde_json::json!(["Tpt"])),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a marketplace listing needs a file, and the deferred trigger would have \
+         made this a 500"
+    );
+    let error: APIError = parse(&body);
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::PayloadMissing));
+
+    let (status, _) = json_call(
+        state,
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &bare(serde_json::json!([])),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "and the same body naming no marketplace is a resource kept here (D32)"
+    );
+}
+
+/// A marketplace named without a file is refused as its own situation.
+///
+/// Same code as the bare payload-less create above and deliberately a
+/// different sentence: one is a draft nobody asked to publish, the other is a
+/// seller who has chosen where this goes and not yet uploaded what goes there,
+/// and only the second can be answered with "add your file first".
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_marketplace_named_without_a_file_is_refused_by_that_name(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("marketplace-no-file");
     let state = configured(pool, &root);
     let (status, body) = json_call(
         state,
@@ -598,20 +903,21 @@ async fn a_payload_less_create_is_a_validation_answer_rather_than_a_fault(pool: 
         Method::POST,
         "/v1/products",
         &serde_json::json!({
-            "title": "No bytes",
+            "title": "Bound for TPT",
             "price": "Free",
             "payload": [],
-            "inventories": []
+            "inventories": ["Tpt"]
         }),
     )
     .await;
-    assert_eq!(
-        status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "the deferred payload trigger would have made this a 500"
-    );
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     let error: APIError = parse(&body);
     assert_eq!(error.errors[0].code, Some(APIErrorCode::PayloadMissing));
+    assert!(
+        error.errors[0].message.contains("marketplace"),
+        "the refusal names the situation the seller is in, not the invariant: {}",
+        error.errors[0].message
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -631,14 +937,49 @@ async fn a_selected_platform_s_required_field_is_refused_by_name(pool: PgPool) {
         Some(APIErrorCode::RequiredFieldMissing),
         "Tes declares its licence required and the create carries neither a grant nor an answer"
     );
+    let missing = error.errors[0]
+        .detail
+        .as_ref()
+        .map_or(serde_json::Value::Null, |detail| {
+            detail["missing"][0].clone()
+        });
     assert_eq!(
-        error.errors[0]
-            .detail
-            .as_ref()
-            .and_then(|detail| detail["missing"][0]["field"].as_str()),
-        Some("licence"),
-        "the refusal names the field the seller has to fill in"
+        (
+            missing["inventory"].as_str(),
+            missing["field"].as_str(),
+            missing["label"].as_str()
+        ),
+        (Some("TesGb"), Some("licence"), Some("Licence")),
+        "the refusal names the marketplace, the wire field a client anchors to, and the \
+         words the seller reads, so the sentence can be built without a second lookup"
     );
+}
+
+/// An already-answered election satisfies the licence on its own.
+///
+/// `required_fields_answered` accepts either a rights declaration or a licence
+/// election, and every test until now sent both, so the second half of that
+/// `||` was never exercised: an election path that stopped satisfying the
+/// requirement would have failed no test while the create form kept sending a
+/// grant beside it. The create form composes both, which is exactly why this
+/// one sends only the election.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_licence_election_alone_satisfies_the_field_without_a_rights_grant(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("election-only");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("election"), "").await;
+    let mut body = create_body(&uploaded, "Election only", &["TesGb"]);
+    body["rights"] = serde_json::Value::Null;
+    let (status, response) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the election answers the required licence with no grant beside it"
+    );
+    let created: CreatedProductView = parse(&response);
+    assert_eq!(created.elections_recorded, 1);
+    assert_eq!(created.mappings.len(), 1);
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -1261,5 +1602,1310 @@ async fn the_taxonomy_endpoint_enumerates_the_terms_a_create_body_names(pool: Pg
         status,
         StatusCode::UNAUTHORIZED,
         "the canonical taxonomy is global reference data behind a session, like every other read"
+    );
+}
+
+// -------------------------------------------------------------- file edits
+
+/// Creates one product from one upload and answers with its id and the id of
+/// the payload file it landed with, which every file test below starts from.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn with_one_file(
+    state: AppState,
+    token: &SessionToken,
+    marker: &str,
+    inventories: &[&str],
+) -> (ProductId, String) {
+    let uploaded = upload(state.clone(), token, pdf(marker), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        token,
+        Method::POST,
+        "/v1/products",
+        &create_body(&uploaded, "A resource with files", inventories),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the create lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let created: CreatedProductView = parse(&body);
+    let path = format!("/v1/products/{}", created.product.0.to_hyphenated());
+    let (_, body) = get(state, token, &path).await;
+    let view: ProductView = parse(&body);
+    let payload = view
+        .files
+        .iter()
+        .find(|file| file.role == "payload")
+        .expect("the create landed a payload file");
+    (created.product, payload.id.to_hyphenated())
+}
+
+fn files_path(product: ProductId) -> String {
+    format!("/v1/products/{}/files", product.0.to_hyphenated())
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_second_payload_file_is_added_and_reads_back_beside_the_first(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-add");
+    let state = configured(pool.clone(), &root);
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "add", &["TesGb"]).await;
+
+    let second = upload(state.clone(), &TOKEN_A, pdf("answer-key"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": second.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the add lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let added: AddedFileView = parse(&body);
+    assert_eq!(
+        (added.file.role.as_str(), added.file.kind.as_str()),
+        ("payload", "pdf"),
+        "the row is written in the role the body named"
+    );
+    assert_eq!(
+        added.reaches,
+        vec![InventoryId::TesGb],
+        "the response names the marketplace this reaches on the next send rather than \
+         implying it has already reached it"
+    );
+
+    let (status, body) = get(
+        state.clone(),
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&body);
+    assert_eq!(
+        view.files
+            .iter()
+            .filter(|file| file.role == "payload")
+            .count(),
+        2,
+        "both payload files read back"
+    );
+
+    let (status, body) = get(state, &TOKEN_A, "/v1/jobs").await;
+    assert_eq!(status, StatusCode::OK);
+    let jobs: serde_json::Value = parse(&body);
+    assert_eq!(
+        jobs["jobs"].as_array().map(Vec::len),
+        Some(0),
+        "a file change enqueues nothing; the marketplace's copy waits for the next send"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_client_named_cover_is_refused_on_every_write_that_could_place_one(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-cover-role");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "sellable", &["TesGb"]).await;
+    let cover = cover_id(state.clone(), &TOKEN_A, product).await;
+    let secret = upload(state.clone(), &TOKEN_A, pdf("the-paid-worksheet"), "").await;
+
+    // The console reads a cover back as an image, so a row whose role is
+    // `cover` is a row whose bytes a browser fetches. Naming that role against
+    // a payload hash is what would make a sellable file browser-readable.
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "cover", "handle": secret.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a cover is drawn rather than uploaded: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // The same hole through the other door: replacing the cover row puts the
+    // client's chosen hash behind the same role.
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{cover}", files_path(product)),
+        &serde_json::json!({"handle": secret.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the cover row is not a target: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // The third door is shut by not existing: the redraw takes no handle at
+    // all, so a `cover` field in the body reaches nothing. It is sent here
+    // anyway, exactly as the old exploit did, to prove it is ignored rather
+    // than honoured — a replacement that quietly accepted it would still pass
+    // a test that only read the status code.
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"handle": secret.payload[0], "cover": secret.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the replacement itself is ordinary: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let replaced: ReplacedFileView = parse(&body);
+    let drawn = replaced
+        .cover
+        .as_ref()
+        .unwrap_or_else(|| panic!("replacing the first payload file redraws the thumbnail"));
+    assert_eq!(
+        drawn.kind, "image",
+        "the thumbnail this server drew is an image, not the PDF the body named"
+    );
+    assert_ne!(
+        drawn.byte_len, secret.payload[0].byte_len,
+        "and it is not the payload's bytes wearing the thumbnail's role"
+    );
+
+    let after = files_of(state, &TOKEN_A, product).await;
+    assert_ne!(
+        cover_of(&after).map(|one| one.id.to_hyphenated()),
+        Some(cover),
+        "the thumbnail was redrawn, so it is not the one the create generated"
+    );
+    assert_eq!(
+        cover_of(&after).map(|one| one.byte_len),
+        Some(drawn.byte_len),
+        "and the one standing is the one this server drew"
+    );
+    assert_eq!(
+        after.iter().filter(|file| file.role == "cover").count(),
+        1,
+        "one thumbnail, as product_file_one_cover requires"
+    );
+    assert_eq!(
+        after.iter().filter(|file| file.role == "payload").count(),
+        1,
+        "and the two refusals above wrote nothing"
+    );
+}
+
+/// The refusal above, read as a seller reads it.
+///
+/// Separate from the test that proves the three doors are shut, because a
+/// refusal that is correct and unreadable is still a defect: this one asserts
+/// the seller is told what to do instead, and that a genuinely generated cover
+/// handle is refused exactly as a payload hash is — the role is what is
+/// refused, not the bytes behind it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_cover_refusal_is_a_sentence_and_holds_even_for_a_real_cover(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-cover");
+    let state = configured(pool.clone(), &root);
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "cover", &["TesGb"]).await;
+
+    let second = upload(state.clone(), &TOKEN_A, pdf("another"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "cover", "handle": second.cover}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a cover the pipeline really did generate is refused too: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let error: APIError = parse(&body);
+    assert!(
+        error.errors[0].message.contains("thumbnail")
+            && error.errors[0].message.contains("first file"),
+        "and the seller is told where a thumbnail comes from rather than only that this failed: {}",
+        error.errors[0].message
+    );
+
+    let (_, body) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    let view: ProductView = parse(&body);
+    assert_eq!(
+        view.files
+            .iter()
+            .filter(|file| file.role == "cover")
+            .count(),
+        1,
+        "the cover the create generated is still the only one"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_replace_swaps_the_bytes_keeps_the_role_and_retires_the_old_row(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-replace");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "v1", &["TesGb"]).await;
+
+    let revised = upload(state.clone(), &TOKEN_A, pdf("v2-with-more-pages"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"handle": revised.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the replace lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let replaced: ReplacedFileView = parse(&body);
+    assert_eq!(
+        replaced.removed.to_hyphenated(),
+        first,
+        "the response names the row that stopped being this resource's"
+    );
+    assert_eq!(
+        replaced.file.role, "payload",
+        "a replacement keeps the role of the file it replaced"
+    );
+    assert_ne!(
+        replaced.file.id.to_hyphenated(),
+        first,
+        "the replacement is a new row, so a client keying on the old id is told"
+    );
+
+    let (_, body) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    let view: ProductView = parse(&body);
+    let payloads: Vec<_> = view
+        .files
+        .iter()
+        .filter(|file| file.role == "payload")
+        .collect();
+    assert_eq!(payloads.len(), 1, "one payload file, not two");
+    assert_eq!(
+        payloads[0].byte_len, revised.payload[0].byte_len,
+        "the bytes the seller uploaded are the ones the resource now names"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_removal_takes_one_file_and_leaves_the_rest(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-remove");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "keep", &["TesGb"]).await;
+
+    let second = upload(state.clone(), &TOKEN_A, pdf("spare"), "").await;
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": second.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!("{}/{first}", files_path(product)),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the removal lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let removed: RemovedFileView = parse(&body);
+    assert_eq!(removed.file.to_hyphenated(), first);
+
+    let (_, body) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    let view: ProductView = parse(&body);
+    assert_eq!(
+        view.files
+            .iter()
+            .filter(|file| file.role == "payload")
+            .count(),
+        1,
+        "the other payload file stands"
+    );
+    assert!(
+        !view
+            .files
+            .iter()
+            .any(|file| file.id.to_hyphenated() == first),
+        "the removed file is gone from every read of the resource"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn removing_the_only_payload_file_is_refused_by_name_and_the_file_stands(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-last");
+    let state = configured(pool.clone(), &root);
+    let (product, only) = with_one_file(state.clone(), &TOKEN_A, "only", &["TesGb"]).await;
+
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!("{}/{only}", files_path(product)),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a resource keeps at least one file"
+    );
+    let error: APIError = parse(&body);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::PayloadMissing),
+        "refused under the code a payload-less create is refused under, not a bare validation"
+    );
+
+    let (_, body) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    let view: ProductView = parse(&body);
+    assert!(
+        view.files
+            .iter()
+            .any(|file| file.id.to_hyphenated() == only),
+        "the refusal left the file exactly where it was"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_live_tes_listing_refuses_every_file_change_with_the_capability_named(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-uncaptured");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "live", &["TesNz"]).await;
+    let spare = upload(state.clone(), &TOKEN_A, pdf("spare"), "").await;
+    bind_live(&pool, ORG_A, product, InventoryId::TesNz).await;
+
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": spare.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = parse(&body);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::UncapturedTransition),
+        "a file change reaches a marketplace as a revise, so a listing that cannot be \
+         revised cannot have its files changed through us"
+    );
+
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"handle": spare.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "so is a replace");
+
+    let (status, _) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!("{}/{first}", files_path(product)),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "and so is a removal"
+    );
+
+    let (_, body) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    let view: ProductView = parse(&body);
+    assert_eq!(
+        view.files
+            .iter()
+            .filter(|file| file.role == "payload")
+            .count(),
+        1,
+        "nothing was written before the refusal"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_handle_this_tenant_never_uploaded_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-unheld");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "held", &["TesGb"]).await;
+
+    let invented = serde_json::json!({
+        "hash": "0".repeat(64),
+        "kind": "pdf",
+        "byte_len": 1024
+    });
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": invented}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = parse(&body);
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::UploadRejected));
+
+    let (status, _) = json_call(
+        state,
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"handle": invented}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the replace is held to the same check as the add"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn one_tenants_file_is_not_reachable_from_another(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("file-tenancy");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "theirs", &["TesGb"]).await;
+    let mine = upload(state.clone(), &TOKEN_B, pdf("mine"), "").await;
+
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_B,
+        Method::PUT,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"handle": mine.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "another tenant's product is not there to be edited"
+    );
+
+    let (_, body) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    let view: ProductView = parse(&body);
+    assert!(
+        view.files
+            .iter()
+            .any(|file| file.id.to_hyphenated() == first),
+        "the owner's file is untouched"
+    );
+}
+
+/// The product's files as the console reads them, in the order it renders.
+async fn files_of(state: AppState, token: &SessionToken, product: ProductId) -> Vec<FileView> {
+    let (status, body) = get(
+        state,
+        token,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the resource reads back");
+    let view: ProductView = parse(&body);
+    view.files
+}
+
+/// The product's cover, or a failed test: every caller of this reads a
+/// resource whose create generated one, so its absence is a broken fixture
+/// rather than a case to handle.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn cover_id(state: AppState, token: &SessionToken, product: ProductId) -> String {
+    let files = files_of(state, token, product).await;
+    cover_of(&files)
+        .expect("the create generated a cover")
+        .id
+        .to_hyphenated()
+}
+
+fn cover_of(files: &[FileView]) -> Option<&FileView> {
+    files.iter().find(|file| file.role == "cover")
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn replacing_the_first_payload_file_redraws_the_cover_it_was_drawn_from(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-cover-redraw");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "drawn", &["TesGb"]).await;
+    let before = cover_id(state.clone(), &TOKEN_A, product).await;
+
+    let revised = upload(state.clone(), &TOKEN_A, pdf("redrawn-from-this"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"handle": revised.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the replace lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let replaced: ReplacedFileView = parse(&body);
+    let drawn = replaced
+        .cover
+        .as_ref()
+        .unwrap_or_else(|| panic!("the response names the cover it redrew"));
+    assert_eq!(
+        drawn.role, "cover",
+        "the redrawn row occupies the cover's role"
+    );
+
+    let after = files_of(state, &TOKEN_A, product).await;
+    let live = cover_of(&after).unwrap_or_else(|| panic!("the resource still has a cover"));
+    assert_eq!(
+        live.id.to_hyphenated(),
+        drawn.id.to_hyphenated(),
+        "the cover the resource reads back is the one the response named"
+    );
+    assert_ne!(
+        live.id.to_hyphenated(),
+        before,
+        "the cover drawn from the replaced file is not the one left standing"
+    );
+    assert_eq!(
+        after.iter().filter(|file| file.role == "cover").count(),
+        1,
+        "one cover, which product_file_one_cover would have refused otherwise"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn replacing_a_later_payload_file_leaves_the_cover_alone(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-cover-kept");
+    let state = configured(pool.clone(), &root);
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "kept-cover", &["TesGb"]).await;
+    let before = cover_id(state.clone(), &TOKEN_A, product).await;
+
+    let second = upload(state.clone(), &TOKEN_A, pdf("answer-key"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": second.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let added: AddedFileView = parse(&body);
+
+    // A replacement of the file the thumbnail was not drawn from. Nothing in
+    // the body could ask for a redraw even if it wanted one; the server
+    // decides, and here it decides not to.
+    let third = upload(state.clone(), &TOKEN_A, pdf("answer-key-v2"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{}", files_path(product), added.file.id.to_hyphenated()),
+        &serde_json::json!({"handle": third.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the replace lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let replaced: ReplacedFileView = parse(&body);
+    assert!(
+        replaced.cover.is_none(),
+        "the response says no cover was redrawn, so the page does not claim one was"
+    );
+
+    let after = files_of(state, &TOKEN_A, product).await;
+    let live = cover_of(&after).unwrap_or_else(|| panic!("the resource still has a cover"));
+    assert_eq!(
+        live.id.to_hyphenated(),
+        before,
+        "the cover drawn from the first payload file is untouched"
+    );
+}
+
+/// The create body with each payload handle carrying the name a seller's file
+/// picker would have given it.
+fn named_create(uploaded: &UploadedView, title: &str, names: &[&str]) -> serde_json::Value {
+    let mut body = create_body(uploaded, title, &["TesGb"]);
+    let payload: Vec<serde_json::Value> = uploaded
+        .payload
+        .iter()
+        .zip(names)
+        .map(|(handle, name)| {
+            serde_json::json!({
+                "hash": handle.hash,
+                "kind": handle.kind,
+                "byte_len": handle.byte_len,
+                "name": name,
+            })
+        })
+        .collect();
+    body["payload"] = serde_json::Value::Array(payload);
+    body
+}
+
+fn name_of<'a>(files: &'a [FileView], id: &str) -> Option<&'a str> {
+    files
+        .iter()
+        .find(|file| file.id.to_hyphenated() == id)
+        .and_then(|file| file.name.as_deref())
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_seller_s_own_filenames_survive_the_create_and_the_two_writes(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-names");
+    let state = configured(pool.clone(), &root);
+
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("named"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &named_create(&uploaded, "Named files", &["task-cards.pdf"]),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the create lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let created: CreatedProductView = parse(&body);
+    let files = files_of(state.clone(), &TOKEN_A, created.product).await;
+    let payload = files
+        .iter()
+        .find(|file| file.role == "payload")
+        .unwrap_or_else(|| panic!("the create landed a payload file"));
+    assert_eq!(
+        payload.name.as_deref(),
+        Some("task-cards.pdf"),
+        "the name the seller's picker gave the file reaches the row"
+    );
+    assert_eq!(
+        cover_of(&files).and_then(|cover| cover.name.as_deref()),
+        None,
+        "the generated cover carries no name, because nobody chose it"
+    );
+
+    // An add names its own file.
+    let second = upload(state.clone(), &TOKEN_A, pdf("answers"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(created.product),
+        &serde_json::json!({
+            "role": "payload",
+            "handle": {
+                "hash": second.payload[0].hash,
+                "kind": second.payload[0].kind,
+                "byte_len": second.payload[0].byte_len,
+                "name": "answer-key.pdf",
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let added: AddedFileView = parse(&body);
+    assert_eq!(
+        added.file.name.as_deref(),
+        Some("answer-key.pdf"),
+        "the response names the file it wrote"
+    );
+
+    // A replacement takes the new file's name, not the old one's.
+    let third = upload(state.clone(), &TOKEN_A, pdf("answers-v2"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!(
+            "{}/{}",
+            files_path(created.product),
+            added.file.id.to_hyphenated()
+        ),
+        &serde_json::json!({
+            "handle": {
+                "hash": third.payload[0].hash,
+                "kind": third.payload[0].kind,
+                "byte_len": third.payload[0].byte_len,
+                "name": "answer-key-corrected.pdf",
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let replaced: ReplacedFileView = parse(&body);
+    assert_eq!(
+        replaced.file.name.as_deref(),
+        Some("answer-key-corrected.pdf")
+    );
+
+    let after = files_of(state, &TOKEN_A, created.product).await;
+    assert_eq!(
+        name_of(&after, &payload.id.to_hyphenated()),
+        Some("task-cards.pdf"),
+        "the file nobody touched keeps its name"
+    );
+    assert_eq!(
+        name_of(&after, &replaced.file.id.to_hyphenated()),
+        Some("answer-key-corrected.pdf"),
+        "and the replacement reads back under the name the seller chose for it"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_file_nobody_named_reads_back_without_a_name_rather_than_with_a_guess(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-unnamed");
+    let state = configured(pool.clone(), &root);
+    // The same body every client sent before names existed: handles with no
+    // `name` at all, which is what every stored row looks like today.
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "unnamed", &["TesGb"]).await;
+
+    let files = files_of(state, &TOKEN_A, product).await;
+    assert_eq!(
+        name_of(&files, &first),
+        None,
+        "an unnamed file stays unnamed rather than acquiring its kind as a name"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_name_longer_than_the_column_is_refused_before_the_insert(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-long-name");
+    let state = configured(pool.clone(), &root);
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "long", &["TesGb"]).await;
+
+    let second = upload(state.clone(), &TOKEN_A, pdf("verbose"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({
+            "role": "payload",
+            "handle": {
+                "hash": second.payload[0].hash,
+                "kind": second.payload[0].kind,
+                "byte_len": second.payload[0].byte_len,
+                "name": "x".repeat(256),
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "refused as the seller's to fix rather than reaching the CHECK as a 500: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let files = files_of(state, &TOKEN_A, product).await;
+    assert_eq!(
+        files.iter().filter(|file| file.role == "payload").count(),
+        1,
+        "and nothing was written"
+    );
+}
+
+/// The read a browser makes to draw a thumbnail, and the two fences on it.
+///
+/// The catalogue names the URL rather than the client composing it, so this
+/// asserts the exact string a row is handed; and the bytes are the PNG the
+/// ingest generated, read back through the same sealed store the upload wrote
+/// them to, so a cover that only existed as a database row would fail here.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_cover_is_named_on_the_catalogue_and_served_only_to_its_own_tenant(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("cover-route");
+    let state = configured(pool.clone(), &root);
+    let (product, _payload) = with_one_file(state.clone(), &TOKEN_A, "covered", &["TesGb"]).await;
+
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/products").await;
+    assert_eq!(status, StatusCode::OK, "the catalogue reads");
+    let page: ProductsPage = parse(&body);
+    let head = page
+        .products
+        .iter()
+        .find(|entry| entry.id == product)
+        .expect("the created resource is on the page");
+    let path = format!("/v1/products/{}/cover", product.0.to_hyphenated());
+    assert_eq!(
+        head.cover.as_deref(),
+        Some(path.as_str()),
+        "a resource whose ingest generated a cover names where to fetch it"
+    );
+
+    let (status, bytes) = get(state.clone(), &TOKEN_A, &path).await;
+    assert_eq!(status, StatusCode::OK, "the owner reads their own cover");
+    assert!(
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "the bytes are the PNG the ingest encoded, not an error document"
+    );
+
+    let (status, _) = get(state, &TOKEN_B, &path).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "another tenant's cover answers exactly as a resource that is not there"
+    );
+}
+
+/// The read the create form makes before a product exists.
+///
+/// A cover is generated during the upload, so the form holds a handle and no
+/// product; this proves the handle alone reaches the bytes inside the tenant
+/// that sealed them, that it does not reach them from outside it, and that a
+/// payload handle is refused rather than streamed through an image route.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_uploaded_image_reads_by_handle_inside_its_own_tenant_only(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("upload-handle");
+    let state = configured(pool.clone(), &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("preview"), "").await;
+
+    let cover = format!("/v1/uploads/{}", uploaded.cover.hash);
+    let (status, bytes) = get(state.clone(), &TOKEN_A, &cover).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the uploader reads the cover it just made"
+    );
+    assert!(
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "and the bytes are the PNG the render encoded"
+    );
+
+    let payload = format!("/v1/uploads/{}", uploaded.payload[0].hash);
+    let (status, _) = get(state.clone(), &TOKEN_A, &payload).await;
+    assert_eq!(
+        status,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "a payload handle is refused by name rather than streamed through an image route"
+    );
+
+    let (status, _) = get(state, &TOKEN_B, &cover).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "another tenant's handle answers exactly as one that was never sealed"
+    );
+}
+
+/// The 32 bytes a lowercase-hex handle names.
+fn content_hash(hex: &str) -> ContentHash {
+    let mut bytes = [0u8; 32];
+    for (index, slot) in bytes.iter_mut().enumerate() {
+        let pair = hex.get(index * 2..index * 2 + 2).unwrap_or("00");
+        *slot = u8::from_str_radix(pair, 16).unwrap_or(0);
+    }
+    ContentHash(bytes)
+}
+
+/// A cover row pointing at bytes that are not an image is refused, not served.
+///
+/// The row is written through the repository rather than through a write
+/// route, deliberately: the write side may come to refuse a client-named cover
+/// of the wrong kind, and this route has to refuse on its own either way, so a
+/// test that reached the state through the write side would stop testing this
+/// one the moment that refusal landed.
+///
+/// The bytes are a real sealed PDF from a real upload, so what is refused is a
+/// blob this organisation genuinely holds — the fence being proved is the
+/// route's, not the store's.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_cover_naming_bytes_that_are_not_an_image_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("cover-not-an-image");
+    let state = configured(pool.clone(), &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("not-an-image"), "").await;
+    let hash = content_hash(&uploaded.payload[0].hash);
+
+    let product = ProductId(Uuid([0x77; 16]));
+    let held = |id: u8, role: FileRole| ProductFile {
+        id: FileId(Uuid([id; 16])),
+        role,
+        kind: FileKind::Pdf,
+        bytes: FileBytes::Held {
+            hash,
+            byte_len: uploaded.payload[0].byte_len,
+            scan: ScanOutcome::Pending,
+        },
+    };
+    ProductRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &tam_domain::CanonicalProduct {
+                id: product,
+                org: ORG_A,
+                title: Title("A resource whose cover is a PDF".to_owned()),
+                body: ListingCopy {
+                    body: "Fixture body.".to_owned(),
+                    format: CopyFormat::Markdown,
+                },
+                payload: Some(PayloadSet::new(held(0x71, FileRole::Payload), vec![])),
+                cover: Some(held(0x72, FileRole::Cover)),
+                previews: vec![],
+                subjects: vec![],
+                grades: tam_domain::GradeDeclaration {
+                    source: tam_domain::DeclarationSource::Seller,
+                    raw: vec![],
+                    derived: None,
+                },
+                price: PriceIntent::Free,
+                rights: tam_domain::RightsDeclaration::Unstated,
+                native_residue: vec![],
+            },
+            NOW,
+        )
+        .await
+        .expect("the fixture product inserts");
+
+    let path = format!("/v1/products/{}/cover", product.0.to_hyphenated());
+    let (status, _) = get(state, &TOKEN_A, &path).await;
+    assert_eq!(
+        status,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "a seller's PDF is not streamed through the route a browser draws images from"
+    );
+}
+
+/// A deleted resource has no cover, on the catalogue or on the route.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_deleted_resource_stops_naming_and_stops_serving_its_cover(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("cover-after-delete");
+    let state = configured(pool.clone(), &root);
+    let (product, _payload) = with_one_file(state.clone(), &TOKEN_A, "doomed", &["TesGb"]).await;
+    let path = format!("/v1/products/{}/cover", product.0.to_hyphenated());
+
+    let (status, _) = get(state.clone(), &TOKEN_A, &path).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the cover serves while the resource stands"
+    );
+
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::DELETE,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+        &serde_json::json!({"leave_live": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the resource deletes");
+
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/products").await;
+    assert_eq!(status, StatusCode::OK);
+    let page: ProductsPage = parse(&body);
+    assert!(
+        page.products.is_empty(),
+        "a deleted resource leaves the catalogue"
+    );
+
+    let (status, _) = get(state, &TOKEN_A, &path).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "and its cover goes with it, rather than outliving the row that named it"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn removing_the_file_the_thumbnail_was_drawn_from_redraws_it_from_the_next(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-remove-redraw");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "drawn-from", &["TesGb"]).await;
+    let before = cover_id(state.clone(), &TOKEN_A, product).await;
+
+    // A second payload file, so the removal is permitted at all and there is
+    // something for the thumbnail to be redrawn from.
+    let second = upload(state.clone(), &TOKEN_A, pdf("answer-key"), "").await;
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": second.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!("{}/{first}", files_path(product)),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the removal lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let removed: RemovedFileView = parse(&body);
+    let ThumbnailView::Redrawn { file: drawn } = &removed.thumbnail else {
+        panic!(
+            "the response names the thumbnail it redrew, not {:?}",
+            removed.thumbnail
+        )
+    };
+    assert_eq!(
+        drawn.role, "cover",
+        "the redrawn row occupies the same role"
+    );
+
+    let after = files_of(state, &TOKEN_A, product).await;
+    assert_ne!(
+        cover_of(&after).map(|one| one.id.to_hyphenated()),
+        Some(before),
+        "the thumbnail drawn from the removed file is not the one left standing"
+    );
+    assert_eq!(
+        cover_of(&after).map(|one| one.id.to_hyphenated()),
+        Some(drawn.id.to_hyphenated()),
+        "the one standing is the one this server drew"
+    );
+    assert_eq!(
+        after.iter().filter(|file| file.role == "cover").count(),
+        1,
+        "one thumbnail, as product_file_one_cover requires"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn removing_a_later_payload_file_leaves_the_thumbnail_alone(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-remove-keeps");
+    let state = configured(pool.clone(), &root);
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "keeps", &["TesGb"]).await;
+    let before = cover_id(state.clone(), &TOKEN_A, product).await;
+
+    let second = upload(state.clone(), &TOKEN_A, pdf("spare"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": second.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let added: AddedFileView = parse(&body);
+
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!("{}/{}", files_path(product), added.file.id.to_hyphenated()),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let removed: RemovedFileView = parse(&body);
+    assert!(
+        matches!(removed.thumbnail, ThumbnailView::Untouched),
+        "the response says the thumbnail was left alone, so the page does not claim otherwise"
+    );
+
+    let after = files_of(state, &TOKEN_A, product).await;
+    assert_eq!(
+        cover_of(&after).map(|one| one.id.to_hyphenated()),
+        Some(before),
+        "the thumbnail drawn from the first payload file is untouched"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_unmapped_resource_may_lose_its_last_file_and_its_thumbnail_with_it(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-unmapped-last");
+    let state = configured(pool.clone(), &root);
+    // No inventories: a draft kept here and carried by no marketplace, which is
+    // the case migration 0061 relaxed the payload requirement for.
+    let (product, only) = with_one_file(state.clone(), &TOKEN_A, "draft-only", &[]).await;
+
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!("{}/{only}", files_path(product)),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a resource no marketplace carries may have no file: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let removed: RemovedFileView = parse(&body);
+    assert!(
+        matches!(removed.thumbnail, ThumbnailView::Retired),
+        "the thumbnail goes with the file it was drawn from, because nothing is left to \
+         draw a new one from: {:?}",
+        removed.thumbnail
+    );
+
+    // The resource is still there and still readable, which is the half a
+    // relaxed invariant most easily breaks.
+    let (status, body) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the resource still reads back");
+    let view: ProductView = parse(&body);
+    assert!(
+        view.files.is_empty(),
+        "with no files at all, which is the state D32 admits"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_listed_resource_still_keeps_its_last_file(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("file-mapped-last");
+    let state = configured(pool.clone(), &root);
+    let (product, only) = with_one_file(state.clone(), &TOKEN_A, "listed", &["TesGb"]).await;
+
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!("{}/{only}", files_path(product)),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a resource a marketplace carries keeps at least one file"
+    );
+    let error: APIError = parse(&body);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::PayloadMissing),
+        "refused by name, under the code the same invariant uses at create"
+    );
+
+    let after = files_of(state, &TOKEN_A, product).await;
+    assert!(
+        after.iter().any(|file| file.id.to_hyphenated() == only),
+        "and the refusal left the file where it was"
     );
 }

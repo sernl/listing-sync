@@ -41,7 +41,10 @@ use crate::{
 pub struct ProductIdentity {
     pub id: ProductId,
     pub org: OrgId,
-    pub payload: PayloadSet,
+    /// The files buyers download, where the resource has any (D32). A
+    /// TPT-base draft that names a marketplace carries one by the time it
+    /// reaches here; one kept on Teachouse need not.
+    pub payload: Option<PayloadSet>,
     pub cover: Option<ProductFile>,
     pub previews: Vec<ProductFile>,
     /// The canonical terms the subject-area slugs resolve to. Empty where

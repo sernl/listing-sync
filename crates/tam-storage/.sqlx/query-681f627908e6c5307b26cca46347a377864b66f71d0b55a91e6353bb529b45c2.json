@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE product_file SET deleted_at = $4 WHERE org_id = $1 AND product_id = $2 AND id = $3 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "681f627908e6c5307b26cca46347a377864b66f71d0b55a91e6353bb529b45c2"
+}

@@ -586,3 +586,252 @@ async fn a_park_with_a_question_still_open_is_left_alone(app: PgPool) {
         ("parked_live".to_owned(), Some("election".to_owned())),
     );
 }
+
+// ------------------------------------------------------------- delegation
+
+const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_org(pool: &PgPool, org: OrgId, name: &str) {
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .bind(name)
+        .execute(pool)
+        .await
+        .expect("the organisation seeds");
+}
+
+/// One delegation row per delegable axis, on the two triggers the table
+/// admits keylessly. Named as data rather than derived, so the tick reaching
+/// a new axis is a deliberate edit here.
+fn delegation(org: OrgId, axis: TermKind, trigger_kind: ElectionTriggerKind) -> ElectionRule {
+    #[expect(
+        clippy::expect_used,
+        reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+    )]
+    ElectionRule::new(NewElectionRule {
+        org,
+        inventory: InventoryId::TesGb,
+        axis,
+        trigger_kind,
+        trigger_key: None,
+        answer: ElectionAnswer::Delegate,
+        decided_by: Decider::Imported {
+            source: "test fixture".to_owned(),
+        },
+        decided_at: T0,
+    })
+    .expect("every axis here is delegable")
+}
+
+/// The tick and the untick as one durable, revocable fact per axis.
+///
+/// Three properties in one test because they are one behaviour: the tick
+/// writes every delegable axis in a single transaction, the untick withdraws
+/// exactly the delegations, and a literal answer the seller stated themselves
+/// survives the untick because it is a decision rather than a permission.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_delegation_is_written_whole_and_withdrawn_without_taking_the_sellers_own_answer(
+    app: PgPool,
+) {
+    seed_org(&app, ORG_A, "org-a").await;
+    let repo = ElectionRepo::new(app.clone());
+    let rules: Vec<ElectionRule> = [TermKind::Subject, TermKind::Topic, TermKind::ResourceType]
+        .into_iter()
+        .flat_map(|axis| {
+            [ElectionTriggerKind::ElectOne, ElectionTriggerKind::OverCap]
+                .into_iter()
+                .map(move |trigger| delegation(ORG_A, axis, trigger))
+        })
+        .collect();
+    repo.upsert_rules(&rules)
+        .await
+        .expect("six delegations record together");
+
+    let own_answer = ElectionRule::new(NewElectionRule {
+        org: ORG_A,
+        inventory: InventoryId::TesGb,
+        axis: TermKind::Licence,
+        trigger_kind: ElectionTriggerKind::Supply,
+        trigger_key: Some("free".to_owned()),
+        answer: ElectionAnswer::Value {
+            path: licence("CC-BY-SA"),
+        },
+        decided_by: Decider::Imported {
+            source: "test fixture".to_owned(),
+        },
+        decided_at: T0,
+    })
+    .expect("a value answer on a legal axis is admissible");
+    repo.upsert_rule(&own_answer)
+        .await
+        .expect("the seller's own answer records");
+    assert_eq!(
+        repo.rules(ORG_A).await.expect("the rules read").len(),
+        7,
+        "six delegations and the one answer the seller stated themselves"
+    );
+
+    let removed = repo
+        .revoke_delegation(ORG_A, InventoryId::TesGb)
+        .await
+        .expect("the untick withdraws");
+    assert_eq!(
+        removed, 6,
+        "every delegation on that marketplace, and only those"
+    );
+    assert_eq!(
+        repo.rules(ORG_A).await.expect("the rules read"),
+        vec![own_answer],
+        "unticking best fit takes back a permission and never a decision, so the licence \
+         the seller chose is still theirs"
+    );
+}
+
+/// The untick withdraws every delegation on the marketplace, including one
+/// the tick never wrote, and that is the intended reading rather than an
+/// oversight: a `delegate` row means the axis is delegated whichever route
+/// wrote it, so withdrawing delegation on a marketplace withdraws all of it.
+///
+/// The row this pins is one the tick provably could not have written. The
+/// marketplace tick only ever writes the two keyless triggers, because
+/// `election_rule_trigger_key` admits a keyless rule for exactly those and a
+/// marketplace-level control has no key to give; a keyed `narrow` rule can
+/// therefore only have arrived through the general single-axis endpoint. It
+/// still goes, and the seller's own literal answers still do not, which is
+/// the line the untick draws: it takes back permissions and never decisions.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_marketplace_untick_withdraws_a_delegation_the_tick_never_wrote(app: PgPool) {
+    seed_org(&app, ORG_A, "org-a").await;
+    let repo = ElectionRepo::new(app.clone());
+
+    // The general single-axis path, keyed on one source band, which is the
+    // shape `POST /v1/elections/rules` accepts and the tick cannot produce.
+    let single_axis = ElectionRule::new(NewElectionRule {
+        org: ORG_A,
+        inventory: InventoryId::TesGb,
+        axis: TermKind::Subject,
+        trigger_kind: ElectionTriggerKind::Narrow,
+        trigger_key: Some("1001595".to_owned()),
+        answer: ElectionAnswer::Delegate,
+        decided_by: Decider::Imported {
+            source: "test fixture".to_owned(),
+        },
+        decided_at: T0,
+    })
+    .expect("the subject axis is delegable");
+    repo.upsert_rule(&single_axis)
+        .await
+        .expect("the single-axis delegation records");
+
+    let own_answer = ElectionRule::new(NewElectionRule {
+        org: ORG_A,
+        inventory: InventoryId::TesGb,
+        axis: TermKind::Licence,
+        trigger_kind: ElectionTriggerKind::Supply,
+        trigger_key: Some("free".to_owned()),
+        answer: ElectionAnswer::Value {
+            path: licence("CC-BY-SA"),
+        },
+        decided_by: Decider::Imported {
+            source: "test fixture".to_owned(),
+        },
+        decided_at: T0,
+    })
+    .expect("a value answer on a legal axis is admissible");
+    repo.upsert_rule(&own_answer)
+        .await
+        .expect("the seller's own answer records");
+
+    repo.upsert_rules(&[
+        delegation(ORG_A, TermKind::Subject, ElectionTriggerKind::ElectOne),
+        delegation(ORG_A, TermKind::Subject, ElectionTriggerKind::OverCap),
+    ])
+    .await
+    .expect("the marketplace tick records");
+    assert_eq!(
+        repo.rules(ORG_A).await.expect("the rules read").len(),
+        4,
+        "the keyed single-axis delegation, the literal answer, and the tick's two"
+    );
+
+    let removed = repo
+        .revoke_delegation(ORG_A, InventoryId::TesGb)
+        .await
+        .expect("the untick withdraws");
+    assert_eq!(
+        removed, 3,
+        "the tick's two and the one it never wrote, because a delegate row means \
+         delegated whichever route wrote it"
+    );
+    assert_eq!(
+        repo.rules(ORG_A).await.expect("the rules read"),
+        vec![own_answer],
+        "only the seller's own literal answer survives, so the untick took back every \
+         permission and no decision"
+    );
+}
+
+/// The untick is scoped by the row policy exactly as every other write is: a
+/// tenant withdrawing their own delegation cannot reach another tenant's.
+#[sqlx::test(migrations = "./migrations")]
+async fn one_tenants_untick_never_reaches_another_tenants_delegation(app: PgPool) {
+    seed_org(&app, ORG_A, "org-a").await;
+    seed_org(&app, ORG_B, "org-b").await;
+    let repo = ElectionRepo::new(app.clone());
+    for org in [ORG_A, ORG_B] {
+        repo.upsert_rules(&[delegation(
+            org,
+            TermKind::Subject,
+            ElectionTriggerKind::ElectOne,
+        )])
+        .await
+        .expect("each tenant delegates its own subject axis");
+    }
+
+    let removed = repo
+        .revoke_delegation(ORG_A, InventoryId::TesGb)
+        .await
+        .expect("A unticks");
+    assert_eq!(removed, 1, "A's own row and no other");
+    assert!(
+        repo.rules(ORG_A).await.expect("A reads").is_empty(),
+        "A withdrew its own delegation"
+    );
+    assert_eq!(
+        repo.rules(ORG_B).await.expect("B reads").len(),
+        1,
+        "B never asked for anything to change"
+    );
+}
+
+/// A batch that names two tenants is refused rather than pinned to whichever
+/// org happened to be first, because `pin_org` sets one tenant for the
+/// transaction and the rest would be written under a policy that is not
+/// theirs.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_delegation_batch_speaking_for_two_tenants_is_refused(app: PgPool) {
+    seed_org(&app, ORG_A, "org-a").await;
+    seed_org(&app, ORG_B, "org-b").await;
+    let repo = ElectionRepo::new(app.clone());
+    assert!(
+        matches!(
+            repo.upsert_rules(&[
+                delegation(ORG_A, TermKind::Subject, ElectionTriggerKind::ElectOne),
+                delegation(ORG_B, TermKind::Topic, ElectionTriggerKind::ElectOne),
+            ])
+            .await,
+            Err(StorageError::OrgMismatch)
+        ),
+        "one transaction speaks for one tenant"
+    );
+    for org in [ORG_A, ORG_B] {
+        assert!(
+            repo.rules(org).await.expect("the rules read").is_empty(),
+            "the refusal wrote nothing for either tenant"
+        );
+    }
+}

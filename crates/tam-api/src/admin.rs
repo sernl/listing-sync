@@ -1,4 +1,4 @@
-//! The operator backoffice: six reads over the whole platform rather than
+//! The operator backoffice: seven reads over the whole platform rather than
 //! one tenant.
 //!
 //! Every route here takes [`OperatorContext`], so the marking is checked
@@ -136,6 +136,7 @@ pub(crate) async fn signups(
 pub struct OrgSummaryView {
     pub org: OrgId,
     pub name: String,
+    pub slug: Option<String>,
     pub created_at: Timestamp,
     pub products: i64,
     pub mappings: i64,
@@ -148,6 +149,7 @@ impl OrgSummaryView {
         Self {
             org: summary.org,
             name: summary.name,
+            slug: summary.slug,
             created_at: summary.created_at,
             products: summary.products,
             mappings: summary.mappings,
@@ -390,6 +392,53 @@ pub(crate) async fn failed_writes(
                 ambiguity_cause: row.ambiguity_cause,
                 item_failure_code: row.item_failure_code,
                 item_failure_detail: row.item_failure_detail,
+            })
+            .collect(),
+    }))
+}
+
+// ------------------------------------------------------------- import drain
+
+/// How many drain measurements one read may carry back. Thirty days of
+/// retention across every tenant, which is what the page draws.
+const IMPORT_DRAIN_LIMIT: i64 = 500;
+
+/// One import-drain measurement as the operator page reads it.
+///
+/// `payload` is passed through unparsed rather than widened into named
+/// fields. It is `jsonb` in the ledger and nothing constrains its shape at
+/// rest, so a row written by an older build is a shape this binary may not
+/// know; forwarding it lets the client drop that one row and draw the rest,
+/// where parsing here would fail the whole read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportDrainRowView {
+    pub org: OrgId,
+    pub org_name: String,
+    pub org_seq: i64,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportDrainView {
+    pub rows: Vec<ImportDrainRowView>,
+}
+
+pub(crate) async fn import_drain(
+    State(state): State<AppState>,
+    _operator: OperatorContext,
+) -> Result<Json<ImportDrainView>, APIError> {
+    let rows = BackofficeRepo::new(backoffice(&state)?)
+        .import_drain(IMPORT_DRAIN_LIMIT)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(ImportDrainView {
+        rows: rows
+            .into_iter()
+            .map(|row| ImportDrainRowView {
+                org: row.org,
+                org_name: row.org_name,
+                org_seq: row.org_seq,
+                payload: row.payload,
             })
             .collect(),
     }))

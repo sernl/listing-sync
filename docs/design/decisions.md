@@ -445,3 +445,98 @@ The founder approved this on 2026-09-05 knowing that Etsy and Shopify both state
 The alternative rejected was wordmark tiles set in our own typeface.
 The founder's stated intent is to approach each marketplace in due course.
 The brand survey behind those facts sits in the marketplace catalogue, which is outside this repository; the decision is recorded in `../notes/design/console-redesign-plan.md`.
+
+## Best fit, pre-ticked on each marketplace tab, 2026-09-05
+
+The best-fit control on a marketplace tab of the authoring form is ticked by default, and the seller unticks it to answer that marketplace's fields themselves.
+This amends the founder's own 2026-08-29 mapping-equivalence direction, which made best fit an opt-in convenience and explicitly not the default, and it amends the design record's "offer only what the target will accept, and never default" in `../research/rethink/cross-marketplace-mapping-tpt-base.md`.
+It is an amendment rather than an oversight: the earlier direction was written before the form existed, and a seller who has selected four marketplaces and must answer every axis of each by hand is being asked to do the work the product exists to remove.
+
+The amendment holds on three conditions, and each is enforced rather than asserted.
+
+The tick never covers a field the registry marks `Delegation::Never`.
+`resolution_for` already makes `Never` win over any opt-in, and `best_fit` declines by consulting exactly that function rather than by repeating the rule, so the Tes licence and TPT's copyright declaration stay the seller's whatever the tick says.
+`PUT /{version}/elections/delegation` filters those axes out before writing, so ticking a marketplace that carries one succeeds on everything else rather than failing whole, and `ElectionRule::new` and the `election_rule_licence_never_delegated` CHECK both still refuse the row if anything reaches past the filter.
+
+The tick writes a durable, revocable `ElectionRule` with `answer_kind = 'delegate'`, one per delegable axis, rather than setting a preference in a browser.
+The delegation is therefore a row the seller can see, an operator can audit, and one call withdraws; the untick deletes exactly the delegations and never the literal answers the seller stated themselves, because withdrawing a permission is not withdrawing a decision.
+The opt-in is read back per `(inventory, axis)` rather than per trigger, because the table admits a keyless rule for only the two triggers that generalise to nothing and a marketplace-level tick has no key to give for the other two.
+
+A suggestion resolves only on explicit confirmation.
+`resolved_by` returns nothing for a `Delegate` answer, so a delegated question stays a question and is never silently settled by the projection; the pre-selected value is rendered and the seller confirms it.
+
+The ranking is over the resolved set and never over the target's vocabulary, which is what keeps a suggestion from becoming an invention.
+Order is the edge kind first, `Exact` before `Broader`, then the seller's own stated order, and the sort is stable so their order survives within a kind.
+An over-cap suggestion keeps exactly the cap and names what it dropped; a narrow suggestion keeps every value under the band; a supply suggests nothing, because the source carried no value and there is no set to rank.
+
+The form templates the tick sits inside are a frontend concern and are recorded here only where the backend carries them.
+A native field gains the words the platform's own form heads it with and the section that holds it, both from the captures already on file and absent where no capture recorded either, so a form renders "Resource type" where the wire says `mainType` and falls back to the wire name rather than to a reading invented for it.
+The template choice itself is derived from the resource's destination set and stored nowhere: it is a fact about how a form was rendered rather than about the product, and re-opening a resource on another template must show the same product.
+
+## The organisation slug, chosen at the first sign-in, 2026-09-05
+
+An organisation carries a slug beside the name it already had: 3 to 32 characters, lowercase letters, digits and single interior hyphens, no hyphen at either end, unique case-insensitively under an index on `lower(slug)`.
+The name stays what the seller wants printed; the slug is the unique, URL-safe handle they type and a support email quotes.
+Both pay rent, so the slug is added beside the name rather than replacing it, and the slug is URL-safe from the day it exists rather than from the day something embeds it.
+
+The choice happens at a first-run claim screen after the first successful sign-in, not on the signup form.
+The reason is mechanical rather than aesthetic.
+Registration never leads straight to the console: the identity service sends a verification link and the API refuses an unverified assertion, so the signup form's next screen is "Check your email", and the first session exchange -- the only moment an organisation is created -- happens after an email round trip, on a page load that may be a different browser or a different device.
+A slug typed at signup has nowhere to live across that gap: `auth.user` is the identity service's and holding domain data there breaks the boundary this record already draws, `sessionStorage` is defeated by the verification link, and widening the assertion's claim set would make the identity service assert domain data that authorisation is never allowed to read from a token.
+
+Existing organisations get `NULL` and no derived backfill, because a slug derived from the row's UUID is the provisional `org-{uuid}` name wearing a different hat and would burn a handle the seller may want.
+A newly provisioned organisation meets the claim screen as a hard gate before the console, since a new seller has nothing to do there before naming their organisation and a dismissable prompt would become a permanent `NULL`.
+An organisation that predates the change meets a banner it can dismiss, since it is mid-work and a gate would be a rude surprise for no gain.
+Nothing in the row distinguishes the two, so migration 0057 records the distinction at the one instant it is knowable, writing `slug_deferred` true for every row that already existed and false by default for every row since.
+The alternative was comparing `created_at` against a cutoff instant, which puts a date literal in whichever layer does the comparing and cannot be checked by a test that does not also control the clock.
+
+A slug is changeable, the old one is not reserved and no history is kept.
+Nothing depends on one today: no route embeds a handle, no marketplace listing carries it and no email template references it, so a rename breaks nothing.
+The standing cost is recorded rather than discovered later -- the first public URL that embeds the slug converts this into a redirect obligation, and the change to make then is a slug-history table plus a permanent redirect, not a retroactive freeze.
+"Changeable by the owner" cannot be expressed today and is deliberately not claimed: there is no ownership or membership concept, so the slug is changeable by any member of the organisation, which in practice is one person because signup provisions one organisation per subject.
+Adding invites is the moment the ownership question arrives, rather than a moment at which it is silently answered.
+
+The availability endpoint exists, session-gated and bounded per session, and the 409 on write stays authoritative.
+The endpoint is what makes checking as the seller types possible, and the session gate costs nothing because the claim screen is post-sign-in by construction; without a bound it is a directory of every tenant's slug read one guess at a time.
+Check-then-write is a race only the unique index settles, so the console renders the 409 even when its own check said the slug was free.
+A reserved word is refused 422 and a collision 409, because a policy refusal is not a collision and the console renders them differently.
+
+Shape lives in two places on purpose and policy in one.
+The database CHECK restates the shape rule so a malformed slug cannot arrive from a path that is not the API; the reserved list and the refusal of a 32-character hexadecimal string stay in Rust, because the reserved list moves with our own route table and a second copy of it would drift.
+
+One bound in this change lives outside `crates/tam-limits`, and it is recorded here rather than left to be discovered.
+The availability endpoint carries a per-session probe budget -- thirty in a rolling minute, held in the API process and keyed by the session's user -- whose constant sits in `crates/tam-api/src/org.rs` beside the route it governs.
+It is a limit, and limits are founder-gated wherever they live, so the founder's next limits round should either adopt it into `tam-limits` or remove it; until then it is an unadopted bound rather than an agreed one.
+What it buys is that an account-holder cannot walk the endpoint one guess at a time and read out every tenant's slug; what it does not buy is durability, because a restart forgives a budget and a second API process would keep its own.
+Nothing in the product's promises rests on it: the endpoint is advisory in both directions, and the unique index remains the only arbiter of who holds a slug.
+
+## A resource may exist with no file; a marketplace listing may not, 2026-09-05
+
+A resource kept on Teachouse alone may carry no file at all.
+A file becomes required the moment the resource is pointed at a marketplace, for a draft there and for a live listing alike, so the rule is about the destination rather than about the lifecycle state.
+
+This reverses the earlier decision that a product with no payload cannot be listed anywhere and should therefore be unrepresentable.
+That reasoning was sound about marketplaces and wrong about us: a seller works on a resource before deciding where it goes, and refusing to hold that work made Teachouse the one place the resource could not live.
+The invariant was doing two jobs -- keeping a marketplace write well-formed, and keeping the catalogue tidy -- and only the first was ever paid for.
+
+So the invariant moves rather than disappearing.
+`CanonicalProduct` carries an optional payload set, and where a payload exists it is still non-empty by construction, so nothing acquires a `Vec` with a runtime check.
+Migration 0061 relaxes `assert_product_has_payload` under its own name, so both frozen constraint triggers keep their attachments and the function simply stops raising for a product no mapping names; a new deferred constraint trigger on `mapping` closes the other direction, which the two frozen triggers cannot see because they fire on `product` and `product_file`.
+The removal side needs no new code: deleting the last payload fires the existing `product_file` trigger, which now raises exactly when a mapping exists.
+
+`POST /{version}/products` refuses a create that names an inventory and carries no payload, `POST /{version}/products/{product}/mappings` refuses a mapping onto a product with none, and `draft_refusals` raises `PayloadMissing` only where a marketplace is targeted.
+The destination reaches the model as a flag on the draft, defaulting to absent, which is what lets a saved template -- a partial draft nobody has chosen a destination for -- round-trip without being held to a marketplace's rules.
+The wasm core, `POST /{version}/authoring/check` and the create path stay one function, so the sentence a seller reads as they type and the answer the server gives remain one answer.
+
+What is deliberately not claimed: this says nothing about whether a payload-less resource may be published, because it may not, and nothing about deleting the last file from a resource that already reaches a marketplace, which stays refused by the mapping rule above.
+
+The migration is not reversible past this point.
+Relaxing the rule reverses cleanly; the payload-less products created afterwards do not, so a rollback has to deal with those rows first.
+That is a runbook obligation rather than part of this decision, and it is named here so it is not discovered from a failed migration.
+
+One consequence is carried forward rather than solved.
+`partition_files` used to raise `CorruptRow` for a product with no live payload row, which was always right under the old invariant; it now returns an absent payload for that condition unconditionally, and cannot tell a resource legitimately kept here from a mapped product that has somehow lost its file.
+`ProductRepo::get` does not read `mapping` in the same call, so the distinction needs one more statement in that transaction to recover.
+It is deliberately not added here for two reasons: the state is believed unreachable, since both deferred triggers re-query `product_file` at commit and a single transaction that inserts a mapping and deletes the last payload is visible to both, so at least one raises; and the reachability argument is reasoned rather than demonstrated, because the existing race test covers two concurrent transactions rather than one transaction doing both writes.
+What would close it is a repository-level test of that interleaving and the mapping count threaded into the read, and neither is large.
+Until then a corrupted product reads back as a resource with no file, which is the wrong sentence for a state that should be impossible.

@@ -440,7 +440,7 @@ fn fixture_product(
             body: "A single-page test file. Delete on sight.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(seeded(at, 0x11)),
                 role: FileRole::Payload,
@@ -452,7 +452,7 @@ fn fixture_product(
                 },
             },
             vec![],
-        ),
+        )),
         // Tpt uploads the payload alone, but the projection's cover gate is
         // unconditional, so the cover is a real stored blob rather than a row
         // pointing at bytes that were never written.
@@ -720,8 +720,7 @@ async fn remove(pool: &PgPool, mapping: MappingId) -> Result<(), Failure> {
     // applies in SQL, where the equivalent select coalesces the two columns.
     let payload_hash = product
         .product
-        .payload
-        .iter()
+        .payload_files()
         .next()
         .ok_or("the mapped product carries no payload file")?
         .bytes

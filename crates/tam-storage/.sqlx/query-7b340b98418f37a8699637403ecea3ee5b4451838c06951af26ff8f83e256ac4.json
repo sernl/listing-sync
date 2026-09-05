@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organisation SET name = COALESCE($2, name), slug = COALESCE($3, slug) WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b340b98418f37a8699637403ecea3ee5b4451838c06951af26ff8f83e256ac4"
+}

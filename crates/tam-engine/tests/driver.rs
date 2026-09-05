@@ -241,7 +241,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                     body: "Fixture".to_owned(),
                     format: CopyFormat::Markdown,
                 },
-                payload: tam_types::PayloadSet::new(
+                payload: Some(tam_types::PayloadSet::new(
                     tam_types::ProductFile {
                         id: tam_types::FileId(Uuid([0x03; 16])),
                         role: tam_types::FileRole::Payload,
@@ -253,7 +253,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: None,
                 previews: vec![],
                 subjects: vec![],

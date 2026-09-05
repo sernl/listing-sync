@@ -141,6 +141,42 @@ pub mod job {
     pub const CONCURRENT_JOBS_GLOBAL_MAX: u32 = 8;
 }
 
+pub mod import {
+    /// DECIDED (founder, 2026-09-05, the spreadsheet-import decision set): the
+    /// largest spreadsheet one upload may carry.
+    ///
+    /// Not `http::UPLOAD_BODY_BYTES_MAX` at 256 MiB, because an xlsx is a zip
+    /// and a zip of cells at that size is a parse bomb whose expansion the
+    /// ingest pipeline's own archive bounds never see -- this upload
+    /// deliberately does not go through the ingest route. Not
+    /// `http::REQUEST_BODY_BYTES_MAX` at 2 MiB either, which is the general
+    /// route ceiling this one exceeds on purpose: a five-hundred-row workbook
+    /// with a dropdown per vocabulary column is comfortably past it.
+    ///
+    /// Re-opened by the first real seller workbook that is refused here.
+    pub const SPREADSHEET_BYTES_MAX: u64 = 8 * 1024 * 1024;
+
+    /// DECIDED (founder, 2026-09-05, the spreadsheet-import decision set): how
+    /// many rows one upload may carry across every tab.
+    ///
+    /// Chosen against `Tier::quota().listings_max` -- Free 100, Pro 5 000 --
+    /// and against the reject-the-whole-upload model, which makes a refused
+    /// five-thousand-row sheet both a slow parse and a bad answer. It sits
+    /// above the founder's own catalogue scale.
+    pub const ROWS_PER_UPLOAD_MAX: usize = 500;
+
+    /// DECIDED (founder, 2026-09-05, the spreadsheet-import decision set): how
+    /// long an unsettled batch survives before the sweep settles it and
+    /// releases the bytes attached to its rows.
+    ///
+    /// A retention window like `ledger::JOB_EVENT_RETENTION_DAYS` beside it,
+    /// and it is here for the same reason: a batch nobody finished charges
+    /// storage against a tenant's quota for bytes that belong to no product,
+    /// which the seller cannot see and cannot free. Deleting a seller's own
+    /// uploaded bytes is why this number needed a word rather than a default.
+    pub const BATCH_EXPIRY_DAYS: i64 = 14;
+}
+
 pub mod ledger {
     /// SIZED between `job::WALL_CLOCK_MAX` at the floor and the resync
     /// contract at the ceiling: a job's events are complete within half an
@@ -207,6 +243,14 @@ const _: () = {
         http::UPLOAD_BODY_BYTES_MAX * ingest::ARCHIVE_COMPRESSION_RATIO_MAX
             > ingest::ARCHIVE_UNCOMPRESSED_BYTES_MAX,
         "the ratio cap must be able to bind before the absolute cap, or one of them is dead code"
+    );
+    assert!(
+        import::SPREADSHEET_BYTES_MAX > http::REQUEST_BODY_BYTES_MAX,
+        "the spreadsheet route exceeds the general body ceiling deliberately, and says so"
+    );
+    assert!(
+        import::SPREADSHEET_BYTES_MAX < http::UPLOAD_BODY_BYTES_MAX,
+        "a spreadsheet is a zip parsed into cells, so it is bounded well under the payload ceiling"
     );
     #[cfg(not(target_family = "wasm"))]
     assert!(

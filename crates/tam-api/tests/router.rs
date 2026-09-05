@@ -194,7 +194,15 @@ async fn every_documented_operation_is_mounted() {
             .replace("{job}", "11111111-1111-4111-8111-111111111111")
             .replace("{item}", "11111111-1111-4111-8111-111111111111")
             .replace("{product}", "11111111-1111-4111-8111-111111111111")
-            .replace("{connection}", "11111111-1111-4111-8111-111111111111");
+            .replace("{file}", "11111111-1111-4111-8111-111111111111")
+            .replace("{connection}", "11111111-1111-4111-8111-111111111111")
+            .replace("{batch}", "11111111-1111-4111-8111-111111111111")
+            // A handle is a content hash, not a uuid, so it substitutes with
+            // 64 hex characters or the route it names never matches.
+            .replace(
+                "{handle}",
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            );
         let method = route.method.to_uppercase();
         let request = Request::builder()
             .method(method.as_str())

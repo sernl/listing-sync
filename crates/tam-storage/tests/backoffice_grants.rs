@@ -121,6 +121,35 @@ async fn seed_two_tenants(app: &PgPool) -> Result<(), sqlx::Error> {
         .bind(uuid::Uuid::from_bytes([mark.wrapping_add(0x30); 16]))
         .execute(&mut *tx)
         .await?;
+        // Two ledger events per tenant, which is what migration 0060's grant is
+        // asserted against below: one drain measurement the operator role may
+        // read, and one settlement carrying a marker that must never reach it.
+        let job = uuid::Uuid::from_bytes([mark.wrapping_add(0x50); 16]);
+        sqlx::query(
+            "INSERT INTO job \
+             (org_id, id, inventory, marketplace, created_at, actor_kind) \
+             VALUES ($1, $2, 'tes_gb', 'tes', now(), 'system')",
+        )
+        .bind(org_uuid)
+        .bind(job)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO job_event \
+             (org_id, org_seq, job_id, kind, payload, created_at, actor_kind) \
+             VALUES ($1, 1, $2, 'ImportDrainMeasured', $3, now(), 'system'), \
+                    ($1, 2, $2, 'JobSettled', $4, now(), 'system')",
+        )
+        .bind(org_uuid)
+        .bind(job)
+        .bind(serde_json::json!({
+            "source": "TesGb", "target": "TesNz", "rows": 1, "terms_seen": 3,
+            "terms_unmapped": 1, "terms_covered": 1, "items_new": 1,
+            "items_already_open": 0
+        }))
+        .bind(serde_json::json!({ "secret": "seller" }))
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
     }
     Ok(())
@@ -273,6 +302,10 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         );
     }
 
+    // `job_event` is deliberately absent from both lists above. It is neither
+    // fully denied nor granted `USING (true)` like every table below, and
+    // folding it into either list would state something false about it; its
+    // own case follows this test.
     for table in [
         "product",
         "mapping",
@@ -296,4 +329,63 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
              one without the other shows this role nothing"
         );
     }
+}
+
+/// Migration 0060's grant, which is the only one in this role's list that is
+/// not `USING (true)`, so it is the only one whose *narrowness* is the thing
+/// worth asserting.
+///
+/// The seeded `JobSettled` payload carries a marker that must never surface.
+/// Asserting the count of visible kinds alone would pass against a policy that
+/// leaked a different event with no rows in it yet; asserting that a row which
+/// exists, and is readable to the tenant, is invisible here is what actually
+/// pins the fence.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_backoffice_role_reads_drain_measurements_and_no_other_ledger_event(app: PgPool) {
+    seed_two_tenants(&app).await.expect("the tenants seed");
+    let backoffice = backoffice_pool(&app).await.expect("the role connects");
+
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM import_drain_measurement")
+        .fetch_one(&backoffice)
+        .await
+        .expect("the operator projection reads");
+    assert_eq!(
+        rows, 2,
+        "the view carries one measurement per tenant, across tenants"
+    );
+
+    let kinds: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT kind FROM job_event ORDER BY kind")
+            .fetch_all(&backoffice)
+            .await
+            .expect("the ledger reads under the restricted policy");
+    assert_eq!(
+        kinds,
+        vec!["ImportDrainMeasured".to_owned()],
+        "the operator role sees drain measurements and no other kind of ledger event"
+    );
+
+    let leaked: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM job_event WHERE payload::text LIKE '%seller%'")
+            .fetch_one(&backoffice)
+            .await
+            .expect("the probe runs");
+    assert_eq!(
+        leaked, 0,
+        "the settled event's payload is invisible to the operator role"
+    );
+
+    // The tenant's own pinned connection still sees both, so the assertion
+    // above is a fence rather than an empty table.
+    let mut tenant = app.acquire().await.expect("a pinned connection");
+    sqlx::query("SELECT set_config('app.current_org', $1, false)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tenant)
+        .await
+        .expect("the pin sets");
+    let visible: i64 = sqlx::query_scalar("SELECT count(*) FROM job_event")
+        .fetch_one(&mut *tenant)
+        .await
+        .expect("the tenant reads its own ledger");
+    assert_eq!(visible, 2, "the tenant itself sees both of its own events");
 }

@@ -38,7 +38,7 @@ const NOW: Timestamp = Timestamp(5_000);
 fn second_product() -> CanonicalProduct {
     let mut product = minimal_product();
     product.id = PRODUCT_2;
-    product.payload = PayloadSet::new(
+    product.payload = Some(PayloadSet::new(
         ProductFile {
             id: FileId(Uuid([0x22; 16])),
             role: FileRole::Payload,
@@ -50,7 +50,7 @@ fn second_product() -> CanonicalProduct {
             },
         },
         vec![],
-    );
+    ));
     product
 }
 
@@ -73,6 +73,48 @@ fn unbound(org: OrgId, product: ProductId, inventory: InventoryId, id: MappingId
         publish: PublishMode::DryRun,
         lifecycle: RemoteLifecycle::Absent,
     }
+}
+
+/// The database refuses a mapping onto a resource with no file, on its own.
+///
+/// D32 moved the payload requirement from the product to the mapping, and the
+/// API refuses this by name in `add_mapping`. This test deliberately does not
+/// go through that route: it writes the mapping straight through the
+/// repository, so it fails if the handler's guard is the only thing holding
+/// the rule. `mapping_payload_nonempty` in migration 0061 is what it is
+/// actually asking about, and a deferred constraint trigger raises at commit,
+/// which is why the refusal surfaces from the write rather than from a read
+/// before it.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_mapping_onto_a_resource_with_no_file_is_refused_by_the_database(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    let mut kept = minimal_product();
+    kept.payload = None;
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &kept, NOW)
+        .await
+        .expect("a resource with no file is stored, which is D32's other half");
+
+    let refused = MappingRepo::new(pool.clone())
+        .add(
+            ORG_A,
+            &unbound(ORG_A, PRODUCT_1, InventoryId::Tpt, MAPPING_1),
+            0,
+            NOW,
+        )
+        .await;
+    // Named rather than `is_err`: an insert can fail for a dozen reasons a
+    // fixture change could introduce, and a test that accepts any of them would
+    // go on passing after the trigger it exists to check was dropped.
+    let message = match refused {
+        Ok(_) => panic!("the mapping was written onto a resource with no file"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        message.contains("no live payload file"),
+        "a marketplace listing needs a file, and the trigger says so even when \
+         nothing above it did: {message}"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

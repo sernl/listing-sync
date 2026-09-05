@@ -67,7 +67,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
                     body: "Fixture".to_owned(),
                     format: CopyFormat::Markdown,
                 },
-                payload: PayloadSet::new(
+                payload: Some(PayloadSet::new(
                     ProductFile {
                         id: FileId(Uuid([0x03; 16])),
                         role: FileRole::Payload,
@@ -79,7 +79,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: None,
                 previews: vec![],
                 subjects: vec![],

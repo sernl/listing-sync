@@ -30,7 +30,6 @@ tauri-build = { version = "2.6", features = [] }
 [dependencies]
 tauri               = { version = "2.11", features = [] }
 tauri-plugin-os     = "2.3"
-tauri-plugin-updater = "2.11"
 
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -141,6 +140,43 @@ keyring = { version = "3.6", features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+
+# The updater, on the platforms that have one. `tauri-plugin-updater` declares
+# `platforms.support.android.level = "none"` in its own manifest and the code
+# registering it is already `#[cfg(desktop)]`, so on a phone it was compiled in
+# to answer nothing while dragging its own reqwest features, `zip` and
+# `system-proxy` behind it.
+#
+# The predicate is spelled out rather than written as `cfg(desktop)`, because a
+# Cargo target table is evaluated by Cargo against rustc's built-in cfgs and
+# knows nothing of the `desktop` and `mobile` cfgs `tauri-build` sets for the
+# compiler. `cfg(desktop)` here would match no target at all and silently drop
+# the dependency from every build. The two spellings mean the same set: Tauri
+# defines `desktop` as `not(mobile)` and `mobile` as android or ios.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2.11"
+
+# The roots the Android build verifies against, and the one platform that does
+# not use the device's own trust store. Founder decision O6, 2026-09-06.
+#
+# Not a preference: reqwest 0.13 names `rustls-platform-verifier` as a hard
+# dependency of both of its rustls features, so it is compiled into every build
+# and there is no feature that swaps it for bundled roots. On Android that
+# verifier panics on first use unless a Kotlin component -- not published to
+# Maven -- is added to the Gradle build and initialised with the JNI
+# environment. Rather than take that component, the Android client hands reqwest
+# a rustls configuration rooted here, and every desktop target keeps the
+# platform verifier untouched.
+#
+# What it costs, stated rather than left to be discovered: a certificate the
+# seller's own device trusts and Mozilla does not -- a school proxy's -- is
+# refused on Android and accepted on the desktop build. That gap is narrower
+# than it sounds, because an application targeting API 24 or above does not
+# trust a user-installed CA in the first place without a network security
+# configuration naming `<certificates src="user" />`, which this application
+# does not carry.
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-roots = "1"
 
 [dev-dependencies]
 ring  = { version = "0.17", features = ["std"] }

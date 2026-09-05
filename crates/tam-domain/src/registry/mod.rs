@@ -24,6 +24,7 @@ pub mod listing_url;
 mod tes;
 mod tpt;
 
+use crate::product::FormGroup;
 use crate::TermKind;
 use tam_types::{FieldKey, InventoryId, LengthUnit, TransportClass};
 
@@ -166,10 +167,149 @@ pub enum NonDelegable {
     LegalContent,
 }
 
+/// One step of the Tes uploader wizard, in the order it walks them.
+///
+/// Tes's uploader is five ordered screens rather than one page of headings,
+/// captured as "Description, Add Files, Categories, Licence, Publish" in
+/// `docs/notes/probes/02-upload-request-shape.md`. They are a different shape
+/// from TPT's nine sections and are not a translation of them: TPT names a
+/// Price section Tes folds into Licence, and Tes names a Publish step TPT
+/// spells Product Status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TesStep {
+    Description,
+    Files,
+    Categories,
+    Licence,
+    Publish,
+}
+
+impl TesStep {
+    pub const ALL: [Self; 5] = [
+        Self::Description,
+        Self::Files,
+        Self::Categories,
+        Self::Licence,
+        Self::Publish,
+    ];
+
+    /// The step as the uploader's own wizard names it.
+    #[must_use]
+    pub const fn heading(self) -> &'static str {
+        match self {
+            Self::Description => "Description",
+            Self::Files => "Add Files",
+            Self::Categories => "Categories",
+            Self::Licence => "Licence",
+            Self::Publish => "Publish",
+        }
+    }
+}
+
+/// The section of one platform's own authoring form that holds a field.
+///
+/// Two arms rather than one flat list, because the two platforms' form shapes
+/// are separate facts and neither is the other's translation. TPT's arm
+/// carries [`FormGroup`] itself rather than restating its nine values, so a
+/// section added there is a compile error here instead of a second list to
+/// keep in step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldGroup {
+    Tes(TesStep),
+    Tpt(FormGroup),
+}
+
+impl FieldGroup {
+    /// Every group, in the order a form renders them: Tes's five steps in
+    /// wizard order, then TPT's nine sections in TPT's own order. No
+    /// inventory carries groups from both arms, so one order serves both.
+    pub const ALL: [Self; 14] = [
+        Self::Tes(TesStep::Description),
+        Self::Tes(TesStep::Files),
+        Self::Tes(TesStep::Categories),
+        Self::Tes(TesStep::Licence),
+        Self::Tes(TesStep::Publish),
+        Self::Tpt(FormGroup::Name),
+        Self::Tpt(FormGroup::Files),
+        Self::Tpt(FormGroup::Description),
+        Self::Tpt(FormGroup::Price),
+        Self::Tpt(FormGroup::Categories),
+        Self::Tpt(FormGroup::EducationStandards),
+        Self::Tpt(FormGroup::Details),
+        Self::Tpt(FormGroup::Copyright),
+        Self::Tpt(FormGroup::ProductStatus),
+    ];
+
+    /// The token this group is named by on the wire. Namespaced by
+    /// marketplace because "categories" names a Tes wizard step and a TPT
+    /// section that hold different fields.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Tes(TesStep::Description) => "tes_description",
+            Self::Tes(TesStep::Files) => "tes_files",
+            Self::Tes(TesStep::Categories) => "tes_categories",
+            Self::Tes(TesStep::Licence) => "tes_licence",
+            Self::Tes(TesStep::Publish) => "tes_publish",
+            Self::Tpt(group) => match group {
+                FormGroup::Name => "tpt_name",
+                FormGroup::Files => "tpt_files",
+                FormGroup::Description => "tpt_description",
+                FormGroup::Price => "tpt_price",
+                FormGroup::Categories => "tpt_categories",
+                FormGroup::EducationStandards => "tpt_education_standards",
+                FormGroup::Details => "tpt_details",
+                FormGroup::Copyright => "tpt_copyright",
+                FormGroup::ProductStatus => "tpt_product_status",
+            },
+        }
+    }
+
+    /// The heading as the platform's own form reads it.
+    #[must_use]
+    pub const fn heading(self) -> &'static str {
+        match self {
+            Self::Tes(step) => step.heading(),
+            Self::Tpt(group) => group.heading(),
+        }
+    }
+}
+
+/// Where a field sits on the platform's own authoring form.
+///
+/// A form shape rather than a field fact, which is why it is optional: a
+/// field the platform's form has no control for carries none, and so does
+/// every field of an inventory whose form was never captured.
+///
+/// `ordinal` is the field's position among its section's own controls, and
+/// orders nothing across sections: the render order is `FieldGroup::ALL`
+/// first and this second. It counts controls rather than native fields, so a
+/// gap is a slot held by a control that is not a native field of its own —
+/// several pickers feeding one wire field, or one of the canonical six.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormPlacement {
+    pub group: FieldGroup,
+    pub ordinal: u8,
+}
+
 /// A field particular to one platform's wire, named as that wire names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeField {
     pub name: &'static str,
+    /// The words the platform's own form heads this control with, where a
+    /// capture recorded them, and `None` where none did.
+    ///
+    /// `None` is not a hole to fill: the caller shows the wire name, exactly
+    /// as a value with no captured label shows its own token. Inventing a
+    /// reading of `mainType` would put a claim on a seller's screen that no
+    /// capture supports, and a field assembled from several controls — TPT's
+    /// `taxonomyTags`, which five pickers feed — has no single label to
+    /// record.
+    pub label: Option<&'static str>,
+    /// Where the platform's own form puts this field, where a capture placed
+    /// it. Absent means the form has no control for it, or that no form
+    /// capture exists for this inventory at all.
+    pub placement: Option<FormPlacement>,
     pub direction: FieldDirection,
     /// Read as `FieldSpec::required`: a recorded refusal, not an absence.
     pub required: bool,
@@ -251,6 +391,23 @@ impl InventoryRegistry {
             .copied()
             .find(|native| native.name == name)
     }
+
+    /// The form sections this inventory's fields fall in, in render order and
+    /// without repeats. Empty where no form capture placed any field, which
+    /// is Etsy.
+    #[must_use]
+    pub fn groups(&self) -> Vec<FieldGroup> {
+        FieldGroup::ALL
+            .into_iter()
+            .filter(|group| {
+                self.natives.iter().any(|native| {
+                    native
+                        .placement
+                        .is_some_and(|placement| placement.group == *group)
+                })
+            })
+            .collect()
+    }
 }
 
 /// Total over `InventoryId::ALL` by exhaustive match, so a new inventory is a
@@ -297,7 +454,9 @@ pub fn truncate(text: &str, cap: LengthCap) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{registry, truncate, Delegation, FieldSpec, LengthCap, NativeVocabulary};
+    use super::{
+        registry, truncate, Delegation, FieldGroup, FieldSpec, LengthCap, NativeVocabulary,
+    };
     use tam_types::{FieldKey, InventoryId, LengthUnit, TransportClass};
 
     fn cap(limit: usize, unit: LengthUnit) -> LengthCap {
@@ -399,20 +558,118 @@ mod tests {
         }
     }
 
+    /// The count and the names together, because the count alone would let a
+    /// legal field trade places with an ordinary one. A form that pre-ticks
+    /// best fit reads `delegation` to decide what the tick may cover, so this
+    /// is what stops a new authoring surface rendering a rights grant as
+    /// something a computation may supply.
     #[test]
     fn a_never_delegable_field_states_which_bar_it_clears() {
-        let mut refused = 0_usize;
+        let mut refused: Vec<(InventoryId, &str)> = Vec::new();
         for inventory in InventoryId::ALL {
             for native in registry(inventory).natives {
                 if matches!(native.delegation, Delegation::Never(_)) {
-                    refused = refused.saturating_add(1);
+                    refused.push((inventory, native.name));
                 }
             }
         }
         assert_eq!(
-            refused, 4,
+            refused,
+            vec![
+                (InventoryId::TesGb, "licence"),
+                (InventoryId::TesUs, "licence"),
+                (InventoryId::TesNz, "licence"),
+                (InventoryId::Tpt, "ItemsProperty.copyright_declaration"),
+            ],
             "the Tes licence on each of three inventories, and TPT's copyright declaration"
         );
+    }
+
+    /// A required field is the one a create is refused without, so it is the
+    /// one a form must be able to head with words and put somewhere. Etsy is
+    /// exempted by a derived condition rather than by name: its entries come
+    /// from a published API reference and no form of its was ever captured, so
+    /// it places no field at all, and the moment one of its fields is placed
+    /// its required ones are held to the same bar.
+    #[test]
+    fn every_required_native_of_a_captured_form_carries_a_label_and_a_placement() {
+        for inventory in InventoryId::ALL {
+            let entry = registry(inventory);
+            if entry.groups().is_empty() {
+                continue;
+            }
+            for native in entry.natives.iter().filter(|native| native.required) {
+                assert!(
+                    native.label.is_some() && native.placement.is_some(),
+                    "{inventory:?} refuses a create without {}, so a form has to be able to \
+                     head it with the platform's own words and know where to put it",
+                    native.name
+                );
+            }
+        }
+    }
+
+    /// `groups` is what a form renders its headings from, so a placed field
+    /// whose group it omits would be a control with nowhere to go.
+    #[test]
+    fn every_placed_field_falls_in_a_group_its_inventory_lists() {
+        for inventory in InventoryId::ALL {
+            let entry = registry(inventory);
+            let listed = entry.groups();
+            for native in entry.natives {
+                let Some(placement) = native.placement else {
+                    continue;
+                };
+                assert!(
+                    listed.contains(&placement.group),
+                    "{inventory:?} places {} in {:?}, which its own group list omits",
+                    native.name,
+                    placement.group
+                );
+            }
+        }
+    }
+
+    /// One inventory never draws groups from two platforms' forms, so
+    /// `FieldGroup::ALL`'s single order is a render order for every one of
+    /// them rather than an interleaving of two.
+    #[test]
+    fn an_inventory_draws_its_groups_from_one_platforms_form() {
+        for inventory in InventoryId::ALL {
+            let groups = registry(inventory).groups();
+            let tes = groups
+                .iter()
+                .filter(|group| matches!(group, FieldGroup::Tes(_)))
+                .count();
+            assert!(
+                tes == 0 || tes == groups.len(),
+                "{inventory:?} mixes two platforms' form sections, so no single order \
+                 renders it"
+            );
+        }
+    }
+
+    /// The token is the client's key into the heading list, so two groups
+    /// sharing one would collapse two sections into one on the form. Tes and
+    /// TPT both name a Categories section, which is exactly why the token is
+    /// namespaced and this test exists.
+    #[test]
+    fn every_group_token_is_its_own() {
+        let mut tokens: Vec<&str> = FieldGroup::ALL.iter().map(|group| group.token()).collect();
+        let count = tokens.len();
+        tokens.sort_unstable();
+        tokens.dedup();
+        assert_eq!(
+            tokens.len(),
+            count,
+            "two sections sharing a token would render as one heading"
+        );
+        for group in FieldGroup::ALL {
+            assert!(
+                !group.heading().is_empty(),
+                "{group:?} is rendered as a heading, so it must have words"
+            );
+        }
     }
 
     #[test]

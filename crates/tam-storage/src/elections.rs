@@ -512,6 +512,58 @@ impl ElectionRepo {
         tx.commit().await?;
         Ok(())
     }
+
+    /// Records several standing answers together, which is what one tick of
+    /// the best-fit control is: a delegation the seller gave once, over every
+    /// axis of one marketplace that admits one.
+    ///
+    /// One transaction rather than a call per axis, so a marketplace is never
+    /// left half-delegated by a failure halfway down. The rules arrive already
+    /// constructed for the same reason `upsert_rule`'s does, and an empty
+    /// slice writes nothing rather than opening a transaction to do nothing.
+    pub async fn upsert_rules(&self, rules: &[ElectionRule]) -> Result<(), StorageError> {
+        let Some(first) = rules.first() else {
+            return Ok(());
+        };
+        if rules.iter().any(|rule| rule.org != first.org) {
+            return Err(StorageError::OrgMismatch);
+        }
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, first.org).await?;
+        for rule in rules {
+            write_rule(&mut tx, rule).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Withdraws every delegation this tenant gave on one marketplace, and
+    /// reports how many rows it removed.
+    ///
+    /// Scoped to `delegate` rows and nothing else: unticking best fit takes
+    /// back the permission to compute an answer, and the seller's own literal
+    /// answers on the same axes are decisions they made rather than
+    /// permissions they granted. A delete that took those too would discard
+    /// standing answers the seller never revoked.
+    pub async fn revoke_delegation(
+        &self,
+        org: OrgId,
+        inventory: InventoryId,
+    ) -> Result<u64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let removed = sqlx::query!(
+            "DELETE FROM election_rule \
+             WHERE org_id = $1 AND inventory = $2 AND answer_kind = 'delegate'",
+            uuid_to_db(org.0),
+            inventory_to_db(inventory),
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(removed)
+    }
 }
 
 /// The rule upsert itself, taking the transaction rather than opening one, so

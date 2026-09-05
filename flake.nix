@@ -107,6 +107,7 @@
           # the two cannot drift into that failure again.
           androidBuildToolsVersion = "35.0.0";
           androidNdkVersion = "29.0.14206865";
+          androidEmulatorVersion = "37.1.11";
           # Every version is pinned. `latest` in this composition resolves
           # through nixpkgs' `repo.json`, so an input bump would silently move
           # the SDK a build was proven against; naming them makes that a diff.
@@ -114,16 +115,43 @@
             cmdLineToolsVersion = "19.0";
             platformToolsVersion = "37.0.1";
             buildToolsVersions = [ androidBuildToolsVersion ];
-            # 36 is `compileSdk` and `targetSdk` in the generated project.
-            platformVersions = [ "36" ];
+            # 36 is `compileSdk` and `targetSdk` in the generated project. 31 is
+            # here for the emulator rather than for the build: it is Android 12,
+            # which is where the founder's Galaxy Note10+ ends, and reproducing
+            # a launch on the API the failure was reported from is the point of
+            # having an emulator at all. The two are one list because androidenv
+            # fetches a system image per platform version rather than letting
+            # the image be named on its own, so this also costs the API 36 image
+            # nothing here uses (`compose-android-packages.nix`, the
+            # `system-images` binding maps over `platformVersions`).
+            platformVersions = [
+              "31"
+              "36"
+            ];
             includeNDK = true;
             ndkVersions = [ androidNdkVersion ];
             # Nothing here builds C++ through CMake -- Tauri drives cargo from
-            # a Gradle task -- and the emulator and its system images are
-            # gigabytes we do not need to compile an APK.
+            # a Gradle task.
             includeCmake = false;
-            includeEmulator = false;
-            includeSystemImages = false;
+            # Developer tooling rather than a product dependency: a client that
+            # opens and closes says nothing about why, and the answer is one
+            # `logcat` away on a device we control instead of on a seller's
+            # phone. The APK build does not use any of this.
+            #
+            # One image type and one ABI, because the composition fetches the
+            # cross product of `platformVersions`, `systemImageTypes` and
+            # `abiVersions` and each image is over a gigabyte. x86_64 is the
+            # one that runs under KVM at native speed; an arm64 image on an
+            # x86_64 host is emulated instruction by instruction and boots in
+            # tens of minutes. What that costs is stated rather than hidden: a
+            # defect that only appears on arm64 does not appear here, so a
+            # clean launch on this image narrows the fault to the ABI or the
+            # device rather than clearing the client.
+            includeEmulator = true;
+            emulatorVersion = androidEmulatorVersion;
+            includeSystemImages = true;
+            systemImageTypes = [ "google_apis" ];
+            abiVersions = [ "x86_64" ];
           };
           androidSdkRoot = "${androidComposition.androidsdk}/libexec/android-sdk";
           androidNdkRoot = "${androidSdkRoot}/ndk/${androidNdkVersion}";

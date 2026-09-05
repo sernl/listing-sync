@@ -85,7 +85,7 @@ pub(crate) fn identity() -> ProductIdentity {
     ProductIdentity {
         id: ProductId(Uuid([0x0f; 16])),
         org: OrgId(Uuid([0xaa; 16])),
-        payload: PayloadSet::new(file(FileRole::Payload), vec![]),
+        payload: Some(PayloadSet::new(file(FileRole::Payload), vec![])),
         cover: Some(file(FileRole::Cover)),
         previews: vec![file(FileRole::Preview)],
         subjects: vec![],

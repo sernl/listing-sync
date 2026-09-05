@@ -12,7 +12,8 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::resources::{
-    ConnectionsView, DecisionsView, ProductView, ProductsPage, QueueView, RevokedView, StatsView,
+    ConnectionsView, DecisionsView, DelegationsView, ProductView, ProductsPage, QueueView,
+    RevokedView, StatsView,
 };
 use tam_api::{router, APIError, AppState, Config, SESSION_COOKIE};
 use tam_domain::equivalence::{Election, ElectionTrigger, Loss, PricingBranch};
@@ -82,7 +83,7 @@ async fn provision(pool: &PgPool) {
                     body: "Fixture body.".to_owned(),
                     format: CopyFormat::Markdown,
                 },
-                payload: PayloadSet::new(
+                payload: Some(PayloadSet::new(
                     ProductFile {
                         id: FileId(Uuid([0x21; 16])),
                         role: FileRole::Payload,
@@ -94,7 +95,7 @@ async fn provision(pool: &PgPool) {
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: None,
                 previews: vec![],
                 subjects: vec![],
@@ -201,6 +202,19 @@ async fn the_catalogue_lists_and_the_aggregate_reads_back(pool: PgPool) {
     assert_eq!(page.products.len(), 1, "the fixture product lists");
     assert_eq!(page.products[0].title, "Fixture product");
     assert_eq!(page.next_cursor, None, "a short page mints no cursor");
+    assert_eq!(
+        page.products[0].cover, None,
+        "a resource carrying no cover file names no cover URL, so its row draws \
+         the placeholder rather than asking for bytes that are not there"
+    );
+
+    let cover = format!("/v1/products/{}/cover", PRODUCT.0.to_hyphenated());
+    let (status, _) = call(pool.clone(), Config::default(), Method::GET, &cover, None).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "and the route refuses rather than answering an empty body"
+    );
 
     let path = format!("/v1/products/{}", PRODUCT.0.to_hyphenated());
     let (status, body) = call(pool, Config::default(), Method::GET, &path, None).await;
@@ -635,5 +649,209 @@ async fn a_tpt_tag_axis_resolution_without_an_identifier_is_refused_rather_than_
         edges.first().and_then(|edge| edge.to.native_id.as_deref()),
         Some("fractions"),
         "the slug TPT issues is what the edge carries"
+    );
+}
+
+/// The best-fit tick, end to end: it writes durable rules, the decision
+/// surface reads the opt-in back off them rather than assuming it, the legal
+/// axis is untouched whatever the tick says, and the untick puts everything
+/// back.
+///
+/// This is the whole of the founder's amendment made checkable. Pre-ticking
+/// best fit is safe only if the tick can never cover a rights grant, if the
+/// delegation is a row rather than a browser preference, and if withdrawing
+/// it is one call — and each of the three is asserted here.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn ticking_best_fit_delegates_every_axis_but_the_licence_and_the_untick_takes_it_back(
+    pool: PgPool,
+) {
+    provision(&pool).await;
+    ElectionRepo::new(pool.clone())
+        .raise(
+            ORG,
+            MAPPING,
+            &[
+                Election {
+                    product: PRODUCT,
+                    inventory: InventoryId::TesGb,
+                    axis: TermKind::ResourceType,
+                    trigger: ElectionTrigger::ElectOne { from: Vec::new() },
+                },
+                Election {
+                    product: PRODUCT,
+                    inventory: InventoryId::TesGb,
+                    axis: TermKind::Licence,
+                    trigger: ElectionTrigger::Supply {
+                        pricing: PricingBranch::Free,
+                    },
+                },
+            ],
+            NOW,
+        )
+        .await
+        .expect("both questions raise");
+
+    let resolutions = |body: &[u8]| {
+        let view: DecisionsView = parse(body);
+        let mut read: Vec<(TermKind, String)> = view
+            .items
+            .iter()
+            .map(|item| (item.axis, item.resolution.clone()))
+            .collect();
+        read.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+        read
+    };
+
+    let (_, before) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        "/v1/elections/items",
+        None,
+    )
+    .await;
+    assert_eq!(
+        resolutions(&before),
+        vec![
+            (TermKind::Licence, "seller_decides".to_owned()),
+            (TermKind::ResourceType, "seller_decides".to_owned()),
+        ],
+        "a tenant who has written no rule is not opted in, which is the shipped behaviour"
+    );
+
+    let (status, ticked) = call(
+        pool.clone(),
+        Config::default(),
+        Method::PUT,
+        "/v1/elections/delegation",
+        Some(serde_json::json!({ "inventory": "TesGb", "delegated": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: DelegationsView = parse(&ticked);
+    let tes: Vec<(TermKind, bool)> = view
+        .items
+        .iter()
+        .filter(|item| item.inventory == InventoryId::TesGb)
+        .map(|item| (item.axis, item.delegated))
+        .collect();
+    assert_eq!(
+        tes,
+        vec![
+            (TermKind::Subject, true),
+            (TermKind::Topic, true),
+            (TermKind::ResourceType, true),
+            (TermKind::Phase, true),
+            (TermKind::Licence, false),
+        ],
+        "one tick reaches every axis the registry admits and stops at the one it does not"
+    );
+
+    let (_, after) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        "/v1/elections/items",
+        None,
+    )
+    .await;
+    assert_eq!(
+        resolutions(&after),
+        vec![
+            (TermKind::Licence, "seller_decides".to_owned()),
+            (TermKind::ResourceType, "best_fit".to_owned()),
+        ],
+        "the opt-in is read back off the seller's own rows, and Never still wins on the \
+         licence"
+    );
+
+    let (status, _) = call(
+        pool.clone(),
+        Config::default(),
+        Method::PUT,
+        "/v1/elections/delegation",
+        Some(serde_json::json!({ "inventory": "TesGb", "delegated": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, untickeded) = call(
+        pool,
+        Config::default(),
+        Method::GET,
+        "/v1/elections/items",
+        None,
+    )
+    .await;
+    assert_eq!(
+        resolutions(&untickeded),
+        vec![
+            (TermKind::Licence, "seller_decides".to_owned()),
+            (TermKind::ResourceType, "seller_decides".to_owned()),
+        ],
+        "the delegation is revocable, so unticking is one call and not a support request"
+    );
+}
+
+/// The question one marketplace tab of the authoring form asks: what does
+/// this resource still owe this marketplace? Both filters narrow, and a
+/// filter naming an inventory this server does not serve is the caller's
+/// error rather than an empty list that looks like good news.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_decision_surface_answers_for_one_resource_on_one_marketplace(pool: PgPool) {
+    provision(&pool).await;
+    ElectionRepo::new(pool.clone())
+        .raise(
+            ORG,
+            MAPPING,
+            &[Election {
+                product: PRODUCT,
+                inventory: InventoryId::TesGb,
+                axis: TermKind::Licence,
+                trigger: ElectionTrigger::Supply {
+                    pricing: PricingBranch::Free,
+                },
+            }],
+            NOW,
+        )
+        .await
+        .expect("the question raises");
+
+    let count = |body: &[u8]| parse::<DecisionsView>(body).items.len();
+    let (status, matching) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        &format!(
+            "/v1/elections/items?product={}&inventory=TesGb",
+            PRODUCT.0.to_hyphenated()
+        ),
+        None,
+    )
+    .await;
+    assert_eq!((status, count(&matching)), (StatusCode::OK, 1));
+
+    let (_, other_market) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        "/v1/elections/items?inventory=Tpt",
+        None,
+    )
+    .await;
+    assert_eq!(count(&other_market), 0, "nothing is owed to TPT here");
+
+    let (status, _) = call(
+        pool,
+        Config::default(),
+        Method::GET,
+        "/v1/elections/items?inventory=tesgb",
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a spelling this server never issues is refused as every other bad value on this \
+         surface is, rather than answered with an empty list that reads as good news"
     );
 }

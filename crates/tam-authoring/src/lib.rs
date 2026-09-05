@@ -105,6 +105,20 @@ pub struct DraftInput {
     pub name: String,
     #[serde(default)]
     pub payload_hash: Option<String>,
+    /// Whether this draft is bound for a marketplace.
+    ///
+    /// D32: a resource kept on Teachouse alone may carry no file, and a file
+    /// becomes necessary the moment a marketplace is named — for a draft there
+    /// and for a live listing alike, so this is about the destination rather
+    /// than the lifecycle state. The model describes a product and cannot know
+    /// where it is going, so the caller states it.
+    ///
+    /// Defaulting to false is what makes a saved template deserialise
+    /// correctly: a template is a partial draft nobody has chosen a
+    /// destination for, and holding it to a marketplace's rules would refuse
+    /// the half-filled form the template surface exists to store.
+    #[serde(default)]
+    pub for_marketplace: bool,
     #[serde(default)]
     pub preview_hash: Option<String>,
     #[serde(default)]
@@ -205,7 +219,7 @@ pub fn refusal_of(error: &AuthoringError) -> RefusalView {
         AuthoringError::EmptySlug => (None, "A category value cannot be blank.".to_owned()),
         AuthoringError::MalformedUploadRef => (
             None,
-            "A file handle is not one this server issued; upload the file again.".to_owned(),
+            "That file is not one we hold; upload it again.".to_owned(),
         ),
         AuthoringError::OverCap { picker, chosen, cap } => (
             Some(picker.label().to_owned()),
@@ -473,6 +487,10 @@ pub struct DraftHead {
     pub price_minor_units: Option<i64>,
     pub payload_hash: Option<String>,
     pub grades: Vec<String>,
+    /// Whether this create names a marketplace, which is the only thing that
+    /// makes the payload necessary (D32). The create body holds the inventory
+    /// list, so this is read from there rather than guessed at here.
+    pub for_marketplace: bool,
 }
 
 impl TptBaseInput {
@@ -481,6 +499,7 @@ impl TptBaseInput {
         DraftInput {
             name: head.name,
             payload_hash: head.payload_hash,
+            for_marketplace: head.for_marketplace,
             preview_hash: None,
             video_preview_hash: self.video_preview_hash,
             thumbnail_mode: self.thumbnail_mode,
@@ -539,7 +558,7 @@ fn refusal_of_draft(refusal: DraftRefusal) -> RefusalView {
         DraftRefusal::PayloadMissing => (
             FormGroup::Files,
             Some("Downloadable File"),
-            "Upload the file buyers download; a product with none cannot be listed anywhere."
+            "Upload the file buyers download. A marketplace will not list this without one."
                 .to_owned(),
         ),
         DraftRefusal::PriceUnderFloor {
@@ -561,9 +580,7 @@ fn refusal_of_draft(refusal: DraftRefusal) -> RefusalView {
         DraftRefusal::TaxCodeUnstated => (
             FormGroup::Price,
             Some("Tax Code"),
-            "Choose a tax code. It is never chosen for you: designating it is yours under \
-             TPT's terms."
-                .to_owned(),
+            "Choose a tax code. TPT makes this your choice rather than ours.".to_owned(),
         ),
     };
     RefusalView {
@@ -621,7 +638,11 @@ pub fn stated_price_refusal(draft: &DraftInput) -> Option<RefusalView> {
 /// The three submission rules, in the order the form's own groups read.
 fn draft_refusals(draft: &DraftInput) -> Vec<DraftRefusal> {
     let mut found = Vec::new();
-    if draft.payload_hash.is_none() {
+    // Only where the draft is bound for a marketplace (D32). A resource kept
+    // here is allowed to have no file yet, which is the whole of the change;
+    // everything else about the rule, including the sentence it renders, is
+    // unmoved.
+    if draft.for_marketplace && draft.payload_hash.is_none() {
         found.push(DraftRefusal::PayloadMissing);
     }
     if !draft.free {
@@ -710,21 +731,63 @@ mod draft_rule_tests {
         );
     }
 
-    /// The defect this rule fixes: the draft reader returned early on a
-    /// missing payload without recording anything, so a titled draft with no
-    /// file came back submittable and only the client's own refusal caught it.
+    /// D32, both directions, because the rule is about the destination and a
+    /// test of one direction alone would pass on a rule that always refuses or
+    /// one that never does.
+    ///
+    /// The defect the refusal itself fixes is older and still guarded: the
+    /// draft reader returned early on a missing payload without recording
+    /// anything, so a titled draft with no file came back submittable and only
+    /// the client's own refusal caught it.
     #[test]
-    fn a_draft_with_no_downloadable_file_is_refused() {
+    fn a_draft_bound_for_a_marketplace_needs_a_downloadable_file() {
         let mut bare = paid();
         bare.payload_hash = None;
+        bare.for_marketplace = true;
         let report = verdict(&bare);
         assert!(
             !report.submittable,
-            "a product buyers cannot download is not one any target will take"
+            "a marketplace will not list a product buyers cannot download"
         );
         assert!(
             controls(&bare).contains(&"Downloadable File".to_owned()),
             "and the refusal names the control rather than the wire field"
+        );
+    }
+
+    #[test]
+    fn a_draft_kept_here_needs_no_downloadable_file() {
+        let mut kept = paid();
+        kept.payload_hash = None;
+        kept.for_marketplace = false;
+        let report = verdict(&kept);
+        assert!(
+            report.submittable,
+            "a resource kept on Teachouse may have no file yet, which is D32"
+        );
+        assert!(
+            !controls(&kept).contains(&"Downloadable File".to_owned()),
+            "and nothing asks for one"
+        );
+    }
+
+    /// The same draft, refused and not refused by the destination alone.
+    ///
+    /// Holds the two tests above to one variable: if some other field of
+    /// `paid()` started deciding the payload rule, both would still pass
+    /// separately and this would not.
+    #[test]
+    fn the_destination_is_the_only_thing_that_decides_it() {
+        let mut draft = paid();
+        draft.payload_hash = None;
+        draft.for_marketplace = false;
+        let kept = verdict(&draft).submittable;
+        draft.for_marketplace = true;
+        let bound = verdict(&draft).submittable;
+        assert_eq!(
+            (kept, bound),
+            (true, false),
+            "one field moved and the verdict moved with it"
         );
     }
 

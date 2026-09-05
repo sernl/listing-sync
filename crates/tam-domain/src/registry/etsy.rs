@@ -1,6 +1,11 @@
 //! Etsy, whose connector is not built. Every entry comes from the published
 //! API reference rather than from a capture, and no equivalence axis is
 //! declared, which is what keeps an Etsy projection blocking.
+//!
+//! No field carries a label or a placement, for the same reason: an API
+//! reference names wire fields and not the words a seller reads or the form
+//! that holds them. Both stay absent until a capture supplies them, and a
+//! form renders the wire names rather than a reading invented here.
 
 use super::{
     CanonicalFields, Delegation, FieldDirection, FieldSpec, InventoryRegistry, LengthCap,
@@ -41,6 +46,8 @@ pub(super) const ETSY: InventoryRegistry = InventoryRegistry {
 const ETSY_NATIVES: &[NativeField] = &[
     NativeField {
         name: "quantity",
+        label: None,
+        placement: None,
         direction: FieldDirection::Written,
         required: true,
         vocabulary: NativeVocabulary::Numeric,
@@ -48,6 +55,8 @@ const ETSY_NATIVES: &[NativeField] = &[
     },
     NativeField {
         name: "who_made",
+        label: None,
+        placement: None,
         direction: FieldDirection::Written,
         required: true,
         vocabulary: NativeVocabulary::Closed(&["i_did", "someone_else", "collective"]),
@@ -57,6 +66,8 @@ const ETSY_NATIVES: &[NativeField] = &[
     // here. Etsy refuses an unlisted value, so a guess is a failed create.
     NativeField {
         name: "when_made",
+        label: None,
+        placement: None,
         direction: FieldDirection::Written,
         required: true,
         vocabulary: NativeVocabulary::ClosedUncaptured,
@@ -68,6 +79,8 @@ const ETSY_NATIVES: &[NativeField] = &[
     // the connector needs to enforce it.
     NativeField {
         name: "tags",
+        label: None,
+        placement: None,
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Free,

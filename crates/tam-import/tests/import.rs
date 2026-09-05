@@ -1341,8 +1341,7 @@ async fn discover_lists_downloads_and_imports_with_no_file_on_disk(pool: PgPool)
         .expect("the product exists");
     let kinds: Vec<FileKind> = record
         .product
-        .payload
-        .iter()
+        .payload_files()
         .map(|file| file.kind)
         .collect();
     assert_eq!(
@@ -1415,8 +1414,7 @@ async fn a_bundle_wrapping_an_inner_zip_keeps_it_as_one_archive_payload(pool: Pg
         .expect("the product exists");
     let kinds: Vec<FileKind> = record
         .product
-        .payload
-        .iter()
+        .payload_files()
         .map(|file| file.kind)
         .collect();
     assert_eq!(

@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater",
+  "description": "The updater's grant, on the platforms that have an updater. Split out of default.json rather than left beside the other window grants, because tauri-plugin-updater is a desktop-only dependency: it declares platforms.support.android.level = \"none\" in its own manifest, lib.rs registers it under #[cfg(desktop)], and its Cargo entry is scoped to cfg(not(any(target_os = \"android\", target_os = \"ios\"))). A capability that names a permission whose plugin is not a dependency of the target being built is a build failure and not a silent no-op — the Android build stops with `Permission updater:default not found` — so the platform list below is what makes the split work rather than decoration on it. The window is main because that is the only window this application creates and the only one the updater's own commands are reached from; the login webview is absent from every capability, here as everywhere.",
+  "platforms": [
+    "linux",
+    "macOS",
+    "windows"
+  ],
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "updater:default"
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT o.id, o.name, o.created_at, (SELECT count(*) FROM product p WHERE p.org_id = o.id AND p.deleted_at IS NULL) AS \"products!\", (SELECT count(*) FROM mapping m WHERE m.org_id = o.id) AS \"mappings!\", (SELECT count(*) FROM connection c WHERE c.org_id = o.id) AS \"connections!\", (SELECT count(*) FROM app_user u WHERE u.org_id = o.id) AS \"users!\" FROM organisation o WHERE o.id = $1",
+  "query": "SELECT o.id, o.name, o.slug, o.created_at, (SELECT count(*) FROM product p WHERE p.org_id = o.id AND p.deleted_at IS NULL) AS \"products!\", (SELECT count(*) FROM mapping m WHERE m.org_id = o.id) AS \"mappings!\", (SELECT count(*) FROM connection c WHERE c.org_id = o.id) AS \"connections!\", (SELECT count(*) FROM app_user u WHERE u.org_id = o.id) AS \"users!\" FROM organisation o ORDER BY o.created_at DESC, o.id LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -15,38 +15,44 @@
       },
       {
         "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "products!",
         "type_info": "Int8"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "mappings!",
         "type_info": "Int8"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "connections!",
         "type_info": "Int8"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "users!",
         "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Int8"
       ]
     },
     "nullable": [
       false,
       false,
+      true,
       false,
       null,
       null,
@@ -54,5 +60,5 @@
       null
     ]
   },
-  "hash": "18a44134a3eb70b009b98108b2c211d92ab9b5be8a06325d74df4869a55d328a"
+  "hash": "1b7cb963baa3f02e512b9be9136e9bc0063a60071ee6376c85d2471a8b8e463f"
 }

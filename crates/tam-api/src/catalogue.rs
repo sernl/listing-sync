@@ -42,10 +42,13 @@ use tam_types::{
     ProductId, ScanOutcome, Stamp, Timestamp, Title, Uuid,
 };
 
+use tam_authoring::refusal_of;
+use tam_domain::product::ProductName;
+
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::product::{record_of, verdict, DraftHead, TptBaseInput};
 use crate::quota::{quota_for, QuotaKind};
-use crate::resources::{kind_from_str, kind_str, MappingHeadView};
+use crate::resources::{file_view, kind_from_str, kind_str, FileView, MappingHeadView};
 use crate::{AppState, OrgContext};
 
 /// The intent version the item idempotency key is derived under, matching
@@ -109,15 +112,49 @@ pub struct FileHandle {
     /// spells it.
     pub kind: String,
     pub byte_len: u64,
+    /// What the seller called the file they chose.
+    ///
+    /// The client's word and never ours: the upload route reads the request
+    /// body as raw bytes, which carry no filename, so the name comes back
+    /// beside the handle on the create or the file write rather than out of
+    /// anything the pipeline probed. Absent is a handle nobody named — the
+    /// generated cover, an entry of an exploded archive, an older client —
+    /// and the console renders the absence rather than inventing a name.
+    #[serde(default)]
+    pub name: Option<String>,
 }
+
+/// The longest name `product_file_name_length` admits.
+const FILE_NAME_MAX: usize = 255;
 
 impl FileHandle {
     fn of(file: &tam_pipeline::pipeline::IngestedFile) -> Self {
         Self {
+            name: None,
             hash: hex_encode(&file.hash.0),
             kind: kind_str(file.kind).to_owned(),
             byte_len: file.byte_len,
         }
+    }
+
+    /// The name this handle carries, refused where it would not fit the
+    /// column. Checked here rather than at each caller so the create, the add
+    /// and the replace cannot come to different conclusions about one field.
+    fn checked_name(&self) -> Result<Option<&str>, APIError> {
+        let Some(name) = self
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        else {
+            return Ok(None);
+        };
+        if name.chars().count() > FILE_NAME_MAX {
+            return Err(validation(
+                "a file's name is longer than the 255 characters a listing can carry",
+            ));
+        }
+        Ok(Some(name))
     }
 
     fn resolve(&self, role: FileRole, now: Timestamp) -> Result<ProductFile, APIError> {
@@ -143,6 +180,27 @@ impl FileHandle {
     }
 }
 
+/// Resolves one handle and records what the seller called it, keyed by the
+/// identity the resolve just minted.
+///
+/// The two steps are one function because the key is that identity: the
+/// resolve mints a fresh `FileId`, so a caller that resolved first and named
+/// afterwards would have to keep the handle and the file paired by hand across
+/// four collections, and the first one it mispaired would put a worksheet's
+/// name on an answer key.
+fn resolve_named(
+    handle: &FileHandle,
+    role: FileRole,
+    now: Timestamp,
+    names: &mut std::collections::HashMap<FileId, String>,
+) -> Result<ProductFile, APIError> {
+    let file = handle.resolve(role, now)?;
+    if let Some(name) = handle.checked_name()? {
+        names.insert(file.id, name.to_owned());
+    }
+    Ok(file)
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     use core::fmt::Write;
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -153,7 +211,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn parse_hash(raw: &str) -> Option<ContentHash> {
+pub(crate) fn parse_hash(raw: &str) -> Option<ContentHash> {
     if raw.len() != 64 {
         return None;
     }
@@ -441,6 +499,30 @@ pub struct MappingView {
     pub mapping: MappingId,
 }
 
+/// Refuses a title the domain will not hold, in the seller's own words.
+///
+/// Through `ProductName::new` rather than an emptiness check of its own, so
+/// this route and the operator import agree: the import already builds the
+/// same type, and a title 81 UTF-16 units long was accepted here and refused
+/// there. The cap is TPT's own, measured from its form, and it was reachable
+/// from this route only when a TPT-base block happened to be present — so a
+/// create without one could store a title no marketplace would take.
+///
+/// The sentence is `tam_authoring`'s, rendered by the same `refusal_of` the
+/// check endpoint renders every other authoring refusal with, so the two
+/// surfaces cannot word one rule differently.
+fn checked_title(raw: &str) -> Result<ProductName, APIError> {
+    ProductName::new(raw).map_err(|error| {
+        let view = refusal_of(&error);
+        APIError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            APIErrorEntry::new(&view.message)
+                .code(APIErrorCode::RequiredFieldMissing)
+                .kind(APIErrorKind::Validation),
+        )
+    })
+}
+
 /// Re-validates a price through the smart constructor, which deserialisation
 /// bypasses: `Money::new` is where a non-positive paid amount is refused, and
 /// a body that reached the handler has not been through it.
@@ -464,6 +546,14 @@ fn checked_price(price: PriceIntent) -> Result<PriceIntent, APIError> {
 /// only refusal anyone has measured. A licence reaches the write either as
 /// the product's own rights declaration or as an already-answered licence
 /// election for that inventory, so either satisfies it.
+///
+/// The refusal names the marketplace and the field for every one that is
+/// missing, and names the field twice — once as the wire spells it, so a
+/// client can anchor to the control, and once as the platform's own form
+/// heads it, so the sentence a seller reads is in their words. A client that
+/// renders the bare message and discards the detail tells a seller a field is
+/// missing without saying which, which is the whole reason the detail is a
+/// contract rather than a convenience.
 fn required_fields_answered(
     inventories: &[InventoryId],
     rights: Option<&RightsInput>,
@@ -498,6 +588,12 @@ fn required_fields_answered(
                 unmet.push(serde_json::json!({
                     "inventory": inventory,
                     "field": native.name,
+                    // The words the platform's own form heads the control
+                    // with, so the refusal a seller reads names the field
+                    // they would recognise rather than the wire name beside
+                    // it. The wire name where no capture recorded words,
+                    // which is the same fallback the vocabulary view makes.
+                    "label": native.label.unwrap_or(native.name),
                 }));
             }
         }
@@ -543,6 +639,10 @@ fn draft_head(
             PriceIntent::Paid(money) => Some(money.minor_units()),
         },
         payload_hash: payload.first().map(|handle| handle.hash.clone()),
+        // The destination is not knowable from these five fields; the create
+        // path overrides it from its own inventory list, which is the only
+        // place that holds one.
+        for_marketplace: false,
         grades: grades
             .iter()
             .map(|path| {
@@ -580,19 +680,24 @@ pub(crate) async fn create_product(
     context: OrgContext,
     Json(body): Json<CreateProductBody>,
 ) -> Result<(StatusCode, Json<CreatedProductView>), APIError> {
-    if body.title.trim().is_empty() {
-        return Err(validation("a product needs a title"));
-    }
-    // Refused here rather than at commit. The deferred
-    // `assert_product_has_payload` trigger states the same invariant, and
-    // letting it fire would turn a form the seller can fix into a 500.
-    let Some((head, rest)) = body.payload.split_first() else {
+    checked_title(&body.title)?;
+    // Named before the general refusal below, because the two are different
+    // situations and only this one is about something the seller just chose. A
+    // create naming a marketplace and carrying no file cannot be listed there
+    // whatever else is true of it, and saying so by name is what lets the form
+    // answer "add your file first" rather than restating the rule for a draft
+    // that was never going anywhere.
+    if !body.inventories.is_empty() && body.payload.is_empty() {
         return Err(coded(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "a product needs at least one payload file; upload the bytes first",
+            "a listing on a marketplace needs a file buyers can download; upload it first",
             APIErrorCode::PayloadMissing,
         ));
-    };
+    }
+    // No payload at all is a resource kept on Teachouse (D32), so the general
+    // refusal that used to stand here is gone and the marketplace case above is
+    // what replaced it. The deferred trigger now raises only for a product a
+    // mapping names, so the two say the same thing.
     let price = checked_price(body.price)?;
     required_fields_answered(&body.inventories, body.rights.as_ref(), &body.elections)?;
     // The TPT-base block is validated before anything is written, against the
@@ -603,13 +708,13 @@ pub(crate) async fn create_product(
     let sidecar = match body.tpt_base.clone() {
         None => None,
         Some(base) => {
-            let draft = base.into_draft(draft_head(
-                &body.title,
-                &body.body,
-                price,
-                &body.payload,
-                &body.grades,
-            ));
+            // The destination is the create body's own, not the block's: a
+            // draft bound for a marketplace needs a file and one kept here
+            // does not (D32), and only this body knows which it is.
+            let draft = base.into_draft(DraftHead {
+                for_marketplace: !body.inventories.is_empty(),
+                ..draft_head(&body.title, &body.body, price, &body.payload, &body.grades)
+            });
             refuse_unsubmittable(&draft)?;
             Some(record_of(&draft)?)
         }
@@ -634,7 +739,13 @@ pub(crate) async fn create_product(
     // catalogue insert upserts a blob row rather than requiring one, so a
     // fabricated hash would otherwise mint a row pointing at no object and
     // charge the tenant for storage that does not exist.
-    let claimed: Vec<ContentHash> = body
+    //
+    // The sidecar's thumbnail hashes are checked here too, and were not before.
+    // They travel as bare digests rather than as `FileHandle`s, so they missed
+    // the chain below and reached `product_tpt_base` unverified: a create could
+    // name four digests this organisation never uploaded and the row would
+    // record them, leaving the TPT write pointing at bytes that do not exist.
+    let mut claimed: Vec<ContentHash> = body
         .payload
         .iter()
         .chain(body.cover.iter())
@@ -644,6 +755,21 @@ pub(crate) async fn create_product(
                 .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))
         })
         .collect::<Result<Vec<_>, APIError>>()?;
+    // The digest is already well-formed by the time this runs — `record_of`
+    // above reads the same strings through `UploadRef::new` and refuses a
+    // malformed one as an authoring refusal — so this arm exists to keep the
+    // conversion total rather than to catch anything a caller can reach today.
+    // What it does catch is the held-bytes question, which nothing asked.
+    for hash in body
+        .tpt_base
+        .iter()
+        .flat_map(|base| base.thumbnail_hashes.iter())
+    {
+        claimed
+            .push(parse_hash(hash).ok_or_else(|| {
+                validation("a thumbnail's hash is not a 64-character hex digest")
+            })?);
+    }
     let known = products
         .stored_hashes(context.org, &claimed)
         .await
@@ -663,12 +789,21 @@ pub(crate) async fn create_product(
         ));
     }
 
-    let payload = PayloadSet::new(
-        head.resolve(FileRole::Payload, now)?,
-        rest.iter()
-            .map(|handle| handle.resolve(FileRole::Payload, now))
-            .collect::<Result<Vec<_>, APIError>>()?,
-    );
+    let mut names = std::collections::HashMap::new();
+    // Non-empty by construction wherever it exists: the option carries the
+    // absence and `PayloadSet` carries nothing else, so there is no third state
+    // in which a set exists and holds no file.
+    let payload = match body.payload.split_first() {
+        None => None,
+        Some((head, rest)) => Some(PayloadSet::new(
+            resolve_named(head, FileRole::Payload, now, &mut names)?,
+            rest.iter()
+                .map(|handle| resolve_named(handle, FileRole::Payload, now, &mut names))
+                .collect::<Result<Vec<_>, APIError>>()?,
+        )),
+    };
+    // The cover is generated from the first payload's bytes rather than
+    // chosen, so no name is recorded for it even where a client sends one.
     let cover = body
         .cover
         .as_ref()
@@ -677,7 +812,7 @@ pub(crate) async fn create_product(
     let previews = body
         .previews
         .iter()
-        .map(|handle| handle.resolve(FileRole::Preview, now))
+        .map(|handle| resolve_named(handle, FileRole::Preview, now, &mut names))
         .collect::<Result<Vec<_>, APIError>>()?;
 
     let raw: Vec<VocabularyPath> = body
@@ -710,7 +845,7 @@ pub(crate) async fn create_product(
 
     let product = ProductId(fresh_uuid());
     products
-        .insert(
+        .insert_named(
             context.org,
             &CanonicalProduct {
                 id: product,
@@ -731,6 +866,7 @@ pub(crate) async fn create_product(
                 // source value in an untyped axis to keep.
                 native_residue: vec![],
             },
+            &names,
             now,
         )
         .await
@@ -911,6 +1047,19 @@ pub(crate) async fn add_mapping(
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such product"))?;
 
+    // The other half of D32, and the half that is not vacuous: a resource kept
+    // on Teachouse may carry no file, so the moment it is pointed at a
+    // marketplace is the moment one becomes necessary. Refused here rather than
+    // at the write, because a mapping is what a publish lowers and a seller who
+    // learns this from a failed job learns it far too late.
+    if !stored.product.has_payload() {
+        return Err(coded(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a listing on a marketplace needs a file buyers can download; upload it first",
+            APIErrorCode::PayloadMissing,
+        ));
+    }
+
     let now = (state.wall)();
     let mapping = MappingId(fresh_uuid());
     let repo = MappingRepo::new(state.pool.clone());
@@ -1078,8 +1227,17 @@ pub(crate) async fn patch_product(
             })
         }
     };
+    // The same rule as the create, on the one route that can change a title
+    // after it. An edit carries a title only when it changes one, so the check
+    // runs on what was sent rather than on an absent field read as blank.
+    let title = body
+        .title
+        .as_deref()
+        .map(checked_title)
+        .transpose()?
+        .map(|name| Title(name.as_str().to_owned()));
     let edit = ProductEdit {
-        title: body.title.as_ref().map(|title| Title(title.clone())),
+        title,
         body: body.body.as_ref().map(|text| ListingCopy {
             body: text.clone(),
             format: body.body_format.unwrap_or(CopyFormat::Markdown),
@@ -1116,6 +1274,10 @@ pub(crate) async fn patch_product(
             },
             payload_hash: None,
             grades: vec![],
+            // False for the same reason `payload_hash` is None: an edit carries
+            // neither, and holding it to the marketplace rule would refuse
+            // every edit of a listing that has a file, for not resending it.
+            for_marketplace: false,
         }))?;
         TptBaseRepo::new(state.pool.clone())
             .upsert(context.org, product, &record, now)
@@ -1313,6 +1475,477 @@ pub(crate) async fn delete_product(
     }))
 }
 
+// ------------------------------------------------------------------- files
+
+/// One file added to a product that already exists.
+///
+/// The role is the client's to state, because a preview and a payload arrive
+/// by the same upload and only the seller knows which they meant. A cover is
+/// accepted for the product that has none, and refused for the product that
+/// has one, which is `product_file_one_cover` said in a sentence.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddFileBody {
+    /// `payload`, `cover` or `preview`, spelled as the product view spells it.
+    pub role: String,
+    pub handle: FileHandle,
+}
+
+/// The bytes one file is to be swapped for.
+///
+/// One field, and deliberately no others. No role, because a replacement keeps
+/// the role of the file it replaces. And no cover: the thumbnail this write
+/// redraws is rendered here from these bytes rather than named by the caller,
+/// so there is no handle for a client to point at a file of its choosing. A
+/// field that cannot be sent is one that cannot be abused, which is why this
+/// closes the hole rather than checking it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReplaceFileBody {
+    pub handle: FileHandle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddedFileView {
+    pub product: ProductId,
+    pub file: FileView,
+    /// The platforms this change reaches on the next send, exactly as
+    /// [`PatchedProductView`] reports them. Nothing here contacts a
+    /// marketplace, so the copy already on one stands until that send.
+    pub reaches: Vec<InventoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplacedFileView {
+    pub product: ProductId,
+    /// The file that stopped being this resource's. Reported because the
+    /// replacement is a new row with a new identifier, and a client keying on
+    /// the old one would otherwise go on rendering it.
+    pub removed: Uuid,
+    pub file: FileView,
+    /// The cover this replacement redrew, absent where it did not.
+    ///
+    /// Reported rather than inferred from having offered one: the two
+    /// conditions that decide it are the server's, so a client that assumed
+    /// would tell the seller their thumbnail changed when it had not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<FileView>,
+    pub reaches: Vec<InventoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemovedFileView {
+    pub product: ProductId,
+    pub file: Uuid,
+    /// What became of the thumbnail. Three states rather than an optional
+    /// file, because a removal can leave it alone, redraw it, or take it away,
+    /// and the last is not the absence of the second.
+    pub thumbnail: ThumbnailView,
+    pub reaches: Vec<InventoryId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ThumbnailView {
+    /// The removed file was not the one it was drawn from.
+    Untouched,
+    /// Redrawn from the file that became the first one.
+    Redrawn { file: FileView },
+    /// Taken away, because the resource has no file left to draw one from. A
+    /// picture of a file the resource does not hold is worse than no picture.
+    Retired,
+}
+
+fn role_from_str(raw: &str) -> Option<FileRole> {
+    match raw {
+        "payload" => Some(FileRole::Payload),
+        "cover" => Some(FileRole::Cover),
+        "preview" => Some(FileRole::Preview),
+        _ => None,
+    }
+}
+
+fn parse_file_id(raw: &str) -> Result<FileId, APIError> {
+    uuid::Uuid::parse_str(raw)
+        .map(|parsed| FileId(Uuid(*parsed.as_bytes())))
+        .map_err(|_| missing("no such file"))
+}
+
+/// The sentence each storage refusal reaches the seller as.
+///
+/// `LastPayload` carries [`APIErrorCode::PayloadMissing`] rather than a code
+/// of its own: it is the same invariant a payload-less create is refused by,
+/// stated at the other end of the resource's life.
+fn file_refusal(state: &AppState, refusal: tam_storage::FileRefusal) -> APIError {
+    match refusal {
+        tam_storage::FileRefusal::NoProduct => missing("no such product"),
+        tam_storage::FileRefusal::NoFile => missing("no such file"),
+        tam_storage::FileRefusal::LastPayload => coded(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a resource keeps at least one file, so this one cannot be removed; \
+             replace it, or add another first",
+            APIErrorCode::PayloadMissing,
+        ),
+        // Unreachable through this API: no route asks the repository to add a
+        // cover any more, because a client may not name that role and the
+        // redraw replaces the row rather than adding to it. Kept as a fault
+        // rather than deleted, because `add_file` is a public method of the
+        // repository and a future caller could still reach the guard — and
+        // reaching it from here would mean our own routes had disagreed with
+        // themselves, which is ours to see rather than a seller's to read.
+        tam_storage::FileRefusal::CoverExists => {
+            state.internal("a file route asked the catalogue to add a second thumbnail")
+        }
+    }
+}
+
+/// Which marketplaces this change reaches on the next send, and the refusal
+/// where a live listing cannot be revised at all.
+///
+/// The same gate the edit passes through, for the same reason: a file change
+/// reaches a marketplace as a revise, so a listing whose revise no capture
+/// supports cannot have its file changed through us either, and the seller is
+/// told before the catalogue is written rather than after an item settles.
+async fn refuse_uncaptured(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+) -> Result<(), APIError> {
+    let mappings = MappingRepo::new(state.pool.clone())
+        .list_for_product(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let refused = uncaptured_edits(&mappings);
+    if !refused.is_empty() {
+        return Err(APIError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            APIErrorEntry::new(
+                "this listing is live on a platform whose edit-published transition is \
+                 uncaptured, so its files cannot be changed",
+            )
+            .code(APIErrorCode::UncapturedTransition)
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({
+                "blocked": refused
+                    .iter()
+                    .map(|(inventory, capability)| serde_json::json!({
+                        "inventory": inventory,
+                        "capability": capability,
+                    }))
+                    .collect::<Vec<_>>(),
+            })),
+        ));
+    }
+    Ok(())
+}
+
+/// Which marketplaces this change reaches on the next send, read after the
+/// write rather than before it.
+///
+/// The two halves are separate calls on purpose. The refusal has to run before
+/// the write, because its whole point is to decline before the catalogue moves;
+/// the reported reach has to be read after, because a mapping bound or unbound
+/// while the write held the product's row would otherwise be described by a
+/// value taken before it. The response then says where the change actually
+/// landed rather than where it was going to.
+async fn reaches_after(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+) -> Result<Vec<InventoryId>, APIError> {
+    Ok(MappingRepo::new(state.pool.clone())
+        .list_for_product(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .iter()
+        .map(|record| record.mapping.inventory)
+        .collect())
+}
+
+/// Refuses a handle naming bytes this tenant has never uploaded, which is the
+/// create's own check applied to the one handle a file change carries.
+async fn held(state: &AppState, org: OrgId, handle: &FileHandle) -> Result<(), APIError> {
+    let claimed = parse_hash(&handle.hash)
+        .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))?;
+    let known = ProductRepo::new(state.pool.clone())
+        .stored_hashes(org, &[claimed])
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    if known.is_empty() {
+        return Err(APIError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            APIErrorEntry::new("a file handle names bytes this organisation has not uploaded")
+                .code(APIErrorCode::UploadRejected)
+                .kind(APIErrorKind::Validation)
+                .detail(serde_json::json!({ "hashes": [hex_encode(&claimed.0)] })),
+        ));
+    }
+    Ok(())
+}
+
+/// Refused because a cover is ours to draw and never a client's to name.
+///
+/// The console reads a cover back as an image, so a row whose role is `cover`
+/// is a row whose bytes a browser will fetch. Letting a client point that role
+/// at any hash the organisation holds therefore turns this route into a way to
+/// make a sellable payload file browser-readable, and the only thing that ever
+/// stopped it was that our own client did not ask. `ingest` draws every cover
+/// from the first payload's bytes and nothing else writes one, which is what
+/// this refusal states in the code rather than only in the design.
+fn cover_not_yours() -> APIError {
+    validation(
+        "the thumbnail is drawn from the resource's first file and is not one to upload directly",
+    )
+}
+
+/// What a replacement needs to know about the product before it writes: which
+/// row is the cover, and which is the payload file the cover was drawn from.
+///
+/// One read rather than two, and a read rather than a check inside the
+/// repository, because `product.rs` is not this slice's to edit today. A row's
+/// role never changes and its position never moves, so nothing here can go
+/// stale between the read and the write; a row that disappears in between is
+/// refused by the repository as no such file, and the repository re-checks the
+/// redraw condition under its own lock regardless.
+struct CoverFacts {
+    cover: Option<FileId>,
+    first_payload: Option<FileId>,
+    /// The payload file that becomes the first one when the first is removed,
+    /// and therefore the one a redrawn thumbnail is rendered from. Absent
+    /// where the product has only one, which is a removal the repository
+    /// refuses anyway.
+    next_payload: Option<ProductFile>,
+}
+
+async fn cover_facts(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+) -> Result<CoverFacts, APIError> {
+    let record = ProductRepo::new(state.pool.clone())
+        .get(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such product"))?;
+    let mut payloads = record.product.payload_files();
+    let first_payload = payloads.next().map(|file| file.id);
+    let next_payload = payloads.next().cloned();
+    Ok(CoverFacts {
+        cover: record.product.cover.as_ref().map(|cover| cover.id),
+        first_payload,
+        next_payload,
+    })
+}
+
+/// Draws the thumbnail for a replacement, from the replacement's own bytes.
+///
+/// This is the whole of the fix for the third door: the cover handle used to
+/// arrive in the request body, so a client could name any hash the
+/// organisation held and have it written behind the one role the console
+/// renders as an image. Nothing the caller sends reaches this function — it
+/// reads the bytes back from the object store by the hash it just verified, it
+/// renders them through the same `tam_pipeline::render::cover` the upload
+/// used, and it stores the result under this tenant's own sink.
+///
+/// The read-back is a real cost and is stated rather than hidden: it holds the
+/// replacement in memory exactly as the upload that produced it did, bounded
+/// by the same `UPLOAD_BODY_BYTES_MAX`.
+async fn redraw_cover(
+    state: &AppState,
+    org: OrgId,
+    file: &ProductFile,
+    now: Timestamp,
+) -> Result<tam_storage::FileReplacement, APIError> {
+    let blobs = state.blobs.clone().ok_or_else(|| {
+        APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new(
+                "this deployment holds no key-encryption key or object-store root, so the                  thumbnail cannot be redrawn and the file was not replaced",
+            )
+            .code(APIErrorCode::BlobStoreUnavailable)
+            .kind(APIErrorKind::Internal),
+        )
+    })?;
+    let FileBytes::Held { hash, .. } = file.bytes else {
+        return Err(state.internal("a replacement resolved to bytes this server does not hold"));
+    };
+    let repo = BlobRepo::new(
+        state.pool.clone(),
+        LocalObjectStore::new(blobs.root.clone()),
+        blobs.kek.clone(),
+    );
+    let bytes = repo
+        .get(org, hash)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let rendered = tam_pipeline::render::cover(file.kind, &bytes)
+        .map_err(|error| state.internal(&format!("the thumbnail could not be drawn: {error}")))?;
+    let sink = TenantBlobSink {
+        repo: &repo,
+        org,
+        at: now,
+    };
+    let drawn = tam_pipeline::pipeline::BlobSink::store(&sink, rendered.png.clone())
+        .await
+        .map_err(|error| state.internal(&error))?;
+    Ok(tam_storage::FileReplacement {
+        id: FileId(fresh_uuid()),
+        kind: tam_types::FileKind::Image,
+        bytes: FileBytes::Held {
+            hash: drawn,
+            byte_len: rendered.png.len() as u64,
+            // Rendered here from bytes this server already scanned at upload,
+            // so the verdict is ours to state rather than a client's.
+            scan: ScanOutcome::Clean { at: now },
+        },
+        name: None,
+    })
+}
+
+pub(crate) async fn add_file(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product)): Path<(String, String)>,
+    Json(body): Json<AddFileBody>,
+) -> Result<(StatusCode, Json<AddedFileView>), APIError> {
+    let product = parse_product_id(&product)?;
+    let role = role_from_str(&body.role)
+        .ok_or_else(|| validation("a file names a role this server does not store"))?;
+    if role == FileRole::Cover {
+        return Err(cover_not_yours());
+    }
+    let now = (state.wall)();
+    refuse_uncaptured(&state, context.org, product).await?;
+    held(&state, context.org, &body.handle).await?;
+    let file = body.handle.resolve(role, now)?;
+    let name = body.handle.checked_name()?;
+    ProductRepo::new(state.pool.clone())
+        .add_file(context.org, product, (&file, name), now)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .map_err(|refusal| file_refusal(&state, refusal))?;
+    let reaches = reaches_after(&state, context.org, product).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(AddedFileView {
+            product,
+            file: file_view(&file, name),
+            reaches,
+        }),
+    ))
+}
+
+pub(crate) async fn replace_file(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product, file)): Path<(String, String, String)>,
+    Json(body): Json<ReplaceFileBody>,
+) -> Result<Json<ReplacedFileView>, APIError> {
+    let product = parse_product_id(&product)?;
+    let replaced = parse_file_id(&file)?;
+    let now = (state.wall)();
+    refuse_uncaptured(&state, context.org, product).await?;
+    let facts = cover_facts(&state, context.org, product).await?;
+    // The cover row is not a target. Replacing it would let a client put any
+    // hash the organisation holds behind the one role the console renders as
+    // an image, which is the same hole as naming the role on an add.
+    if facts.cover == Some(replaced) {
+        return Err(cover_not_yours());
+    }
+    held(&state, context.org, &body.handle).await?;
+    // Resolved into the payload slot only to reach the parsed kind and bytes;
+    // the role the row keeps is the stored one, which `replace_file` reads
+    // under its own lock and `FileReplacement` deliberately cannot state.
+    let parsed = body.handle.resolve(FileRole::Payload, now)?;
+    // The thumbnail is drawn from the first payload file, so replacing that
+    // file redraws it. Decided here only to avoid rendering one nobody will
+    // use; the repository re-checks the same condition under its own lock, so
+    // a cover drawn against a product that moved underneath is discarded
+    // rather than written.
+    let cover = if facts.first_payload == Some(replaced) && facts.cover.is_some() {
+        Some(redraw_cover(&state, context.org, &parsed, now).await?)
+    } else {
+        None
+    };
+    let written = ProductRepo::new(state.pool.clone())
+        .replace_file(
+            context.org,
+            tam_storage::FileTarget {
+                product,
+                file: replaced,
+            },
+            &tam_storage::FileSwap {
+                file: tam_storage::FileReplacement {
+                    id: parsed.id,
+                    kind: parsed.kind,
+                    bytes: parsed.bytes,
+                    name: body.handle.checked_name()?.map(str::to_owned),
+                },
+                cover,
+            },
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .map_err(|refusal| file_refusal(&state, refusal))?;
+    let reaches = reaches_after(&state, context.org, product).await?;
+    Ok(Json(ReplacedFileView {
+        product,
+        removed: replaced.0,
+        file: file_view(&written.file, body.handle.checked_name()?),
+        // No name: the cover was drawn from the new bytes, not chosen.
+        cover: written.cover.as_ref().map(|drawn| file_view(drawn, None)),
+        reaches,
+    }))
+}
+
+pub(crate) async fn remove_file(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product, file)): Path<(String, String, String)>,
+) -> Result<Json<RemovedFileView>, APIError> {
+    let product = parse_product_id(&product)?;
+    let removed = parse_file_id(&file)?;
+    let now = (state.wall)();
+    refuse_uncaptured(&state, context.org, product).await?;
+    let facts = cover_facts(&state, context.org, product).await?;
+    // The thumbnail is drawn from the first payload file, so removing that
+    // file leaves it depicting a file the resource no longer holds. It is
+    // redrawn from the file that becomes the first one — rendered here from
+    // that file's own bytes, never from anything the caller sends, for the
+    // same reason a replacement's is.
+    let redrawn = match (&facts.next_payload, facts.first_payload, facts.cover) {
+        (Some(next), Some(first), Some(_)) if first == removed => {
+            Some(redraw_cover(&state, context.org, next, now).await?)
+        }
+        _ => None,
+    };
+    let cover = ProductRepo::new(state.pool.clone())
+        .remove_file(
+            context.org,
+            tam_storage::FileTarget {
+                product,
+                file: removed,
+            },
+            redrawn.as_ref(),
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .map_err(|refusal| file_refusal(&state, refusal))?;
+    let reaches = reaches_after(&state, context.org, product).await?;
+    Ok(Json(RemovedFileView {
+        product,
+        file: removed.0,
+        thumbnail: match &cover {
+            tam_storage::ThumbnailChange::Untouched => ThumbnailView::Untouched,
+            tam_storage::ThumbnailChange::Redrawn(drawn) => ThumbnailView::Redrawn {
+                file: file_view(drawn, None),
+            },
+            tam_storage::ThumbnailChange::Retired => ThumbnailView::Retired,
+        },
+        reaches,
+    }))
+}
+
 // ------------------------------------------------------------------- mount
 
 /// The upload route's own body ceiling, which is the one route that carries
@@ -1328,7 +1961,7 @@ pub fn upload_body_limit() -> DefaultBodyLimit {
 mod tests {
     use super::{
         hex_encode, parse_hash, required_fields_answered, trigger_kind_of, uncaptured_edits,
-        ElectionInput, FileHandle, RightsInput,
+        ElectionInput, FileHandle, RightsInput, FILE_NAME_MAX,
     };
     use tam_domain::equivalence::ElectionTriggerKind;
     use tam_domain::{
@@ -1411,7 +2044,32 @@ mod tests {
             hash: hex_encode(&[0x11; 32]),
             kind: "pdf".to_owned(),
             byte_len: 9,
+            name: Some("  worksheet.pdf  ".to_owned()),
         };
+        assert_eq!(
+            handle.checked_name().expect("a short name is admitted"),
+            Some("worksheet.pdf"),
+            "the surrounding space a file picker leaves is not part of the name"
+        );
+        assert_eq!(
+            FileHandle {
+                name: Some("   ".to_owned()),
+                ..handle.clone()
+            }
+            .checked_name()
+            .expect("a blank name is admitted as no name"),
+            None,
+            "a name that is only space is no name, not an empty one"
+        );
+        assert!(
+            FileHandle {
+                name: Some("x".repeat(FILE_NAME_MAX + 1)),
+                ..handle.clone()
+            }
+            .checked_name()
+            .is_err(),
+            "a name longer than the column is refused here rather than at the insert"
+        );
         let file = handle
             .resolve(FileRole::Payload, tam_types::Timestamp(9))
             .expect("a well-formed handle resolves");
@@ -1422,7 +2080,7 @@ mod tests {
         );
         let refused = FileHandle {
             kind: "exe".to_owned(),
-            ..handle
+            ..handle.clone()
         }
         .resolve(FileRole::Payload, tam_types::Timestamp(9));
         assert!(

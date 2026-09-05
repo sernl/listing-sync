@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_batch SET state = 'abandoned', settled_at = $3, failure_detail = $4 WHERE org_id = $1 AND id = $2 AND state IN ('parsed', 'attaching', 'importing')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aaf561abe0b5b74198a7617cd051577a693e453fcf0e4257b5e65863a6957d92"
+}

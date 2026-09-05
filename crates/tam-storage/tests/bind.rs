@@ -64,7 +64,7 @@ fn product(seed: u8) -> CanonicalProduct {
             body: "Fixture".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([seed.wrapping_add(1); 16])),
                 role: FileRole::Payload,
@@ -76,7 +76,7 @@ fn product(seed: u8) -> CanonicalProduct {
                 },
             },
             vec![],
-        ),
+        )),
         cover: None,
         previews: vec![],
         subjects: Vec::<CanonicalTermId>::new(),

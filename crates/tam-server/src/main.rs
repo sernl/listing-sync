@@ -28,7 +28,7 @@ use tam_api::{
     JwksUnavailable, WebhookSecret,
 };
 use tam_engine::outbox::{drain, LoggingDeliverer};
-use tam_storage::{OutboxRepo, PruneRepo};
+use tam_storage::{ImportBatchRepo, OutboxRepo, PruneRepo};
 use tam_types::Timestamp;
 use tokio_util::sync::CancellationToken;
 
@@ -282,6 +282,38 @@ fn spawn_event_pruner(pruner: PruneRepo, cancel: CancellationToken) {
     });
 }
 
+/// The spreadsheet-import expiry sweep, settling a batch nobody finished and
+/// releasing the files attached to it.
+///
+/// Beside the pruner because it is the same shape of thing: a cross-tenant pass
+/// on the engine's own pool, woken on a timer, whose failure is reported and
+/// retried rather than fatal. The deadline itself is stored on each batch when
+/// it is written, so this pass carries no window of its own -- it asks the
+/// current instant and settles whatever is already past its own date.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the sweep loop is owned by the serving process and stopped by its cancellation token, not a fire-and-forget spawn"
+)]
+fn spawn_import_batch_sweep(batches: ImportBatchRepo, cancel: CancellationToken) {
+    let period = core::time::Duration::from_secs(tam_api::import_batch::sweep::SWEEP_INTERVAL_SECS);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(period) => {}
+            }
+            match tam_api::import_batch::sweep::pass(&batches, wall_now()).await {
+                Ok(report) if report.abandoned > 0 => eprintln!(
+                    "tam-server: swept {} expired imports, releasing {} attached files",
+                    report.abandoned, report.released
+                ),
+                Ok(_) => {}
+                Err(error) => eprintln!("tam-server: import sweep failed: {error}"),
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut invocation = parse_invocation()?;
@@ -390,9 +422,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .max_connections(2)
             .connect(url)
             .await?;
-        eprintln!("tam-server hosting the outbox drainer and the job-event pruner");
+        eprintln!(
+            "tam-server hosting the outbox drainer, the job-event pruner and the import sweep"
+        );
         spawn_outbox_drain(OutboxRepo::new(engine.clone()), loops.clone());
-        spawn_event_pruner(PruneRepo::new(engine), loops.clone());
+        spawn_event_pruner(PruneRepo::new(engine.clone()), loops.clone());
+        spawn_import_batch_sweep(ImportBatchRepo::new(engine), loops.clone());
     }
 
     let console = match &invocation.ui_dir {

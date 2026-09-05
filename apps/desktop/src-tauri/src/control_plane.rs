@@ -182,9 +182,12 @@ impl HttpTransport {
     ///
     pub fn new(base_url: &str) -> Result<Self, ControlPlaneError> {
         install_crypto_provider();
-        let client = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(CONNECT_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT);
+        #[cfg(target_os = "android")]
+        let builder = builder.tls_backend_preconfigured(bundled_roots());
+        let client = builder
             .build()
             .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
         Ok(Self {
@@ -192,6 +195,35 @@ impl HttpTransport {
             base: base_url.trim_end_matches('/').to_owned(),
         })
     }
+}
+
+/// The trust anchors the Android build verifies servers against.
+///
+/// Everywhere else reqwest verifies through `rustls-platform-verifier`, which
+/// reads the operating system's own trust store. On Android that verifier
+/// requires a Kotlin component in the Gradle build and an initialisation call
+/// carrying the JNI environment, and without them its first use panics rather
+/// than failing; founder decision O6 takes Mozilla's bundled roots on this one
+/// platform instead. `Cargo.toml` records what that costs.
+///
+/// The downcast this is handed to is the footgun worth naming: reqwest accepts
+/// the configuration as `impl Any` and recovers it by downcasting to its own
+/// `rustls::ClientConfig` (reqwest 0.13.4, `src/async_impl/client.rs:2192`).
+/// If this crate's `rustls` ever resolved to a different version from
+/// reqwest's, the downcast would fail silently and the client would fall back
+/// to an unconfigured backend rather than refusing to build. Cargo unifies the
+/// two into one package today, and the workspace lock holds a single rustls
+/// 0.23; a second one appearing is what would break this.
+#[cfg(target_os = "android")]
+fn bundled_roots() -> rustls::ClientConfig {
+    // The provider is installed by the caller immediately above, which is what
+    // makes this builder's own lookup of the process default total.
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth()
 }
 
 /// Installs the process-wide rustls crypto provider, once.

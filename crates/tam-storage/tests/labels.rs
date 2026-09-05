@@ -24,7 +24,7 @@ const NOW: Timestamp = Timestamp(5_000);
 fn second_product() -> CanonicalProduct {
     let mut product = minimal_product();
     product.id = PRODUCT_2;
-    product.payload = PayloadSet::new(
+    product.payload = Some(PayloadSet::new(
         ProductFile {
             id: FileId(Uuid([0x22; 16])),
             role: FileRole::Payload,
@@ -36,7 +36,7 @@ fn second_product() -> CanonicalProduct {
             },
         },
         vec![],
-    );
+    ));
     product
 }
 

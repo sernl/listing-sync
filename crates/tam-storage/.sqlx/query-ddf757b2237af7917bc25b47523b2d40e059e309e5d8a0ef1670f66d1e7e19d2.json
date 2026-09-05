@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO import_batch_row (org_id, batch_id, sheet, ordinal, inventory, intent, draft, problems, file_name, state) SELECT $1, $2, r.sheet, r.ordinal, NULLIF(r.inventory, ''), r.intent, r.draft, r.problems, NULLIF(r.file_name, ''), r.state FROM UNNEST($3::text[], $4::int[], $5::text[], $6::text[], $7::jsonb[], $8::jsonb[], $9::text[], $10::text[]) AS r(sheet, ordinal, inventory, intent, draft, problems, file_name, state)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "TextArray",
+        "Int4Array",
+        "TextArray",
+        "TextArray",
+        "JsonbArray",
+        "JsonbArray",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ddf757b2237af7917bc25b47523b2d40e059e309e5d8a0ef1670f66d1e7e19d2"
+}

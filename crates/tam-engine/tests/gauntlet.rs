@@ -560,7 +560,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
             body: "A worksheet.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([0x21; 16])),
                 role: FileRole::Payload,
@@ -572,7 +572,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
                 },
             },
             vec![],
-        ),
+        )),
         cover: Some(ProductFile {
             id: FileId(Uuid([0x22; 16])),
             role: FileRole::Cover,

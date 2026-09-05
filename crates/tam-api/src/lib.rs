@@ -25,6 +25,7 @@ pub mod devices;
 pub mod error;
 pub mod export;
 pub mod import;
+pub mod import_batch;
 pub mod jobs;
 pub mod marketplace_requests;
 pub mod openapi;
@@ -43,8 +44,9 @@ pub mod vocabulary;
 pub mod work;
 
 use axum::{
+    extract::State,
     http::StatusCode,
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -156,10 +158,18 @@ pub struct Health {
 
 /// Who the session speaks for, echoed back; the client's first authenticated
 /// call and the session floor's own probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// It carries the organisation's slug and the prompt that slug calls for
+/// because the console's own gate is answered here and nowhere earlier: the
+/// client's route load calls this before the console renders, so a seller who
+/// has claimed no slug meets the claim screen rather than a console they would
+/// have to leave again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Whoami {
     pub org: OrgId,
     pub user: UserId,
+    pub slug: Option<String>,
+    pub slug_prompt: org::SlugPrompt,
 }
 
 /// The whole API surface this build serves, configured by the binary.
@@ -172,7 +182,8 @@ pub fn router(state: AppState) -> Router {
             "/{version}/session",
             post(session::exchange).delete(session::logout),
         )
-        .route("/{version}/org", get(org::org_view).patch(org::rename_org))
+        .route("/{version}/org", get(org::org_view).patch(org::update_org))
+        .route("/{version}/org/slug/{slug}", get(org::slug_availability))
         .route("/{version}/billing", get(billing::billing_view))
         .route("/{version}/billing/webhook", post(billing::webhook))
         .route(
@@ -192,11 +203,37 @@ pub fn router(state: AppState) -> Router {
             "/{version}/uploads",
             post(catalogue::upload).layer(catalogue::upload_body_limit()),
         )
+        // The create form's own preview: a cover is generated during the
+        // upload, before any product exists to address it through, so the
+        // handle the upload answered is what the form has to read it by.
+        .route(
+            "/{version}/uploads/{handle}",
+            get(resources::uploaded_image),
+        )
         .route(
             "/{version}/products",
             get(resources::list_products).post(catalogue::create_product),
         )
         .route("/{version}/products/export", get(export::export_catalogue))
+        // The spreadsheet import. The template is generated from the
+        // registry; an upload is parsed and held and creates nothing. The
+        // upload's body ceiling is its own rather than the resource upload's,
+        // because an xlsx is a zip parsed into cells and not a payload.
+        .route("/{version}/imports/template", get(import_batch::template))
+        // The body ceiling is applied before the listing is added, because
+        // `MethodRouter::layer` reaches the handlers already on the router and
+        // not the ones added after it: the upload gets the larger limit and
+        // the listing keeps the default, which is what each needs.
+        .route(
+            "/{version}/imports",
+            post(import_batch::upload)
+                .layer(import_batch::spreadsheet_body_limit())
+                .get(import_batch::list),
+        )
+        .route(
+            "/{version}/imports/{batch}",
+            get(import_batch::view).delete(import_batch::abandon),
+        )
         .route(
             "/{version}/products/{product}",
             get(resources::product_view)
@@ -206,6 +243,27 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/products/{product}/mappings",
             post(catalogue::add_mapping),
+        )
+        // A sub-resource rather than a `files` array on the PATCH above: that
+        // route's contract is that an absent field is left as stored, so a
+        // whole-array replace could not tell a removal from a form that did
+        // not render the field. Bytes still arrive only at `POST /uploads`;
+        // these three name a handle it already returned.
+        .route(
+            "/{version}/products/{product}/files",
+            post(catalogue::add_file),
+        )
+        .route(
+            "/{version}/products/{product}/files/{file}",
+            put(catalogue::replace_file).delete(catalogue::remove_file),
+        )
+        // The one read that hands a browser a resource's picture. Its own
+        // route rather than a field of bytes on the product view: a thumbnail
+        // is fetched by the img element itself, cached by the browser, and
+        // asked for once per row.
+        .route(
+            "/{version}/products/{product}/cover",
+            get(resources::product_cover),
         )
         .route(
             "/{version}/products/{product}/labels",
@@ -319,6 +377,15 @@ pub fn router(state: AppState) -> Router {
             post(resources::withdraw_decision),
         )
         .route("/{version}/elections/rules", post(resources::upsert_rule))
+        // The best-fit tick, per marketplace rather than per axis, because
+        // that is the control: one checkbox at the head of a marketplace tab.
+        // It writes a durable rule per delegable axis and the untick withdraws
+        // them, so the delegation is auditable and revocable rather than a
+        // preference held in a browser.
+        .route(
+            "/{version}/elections/delegation",
+            get(resources::list_delegations).put(resources::set_delegation),
+        )
         .route(
             "/{version}/mappings/overrides",
             post(resources::upsert_override)
@@ -347,6 +414,7 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/admin/orgs/{org}", get(admin::org_detail))
         .route("/{version}/admin/sync-health", get(admin::sync_health))
         .route("/{version}/admin/failed-writes", get(admin::failed_writes))
+        .route("/{version}/admin/import-drain", get(admin::import_drain))
         .route(
             "/{version}/admin/impersonations",
             get(admin::impersonations),
@@ -369,9 +437,16 @@ async fn versioned_healthz(version: APIVersion) -> Json<Health> {
     Json(Health { version })
 }
 
-async fn whoami(_version: APIVersion, context: OrgContext) -> Json<Whoami> {
-    Json(Whoami {
+async fn whoami(
+    _version: APIVersion,
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<Whoami>, APIError> {
+    let (slug, slug_prompt) = org::slug_state(&state, context.org).await?;
+    Ok(Json(Whoami {
         org: context.org,
         user: context.user,
-    })
+        slug,
+        slug_prompt,
+    }))
 }

@@ -34,6 +34,20 @@ subtle = "2.6"
 # drops `getopts`, which exists for the crate's own command-line binary.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
+# The two halves of the spreadsheet import, founder-approved on 2026-09-05 and
+# pinned exactly rather than by caret. A workbook this repository generates and
+# then reads back is one file format crossing two crates, and a caret range
+# lets the reader and the writer move independently between a `cargo update`
+# and the golden-template test that holds them together.
+#
+# Both are pure Rust with empty default feature sets, which is why neither
+# carries `default-features = false`: there is nothing to switch off. The
+# writer's `zlib` feature routes deflate through a C library and stays off;
+# the reader's `dates` feature pulls `chrono`, and no cell this import reads is
+# a date.
+calamine = "=0.36.1"
+rust_xlsxwriter = "=0.99.0"
+
 [workspace.lints.rust]
 unsafe_code                = "forbid"
 rust_2018_idioms           = { level = "deny", priority = -1 }
@@ -99,6 +113,18 @@ cognitive_complexity        = "allow"
 must_use_candidate          = "allow"
 panic_in_result_fn          = "allow"
 indexing_slicing            = "allow"
+
+# wry 0.55.1, with four Android fixes and nothing else. Without them the
+# Android client aborts before its first frame on every fresh install, and the
+# debug and release builds abort for different reasons: `getCookies` declares a
+# non-null return over `CookieManager.getCookie`, which is null when the jar
+# holds no cookie for the origin, while in a minified build R8 removes
+# `getCookies` outright because wry's own keep rules omit it. Either way the
+# resulting JNI exception is swallowed without being cleared, so ART kills the
+# process at the next JNI call. `vendor/README.md` carries the three diffs, the
+# evidence and the condition under which this entry is removed.
+[patch.crates-io]
+wry = { path = "vendor/wry-0.55.1" }
 
 [profile.release]
 overflow-checks = true

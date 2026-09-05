@@ -1,10 +1,27 @@
 //! TPT, whose whole equivalence surface is one flat facet namespace, and
 //! which binds no licence axis at all.
+//!
+//! The `label` and `placement` on each field below come from
+//! `docs/research/rethink/tpt-create-form-dom.md`, a full-page DOM snapshot of
+//! `GET /My-Products/New/Digital-Next` read on 2026-09-03, which records every
+//! section heading and every control label the create form renders. A field
+//! that snapshot places nowhere carries no placement: the read-only fields the
+//! form has no control for, the item type chosen on the create-type page
+//! before the form, and the two opaque server-issued upload handles.
+//!
+//! The ordinal is the field's position among that section's own controls
+//! rather than among its native fields, so the gaps are information: the
+//! Categories section renders five pickers of which four feed `taxonomyTags`,
+//! which is why `categories` sits at four, and the Files section's first slot
+//! belongs to the upload boxes, which are the canonical `files` field and
+//! carry no placement of their own.
 
 use super::{
     AxisAbsent, AxisBinding, CanonicalFields, Cardinality, CountCap, Delegation, FieldDirection,
-    FieldSpec, InventoryRegistry, LengthCap, NativeField, NativeVocabulary, NonDelegable,
+    FieldGroup, FieldSpec, FormPlacement, InventoryRegistry, LengthCap, NativeField,
+    NativeVocabulary, NonDelegable,
 };
+use crate::product::FormGroup;
 use crate::TermKind;
 use tam_types::{InventoryId, LengthUnit};
 
@@ -144,6 +161,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     // both ways.
     NativeField {
         name: "taxonomyTags",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Categories),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
@@ -156,6 +178,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     // those same numeric ids as a repeated `data[Category][Category][]`.
     NativeField {
         name: "categories",
+        label: Some("Custom Category"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Categories),
+            ordinal: 4,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Numeric,
@@ -170,6 +197,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     // create posted the field not at all.
     NativeField {
         name: "ItemTaxCode.tax_code_id",
+        label: Some("Tax Code"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Price),
+            ordinal: 4,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Closed(&["1", "2", "3", "4", "5"]),
@@ -183,6 +215,8 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     // select.
     NativeField {
         name: "itemType",
+        label: None,
+        placement: None,
         direction: FieldDirection::ReadOnly,
         required: false,
         vocabulary: NativeVocabulary::Closed(&[
@@ -200,6 +234,8 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     // filter vocabulary is a different upstream enum from a product's status.
     NativeField {
         name: "status",
+        label: None,
+        placement: None,
         direction: FieldDirection::ReadOnly,
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,
@@ -209,6 +245,8 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     // Two values from one store is a sample of what this seller uploads.
     NativeField {
         name: "kind",
+        label: None,
+        placement: None,
         direction: FieldDirection::ReadOnly,
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,
@@ -224,6 +262,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     // value being refused means.
     NativeField {
         name: "ItemsCommonCoreStandard.common_core_standard_id",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::EducationStandards),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
@@ -244,6 +287,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // 0 NOT_ACTIVE and 1 ACTIVE, which settles the captured create as a
         // draft and the captured edit as live.
         name: "Item.status_user",
+        label: Some("Make Listing Active"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::ProductStatus),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Closed(&["0", "1"]),
@@ -255,6 +303,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // legal attestation of authorship: the connector posts it only where
         // the seller has made one, and never as a constant.
         name: "ItemsProperty.copyright_declaration",
+        label: Some("Intellectual Property Rights"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Copyright),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Closed(&["1", "2"]),
@@ -269,6 +322,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // carries an UNKNOWN with no posted counterpart, so that one is a
         // read sentinel rather than a member of the written set.
         name: "ItemsProperty.answer_key",
+        label: Some("Answer Key"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Details),
+            ordinal: 2,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Closed(&["0", "1", "2", "3", "4", "5"]),
@@ -279,6 +337,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // lifelong tool, so the captured 0 and 6 read as N/A and 1 hour.
         // UNKNOWN is again read-side only.
         name: "ItemsProperty.duration",
+        label: Some("Teaching Duration"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Details),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Both,
         required: false,
         vocabulary: NativeVocabulary::Closed(&[
@@ -293,6 +356,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // write reproduces the value its own capture carried rather than
         // generalising from one of them.
         name: "Item.generate_thumbnail",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Files),
+            ordinal: 1,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
@@ -303,6 +371,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // countryId of 153 and a countryIdFlag; only the flag is ever posted,
         // and the poll found no country vocabulary in any chunk.
         name: "ItemsLocalization.country_id_flag",
+        label: None,
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Categories),
+            ordinal: 5,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
@@ -312,6 +385,11 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // 1 on the create alongside price 0; the edit form omits the field
         // entirely, so the two endpoints disagree on whether it exists.
         name: "Item.free",
+        label: Some("Free Resource"),
+        placement: Some(FormPlacement {
+            group: FieldGroup::Tpt(FormGroup::Price),
+            ordinal: 0,
+        }),
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
@@ -323,6 +401,8 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // selects between generated and manual, or means something else is
         // unsettled, so the captured value is reproduced rather than derived.
         name: "thumbs",
+        label: None,
+        placement: None,
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::ClosedUncaptured,
@@ -334,6 +414,8 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
         // thumbnail collection key. Server-issued encrypted envelopes over an
         // object path, with no vocabulary and no client-side derivation.
         name: "ItemDigital.product",
+        label: None,
+        placement: None,
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,
@@ -342,6 +424,8 @@ pub(super) const TPT_NATIVES: &[NativeField] = &[
     NativeField {
         // See `ItemDigital.product`.
         name: "thumbs_collection_key",
+        label: None,
+        placement: None,
         direction: FieldDirection::Written,
         required: false,
         vocabulary: NativeVocabulary::Unmeasured,

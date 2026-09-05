@@ -25,6 +25,14 @@ pub struct BlobRepo<S> {
 #[derive(Debug)]
 pub enum BlobError {
     Storage(StorageError),
+    /// This organisation has sealed no blob under that hash.
+    ///
+    /// Its own variant rather than a [`Self::Store`] carrying a sentence,
+    /// because a caller has to tell it from a store that failed: one is a
+    /// request for something that is not there and the other is a fault of
+    /// ours, and answering the second as the first tells a seller their file
+    /// is gone when it is only unreachable.
+    Missing,
     Store(String),
     Crypto(String),
 }
@@ -33,6 +41,7 @@ impl core::fmt::Display for BlobError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Storage(error) => write!(f, "blob storage: {error}"),
+            Self::Missing => write!(f, "no blob under that hash for this organisation"),
             Self::Store(detail) => write!(f, "object store: {detail}"),
             Self::Crypto(detail) => write!(f, "blob crypto: {detail}"),
         }
@@ -134,7 +143,7 @@ impl<S: ObjectStore> BlobRepo<S> {
         .fetch_optional(&mut *tx)
         .await?;
         tx.commit().await?;
-        let row = row.ok_or(BlobError::Store("no blob row for this hash".to_owned()))?;
+        let row = row.ok_or(BlobError::Missing)?;
 
         let object = self
             .store

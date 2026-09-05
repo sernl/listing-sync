@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM product_file WHERE org_id = $1 AND product_id = $2 AND role = 'payload' AND deleted_at IS NULL ORDER BY position LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a19b07253eba60aa7646b0805d55404a592f4fbb486c8a94fe5d1aa6bd2021bc"
+}

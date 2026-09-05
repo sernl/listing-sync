@@ -13,8 +13,8 @@ use tam_domain::{
 };
 use tam_marketplace::RemoteListingId;
 use tam_types::{
-    CanonicalTermId, FileId, FileRole, ImportedTerm, InventoryId, ListingCopy, OrgId, PayloadSet,
-    PriceIntent, ProductFile, ProductId, Timestamp, Title,
+    CanonicalTermId, ContentHash, FileId, FileRole, ImportedTerm, InventoryId, ListingCopy, OrgId,
+    PayloadSet, PriceIntent, ProductFile, ProductId, Timestamp, Title,
 };
 
 use crate::codec::{
@@ -29,6 +29,14 @@ use crate::{pin_org, StorageError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductRecord {
     pub product: CanonicalProduct,
+    /// What the seller called each file they named, keyed by file.
+    ///
+    /// A map rather than a field on `ProductFile`, and absent for every file
+    /// stored before the name column existed: the bytes were sealed under a
+    /// content hash and the filename was never recorded anywhere, so there is
+    /// nothing to backfill from and a reader has to render the absence rather
+    /// than invent a name for it.
+    pub file_names: HashMap<FileId, String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -98,6 +106,95 @@ pub struct ProductEdit {
     pub rights: Option<RightsDeclaration>,
 }
 
+/// Files are deliberately absent from [`ProductEdit`] and reached by the three
+/// methods below instead, because a file is not a field of the copy that
+/// describes it: an edit merges what it carries and leaves the rest, while
+/// removing a file has to be expressible and a merge cannot express it.
+///
+/// Why one mutation did not happen. Every variant is the seller's to fix or
+/// the client's to have avoided, which is why they sit inside the `Ok` arm
+/// rather than beside [`StorageError`]: the outer arm is a fault of ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileRefusal {
+    /// This tenant holds no live product of that identifier.
+    NoProduct,
+    /// The product holds no live file of that identifier.
+    NoFile,
+    /// The removal would leave the product with no payload file, which
+    /// `assert_product_has_payload` forbids and no listing could survive.
+    LastPayload,
+    /// The product already carries a live cover, and
+    /// `product_file_one_cover` admits one. Replace it rather than add a
+    /// second.
+    CoverExists,
+}
+
+/// The file one mutation addresses. A file is named within its product rather
+/// than on its own, which is what makes another tenant's identifier — or this
+/// tenant's, on the wrong product — a plain not-found rather than a row
+/// reachable by guessing a uuid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileTarget {
+    pub product: ProductId,
+    pub file: FileId,
+}
+
+/// The parts of a file a replacement supplies.
+///
+/// The role is not among them on purpose: a replacement keeps the role of the
+/// row it replaces, so a caller able to state a role would be able to state
+/// the wrong one, and the only way for it to know the right one would be a
+/// read it would then have to trust across the gap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileReplacement {
+    pub id: FileId,
+    pub kind: tam_types::FileKind,
+    pub bytes: tam_types::FileBytes,
+    /// What the seller called the file they chose, where they chose one. A
+    /// cover carries none: nobody chooses a generated picture.
+    pub name: Option<String>,
+}
+
+/// One replacement, and the cover to redraw with it.
+///
+/// The cover rides along rather than travelling as a second call because a
+/// cover drawn from a file the product no longer holds is exactly the state
+/// the two writes have to skip over, and two transactions cannot.
+///
+/// Offering the cover is not the same as writing it: [`ProductRepo::
+/// replace_file`] writes it only where the file being replaced is the one a
+/// cover would have been drawn from, so a caller may always offer it and
+/// never has to decide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSwap {
+    pub file: FileReplacement,
+    pub cover: Option<FileReplacement>,
+}
+
+/// What became of a product's thumbnail when one of its files was removed.
+///
+/// Three states rather than an `Option`, because a removal can leave the
+/// thumbnail alone, replace it, or take it away, and the third is not the
+/// absence of the second: a resource that loses its only file has nothing left
+/// to draw a thumbnail from, so the old one is retired rather than redrawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThumbnailChange {
+    Untouched,
+    /// Boxed because a `ProductFile` is two hundred-odd bytes and the other
+    /// two arms carry none: every caller would otherwise pay for the largest.
+    Redrawn(Box<ProductFile>),
+    Retired,
+}
+
+/// What one replace wrote. `cover` is present only where the cover was
+/// redrawn, so a caller states that it was rather than assuming it from
+/// having offered one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplacedFiles {
+    pub file: ProductFile,
+    pub cover: Option<ProductFile>,
+}
+
 pub struct ProductRepo {
     pool: PgPool,
 }
@@ -108,10 +205,30 @@ impl ProductRepo {
         Self { pool }
     }
 
+    /// Writes a product whose files nobody named, which is every path that
+    /// does not come from a seller choosing a file: the operator import, the
+    /// device import, and every fixture.
     pub async fn insert(
         &self,
         org: OrgId,
         product: &CanonicalProduct,
+        at: Timestamp,
+    ) -> Result<(), StorageError> {
+        self.insert_named(org, product, &HashMap::new(), at).await
+    }
+
+    /// The same write, carrying what the seller called each file.
+    ///
+    /// A separate entry point rather than a fifth parameter on `insert`,
+    /// because every existing caller of that has no names to give and
+    /// threading `&HashMap::new()` through each of them would say nothing.
+    /// A name for a file the product does not carry is ignored rather than
+    /// refused: the map is a lookup, not an assertion about the file set.
+    pub async fn insert_named(
+        &self,
+        org: OrgId,
+        product: &CanonicalProduct,
+        names: &HashMap<FileId, String>,
         at: Timestamp,
     ) -> Result<(), StorageError> {
         if product.org != org {
@@ -155,16 +272,36 @@ impl ProductRepo {
             at: at_db,
         };
         let mut position: i32 = 0;
-        for file in product.payload.iter() {
-            insert_file(&mut tx, &write, position, FileRole::Payload, file).await?;
+        for file in product.payload_files() {
+            let downloaded = NewFile {
+                position,
+                slot: FileRole::Payload,
+                file,
+                name: named_as(names, file),
+            };
+            insert_file(&mut tx, &write, downloaded).await?;
             position += 1;
         }
         if let Some(cover) = &product.cover {
-            insert_file(&mut tx, &write, position, FileRole::Cover, cover).await?;
+            // No name: a cover is generated from the first payload's bytes
+            // rather than chosen, so there is nothing a seller called it.
+            let drawn = NewFile {
+                position,
+                slot: FileRole::Cover,
+                file: cover,
+                name: None,
+            };
+            insert_file(&mut tx, &write, drawn).await?;
             position += 1;
         }
         for preview in &product.previews {
-            insert_file(&mut tx, &write, position, FileRole::Preview, preview).await?;
+            let shown = NewFile {
+                position,
+                slot: FileRole::Preview,
+                file: preview,
+                name: named_as(names, preview),
+            };
+            insert_file(&mut tx, &write, shown).await?;
             position += 1;
         }
 
@@ -252,7 +389,7 @@ impl ProductRepo {
              f.observed_hash, f.observed_byte_len, f.observed_by_device, f.observed_at, \
              f.asserted_scan_state, f.asserted_scan_signature, \
              f.asserted_scanned_at, f.asserted_scan_failure_code, \
-             f.payload_file_name, f.payload_content_type \
+             f.payload_file_name, f.payload_content_type, f.name \
              FROM product_file f \
              LEFT JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash \
              WHERE f.org_id = $1 AND f.product_id = $2 AND f.deleted_at IS NULL \
@@ -315,7 +452,12 @@ impl ProductRepo {
             .into_iter()
             .map(decode_residue)
             .collect::<Result<Vec<_>, _>>()?;
-        let (payload, cover, previews) = partition_files(files)?;
+        let ProductFiles {
+            payload,
+            cover,
+            previews,
+            names,
+        } = partition_files(files)?;
         let subjects = terms
             .into_iter()
             .map(|row| CanonicalTermId(uuid_from_db(row.term_id)))
@@ -345,6 +487,7 @@ impl ProductRepo {
                 rights,
                 native_residue,
             },
+            file_names: names,
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),
         }))
@@ -492,6 +635,271 @@ impl ProductRepo {
         rows.iter().map(|row| hash_from_db(row)).collect()
     }
 
+    /// Adds one file to a product that already exists.
+    ///
+    /// The new row takes `MAX(position) + 1` rather than the number of live
+    /// rows, because `product_file_position` is not a partial index: a
+    /// soft-deleted row keeps its position, and reusing it collides.
+    pub async fn add_file(
+        &self,
+        org: OrgId,
+        product: ProductId,
+        added: (&ProductFile, Option<&str>),
+        at: Timestamp,
+    ) -> Result<Result<FileId, FileRefusal>, StorageError> {
+        let (file, name) = added;
+        let org_db = uuid_to_db(org.0);
+        let product_db = uuid_to_db(product.0);
+        let at_db = timestamp_to_db(at)?;
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        if !lock_product(&mut tx, org_db, product_db).await? {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::NoProduct));
+        }
+        if file.role == FileRole::Cover && live_cover(&mut tx, org_db, product_db).await?.is_some()
+        {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::CoverExists));
+        }
+        let position = next_position(&mut tx, org_db, product_db).await?;
+        let write = FileWrite {
+            org: org_db,
+            product: product_db,
+            at: at_db,
+        };
+        insert_file(
+            &mut tx,
+            &write,
+            NewFile {
+                position,
+                slot: file.role,
+                file,
+                name: name.filter(|_| matches!(file.bytes, tam_types::FileBytes::Held { .. })),
+            },
+        )
+        .await?;
+        touch(&mut tx, org_db, product_db, at_db).await?;
+        tx.commit().await?;
+        Ok(Ok(file.id))
+    }
+
+    /// Swaps one file's bytes for another's, keeping the role it occupies.
+    ///
+    /// The old row is retired before the new one is written, which is what
+    /// lets a cover be replaced at all: `product_file_one_cover` is an
+    /// immediate partial unique index, so the two rows cannot both be live
+    /// even for the length of a statement.
+    pub async fn replace_file(
+        &self,
+        org: OrgId,
+        target: FileTarget,
+        swap: &FileSwap,
+        at: Timestamp,
+    ) -> Result<Result<ReplacedFiles, FileRefusal>, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let product_db = uuid_to_db(target.product.0);
+        let file_db = uuid_to_db(target.file.0);
+        let at_db = timestamp_to_db(at)?;
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        if !lock_product(&mut tx, org_db, product_db).await? {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::NoProduct));
+        }
+        let Some(role) = live_role(&mut tx, org_db, product_db, file_db).await? else {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::NoFile));
+        };
+        // The cover is drawn from the first payload file, so replacing that
+        // file and not the cover leaves a picture of a file the product no
+        // longer holds. Decided here rather than by the caller: the caller
+        // cannot see the positions, and a caller that guessed would redraw
+        // the cover from the second payload file.
+        let redraw = match (&swap.cover, role) {
+            (Some(cover), FileRole::Payload)
+                if first_payload(&mut tx, org_db, product_db).await? == Some(file_db) =>
+            {
+                // Only where one already lives. A product with no cover is
+                // not given one by an edit that was asked to replace a
+                // different file.
+                live_cover(&mut tx, org_db, product_db)
+                    .await?
+                    .map(|existing| (existing, cover))
+            }
+            _ => None,
+        };
+
+        let write = FileWrite {
+            org: org_db,
+            product: product_db,
+            at: at_db,
+        };
+        retire(&mut tx, org_db, product_db, file_db, at_db).await?;
+        let written = ProductFile {
+            id: swap.file.id,
+            role,
+            kind: swap.file.kind,
+            bytes: swap.file.bytes.clone(),
+        };
+        let position = next_position(&mut tx, org_db, product_db).await?;
+        insert_file(
+            &mut tx,
+            &write,
+            NewFile {
+                position,
+                slot: role,
+                file: &written,
+                name: swap.file.name.as_deref(),
+            },
+        )
+        .await?;
+
+        let mut cover = None;
+        if let Some((existing, replacement)) = redraw {
+            // Retired before the new one is written, because
+            // `product_file_one_cover` is immediate: the two cannot both be
+            // live even for the length of a statement.
+            retire(&mut tx, org_db, product_db, existing, at_db).await?;
+            let drawn = ProductFile {
+                id: replacement.id,
+                role: FileRole::Cover,
+                kind: replacement.kind,
+                bytes: replacement.bytes.clone(),
+            };
+            let position = next_position(&mut tx, org_db, product_db).await?;
+            insert_file(
+                &mut tx,
+                &write,
+                NewFile {
+                    position,
+                    slot: FileRole::Cover,
+                    file: &drawn,
+                    name: None,
+                },
+            )
+            .await?;
+            cover = Some(drawn);
+        }
+
+        touch(&mut tx, org_db, product_db, at_db).await?;
+        tx.commit().await?;
+        Ok(Ok(ReplacedFiles {
+            file: written,
+            cover,
+        }))
+    }
+
+    /// Retires one file, refusing the removal that would leave the product
+    /// with no payload at all.
+    ///
+    /// The count is taken here rather than left to `product_file_payload_
+    /// nonempty`, for two reasons. The trigger raises a `check_violation` a
+    /// caller would have to read out of an error string to turn into a
+    /// sentence, and it is deferred, so by the time it fires the transaction
+    /// is already lost. It also does not hold on its own: two concurrent
+    /// removals each see the other's row as live, so each passes its own
+    /// trigger and the product ends with none. The `FOR UPDATE` on the
+    /// product row is what closes that, by serialising file writes per
+    /// product; the trigger stays as the backstop for every other path.
+    pub async fn remove_file(
+        &self,
+        org: OrgId,
+        target: FileTarget,
+        redrawn: Option<&FileReplacement>,
+        at: Timestamp,
+    ) -> Result<Result<ThumbnailChange, FileRefusal>, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let product_db = uuid_to_db(target.product.0);
+        let file_db = uuid_to_db(target.file.0);
+        let at_db = timestamp_to_db(at)?;
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        if !lock_product(&mut tx, org_db, product_db).await? {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::NoProduct));
+        }
+        let Some(role) = live_role(&mut tx, org_db, product_db, file_db).await? else {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::NoFile));
+        };
+        // The last payload file may go where no marketplace carries the
+        // resource, which is what migration 0061 moved: the requirement is a
+        // property of the mapping rather than of the product, so a draft kept
+        // here alone is allowed to have no file yet. The count is taken inside
+        // this transaction and under the same lock, so a mapping added while
+        // the removal was in flight cannot leave a listed resource fileless.
+        let last_payload =
+            role == FileRole::Payload && live_payloads(&mut tx, org_db, product_db).await? <= 1;
+        if last_payload && has_mapping(&mut tx, org_db, product_db).await? {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::LastPayload));
+        }
+        // Removing the file the thumbnail was drawn from leaves it depicting a
+        // file the product no longer holds — the same staleness
+        // `replace_file` redraws away, through the door that was left open.
+        // The caller renders the replacement from the payload file that
+        // becomes the first one; the condition is re-decided here under the
+        // lock, so a thumbnail drawn against a product that moved underneath
+        // is discarded rather than written.
+        // The thumbnail is drawn from the first payload file, so removing that
+        // file leaves it depicting a file the product no longer holds. What to
+        // do about it depends on what is left: another payload file to draw
+        // from means a redraw, and nothing left means the thumbnail goes too,
+        // because a picture of a file the resource does not have is worse than
+        // no picture.
+        let drawn_from_this = role == FileRole::Payload
+            && first_payload(&mut tx, org_db, product_db).await? == Some(file_db);
+        let standing = if drawn_from_this {
+            live_cover(&mut tx, org_db, product_db).await?
+        } else {
+            None
+        };
+
+        retire(&mut tx, org_db, product_db, file_db, at_db).await?;
+        let mut outcome = ThumbnailChange::Untouched;
+        if let Some(existing) = standing {
+            match (last_payload, redrawn) {
+                (true, _) | (false, None) => {
+                    retire(&mut tx, org_db, product_db, existing, at_db).await?;
+                    outcome = ThumbnailChange::Retired;
+                }
+                (false, Some(replacement)) => {
+                    retire(&mut tx, org_db, product_db, existing, at_db).await?;
+                    let drawn = ProductFile {
+                        id: replacement.id,
+                        role: FileRole::Cover,
+                        kind: replacement.kind,
+                        bytes: replacement.bytes.clone(),
+                    };
+                    let position = next_position(&mut tx, org_db, product_db).await?;
+                    insert_file(
+                        &mut tx,
+                        &FileWrite {
+                            org: org_db,
+                            product: product_db,
+                            at: at_db,
+                        },
+                        NewFile {
+                            position,
+                            slot: FileRole::Cover,
+                            file: &drawn,
+                            name: None,
+                        },
+                    )
+                    .await?;
+                    outcome = ThumbnailChange::Redrawn(Box::new(drawn));
+                }
+            }
+        }
+        touch(&mut tx, org_db, product_db, at_db).await?;
+        tx.commit().await?;
+        Ok(Ok(outcome))
+    }
+
     /// Marks a product deleted without erasing it. Every catalogue read
     /// already filters on `deleted_at`, so this is the whole local removal.
     ///
@@ -609,10 +1017,191 @@ impl ProductRepo {
     }
 }
 
+/// What the seller called this file, where the write carried a name for it.
+fn named_as<'a>(names: &'a HashMap<FileId, String>, file: &ProductFile) -> Option<&'a str> {
+    // Only the blob-backed arm may carry one: a sourced row's own name is
+    // `payload_file_name`, which migration 0052 governs.
+    if matches!(file.bytes, tam_types::FileBytes::Sourced { .. }) {
+        return None;
+    }
+    names.get(&file.id).map(String::as_str)
+}
+
 struct FileWrite {
     org: uuid::Uuid,
     product: uuid::Uuid,
     at: DateTime<Utc>,
+}
+
+/// Takes the product's row for the length of the transaction, so two file
+/// mutations against one product cannot interleave. `false` is the tenant
+/// holding no live product of that identifier.
+async fn lock_product(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<bool, StorageError> {
+    let found = sqlx::query_scalar!(
+        "SELECT id FROM product \
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL \
+         FOR UPDATE",
+        org_db,
+        product_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(found.is_some())
+}
+
+/// The position a new row takes: one past the greatest this product has ever
+/// used, live or retired, because `product_file_position` counts both.
+async fn next_position(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<i32, StorageError> {
+    let highest = sqlx::query_scalar!(
+        "SELECT MAX(position) FROM product_file WHERE org_id = $1 AND product_id = $2",
+        org_db,
+        product_db,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    highest
+        .unwrap_or(-1)
+        .checked_add(1)
+        .ok_or_else(|| StorageError::Inconsistent {
+            reason: "this product has used every file position the column holds".to_owned(),
+        })
+}
+
+async fn live_role(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+    file_db: uuid::Uuid,
+) -> Result<Option<FileRole>, StorageError> {
+    let row = sqlx::query_scalar!(
+        "SELECT role FROM product_file \
+         WHERE org_id = $1 AND product_id = $2 AND id = $3 AND deleted_at IS NULL",
+        org_db,
+        product_db,
+        file_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    row.map(|role| file_role_from_db(&role)).transpose()
+}
+
+/// The product's live cover, where it has one.
+async fn live_cover(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<Option<uuid::Uuid>, StorageError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT id FROM product_file \
+         WHERE org_id = $1 AND product_id = $2 AND role = 'cover' AND deleted_at IS NULL",
+        org_db,
+        product_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// The payload file a cover would have been drawn from: the live one with the
+/// lowest position, which is the order every read of the product returns them
+/// in and the order `ingest` wrote them in.
+async fn first_payload(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<Option<uuid::Uuid>, StorageError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT id FROM product_file \
+         WHERE org_id = $1 AND product_id = $2 AND role = 'payload' AND deleted_at IS NULL \
+         ORDER BY position \
+         LIMIT 1",
+        org_db,
+        product_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// Whether any marketplace carries this product, which is what migration 0061
+/// makes the payload requirement a property of.
+async fn has_mapping(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<bool, StorageError> {
+    let found = sqlx::query_scalar!(
+        "SELECT id FROM mapping WHERE org_id = $1 AND product_id = $2 LIMIT 1",
+        org_db,
+        product_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(found.is_some())
+}
+
+async fn live_payloads(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<i64, StorageError> {
+    let counted = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM product_file \
+         WHERE org_id = $1 AND product_id = $2 AND role = 'payload' AND deleted_at IS NULL",
+        org_db,
+        product_db,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(counted.unwrap_or(0))
+}
+
+async fn retire(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+    file_db: uuid::Uuid,
+    at_db: DateTime<Utc>,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "UPDATE product_file SET deleted_at = $4 \
+         WHERE org_id = $1 AND product_id = $2 AND id = $3 AND deleted_at IS NULL",
+        org_db,
+        product_db,
+        file_db,
+        at_db,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Moves the product's own `updated_at`, because a file is part of the
+/// resource and a console reporting when it last changed would otherwise miss
+/// every change to what a buyer actually downloads. It also re-runs the
+/// deferred payload trigger, which fires on `UPDATE product`.
+async fn touch(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+    at_db: DateTime<Utc>,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "UPDATE product SET updated_at = $3 \
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+        org_db,
+        product_db,
+        at_db,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Writes a marketplace-sourced file and its first observation.
@@ -705,13 +1294,28 @@ async fn insert_sourced_file(
     .await
 }
 
+/// One file as a write states it: where it sits, which slot it fills, the file
+/// itself, and what the seller called it.
+struct NewFile<'a> {
+    position: i32,
+    slot: FileRole,
+    file: &'a ProductFile,
+    /// Absent for a file nobody named, which is every file written before the
+    /// name column existed and every cover, which no seller chooses.
+    name: Option<&'a str>,
+}
+
 async fn insert_file(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     write: &FileWrite,
-    position: i32,
-    slot: FileRole,
-    file: &ProductFile,
+    new: NewFile<'_>,
 ) -> Result<(), StorageError> {
+    let NewFile {
+        position,
+        slot,
+        file,
+        name,
+    } = new;
     let FileWrite {
         org: org_db,
         product: product_db,
@@ -736,6 +1340,14 @@ async fn insert_file(
             scan,
         } => (*hash, *byte_len, scan),
         tam_types::FileBytes::Sourced { .. } => {
+            // `product_file_name_is_blob_backed` refuses a name here, and
+            // 0052's `payload_file_name` is this arm's own answer to the same
+            // question. A caller offering one has confused the two arms.
+            if name.is_some() {
+                return Err(StorageError::Inconsistent {
+                    reason: "a marketplace-sourced file was given a seller's filename".to_owned(),
+                });
+            }
             return insert_sourced_file(tx, write, position, file).await;
         }
     };
@@ -779,8 +1391,8 @@ async fn insert_file(
     sqlx::query!(
         "INSERT INTO product_file \
          (org_id, id, product_id, position, role, kind, hash, \
-          scan_state, scan_signature, scanned_at, scan_failure_code, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+          scan_state, scan_signature, scanned_at, scan_failure_code, created_at, name) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         org_db,
         uuid_to_db(file.id.0),
         product_db,
@@ -793,6 +1405,7 @@ async fn insert_file(
         scan.scanned_at,
         scan.failure_code,
         at_db,
+        name,
     )
     .execute(&mut **tx)
     .await?;
@@ -964,6 +1577,7 @@ struct FileRow {
     asserted_scan_failure_code: Option<String>,
     payload_file_name: Option<String>,
     payload_content_type: Option<String>,
+    name: Option<String>,
 }
 
 struct GradeRow {
@@ -1011,7 +1625,8 @@ fn decode_residue(row: ResidueRow) -> Result<ImportedTerm, StorageError> {
 /// third case to represent and none to guess at. Every `missing` below names
 /// the constraint that was supposed to prevent it, because reaching one means
 /// the row is corrupt rather than that the branch needs handling.
-fn decode_file(row: FileRow) -> Result<(FileRole, ProductFile), StorageError> {
+fn decode_file(row: FileRow) -> Result<(FileRole, ProductFile, Option<String>), StorageError> {
+    let name = row.name.clone();
     let role = file_role_from_db(&row.role)?;
     let bytes = match row.hash {
         Some(hash) => tam_types::FileBytes::Held {
@@ -1069,6 +1684,7 @@ fn decode_file(row: FileRow) -> Result<(FileRole, ProductFile), StorageError> {
             kind: file_kind_from_db(&row.kind)?,
             bytes,
         },
+        name,
     ))
 }
 
@@ -1079,14 +1695,32 @@ fn missing<T>(value: Option<T>, column: &str) -> Result<T, StorageError> {
     })
 }
 
-fn partition_files(
-    rows: Vec<FileRow>,
-) -> Result<(PayloadSet, Option<ProductFile>, Vec<ProductFile>), StorageError> {
+/// The files of one product, and what the seller called each of the ones they
+/// named.
+///
+/// The names travel beside the files rather than inside `ProductFile`, which
+/// carries no name field: adding one would reach every construction of that
+/// type across the workspace, and a name is a fact about a row this repository
+/// stores rather than a part of the file the domain reasons about.
+pub struct ProductFiles {
+    /// None where the product carries no live payload row, which is a resource
+    /// kept on Teachouse rather than a corrupt product (D32).
+    pub payload: Option<PayloadSet>,
+    pub cover: Option<ProductFile>,
+    pub previews: Vec<ProductFile>,
+    pub names: HashMap<FileId, String>,
+}
+
+fn partition_files(rows: Vec<FileRow>) -> Result<ProductFiles, StorageError> {
     let mut payload = Vec::new();
     let mut cover = None;
     let mut previews = Vec::new();
+    let mut names = HashMap::new();
     for row in rows {
-        let (role, file) = decode_file(row)?;
+        let (role, file, name) = decode_file(row)?;
+        if let Some(name) = name {
+            names.insert(file.id, name);
+        }
         match role {
             FileRole::Payload => payload.push(file),
             FileRole::Preview => previews.push(file),
@@ -1099,11 +1733,20 @@ fn partition_files(
             }
         }
     }
+    // No live payload row is now a resource kept on Teachouse rather than a
+    // corrupt one (D32): the trigger that made it corrupt raises only for a
+    // product a mapping names, so a row without one is a draft nobody has
+    // pointed anywhere yet and reads back as carrying no file.
     let mut payload = payload.into_iter();
-    let head = payload.next().ok_or_else(|| StorageError::CorruptRow {
-        reason: "product without a live payload file".to_owned(),
-    })?;
-    Ok((PayloadSet::new(head, payload.collect()), cover, previews))
+    let held = payload
+        .next()
+        .map(|head| PayloadSet::new(head, payload.collect()));
+    Ok(ProductFiles {
+        payload: held,
+        cover,
+        previews,
+        names,
+    })
 }
 
 fn decode_grades(row: &GradeRow, paths: Vec<PathRow>) -> Result<GradeDeclaration, StorageError> {
@@ -1163,6 +1806,13 @@ fn decode_grades(row: &GradeRow, paths: Vec<PathRow>) -> Result<GradeDeclaration
         raw,
         derived,
     })
+}
+
+/// One product's cover, as the catalogue and the cover route read it.
+#[derive(Debug, Clone, Copy)]
+pub struct StoredCover {
+    pub product: ProductId,
+    pub hash: ContentHash,
 }
 
 impl ProductRepo {
@@ -1228,6 +1878,60 @@ impl ProductRepo {
                     )?,
                     created_at: timestamp_from_db(row.created_at),
                     updated_at: timestamp_from_db(row.updated_at),
+                })
+            })
+            .collect()
+    }
+
+    /// The stored cover of each of these products.
+    ///
+    /// Only a cover whose bytes this deployment holds. A `product_file` row
+    /// may name a marketplace resource instead of a blob, and a row like that
+    /// has nothing here to serve, so it is absent rather than listed with a
+    /// hash it does not have.
+    ///
+    /// A deleted resource has no cover. The join is what says so: a delete is
+    /// a tombstone on `product` and leaves its file rows alone, so a query
+    /// reading `product_file` on its own would go on serving the picture of a
+    /// resource the catalogue no longer lists.
+    ///
+    /// One statement for the whole page, keyed by the page's product
+    /// identifiers, exactly as [`Self::export_page`]'s listings read is.
+    pub async fn covers(
+        &self,
+        org: OrgId,
+        products: &[ProductId],
+    ) -> Result<Vec<StoredCover>, StorageError> {
+        if products.is_empty() {
+            return Ok(Vec::new());
+        }
+        let org_db = uuid_to_db(org.0);
+        let ids: Vec<uuid::Uuid> = products
+            .iter()
+            .map(|product| uuid_to_db(product.0))
+            .collect();
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT pf.product_id, pf.hash FROM product_file pf \
+             JOIN product p ON p.org_id = pf.org_id AND p.id = pf.product_id \
+             WHERE pf.org_id = $1 AND pf.product_id = ANY($2::uuid[]) \
+               AND pf.role = 'cover' AND pf.deleted_at IS NULL AND pf.hash IS NOT NULL \
+               AND p.deleted_at IS NULL",
+            org_db,
+            &ids,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter()
+            .map(|row| {
+                let hash = row.hash.ok_or_else(|| StorageError::CorruptRow {
+                    reason: "a cover row selected on hash IS NOT NULL carried no hash".to_owned(),
+                })?;
+                Ok(StoredCover {
+                    product: ProductId(uuid_from_db(row.product_id)),
+                    hash: hash_from_db(&hash)?,
                 })
             })
             .collect()

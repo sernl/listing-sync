@@ -13,8 +13,20 @@
 //! [`catch_panics`] appends a panic, and [`fatal`] appends an error returned
 //! by the event loop. The interpretation is what the truncation buys: a log
 //! holding only the opening line means the process died after setup began
-//! without reaching either failure path, and a missing or empty log means it
-//! died before the application data directory resolved.
+//! without reaching either failure path.
+//!
+//! A missing or empty log means less than it appears to. It does not narrow
+//! the failure to the data directory, and a reader who takes it that way looks
+//! in the wrong place. [`opening`] is the only caller that seeds `DATA_DIR`,
+//! and it cannot run before
+//! `tauri::Builder::build` returns, because the directory is Tauri's to
+//! resolve and there is no application to ask until then. Every failure inside
+//! that call therefore reports to stderr and to no file: the runtime, the
+//! context, and every plugin's initialisation (`tauri` 2.11.5,
+//! `src/app.rs:2440`). On Windows stderr is discarded, so that region is
+//! genuinely silent; on Android it is not, because tao redirects the process's
+//! stdout and stderr into logcat under the tag `RustStdoutStderr` (`tao`
+//! 0.35.3, `src/platform_impl/android/ndk_glue.rs:327` and `:333`).
 //!
 //! The two failure paths are not interchangeable and the hook is the one that
 //! matters. A `setup` failure does not come back as an error from `run()`:

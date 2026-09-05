@@ -48,7 +48,7 @@ fn product(org: OrgId, id: ProductId, hash: ContentHash, byte_len: u64) -> Canon
             body: "Before body.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([0x21; 16])),
                 role: FileRole::Payload,
@@ -60,7 +60,7 @@ fn product(org: OrgId, id: ProductId, hash: ContentHash, byte_len: u64) -> Canon
                 },
             },
             vec![],
-        ),
+        )),
         cover: None,
         previews: vec![],
         subjects: vec![],

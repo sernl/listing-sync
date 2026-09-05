@@ -915,7 +915,7 @@ async fn seed_claimable(app: &PgPool) {
                     body: "Fixture".to_owned(),
                     format: tam_types::CopyFormat::Markdown,
                 },
-                payload: tam_types::PayloadSet::new(
+                payload: Some(tam_types::PayloadSet::new(
                     tam_types::ProductFile {
                         id: tam_types::FileId(Id([0x03; 16])),
                         role: tam_types::FileRole::Payload,
@@ -927,7 +927,7 @@ async fn seed_claimable(app: &PgPool) {
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: None,
                 previews: vec![],
                 subjects: vec![],
@@ -1858,7 +1858,7 @@ async fn seed_tpt_claimable(app: &PgPool) {
                     body: "A worksheet.".to_owned(),
                     format: tam_types::CopyFormat::Markdown,
                 },
-                payload: tam_types::PayloadSet::new(
+                payload: Some(tam_types::PayloadSet::new(
                     tam_types::ProductFile {
                         id: tam_types::FileId(Id([0x13; 16])),
                         role: tam_types::FileRole::Payload,
@@ -1870,7 +1870,7 @@ async fn seed_tpt_claimable(app: &PgPool) {
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: Some(tam_types::ProductFile {
                     id: tam_types::FileId(Id([0x15; 16])),
                     role: tam_types::FileRole::Cover,

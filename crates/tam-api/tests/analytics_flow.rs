@@ -72,7 +72,7 @@ fn product(org: OrgId, id: MappingId) -> tam_domain::CanonicalProduct {
             body: "Fixture body.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([seed.wrapping_add(0x10); 16])),
                 role: FileRole::Payload,
@@ -84,7 +84,7 @@ fn product(org: OrgId, id: MappingId) -> tam_domain::CanonicalProduct {
                 },
             },
             vec![],
-        ),
+        )),
         cover: None,
         previews: vec![],
         subjects: vec![],

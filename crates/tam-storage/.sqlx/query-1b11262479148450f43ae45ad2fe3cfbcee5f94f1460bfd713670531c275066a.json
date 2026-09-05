@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT f.id, f.role, f.kind, f.hash, b.byte_len AS \"byte_len?\", f.scan_state, f.scan_signature, f.scanned_at, f.scan_failure_code, f.source_marketplace, f.source_connection, f.source_resource, f.source_entry, f.observed_hash, f.observed_byte_len, f.observed_by_device, f.observed_at, f.asserted_scan_state, f.asserted_scan_signature, f.asserted_scanned_at, f.asserted_scan_failure_code, f.payload_file_name, f.payload_content_type FROM product_file f LEFT JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash WHERE f.org_id = $1 AND f.product_id = $2 AND f.deleted_at IS NULL ORDER BY f.position",
+  "query": "SELECT f.id, f.role, f.kind, f.hash, b.byte_len AS \"byte_len?\", f.scan_state, f.scan_signature, f.scanned_at, f.scan_failure_code, f.source_marketplace, f.source_connection, f.source_resource, f.source_entry, f.observed_hash, f.observed_byte_len, f.observed_by_device, f.observed_at, f.asserted_scan_state, f.asserted_scan_signature, f.asserted_scanned_at, f.asserted_scan_failure_code, f.payload_file_name, f.payload_content_type, f.name FROM product_file f LEFT JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash WHERE f.org_id = $1 AND f.product_id = $2 AND f.deleted_at IS NULL ORDER BY f.position",
   "describe": {
     "columns": [
       {
@@ -117,6 +117,11 @@
         "ordinal": 22,
         "name": "payload_content_type",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 23,
+        "name": "name",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -148,8 +153,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "1fdab1adb50fecf642359eab9bdf0a02b1acaff2234eacfd5d8fb9033fc83ef3"
+  "hash": "1b11262479148450f43ae45ad2fe3cfbcee5f94f1460bfd713670531c275066a"
 }

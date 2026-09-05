@@ -13,7 +13,7 @@
 //! field when the truth is that we do not know what the value is.
 
 use crate::registry::{registry, AxisBinding, Delegation, NonDelegable};
-use crate::{Decider, TermKind, TermProjection, VocabularyId, VocabularyPath};
+use crate::{Decider, EdgeKind, TermKind, TermProjection, VocabularyId, VocabularyPath};
 use tam_types::{CanonicalTermId, InventoryId, OrgId, ProductId, Timestamp};
 
 /// Which side of the free/paid gate a product sits on. Carried on a `Supply`
@@ -285,6 +285,124 @@ pub const fn resolution_for(binding: AxisBinding, opted_in: bool) -> Mode {
         (Delegation::Never(_), _) | (Delegation::ByOptIn, false) => Mode::SellerDecides,
         (Delegation::ByOptIn, true) => Mode::BestFit,
     }
+}
+
+/// One value a best-fit ranking may suggest: a value the projection already
+/// resolved, and the edge the relation reached it by.
+///
+/// The edge is carried rather than looked up because the ranking is pure and
+/// the relation is a database read. It is what makes `Exact` outrank
+/// `Broader`: a target value the source names exactly is a better answer than
+/// one that merely contains it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    pub path: VocabularyPath,
+    pub edge: EdgeKind,
+}
+
+/// One value of the resolved set with its rank recorded: the same shape as a
+/// [`Candidate`] except that the edge may be absent.
+///
+/// Absent means the candidate set named no edge for this value. It is still
+/// in the resolved set, which is what admits it to the ranking; asserting an
+/// edge kind for it would be a claim the relation never made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ranked {
+    pub path: VocabularyPath,
+    pub edge: Option<EdgeKind>,
+}
+
+/// What best fit would pick, and what picking it leaves behind.
+///
+/// Never an answer. An election resolves only on explicit confirmation, so
+/// this is offered pre-selected and the question stands until the seller
+/// says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    /// The values suggested, highest ranked first, and never more than the
+    /// target will take.
+    pub keep: Vec<Ranked>,
+    /// The candidates the target's cardinality left behind, so a suggestion
+    /// that drops something names what it dropped rather than dropping it
+    /// quietly. Empty where nothing was dropped.
+    pub dropped: Vec<Ranked>,
+}
+
+/// Rank order: an exact edge beats a broader one, a broader one beats a
+/// narrower one, and a value the candidate set named no edge for ranks below
+/// all three.
+///
+/// `Narrower` has a rank because a `Narrow` trigger's candidates are reached
+/// by narrower edges and nothing else; there it makes every candidate equal
+/// and the seller's own order decides, which is the intended outcome.
+const fn edge_rank(edge: Option<EdgeKind>) -> u8 {
+    match edge {
+        Some(EdgeKind::Exact) => 0,
+        Some(EdgeKind::Broader) => 1,
+        Some(EdgeKind::Narrower) => 2,
+        None => 3,
+    }
+}
+
+/// The resolved set one trigger asks the seller to choose from, and how many
+/// of it the target will take. `Supply` has neither: the source never carried
+/// a value, so there is no resolved set and nothing to rank.
+fn offered(trigger: &ElectionTrigger) -> Option<(&[VocabularyPath], usize)> {
+    match trigger {
+        ElectionTrigger::Supply { .. } => None,
+        ElectionTrigger::ElectOne { from } => Some((from, 1)),
+        ElectionTrigger::OverCap { cap, from } => Some((from, *cap)),
+        // A band that covers eight year groups means eight, so a narrow
+        // suggestion keeps every candidate under the band.
+        ElectionTrigger::Narrow { candidates, .. } => Some((candidates, candidates.len())),
+    }
+}
+
+/// What best fit suggests for one election, or `None` where it declines.
+///
+/// It declines in four situations and each is a refusal to invent. The axis
+/// refuses delegation, which `resolution_for` decides and `Never` wins
+/// outright — the licence is never suggested however the seller has opted in
+/// elsewhere. The seller has not opted in, so no suggestion is ours to make.
+/// The trigger is a `Supply`, where the source carried nothing and there is
+/// no resolved set to rank. Or the resolved set is empty, where the
+/// projection settled nothing and the question stands.
+///
+/// The ranking is strictly over the set the trigger carries and never over
+/// the target's whole vocabulary, which is the constraint that keeps a
+/// suggestion from becoming an invention. Order is the edge kind first and
+/// the seller's own stated order second: the sort is stable, so candidates of
+/// one kind keep the order the seller gave them. A candidate `candidates`
+/// names no edge for still ranks and still may be suggested — it is in the
+/// resolved set, which is what admits it — but it ranks below every candidate
+/// whose edge is known.
+#[must_use]
+pub fn best_fit(
+    binding: AxisBinding,
+    opted_in: bool,
+    trigger: &ElectionTrigger,
+    candidates: &[Candidate],
+) -> Option<Suggestion> {
+    if resolution_for(binding, opted_in) != Mode::BestFit {
+        return None;
+    }
+    let (paths, cap) = offered(trigger)?;
+    let mut ranked: Vec<Ranked> = paths
+        .iter()
+        .map(|path| Ranked {
+            path: path.clone(),
+            edge: candidates
+                .iter()
+                .find(|candidate| candidate.path == *path)
+                .map(|candidate| candidate.edge),
+        })
+        .collect();
+    ranked.sort_by_key(|candidate| edge_rank(candidate.edge));
+    let dropped = ranked.split_off(cap.min(ranked.len()));
+    (!ranked.is_empty()).then_some(Suggestion {
+        keep: ranked,
+        dropped,
+    })
 }
 
 /// Which of the two projecting kinds an override may assert.
@@ -644,12 +762,13 @@ pub fn satisfied_by<'rules>(
 #[cfg(test)]
 mod tests {
     use super::{
-        resolution_for, satisfied_by, Election, ElectionAnswer, ElectionRule, ElectionRuleError,
-        ElectionTrigger, ElectionTriggerKind, Mode, NewElectionRule, NewProjectionOverride,
-        OverrideKind, PricingBranch, ProjectionOverride, ProjectionOverrideError,
+        best_fit, resolution_for, satisfied_by, Candidate, Election, ElectionAnswer, ElectionRule,
+        ElectionRuleError, ElectionTrigger, ElectionTriggerKind, Mode, NewElectionRule,
+        NewProjectionOverride, OverrideKind, PricingBranch, ProjectionOverride,
+        ProjectionOverrideError, Suggestion,
     };
     use crate::registry::{registry, AxisBinding, Cardinality, Delegation, NonDelegable};
-    use crate::{Decider, TermKind, VocabularyId, VocabularyPath};
+    use crate::{Decider, EdgeKind, TermKind, VocabularyId, VocabularyPath};
     use proptest::prelude::*;
     use tam_types::{CanonicalTermId, InventoryId, OrgId, ProductId, Timestamp, Uuid};
 
@@ -997,5 +1116,322 @@ mod tests {
             .expect("Tes binds the licence axis");
         assert!(matches!(binding.delegation, Delegation::Never(_)));
         assert_eq!(resolution_for(binding, true), Mode::SellerDecides);
+    }
+
+    // ------------------------------------------------------------ best fit
+
+    /// A delegable axis with room for exactly one value: Tes takes one
+    /// `mainType`, which is the `ElectOne` shape the ranking exists for.
+    fn resource_type() -> AxisBinding {
+        match registry(InventoryId::TesGb).axis(TermKind::ResourceType) {
+            Some(binding) => binding,
+            None => panic!("Tes binds a resource type"),
+        }
+    }
+
+    fn licence_axis() -> AxisBinding {
+        match registry(InventoryId::TesGb).axis(TermKind::Licence) {
+            Some(binding) => binding,
+            None => panic!("Tes binds the licence axis"),
+        }
+    }
+
+    fn typed(segment: &str) -> VocabularyPath {
+        VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::ResourceType),
+            segments: vec![segment.to_owned()],
+            native_id: Some(segment.to_owned()),
+        }
+    }
+
+    fn candidate(segment: &str, edge: EdgeKind) -> Candidate {
+        Candidate {
+            path: typed(segment),
+            edge,
+        }
+    }
+
+    fn kept(suggestion: &Suggestion) -> Vec<String> {
+        suggestion
+            .keep
+            .iter()
+            .filter_map(|ranked| ranked.path.native_id.clone())
+            .collect()
+    }
+
+    fn dropped(suggestion: &Suggestion) -> Vec<String> {
+        suggestion
+            .dropped
+            .iter()
+            .filter_map(|ranked| ranked.path.native_id.clone())
+            .collect()
+    }
+
+    /// The constraint the whole design rests on: a suggestion is a ranking of
+    /// what the projection already resolved, so it can never name a value the
+    /// resolved set did not hold. A candidate list carrying a value the
+    /// trigger never offered is the invention this guards against.
+    #[test]
+    fn a_suggestion_never_names_a_value_the_resolved_set_did_not_hold() {
+        let trigger = ElectionTrigger::ElectOne {
+            from: vec![typed("99009")],
+        };
+        let Some(suggestion) = best_fit(
+            resource_type(),
+            true,
+            &trigger,
+            &[
+                candidate("99001", EdgeKind::Exact),
+                candidate("99009", EdgeKind::Broader),
+            ],
+        ) else {
+            panic!("one resolved value is still a set of one");
+        };
+        assert_eq!(
+            [kept(&suggestion), dropped(&suggestion)].concat(),
+            ["99009".to_owned()],
+            "99001 has the better edge and is not in the resolved set, so it is not offered"
+        );
+    }
+
+    /// A supply asks for a value the source never carried, so there is no
+    /// resolved set and nothing to rank. Best fit declines rather than
+    /// reaching into the target's vocabulary for something plausible.
+    #[test]
+    fn a_supply_trigger_gets_no_suggestion_because_nothing_resolved() {
+        assert_eq!(
+            best_fit(
+                resource_type(),
+                true,
+                &ElectionTrigger::Supply {
+                    pricing: PricingBranch::Free
+                },
+                &[candidate("99001", EdgeKind::Exact)],
+            ),
+            None,
+            "a candidate list handed in from outside is not a resolved set"
+        );
+    }
+
+    /// The legal backstop, at the one place a computed answer could appear.
+    /// `Never` wins over the opt-in exactly as `resolution_for` says, so this
+    /// holds whatever the seller has asked us to do elsewhere.
+    #[test]
+    fn a_legal_axis_gets_no_suggestion_whatever_the_opt_in_says() {
+        let licence = |segment: &str| VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+            segments: vec![segment.to_owned()],
+            native_id: Some(segment.to_owned()),
+        };
+        let trigger = ElectionTrigger::ElectOne {
+            from: vec![licence("CC-BY"), licence("CC-BY-SA")],
+        };
+        for opted_in in [false, true] {
+            assert_eq!(
+                best_fit(
+                    licence_axis(),
+                    opted_in,
+                    &trigger,
+                    &[Candidate {
+                        path: licence("CC-BY"),
+                        edge: EdgeKind::Exact,
+                    }],
+                ),
+                None,
+                "choosing a licence is issuing a rights grant, so no opt-in reaches it"
+            );
+        }
+    }
+
+    /// Best fit exists only where the seller asked for it. Without the opt-in
+    /// the same delegable axis yields nothing, so a suggestion on screen is
+    /// always one the seller invited.
+    #[test]
+    fn no_opt_in_means_no_suggestion_on_an_otherwise_delegable_axis() {
+        let trigger = ElectionTrigger::ElectOne {
+            from: vec![typed("99001"), typed("99009")],
+        };
+        assert_eq!(
+            best_fit(
+                resource_type(),
+                false,
+                &trigger,
+                &[candidate("99001", EdgeKind::Exact)]
+            ),
+            None,
+            "the default is that the seller decides"
+        );
+    }
+
+    /// The cap case, and the one place the seller most needs to see what a
+    /// suggestion leaves behind: kept and dropped together are the whole
+    /// resolved set, so nothing goes missing without being named.
+    #[test]
+    fn an_over_cap_suggestion_keeps_exactly_the_cap_and_names_the_rest() {
+        let trigger = ElectionTrigger::OverCap {
+            cap: 2,
+            from: vec![
+                typed("99001"),
+                typed("99005"),
+                typed("99007"),
+                typed("99009"),
+            ],
+        };
+        let Some(suggestion) = best_fit(
+            resource_type(),
+            true,
+            &trigger,
+            &[
+                candidate("99001", EdgeKind::Broader),
+                candidate("99005", EdgeKind::Exact),
+                candidate("99007", EdgeKind::Broader),
+                candidate("99009", EdgeKind::Exact),
+            ],
+        ) else {
+            panic!("four resolved values against a cap of two is the over-cap question");
+        };
+        assert_eq!(
+            (kept(&suggestion), dropped(&suggestion)),
+            (
+                vec!["99005".to_owned(), "99009".to_owned()],
+                vec!["99001".to_owned(), "99007".to_owned()]
+            ),
+            "the two exact edges are kept in the seller's own order and the two broader \
+             ones are named as dropped rather than vanishing"
+        );
+    }
+
+    /// A band that covers eight year groups means eight, so the narrow
+    /// suggestion is every candidate under the band and nothing is dropped.
+    #[test]
+    fn a_narrow_suggestion_keeps_every_candidate_under_the_band() {
+        let trigger = ElectionTrigger::Narrow {
+            from: typed("3"),
+            candidates: vec![typed("99001"), typed("99005"), typed("99007")],
+        };
+        let Some(suggestion) = best_fit(resource_type(), true, &trigger, &[]) else {
+            panic!("a band with candidates under it is rankable");
+        };
+        assert_eq!(
+            (kept(&suggestion).len(), dropped(&suggestion)),
+            (3, Vec::new()),
+            "narrowing keeps the whole set the band covers"
+        );
+    }
+
+    /// Edge kind first, and the seller's own order second. The input is given
+    /// in an order the ranking must reverse on the first key and preserve on
+    /// the second, so a sort on either key alone fails it.
+    #[test]
+    fn an_exact_edge_outranks_a_broader_one_and_ties_keep_the_sellers_order() {
+        let trigger = ElectionTrigger::OverCap {
+            cap: 4,
+            from: vec![
+                typed("99009"),
+                typed("99007"),
+                typed("99005"),
+                typed("99001"),
+            ],
+        };
+        let Some(suggestion) = best_fit(
+            resource_type(),
+            true,
+            &trigger,
+            &[
+                candidate("99009", EdgeKind::Broader),
+                candidate("99007", EdgeKind::Exact),
+                candidate("99005", EdgeKind::Broader),
+                candidate("99001", EdgeKind::Exact),
+            ],
+        ) else {
+            panic!("four resolved values under a cap of four still rank");
+        };
+        assert_eq!(
+            kept(&suggestion),
+            vec![
+                "99007".to_owned(),
+                "99001".to_owned(),
+                "99009".to_owned(),
+                "99005".to_owned()
+            ],
+            "the two exact edges come first, and within each kind the seller's own order \
+             stands"
+        );
+    }
+
+    /// A value in the resolved set that the candidate list names no edge for
+    /// is still offered — being resolved is what admits it — but it ranks
+    /// below every value whose edge is known, and it claims no edge of its
+    /// own rather than borrowing the weakest one.
+    #[test]
+    fn a_value_with_no_named_edge_ranks_last_and_claims_none() {
+        let trigger = ElectionTrigger::OverCap {
+            cap: 2,
+            from: vec![typed("99009"), typed("99001")],
+        };
+        let Some(suggestion) = best_fit(
+            resource_type(),
+            true,
+            &trigger,
+            &[candidate("99001", EdgeKind::Narrower)],
+        ) else {
+            panic!("both values are in the resolved set");
+        };
+        assert_eq!(
+            suggestion
+                .keep
+                .iter()
+                .map(|ranked| (ranked.path.native_id.clone(), ranked.edge))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some("99001".to_owned()), Some(EdgeKind::Narrower)),
+                (Some("99009".to_owned()), None)
+            ],
+            "the known edge ranks first even at its weakest, and the unknown one says so"
+        );
+    }
+
+    /// Where the projection resolved nothing there is nothing to rank and the
+    /// question stands, which is the same answer a supply gets by a different
+    /// route.
+    #[test]
+    fn an_empty_resolved_set_yields_no_suggestion() {
+        for trigger in [
+            ElectionTrigger::ElectOne { from: Vec::new() },
+            ElectionTrigger::OverCap {
+                cap: 3,
+                from: Vec::new(),
+            },
+            ElectionTrigger::Narrow {
+                from: typed("3"),
+                candidates: Vec::new(),
+            },
+        ] {
+            assert_eq!(
+                best_fit(resource_type(), true, &trigger, &[]),
+                None,
+                "{trigger:?} resolved nothing, so there is nothing to suggest"
+            );
+        }
+    }
+
+    /// A cap of zero takes nothing, so there is no suggestion to make rather
+    /// than an empty one to render. The registry declares no such cap today
+    /// and the arithmetic is what would go wrong if one arrived.
+    #[test]
+    fn a_cap_of_nothing_yields_no_suggestion_rather_than_an_empty_one() {
+        assert_eq!(
+            best_fit(
+                resource_type(),
+                true,
+                &ElectionTrigger::OverCap {
+                    cap: 0,
+                    from: vec![typed("99001")],
+                },
+                &[candidate("99001", EdgeKind::Exact)],
+            ),
+            None,
+            "a target that takes none is not answered by suggesting none"
+        );
     }
 }

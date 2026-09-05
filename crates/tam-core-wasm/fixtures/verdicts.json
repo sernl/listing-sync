@@ -37,11 +37,6 @@
         "message": "A product needs a title."
       },
       {
-        "group": "files",
-        "control": "Downloadable File",
-        "message": "Upload the file buyers download; a product with none cannot be listed anywhere."
-      },
-      {
         "group": "price",
         "control": "Price",
         "message": "A paid listing needs a price, written in dollars and cents."
@@ -49,7 +44,7 @@
       {
         "group": "price",
         "control": "Tax Code",
-        "message": "Choose a tax code. It is never chosen for you: designating it is yours under TPT's terms."
+        "message": "Choose a tax code. TPT makes this your choice rather than ours."
       }
     ],
     "advisories": []
@@ -80,7 +75,7 @@
     "refusals": [
       {
         "group": "files",
-        "message": "A file handle is not one this server issued; upload the file again."
+        "message": "That file is not one we hold; upload it again."
       }
     ],
     "advisories": []
@@ -95,15 +90,20 @@
     ],
     "advisories": []
   },
-  "no_payload": {
+  "no_payload_for_marketplace": {
     "submittable": false,
     "refusals": [
       {
         "group": "files",
         "control": "Downloadable File",
-        "message": "Upload the file buyers download; a product with none cannot be listed anywhere."
+        "message": "Upload the file buyers download. A marketplace will not list this without one."
       }
     ],
+    "advisories": []
+  },
+  "no_payload_kept_here": {
+    "submittable": true,
+    "refusals": [],
     "advisories": []
   },
   "paid_at_floor": {
@@ -128,7 +128,7 @@
       {
         "group": "price",
         "control": "Tax Code",
-        "message": "Choose a tax code. It is never chosen for you: designating it is yours under TPT's terms."
+        "message": "Choose a tax code. TPT makes this your choice rather than ours."
       }
     ],
     "advisories": []

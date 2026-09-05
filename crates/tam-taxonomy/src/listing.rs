@@ -295,7 +295,7 @@ pub fn project_listing_with_overrides(
     }
 
     // Gate four: every payload scanned clean before any byte leaves.
-    for file in product.payload.iter() {
+    for file in product.payload_files() {
         if !matches!(file.bytes.scan(), ScanOutcome::Clean { .. }) {
             return Err(ProjectionBlocked::ScanIncomplete { file: file.id });
         }
@@ -311,7 +311,7 @@ pub fn project_listing_with_overrides(
         price: product.price,
         taxonomy: included,
         grades,
-        files: product.payload.iter().map(|file| file.id).collect(),
+        files: product.payload_files().map(|file| file.id).collect(),
         natives,
         loss,
     })
@@ -403,7 +403,7 @@ mod tests {
                 body: "Body text.".to_owned(),
                 format: CopyFormat::Markdown,
             },
-            payload: PayloadSet::new(file(scan), vec![]),
+            payload: Some(PayloadSet::new(file(scan), vec![])),
             cover: with_cover.then(cover),
             previews: vec![],
             subjects: vec![TERM],

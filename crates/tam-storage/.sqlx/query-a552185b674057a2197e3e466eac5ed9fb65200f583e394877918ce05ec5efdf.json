@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.org_id AS \"org_id!\", d.org_seq AS \"org_seq!\", d.payload AS \"payload!\", o.name AS \"org_name!\" FROM import_drain_measurement d JOIN organisation o ON o.id = d.org_id ORDER BY o.name, d.org_seq LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "org_seq!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "payload!",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "org_name!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "a552185b674057a2197e3e466eac5ed9fb65200f583e394877918ce05ec5efdf"
+}

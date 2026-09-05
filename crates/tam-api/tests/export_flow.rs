@@ -95,7 +95,7 @@ async fn seed_product(pool: &PgPool, org: OrgId, product: ProductId, title: &str
                     body: "Fixture body.".to_owned(),
                     format: CopyFormat::Markdown,
                 },
-                payload: PayloadSet::new(
+                payload: Some(PayloadSet::new(
                     ProductFile {
                         id: FileId(Uuid(product.0 .0)),
                         role: FileRole::Payload,
@@ -107,7 +107,7 @@ async fn seed_product(pool: &PgPool, org: OrgId, product: ProductId, title: &str
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: None,
                 previews: vec![],
                 subjects: vec![],

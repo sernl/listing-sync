@@ -539,7 +539,7 @@ async fn seed_projectable(pool: &PgPool, org: OrgId, seed: u8) -> tam_storage::L
                     body: "A worksheet.".to_owned(),
                     format: tam_types::CopyFormat::Markdown,
                 },
-                payload: tam_types::PayloadSet::new(
+                payload: Some(tam_types::PayloadSet::new(
                     tam_types::ProductFile {
                         id: tam_types::FileId(Uuid([seed.wrapping_add(2); 16])),
                         role: tam_types::FileRole::Payload,
@@ -551,7 +551,7 @@ async fn seed_projectable(pool: &PgPool, org: OrgId, seed: u8) -> tam_storage::L
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: Some(tam_types::ProductFile {
                     id: tam_types::FileId(Uuid([seed.wrapping_add(4); 16])),
                     role: tam_types::FileRole::Cover,

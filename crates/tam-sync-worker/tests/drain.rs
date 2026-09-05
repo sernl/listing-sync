@@ -50,7 +50,7 @@ async fn seed(pool: &PgPool, tag: u8) -> (ProductId, MappingId) {
                     body: "A worksheet.".to_owned(),
                     format: CopyFormat::Markdown,
                 },
-                payload: PayloadSet::new(
+                payload: Some(PayloadSet::new(
                     ProductFile {
                         id: FileId(Uuid([tag.wrapping_add(0x60); 16])),
                         role: FileRole::Payload,
@@ -62,7 +62,7 @@ async fn seed(pool: &PgPool, tag: u8) -> (ProductId, MappingId) {
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: None,
                 previews: vec![],
                 subjects: vec![],

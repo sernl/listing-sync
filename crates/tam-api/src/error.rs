@@ -77,10 +77,16 @@ pub enum APIErrorCode {
     /// be produced, or a handle naming bytes this tenant never stored. Every
     /// one is the seller's to fix, which is what separates it from a fault.
     UploadRejected,
-    /// A create carrying no payload file. Named apart from a general
-    /// validation refusal because the deferred `assert_product_has_payload`
-    /// trigger states the same invariant at commit, and the client's remedy
-    /// is a specific one: upload the bytes first.
+    /// A write that would leave a resource with no payload file, which the
+    /// deferred `assert_product_has_payload` trigger states as an invariant at
+    /// commit and both ends of a resource's life can reach.
+    ///
+    /// Two callers, one code, because it is one invariant said twice: a create
+    /// carrying no payload file, whose remedy is to upload the bytes first,
+    /// and a removal of the only payload file a resource has, whose remedy is
+    /// to replace that file or add another before removing it. The remedies
+    /// differ, so the client reads the served sentence rather than deriving
+    /// one from the code.
     PayloadMissing,
     /// A selected platform declares a field required that this product does
     /// not carry. `detail.missing` names the inventory and the field.
@@ -114,13 +120,19 @@ pub enum APIErrorCode {
     /// claiming one listing is theirs to untangle, and naming the other
     /// mapping here would leak nothing useful to them.
     ListingAlreadyClaimed,
+    /// Another organisation already holds the slug this claim or rename names.
+    /// Deliberately says nothing about which one, for the reason
+    /// [`APIErrorCode::PlatformAccountAlreadyLinked`] gives: a code that
+    /// identified the holder would turn the uniqueness constraint into a
+    /// directory of every seller on the platform.
+    OrgSlugTaken,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -142,6 +154,7 @@ impl APIErrorCode {
         Self::ListingUrlUnusable,
         Self::MappingNotBindable,
         Self::ListingAlreadyClaimed,
+        Self::OrgSlugTaken,
         Self::Internal,
     ];
 
@@ -169,6 +182,7 @@ impl APIErrorCode {
             Self::ListingUrlUnusable => "listing_url_unusable",
             Self::MappingNotBindable => "mapping_not_bindable",
             Self::ListingAlreadyClaimed => "listing_already_claimed",
+            Self::OrgSlugTaken => "org_slug_taken",
             Self::Internal => "internal",
         }
     }
@@ -397,6 +411,7 @@ mod tests {
                 | APIErrorCode::ListingUrlUnusable
                 | APIErrorCode::MappingNotBindable
                 | APIErrorCode::ListingAlreadyClaimed
+                | APIErrorCode::OrgSlugTaken
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

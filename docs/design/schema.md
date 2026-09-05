@@ -30,18 +30,26 @@ CREATE TABLE product (
 
 The check constraint is the SQL rendering of `PriceIntent` and rules out the two states the domain type has no variant for.
 
-`PayloadSet` is non-empty by construction in Rust and nothing above stops a `product` row committing with zero payload-role `product_file` rows, so the invariant is closed by a deferred constraint trigger.
-PostgreSQL cannot defer a `CHECK`, which is why this one is a trigger rather than a constraint.
+A payload set is non-empty by construction in Rust wherever one exists, and a product may carry none at all -- a resource kept on Teachouse with no file yet (D32).
+What may not exist without a payload is a marketplace mapping, so the deferred constraint trigger closes that rule rather than the product's.
+PostgreSQL cannot defer a `CHECK`, which is why these are triggers rather than constraints.
 
 ```sql
 CREATE CONSTRAINT TRIGGER product_payload_nonempty
     AFTER INSERT OR UPDATE ON product
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION assert_product_has_payload();
+
+CREATE CONSTRAINT TRIGGER mapping_payload_nonempty
+    AFTER INSERT OR UPDATE ON mapping
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION assert_mapping_has_payload();
 ```
 
-`assert_product_has_payload()` raises unless at least one `product_file` row exists for the product with `role = 'payload'` and `deleted_at IS NULL`, and a mirror trigger on `product_file` covers the delete side.
-A product and its first payload therefore land in one transaction and a payload-less product can never commit.
+`assert_product_has_payload()` returns without raising for a product no `mapping` row names, and otherwise raises unless at least one `product_file` row exists for the product with `role = 'payload'` and `deleted_at IS NULL`; a mirror trigger on `product_file` covers the delete side, so a listed resource cannot lose its last file.
+`assert_mapping_has_payload()` closes the other direction, which the two product-side triggers cannot see because neither fires on `mapping`.
+A mapping and the payload it will carry therefore land in one transaction, and a mapping onto a payload-less product can never commit.
+Migration 0061 made this change by redefining `assert_product_has_payload()` under its own name, so both triggers declared in `0003_catalogue.sql` keep their attachments.
 
 ```sql
 CREATE TABLE blob (

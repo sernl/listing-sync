@@ -85,7 +85,7 @@ async fn seed_product(pool: &PgPool, org: OrgId, product: ProductId) {
                     body: "Fixture body.".to_owned(),
                     format: CopyFormat::Markdown,
                 },
-                payload: PayloadSet::new(
+                payload: Some(PayloadSet::new(
                     ProductFile {
                         // Derived from the product rather than fixed:
                         // `product_file` is keyed `(org_id, id)`, so two
@@ -101,7 +101,7 @@ async fn seed_product(pool: &PgPool, org: OrgId, product: ProductId) {
                         },
                     },
                     vec![],
-                ),
+                )),
                 cover: None,
                 previews: vec![],
                 subjects: vec![],

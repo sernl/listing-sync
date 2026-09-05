@@ -473,7 +473,14 @@ pub struct CanonicalProduct {
     pub org: OrgId,
     pub title: Title,
     pub body: ListingCopy,
-    pub payload: PayloadSet,
+    /// The files buyers download, where the resource has any.
+    ///
+    /// Optional since D32: a resource kept on Teachouse alone may carry no file
+    /// yet, and a file becomes necessary the moment it is pointed at a
+    /// marketplace. `PayloadSet` stays non-empty by construction, so the
+    /// absence is expressed once, by this option, rather than by a `Vec` that
+    /// could also be empty for a reason nobody meant.
+    pub payload: Option<PayloadSet>,
     pub cover: Option<ProductFile>,
     pub previews: Vec<ProductFile>,
     pub subjects: Vec<CanonicalTermId>,
@@ -488,6 +495,28 @@ pub struct CanonicalProduct {
     /// to a log line. Adding an axis later is a pure upgrade — values move
     /// out of residue into a typed axis with no data migration.
     pub native_residue: Vec<ImportedTerm>,
+}
+
+impl CanonicalProduct {
+    /// Every payload file this resource holds, and none where it holds no file.
+    ///
+    /// Exists because the obvious spelling is a trap. Once `payload` became an
+    /// option, `product.payload.iter()` still compiled — as `Option::iter`,
+    /// yielding the set itself rather than the files in it — so a read that
+    /// looked unchanged silently became a read of one different thing. It errors
+    /// here only because `PayloadSet` and `ProductFile` share no field names;
+    /// a type that happened to share one would have compiled and been wrong.
+    /// Reading through this method is what makes that unavailable.
+    pub fn payload_files(&self) -> impl Iterator<Item = &ProductFile> {
+        self.payload.iter().flat_map(PayloadSet::iter)
+    }
+
+    /// Whether this resource carries a file buyers can download, which is what
+    /// every marketplace rule turns on (D32).
+    #[must_use]
+    pub fn has_payload(&self) -> bool {
+        self.payload.is_some()
+    }
 }
 
 /// The per-inventory rendering of a canonical product. Derived, never authored,

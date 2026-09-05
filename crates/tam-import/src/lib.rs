@@ -470,7 +470,7 @@ pub async fn import_one(
     });
     let mut payload_iter = payloads.into_iter();
     let head = payload_iter.next().ok_or(ImportError::NoPayload)?;
-    let payload = PayloadSet::new(head, payload_iter.collect());
+    let payload = Some(PayloadSet::new(head, payload_iter.collect()));
 
     // Taxonomy inbound by native id over the source vocabulary's edges. An
     // unmapped id is retained verbatim in the report — the item type cannot

@@ -192,7 +192,7 @@ fn canonical_product(id: ProductId, files: u8) -> tam_domain::CanonicalProduct {
             body: "A worksheet.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([files; 16])),
                 role: FileRole::Payload,
@@ -204,7 +204,7 @@ fn canonical_product(id: ProductId, files: u8) -> tam_domain::CanonicalProduct {
                 },
             },
             vec![],
-        ),
+        )),
         cover: Some(ProductFile {
             id: FileId(Uuid([files.wrapping_add(1); 16])),
             role: FileRole::Cover,

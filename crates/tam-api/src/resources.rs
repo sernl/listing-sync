@@ -4,30 +4,40 @@
 //! used to tombstone through the session broker went with D1, along with
 //! every server-side seller session, so there is no socket to be without.
 
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_domain::equivalence::{
-    resolution_for, ElectionAnswer, ElectionRule, ElectionRuleError, ElectionTriggerKind, Mode,
-    NewElectionRule, NewProjectionOverride, OverrideKind, ProjectionOverride,
-    ProjectionOverrideError,
+    best_fit, resolution_for, Candidate, ElectionAnswer, ElectionRule, ElectionRuleError,
+    ElectionTrigger, ElectionTriggerKind, Mode, NewElectionRule, NewProjectionOverride,
+    OverrideKind, ProjectionOverride, ProjectionOverrideError, Ranked, Suggestion,
 };
 use tam_domain::registry::listing_url::{listing_url, parse_listing_url, UrlRefusal};
-use tam_domain::registry::registry;
-use tam_domain::{Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId, VocabularyPath};
+use tam_domain::registry::{registry, AxisBinding, Cardinality, CountCap};
+use tam_domain::{
+    CanonicalProduct, CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId,
+    VocabularyPath,
+};
+use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
-    ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo, LabelRename, LabelRepo,
-    LedgerCursor, MappingRepo, NewAnswer, OpenElection, OverrideRepo, PastedBind, ProductRepo,
-    StorageError, TaxonomyRepo,
+    BlobError, BlobRepo, ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo,
+    LabelRename, LabelRepo, LedgerCursor, MappingRepo, NewAnswer, OpenElection, OverrideRepo,
+    PastedBind, ProductRepo, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::check_native_ids;
+use tam_taxonomy::listing::projection_vocabularies;
+use tam_taxonomy::project::{ingest_grades, project_terms};
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ConnectionStatus, CopyFormat, InventoryId, MappingId,
     Marketplace, OrgId, PriceIntent, ProductId, ScanOutcome, Stamp, Timestamp, TransportClass,
     Uuid,
 };
 
+use crate::catalogue::parse_hash;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::jobs::{decode_cursor, encode_cursor};
 use crate::{AppState, OrgContext};
@@ -113,6 +123,15 @@ pub struct ProductHead {
     pub id: ProductId,
     pub title: String,
     pub price: PriceIntent,
+    /// Where this resource's cover can be fetched, or absent where it has no
+    /// stored cover.
+    ///
+    /// A URL rather than a flag, because the client renders it directly and a
+    /// client that had to compose the path would be a second place the route
+    /// is written down. Absent rather than always present so a row with no
+    /// cover draws its placeholder instead of asking for bytes that are not
+    /// there.
+    pub cover: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -136,6 +155,7 @@ pub struct CataloguePageParams {
 pub(crate) async fn list_products(
     State(state): State<AppState>,
     context: OrgContext,
+    Path((version,)): Path<(String,)>,
     Query(params): Query<CataloguePageParams>,
 ) -> Result<Json<ProductsPage>, APIError> {
     let cursor = match params.cursor.as_deref() {
@@ -172,10 +192,24 @@ pub(crate) async fn list_products(
             })
         })
         .flatten();
+    // One read for the page rather than one per row: the covers come back
+    // keyed by their product, and a row whose product is absent from that set
+    // has no stored cover to name.
+    let ids: Vec<ProductId> = rows.iter().map(|row| row.id).collect();
+    let covered: HashSet<ProductId> = ProductRepo::new(state.pool.clone())
+        .covers(context.org, &ids)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .into_iter()
+        .map(|cover| cover.product)
+        .collect();
     Ok(Json(ProductsPage {
         products: rows
             .into_iter()
             .map(|row| ProductHead {
+                cover: covered
+                    .contains(&row.id)
+                    .then(|| cover_url(&version, row.id)),
                 id: row.id,
                 title: row.title.0,
                 price: row.price,
@@ -185,6 +219,156 @@ pub(crate) async fn list_products(
             .collect(),
         next_cursor,
     }))
+}
+
+/// Where one product's cover is fetched from, under the version the caller
+/// asked this catalogue for.
+///
+/// Built from the request's own version rather than from a constant, so a
+/// client speaking `/v1` is never handed a `/v2` URL by a server that serves
+/// both.
+fn cover_url(version: &str, product: ProductId) -> String {
+    format!("/{version}/products/{}/cover", product.0.to_hyphenated())
+}
+
+/// The eight bytes every PNG begins with.
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// The headers an image answer carries, or the refusal for bytes that are not
+/// one.
+///
+/// Both byte-serving routes go through this, so neither can drift into
+/// answering a seller's PDF under a type a browser will sniff its way past.
+/// `nosniff` is the second half of that: naming the type is worth nothing if
+/// the browser is free to disagree with it, and these bytes are a seller's own
+/// upload rather than anything this server composed.
+fn image_answer(
+    bytes: Vec<u8>,
+) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Err(APIError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            APIErrorEntry::new("these bytes are not an image, and this route serves images only")
+                .kind(APIErrorKind::Validation),
+        ));
+    }
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            // A cover is derived from bytes that are already sealed and never
+            // rewritten in place, so it is safe to hold; private because it is
+            // one seller's own file and no shared cache may keep it.
+            (header::CACHE_CONTROL, "private, max-age=300"),
+        ],
+        bytes,
+    ))
+}
+
+/// The bytes of one blob this organisation has sealed, named by its handle.
+///
+/// The create form's own read: a cover is generated during `POST /uploads`,
+/// before any product exists, so there is no product to address it through and
+/// the handle the upload already answered is what the form holds. A saved
+/// resource's cover is [`product_cover`] instead.
+///
+/// The organisation is the whole fence, and it is enough. `blob` is keyed
+/// `(org_id, hash)` and [`BlobRepo::get`] pins the organisation before it
+/// reads, so a handle resolves only inside the tenant that sealed those bytes
+/// and another tenant's handle answers exactly as one that does not exist.
+///
+/// Images only, decided from the bytes. A handle names a payload as readily as
+/// a cover, and a seller's PDF is not something an image route should stream
+/// even back to its owner, so anything that is not a PNG is refused by name
+/// rather than served under a type it does not have.
+pub(crate) async fn uploaded_image(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, handle)): Path<(String, String)>,
+) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
+    let hash = parse_hash(&handle)
+        .ok_or_else(|| validation("a handle is the file's 64-character hex hash"))?;
+    let Some(blobs) = state.blobs.clone() else {
+        return Err(APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new("this deployment holds no object store")
+                .kind(APIErrorKind::Internal),
+        ));
+    };
+    let bytes = BlobRepo::new(
+        state.pool.clone(),
+        LocalObjectStore::new(blobs.root.clone()),
+        blobs.kek.clone(),
+    )
+    .get(context.org, hash)
+    .await
+    .map_err(|error| match error {
+        BlobError::Missing => missing("no such handle in this organisation"),
+        // Ours, not theirs: the row says these bytes exist and we could not
+        // produce them, which is a fault to be seen rather than a resource to
+        // be reported absent.
+        fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
+            state.internal(&format!("{fault}"))
+        }
+    })?;
+    image_answer(bytes)
+}
+
+/// The bytes of one product's cover.
+///
+/// The smallest read that lets a browser draw a thumbnail. Nothing else
+/// travels with the bytes: the catalogue's own list view already named this
+/// URL, and a second description of the file beside it would be a second thing
+/// to keep true. Scoped to the caller's organisation by the same context every
+/// other catalogue read takes, so one tenant's cover is not reachable from
+/// another's session; a product in another organisation answers exactly as a
+/// product that does not exist does.
+///
+/// The type is read off the bytes rather than asserted. Every cover this
+/// system stores is a generated PNG — `tam_pipeline::render` encodes one on
+/// ingest and the import stores one — so the check passes in every case we
+/// write, and anything else is served under a type nobody has to believe.
+pub(crate) async fn product_cover(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product)): Path<(String, String)>,
+) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
+    let product = ProductId(parse_id(&product)?);
+    // The row before the store, so a resource that has no cover answers the
+    // same way wherever it is served from: a deployment without an object
+    // store is a different fault from a resource with nothing to draw, and
+    // asking after the store first would report the first as the second.
+    let cover = ProductRepo::new(state.pool.clone())
+        .covers(context.org, &[product])
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| missing("this product has no stored cover"))?;
+    let Some(blobs) = state.blobs.clone() else {
+        return Err(APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new("this deployment holds no object store")
+                .kind(APIErrorKind::Internal),
+        ));
+    };
+    let bytes = BlobRepo::new(
+        state.pool.clone(),
+        LocalObjectStore::new(blobs.root.clone()),
+        blobs.kek.clone(),
+    )
+    .get(context.org, cover.hash)
+    .await
+    .map_err(|error| match error {
+        // The row named a blob the store does not have. That is ours, and a
+        // 404 here would say the resource has no cover when its own row says
+        // otherwise.
+        BlobError::Missing => state.internal("a cover row names a blob this store does not hold"),
+        fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
+            state.internal(&format!("{fault}"))
+        }
+    })?;
+    image_answer(bytes)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -211,7 +395,7 @@ pub struct ProductView {
     pub updated_at: Timestamp,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileView {
     pub id: Uuid,
     pub role: String,
@@ -227,6 +411,14 @@ pub struct FileView {
     /// decided explicitly: the device's scan is acceptable and advisory, and
     /// we do not restate it as a clean bill of ours.
     pub scan_vouched_by: String,
+    /// What the seller called this file, where a name was recorded.
+    ///
+    /// Absent for every file stored before the name column existed, and for a
+    /// cover, which is generated rather than chosen. The client renders the
+    /// absence rather than substituting the kind, because "PDF" is not a name
+    /// and three of them are not three names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Who vouched for a file's scan, from which arm holds its bytes.
@@ -234,6 +426,21 @@ fn scan_vouched_by(bytes: &tam_types::FileBytes) -> &'static str {
     match bytes {
         tam_types::FileBytes::Held { .. } => "server",
         tam_types::FileBytes::Sourced { .. } => "device",
+    }
+}
+
+/// One stored file as every reader of one renders it. Shared with the file
+/// routes in `catalogue`, so a field added here reaches the read and the three
+/// writes at once rather than three of the four.
+pub(crate) fn file_view(file: &tam_types::ProductFile, name: Option<&str>) -> FileView {
+    FileView {
+        id: file.id.0,
+        role: role_str(file.role).to_owned(),
+        kind: kind_str(file.kind).to_owned(),
+        byte_len: file.bytes.byte_len(),
+        scan: scan_str(file.bytes.scan()).to_owned(),
+        scan_vouched_by: scan_vouched_by(&file.bytes).to_owned(),
+        name: name.map(str::to_owned),
     }
 }
 
@@ -326,39 +533,14 @@ pub(crate) async fn product_view(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such product"))?;
+    let file_names = record.file_names;
     let aggregate = record.product;
-    let mut files: Vec<FileView> = aggregate
-        .payload
-        .iter()
-        .map(|file| FileView {
-            id: file.id.0,
-            role: role_str(file.role).to_owned(),
-            kind: kind_str(file.kind).to_owned(),
-            byte_len: file.bytes.byte_len(),
-            scan: scan_str(file.bytes.scan()).to_owned(),
-            scan_vouched_by: scan_vouched_by(&file.bytes).to_owned(),
-        })
-        .collect();
-    if let Some(cover) = &aggregate.cover {
-        files.push(FileView {
-            id: cover.id.0,
-            role: role_str(cover.role).to_owned(),
-            kind: kind_str(cover.kind).to_owned(),
-            byte_len: cover.bytes.byte_len(),
-            scan: scan_str(cover.bytes.scan()).to_owned(),
-            scan_vouched_by: scan_vouched_by(&cover.bytes).to_owned(),
-        });
-    }
-    for preview in &aggregate.previews {
-        files.push(FileView {
-            id: preview.id.0,
-            role: role_str(preview.role).to_owned(),
-            kind: kind_str(preview.kind).to_owned(),
-            byte_len: preview.bytes.byte_len(),
-            scan: scan_str(preview.bytes.scan()).to_owned(),
-            scan_vouched_by: scan_vouched_by(&preview.bytes).to_owned(),
-        });
-    }
+    let named = |file: &tam_types::ProductFile| {
+        file_view(file, file_names.get(&file.id).map(String::as_str))
+    };
+    let mut files: Vec<FileView> = aggregate.payload_files().map(&named).collect();
+    files.extend(aggregate.cover.iter().map(&named));
+    files.extend(aggregate.previews.iter().map(&named));
     let grades = GradesView {
         source: match aggregate.grades.source {
             tam_domain::DeclarationSource::Seller => "seller".to_owned(),
@@ -620,7 +802,7 @@ pub(crate) async fn resolve_item(
             return Err(validation(
                 "a narrower edge invents a distinction the source does not carry, so the \
                  projection never reads one; record the broader direction instead",
-            ))
+            ));
         }
         other => return Err(validation(&format!("unknown edge kind {other}"))),
     };
@@ -1034,7 +1216,7 @@ pub struct SetLabelsBody {
 /// forty labels on one item is describing something the label is the wrong
 /// tool for, and an unbounded list is a row this server writes on a stranger's
 /// say-so.
-const LABELS_PER_PRODUCT_MAX: usize = 20;
+pub(crate) const LABELS_PER_PRODUCT_MAX: usize = 20;
 
 /// The longest a label may be, shared by every route that accepts one so the
 /// rename cannot refuse a name the create path mints. Migration 0046 states
@@ -1051,22 +1233,33 @@ const LABEL_MAX_CHARS: usize = 60;
 /// the reason [`crate::text::is_typed_text`] states. Everything else a person
 /// might type is accepted, and a client sends it percent-encoded.
 fn validated_label(raw: &str) -> Result<String, APIError> {
+    label_refusal(raw).map_err(|refusal| validation(&refusal))
+}
+
+/// The label rules themselves, answering the refusal as plain words.
+///
+/// Split out from [`validated_label`] so that the spreadsheet import can apply
+/// exactly these rules without going through an `APIError`: its report cites a
+/// sheet, a row and a column, and needs the sentence rather than a response.
+/// One function with two callers rather than two copies that agree today —
+/// `LABEL_MAX_CHARS` moving here now moves both, which is the property a
+/// second copy cannot have however carefully it is written.
+pub(crate) fn label_refusal(raw: &str) -> Result<String, String> {
     let name = tam_storage::labels::normalise(raw);
     if name.is_empty() {
-        return Err(validation("a label needs a word in it"));
+        return Err("a label needs a word in it".to_owned());
     }
     if name.chars().count() > LABEL_MAX_CHARS {
-        return Err(validation(&format!(
-            "a label is at most {LABEL_MAX_CHARS} characters"
-        )));
+        return Err(format!("a label is at most {LABEL_MAX_CHARS} characters"));
     }
     if !crate::text::is_typed_text(&name) {
-        return Err(validation("a label cannot contain control characters"));
+        return Err("a label cannot contain control characters".to_owned());
     }
     if name.contains('/') {
-        return Err(validation(
-            "a label cannot contain a slash, because a label is addressed by its own name",
-        ));
+        return Err(
+            "a label cannot contain a slash, because a label is addressed by its own name"
+                .to_owned(),
+        );
     }
     Ok(name)
 }
@@ -1420,13 +1613,59 @@ pub struct DecisionView {
     pub resolution: String,
     /// The target vocabulary's own members, read out of the relation now.
     pub candidates: Vec<PathView>,
-    /// The value pre-selected as a suggestion, where one exists. Never an
-    /// answer: an election resolves only on explicit confirmation.
-    pub suggested: Option<PathView>,
+    /// What best fit would pick, where the seller opted into it and there is
+    /// a resolved set to rank. Never an answer: an election resolves only on
+    /// explicit confirmation.
+    pub suggested: Option<SuggestionView>,
     /// What this listing loses on this target whatever the seller picks, so a
     /// Tes-to-TPT licence drop is visible at the moment of decision rather
     /// than after publish.
     pub losses: Vec<LossView>,
+}
+
+/// A ranked suggestion: what best fit would keep, and what keeping it leaves
+/// behind.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SuggestionView {
+    /// Highest ranked first, and never more than the target will take.
+    pub keep: Vec<RankedView>,
+    /// The candidates the target's cardinality left behind, named rather than
+    /// dropped quietly. Empty where nothing was dropped.
+    pub dropped: Vec<RankedView>,
+}
+
+/// One value of the resolved set with the edge the relation reached it by.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RankedView {
+    pub path: PathView,
+    /// `exact`, `broader` or `narrower`. Absent where the relation named no
+    /// edge for this value: it is in the resolved set, which is what admits
+    /// it to the ranking, and claiming an edge nobody recorded would be a
+    /// fact this server made up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge: Option<String>,
+}
+
+const fn edge_kind_str(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::Exact => "exact",
+        EdgeKind::Broader => "broader",
+        EdgeKind::Narrower => "narrower",
+    }
+}
+
+fn ranked_view(ranked: &Ranked) -> RankedView {
+    RankedView {
+        path: path_view(&ranked.path),
+        edge: ranked.edge.map(|kind| edge_kind_str(kind).to_owned()),
+    }
+}
+
+fn suggestion_view(suggestion: &Suggestion) -> SuggestionView {
+    SuggestionView {
+        keep: suggestion.keep.iter().map(ranked_view).collect(),
+        dropped: suggestion.dropped.iter().map(ranked_view).collect(),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1442,72 +1681,328 @@ pub struct DecisionsView {
     pub items: Vec<DecisionView>,
 }
 
+/// Which questions the caller wants back.
+///
+/// Both filters are optional and both narrow: the console asks for the whole
+/// decision surface, and one marketplace tab of the authoring form asks
+/// "which decisions does this resource still owe this marketplace, and what
+/// would best fit pick", which is this route under both filters at once.
+#[derive(Debug, Default, Deserialize)]
+pub struct DecisionsQuery {
+    #[serde(default)]
+    pub product: Option<String>,
+    /// The same token every JSON body carries, so a client holds one
+    /// vocabulary rather than two.
+    #[serde(default)]
+    pub inventory: Option<String>,
+}
+
+/// The relation slices one product's suggestions are ranked over, loaded once
+/// per product rather than once per open question.
+struct ResolvedContext {
+    product: CanonicalProduct,
+    edges: Vec<ProjectionEdge>,
+    no_counterparts: Vec<(CanonicalTermId, VocabularyId)>,
+}
+
+impl ResolvedContext {
+    /// What this product's own terms resolve to in one target vocabulary,
+    /// which is the set a suggestion ranks and the reason it is not a ranking
+    /// of the target's whole vocabulary.
+    ///
+    /// The seller's own projection overrides are deliberately not consulted.
+    /// An override only ever adds to a resolved set, so a set computed
+    /// without them is a subset of what the projection resolves — short of
+    /// the whole answer, never outside it — and best fit's own invariant, that
+    /// it never names a value the resolved set did not hold, survives.
+    fn resolved(
+        &self,
+        kinds: &HashMap<CanonicalTermId, TermKind>,
+        vocabulary: VocabularyId,
+    ) -> Vec<VocabularyPath> {
+        let VocabularyId(_, axis) = vocabulary;
+        let terms: Vec<CanonicalTermId> = match axis {
+            TermKind::Phase => ingest_grades(&self.product.grades, &self.edges).terms,
+            TermKind::Subject | TermKind::Topic | TermKind::ResourceType => self
+                .product
+                .subjects
+                .iter()
+                .copied()
+                .filter(|term| kinds.get(term) == Some(&axis))
+                .collect(),
+            // A licence question is always a supply — TPT carries no licence
+            // anywhere on its wire, so nothing was stated — and a supply has
+            // no resolved set by construction.
+            TermKind::Licence => Vec::new(),
+        };
+        project_terms(&terms, vocabulary, &self.edges, &self.no_counterparts).included
+    }
+}
+
+/// The question the durable row records, rebuilt with the candidate set it
+/// was asked about.
+///
+/// Two of the four rebuild and two do not, and the two that do not are
+/// refusals rather than gaps. A `supply` asks for a value the source never
+/// carried, so it has no resolved set by construction and best fit declines
+/// on it anyway. A `narrow` asks which values under one source band this
+/// listing means, and the row keys on the band's own native id rather than on
+/// the term it came from, so the band's candidates cannot be named from the
+/// row alone: the question stands rather than being ranked against a set that
+/// is not the one it was asked.
+fn rebuilt_trigger(
+    kind: ElectionTriggerKind,
+    binding: AxisBinding,
+    resolved: Vec<VocabularyPath>,
+) -> Option<ElectionTrigger> {
+    match kind {
+        ElectionTriggerKind::ElectOne => Some(ElectionTrigger::ElectOne { from: resolved }),
+        ElectionTriggerKind::OverCap => match binding.cardinality {
+            Cardinality::Many {
+                cap: Some(CountCap { limit }),
+            } => Some(ElectionTrigger::OverCap {
+                cap: limit,
+                from: resolved,
+            }),
+            // The cap that raised the question is the registry's own, so an
+            // axis declaring none today cannot be asked what it would keep.
+            Cardinality::One | Cardinality::Many { cap: None } => None,
+        },
+        ElectionTriggerKind::Supply | ElectionTriggerKind::Narrow => None,
+    }
+}
+
+/// Every axis this tenant has handed to best fit, read off their own standing
+/// rules rather than assumed.
+///
+/// Keyed on `(inventory, axis)` and not on the trigger, because the tick is
+/// one permission over a marketplace's axis rather than four separate ones:
+/// `election_rule_trigger_key` admits a keyless rule only for the two
+/// triggers that generalise to nothing, so a delegation stored per trigger
+/// could not cover the two that key. `resolution_for` still has the last
+/// word, and `Never` still wins.
+fn delegated_axes(rules: &[ElectionRule]) -> HashSet<(InventoryId, TermKind)> {
+    rules
+        .iter()
+        .filter(|rule| rule.answer == ElectionAnswer::Delegate)
+        .map(|rule| (rule.inventory, rule.axis))
+        .collect()
+}
+
+/// One open question rendered, with the suggestion computed here and nowhere
+/// else.
+fn decision_view(item: OpenElection, context: DecisionContext<'_>) -> DecisionView {
+    let binding = registry(item.inventory).axis(item.axis);
+    let opted_in = context.delegated.contains(&(item.inventory, item.axis));
+    let mode = binding.map_or(Mode::SellerDecides, |binding| {
+        resolution_for(binding, opted_in)
+    });
+    let suggested = binding
+        .zip(context.resolved)
+        .and_then(|(binding, resolved)| {
+            rebuilt_trigger(item.trigger_kind, binding, resolved.to_vec())
+                .and_then(|trigger| best_fit(binding, opted_in, &trigger, context.candidates))
+        })
+        .as_ref()
+        .map(suggestion_view);
+    DecisionView {
+        id: item.id,
+        product: item.product,
+        inventory: item.inventory,
+        axis: item.axis,
+        trigger: item.trigger_kind.as_str().to_owned(),
+        trigger_key: item.trigger_key,
+        raised_at: item.raised_at,
+        resolution: match mode {
+            Mode::SellerDecides => "seller_decides".to_owned(),
+            Mode::BestFit => "best_fit".to_owned(),
+        },
+        suggested,
+        candidates: context
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.edge == EdgeKind::Exact)
+            .map(|candidate| path_view(&candidate.path))
+            .collect(),
+        losses: context.losses,
+    }
+}
+
+/// What rendering one question needs beyond the row itself, bundled because
+/// the arity would otherwise exceed the workspace argument limit.
+struct DecisionContext<'a> {
+    delegated: &'a HashSet<(InventoryId, TermKind)>,
+    /// The target vocabulary's own members with the edge each was reached by,
+    /// which is what ranks a suggestion and what the client picks from.
+    candidates: &'a [Candidate],
+    /// This product's own resolved set in that vocabulary, or `None` where
+    /// the product could not be read and so nothing about it can be ranked.
+    resolved: Option<&'a [VocabularyPath]>,
+    losses: Vec<LossView>,
+}
+
 pub(crate) async fn list_decisions(
     State(state): State<AppState>,
     context: OrgContext,
+    Query(filter): Query<DecisionsQuery>,
 ) -> Result<Json<DecisionsView>, APIError> {
+    let wanted_product = filter.product.as_deref().map(parse_id).transpose()?;
+    let wanted_inventory = filter
+        .inventory
+        .as_deref()
+        .map(|raw| {
+            crate::vocabulary::parse_inventory(raw).ok_or_else(|| validation("no such inventory"))
+        })
+        .transpose()?;
     let repo = ElectionRepo::new(state.pool.clone());
     let taxonomy = TaxonomyRepo::new(state.pool.clone());
     let mappings = MappingRepo::new(state.pool.clone());
-    let open = repo
+    let open: Vec<OpenElection> = repo
         .open_items(context.org)
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
-    let mut items = Vec::with_capacity(open.len());
-    for item in open {
-        let vocabulary = VocabularyId(item.inventory, item.axis);
-        let candidates: Vec<PathView> = taxonomy
-            .edges_into(vocabulary)
+        .map_err(|error| storage_fault(&state, &error))?
+        .into_iter()
+        .filter(|item| wanted_product.is_none_or(|id| item.product.0 == id))
+        .filter(|item| wanted_inventory.is_none_or(|inventory| item.inventory == inventory))
+        .collect();
+    let delegated = delegated_axes(
+        &repo
+            .rules(context.org)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?,
+    );
+    // Everything below this point exists only to compute a suggestion, and a
+    // tenant who has delegated nothing can have none: `best_fit` consults
+    // `resolution_for` first and declines. So a seller who has never ticked
+    // the control -- which is every seller until they do -- pays one extra
+    // read and no more: the `rules` read above happens for every tenant,
+    // because whether they have delegated anything is precisely what it
+    // answers, and the per-product reads below arrive only with the opt-in
+    // that makes them mean something.
+    let mut kinds: HashMap<CanonicalTermId, TermKind> = HashMap::new();
+    let mut contexts: HashMap<(ProductId, InventoryId), Option<ResolvedContext>> = HashMap::new();
+    if !delegated.is_empty() {
+        kinds = taxonomy
+            .terms()
             .await
             .map_err(|error| storage_fault(&state, &error))?
-            .iter()
-            .filter(|edge| edge.kind == EdgeKind::Exact)
-            .map(|edge| path_view(&edge.to))
+            .into_iter()
+            .map(|term: CanonicalTerm| (term.id, term.kind))
             .collect();
-        // The registry decides the mode, and `Never` wins over any opt-in.
-        // The tenant opt-in is not modelled yet, so every axis reads as
-        // seller-decides today and the licence axis will read that way even
-        // once it is.
-        let binding = registry(item.inventory).axis(item.axis);
-        let mode = binding.map_or(Mode::SellerDecides, |binding| {
-            resolution_for(binding, false)
-        });
-        // The losses of the mapping that raised the question. An election
-        // authored on the create form names no mapping and so names no losses
-        // yet, which is honest: nothing has been projected.
-        let losses = match item.raised_by {
-            Some(mapping) => mappings
-                .losses(context.org, mapping)
-                .await
-                .map_err(|error| storage_fault(&state, &error))?
-                .into_iter()
-                .map(|loss| LossView {
-                    kind: loss.kind.as_str().to_owned(),
-                    axis: loss.axis,
-                    detail: loss.detail,
-                    recorded_at: loss.recorded_at,
-                })
-                .collect(),
-            None => Vec::new(),
+        // Keyed on the pair and loaded before the render loop, so a decision
+        // surface holding twenty questions about one listing reads that
+        // listing once rather than twenty times.
+        for item in &open {
+            let key = (item.product, item.inventory);
+            if let Entry::Vacant(slot) = contexts.entry(key) {
+                slot.insert(resolved_context(&state, context.org, key).await?);
+            }
+        }
+    }
+    let mut items = Vec::with_capacity(open.len());
+    for item in open {
+        let key = (item.product, item.inventory);
+        let vocabulary = VocabularyId(item.inventory, item.axis);
+        let loaded = contexts.get(&key).and_then(Option::as_ref);
+        let candidates = match loaded {
+            Some(loaded) => candidates_in(&loaded.edges, vocabulary),
+            None => candidates_in(
+                &taxonomy
+                    .edges_into(vocabulary)
+                    .await
+                    .map_err(|error| storage_fault(&state, &error))?,
+                vocabulary,
+            ),
         };
-        items.push(DecisionView {
-            id: item.id,
-            product: item.product,
-            inventory: item.inventory,
-            axis: item.axis,
-            trigger: item.trigger_kind.as_str().to_owned(),
-            trigger_key: item.trigger_key,
-            raised_at: item.raised_at,
-            resolution: match mode {
-                Mode::SellerDecides => "seller_decides".to_owned(),
-                Mode::BestFit => "best_fit".to_owned(),
+        let resolved = loaded.map(|loaded| loaded.resolved(&kinds, vocabulary));
+        let losses = losses_of(&state, &mappings, context.org, item.raised_by).await?;
+        items.push(decision_view(
+            item,
+            DecisionContext {
+                delegated: &delegated,
+                candidates: &candidates,
+                resolved: resolved.as_deref(),
+                losses,
             },
-            suggested: None,
-            candidates,
-            losses,
-        });
+        ));
     }
     Ok(Json(DecisionsView { items }))
+}
+
+/// The edges into one target vocabulary as ranking candidates. `Narrower` is
+/// kept rather than filtered out: a narrow question's candidates are reached
+/// by nothing else, and an edge kind carried into the ranking is what lets an
+/// exact one outrank a broader one.
+fn candidates_in(edges: &[ProjectionEdge], vocabulary: VocabularyId) -> Vec<Candidate> {
+    edges
+        .iter()
+        .filter(|edge| edge.to.vocabulary == vocabulary)
+        .map(|edge| Candidate {
+            path: edge.to.clone(),
+            edge: edge.kind,
+        })
+        .collect()
+}
+
+/// One product's relation slices, or `None` where the product is gone.
+///
+/// A vanished product is not a fault: an election row outliving its product
+/// is a race with a delete, and the question still renders with its
+/// candidates and without a suggestion, which is honest — there is no
+/// resolved set to rank because there is no longer anything that resolved.
+async fn resolved_context(
+    state: &AppState,
+    org: OrgId,
+    key: (ProductId, InventoryId),
+) -> Result<Option<ResolvedContext>, APIError> {
+    let (product, inventory) = key;
+    let taxonomy = TaxonomyRepo::new(state.pool.clone());
+    let Some(record) = ProductRepo::new(state.pool.clone())
+        .get(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    else {
+        return Ok(None);
+    };
+    let edges = taxonomy
+        .edges_into_all(&projection_vocabularies(inventory, &record.product))
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let no_counterparts = taxonomy
+        .no_counterparts_into(inventory)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok(Some(ResolvedContext {
+        product: record.product,
+        edges,
+        no_counterparts,
+    }))
+}
+
+/// The losses of the mapping that raised the question. An election authored
+/// on the create form names no mapping and so names no losses yet, which is
+/// honest: nothing has been projected.
+async fn losses_of(
+    state: &AppState,
+    mappings: &MappingRepo,
+    org: OrgId,
+    raised_by: Option<MappingId>,
+) -> Result<Vec<LossView>, APIError> {
+    let Some(mapping) = raised_by else {
+        return Ok(Vec::new());
+    };
+    Ok(mappings
+        .losses(org, mapping)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .into_iter()
+        .map(|loss| LossView {
+            kind: loss.kind.as_str().to_owned(),
+            axis: loss.axis,
+            detail: loss.detail,
+            recorded_at: loss.recorded_at,
+        })
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1741,6 +2236,181 @@ pub(crate) async fn upsert_rule(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ------------------------------------------------------------- delegation
+
+/// One axis of one marketplace, and where the seller stands on letting us
+/// choose its value.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AxisDelegationView {
+    pub inventory: InventoryId,
+    pub axis: TermKind,
+    /// The native field the axis lands in, so a tab can name what the tick
+    /// covers in the platform's own words rather than in ours.
+    pub native: String,
+    /// Whether this tenant has handed the axis to best fit.
+    pub delegated: bool,
+    /// Whether it may be handed over at all, and why not where it may not.
+    /// A `never` axis reads `delegated: false` however many rows exist,
+    /// because two layers refuse to write one and `resolution_for` would
+    /// ignore it if one appeared.
+    pub delegation: crate::vocabulary::DelegationView,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DelegationsView {
+    pub items: Vec<AxisDelegationView>,
+}
+
+/// Ticking or unticking best fit for one marketplace.
+///
+/// Per marketplace rather than per axis, because that is the control: one
+/// checkbox at the head of a marketplace tab reading "choose the best fit for
+/// me on this marketplace". Which axes it reaches is the registry's to say,
+/// not the caller's, so the body names no axis and cannot be used to reach
+/// one the registry protects.
+#[derive(Debug, Deserialize)]
+pub struct DelegationBody {
+    pub inventory: InventoryId,
+    pub delegated: bool,
+}
+
+/// The two triggers a blanket delegation can be stored under.
+///
+/// `election_rule_trigger_key` admits a keyless rule for exactly these two,
+/// and a marketplace-level checkbox has no key to give: a supply keys on the
+/// pricing branch and a narrow on one source value's own native id, and the
+/// tick knows neither. Reading the opt-in back per `(inventory, axis)` rather
+/// than per trigger is what still lets those two see the delegation.
+///
+/// Both are written rather than one, though the read-back would be satisfied
+/// by either. The rows are the audit record, and a row on one of the two
+/// would say the seller delegated elect-one and withheld over-cap, which is
+/// not the question they were asked; the table's key makes "this axis is
+/// delegated" expressible only as a row per admissible trigger. The untick
+/// removes both.
+const DELEGABLE_TRIGGERS: [ElectionTriggerKind; 2] =
+    [ElectionTriggerKind::ElectOne, ElectionTriggerKind::OverCap];
+
+/// Every axis of every inventory with the seller's own standing on it, so a
+/// form can render the tick without inferring anything.
+///
+/// Total over the registry rather than over the rows: an axis with no rule is
+/// not delegated, which is the same answer a tenant who has written none gets
+/// today, and a `never` axis appears with its reason so the control can be
+/// disabled with words rather than silently absent.
+fn delegations_view(rules: &[ElectionRule]) -> DelegationsView {
+    let delegated = delegated_axes(rules);
+    let mut items = Vec::new();
+    for inventory in InventoryId::ALL {
+        for binding in registry(inventory).equivalence_axes {
+            items.push(AxisDelegationView {
+                inventory,
+                axis: binding.axis,
+                native: binding.native.to_owned(),
+                delegated: matches!(resolution_for(*binding, true), Mode::BestFit)
+                    && delegated.contains(&(inventory, binding.axis)),
+                delegation: crate::vocabulary::DelegationView::of(binding.delegation),
+            });
+        }
+    }
+    DelegationsView { items }
+}
+
+pub(crate) async fn list_delegations(
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<DelegationsView>, APIError> {
+    let rules = ElectionRepo::new(state.pool.clone())
+        .rules(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(delegations_view(&rules)))
+}
+
+/// The tick and the untick, as one durable and revocable fact per axis.
+///
+/// Ticking writes an `ElectionRule` per delegable axis rather than setting a
+/// client-side preference, so the delegation is a row the seller can see,
+/// audit and withdraw, and so the legal backstop refuses it in the two places
+/// it already refuses everything else. It reaches no `Delegation::Never`
+/// axis: `ElectionRule::new` refuses one and the table's own CHECK refuses it
+/// again, and this filters them out before either has to, so a tick over a
+/// marketplace carrying a licence axis succeeds on everything but the licence
+/// instead of failing whole.
+///
+/// Unticking removes the delegations and nothing else, so a standing answer
+/// the seller stated themselves survives a change of mind about best fit.
+pub(crate) async fn set_delegation(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Json(body): Json<DelegationBody>,
+) -> Result<Json<DelegationsView>, APIError> {
+    let repo = ElectionRepo::new(state.pool.clone());
+    let now = (state.wall)();
+    if body.delegated {
+        let mut rules = Vec::new();
+        for binding in registry(body.inventory).equivalence_axes {
+            if resolution_for(*binding, true) != Mode::BestFit {
+                continue;
+            }
+            for trigger_kind in DELEGABLE_TRIGGERS {
+                rules.push(delegation_rule(
+                    &context,
+                    body.inventory,
+                    *binding,
+                    trigger_kind,
+                    now,
+                )?);
+            }
+        }
+        repo.upsert_rules(&rules)
+            .await
+            .map_err(|error| conflict_or_fault(&state, &error))?;
+    } else {
+        repo.revoke_delegation(context.org, body.inventory)
+            .await
+            .map_err(|error| conflict_or_fault(&state, &error))?;
+    }
+    let rules = repo
+        .rules(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(delegations_view(&rules)))
+}
+
+/// One delegation row, built through `ElectionRule::new` so this route is not
+/// a second way in past the legal refusal.
+fn delegation_rule(
+    context: &OrgContext,
+    inventory: InventoryId,
+    binding: AxisBinding,
+    trigger_kind: ElectionTriggerKind,
+    now: Timestamp,
+) -> Result<ElectionRule, APIError> {
+    ElectionRule::new(NewElectionRule {
+        org: context.org,
+        inventory,
+        axis: binding.axis,
+        trigger_kind,
+        trigger_key: None,
+        answer: ElectionAnswer::Delegate,
+        decided_by: Decider::Human {
+            user: context.user,
+            org: context.org,
+        },
+        decided_at: now,
+    })
+    .map_err(|error| match error {
+        ElectionRuleError::NotDelegable(_) => validation(
+            "this axis is the seller's own: choosing a rights grant is issuing one, \
+             so no opt-in delegates it to a computation",
+        ),
+        ElectionRuleError::UnboundAxis => {
+            validation("this inventory declares no such equivalence axis")
+        }
+    })
+}
+
 /// A storage refusal the seller caused, told apart from one they did not. The
 /// repo states an unanswerable item as `Inconsistent`, which is a conflict
 /// rather than a fault.
@@ -1752,5 +2422,173 @@ fn conflict_or_fault(state: &AppState, error: &tam_storage::StorageError) -> API
         )
     } else {
         storage_fault(state, error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{delegated_axes, delegations_view, rebuilt_trigger};
+    use tam_domain::equivalence::{
+        ElectionAnswer, ElectionRule, ElectionTrigger, ElectionTriggerKind, NewElectionRule,
+    };
+    use tam_domain::registry::registry;
+    use tam_domain::{Decider, TermKind, VocabularyId, VocabularyPath};
+    use tam_types::{InventoryId, OrgId, Timestamp, Uuid};
+
+    const ORG: OrgId = OrgId(Uuid([0x01; 16]));
+
+    fn axis(inventory: InventoryId, axis: TermKind) -> tam_domain::registry::AxisBinding {
+        match registry(inventory).axis(axis) {
+            Some(binding) => binding,
+            None => panic!("{inventory:?} binds {axis:?}"),
+        }
+    }
+
+    fn path(segment: &str) -> VocabularyPath {
+        VocabularyPath {
+            vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Phase),
+            segments: vec![segment.to_owned()],
+            native_id: Some(segment.to_owned()),
+        }
+    }
+
+    fn rule(answer: ElectionAnswer) -> ElectionRule {
+        match ElectionRule::new(NewElectionRule {
+            org: ORG,
+            inventory: InventoryId::TesGb,
+            axis: TermKind::Subject,
+            trigger_kind: ElectionTriggerKind::ElectOne,
+            trigger_key: None,
+            answer,
+            decided_by: Decider::Imported {
+                source: "test".to_owned(),
+            },
+            decided_at: Timestamp(0),
+        }) {
+            Ok(built) => built,
+            Err(error) => panic!("the subject axis is delegable, got {error:?}"),
+        }
+    }
+
+    /// The cap that raised an over-cap question is the registry's own, so the
+    /// rebuild reads it from there rather than from the row. TPT's phase axis
+    /// is the one axis anywhere that declares one.
+    #[test]
+    fn an_over_cap_rebuild_takes_the_cap_the_registry_declares() {
+        let resolved = vec![path("1"), path("2"), path("3"), path("4"), path("5")];
+        assert_eq!(
+            rebuilt_trigger(
+                ElectionTriggerKind::OverCap,
+                axis(InventoryId::Tpt, TermKind::Phase),
+                resolved.clone()
+            ),
+            Some(ElectionTrigger::OverCap {
+                cap: 4,
+                from: resolved.clone()
+            }),
+            "TPT's create form says four grades, and that is the number the suggestion keeps"
+        );
+        assert_eq!(
+            rebuilt_trigger(
+                ElectionTriggerKind::OverCap,
+                axis(InventoryId::Tpt, TermKind::Subject),
+                resolved
+            ),
+            None,
+            "an axis declaring no cap cannot be asked what it would keep, because an absent \
+             cap is unmeasured rather than unlimited"
+        );
+    }
+
+    /// The two the durable row cannot answer, refused rather than ranked
+    /// against a set that is not the one the question was asked about.
+    #[test]
+    fn a_supply_and_a_narrow_are_not_rebuilt_from_the_row() {
+        for kind in [ElectionTriggerKind::Supply, ElectionTriggerKind::Narrow] {
+            assert_eq!(
+                rebuilt_trigger(
+                    kind,
+                    axis(InventoryId::TesGb, TermKind::Subject),
+                    vec![path("1")]
+                ),
+                None,
+                "{kind:?} carries a question this row cannot reconstruct the candidates for"
+            );
+        }
+        assert_eq!(
+            rebuilt_trigger(
+                ElectionTriggerKind::ElectOne,
+                axis(InventoryId::TesGb, TermKind::ResourceType),
+                vec![path("1")]
+            ),
+            Some(ElectionTrigger::ElectOne {
+                from: vec![path("1")]
+            }),
+            "an elect-one asks about this product's own resolved set, which is exactly what \
+             the route recomputes"
+        );
+    }
+
+    /// The opt-in is a delegation and not any standing answer: a seller who
+    /// stated a literal value has decided rather than delegated, and reading
+    /// their decision as an opt-in would compute a suggestion they never
+    /// asked for.
+    #[test]
+    fn only_a_delegate_answer_counts_as_an_opt_in() {
+        assert!(
+            delegated_axes(&[
+                rule(ElectionAnswer::Value { path: path("1") }),
+                rule(ElectionAnswer::Ordering {
+                    prefer: vec![path("1")]
+                }),
+            ])
+            .is_empty(),
+            "a stated answer is a decision, not a permission"
+        );
+        assert_eq!(
+            delegated_axes(&[rule(ElectionAnswer::Delegate)])
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![(InventoryId::TesGb, TermKind::Subject)],
+            "the delegation is keyed on the marketplace and the axis, not on the trigger"
+        );
+    }
+
+    /// The view is total over the registry rather than over the rows, and a
+    /// legal axis reads undelegated whatever exists, so a form can render the
+    /// control disabled with its reason rather than omitting it.
+    #[test]
+    fn the_delegation_view_is_total_and_a_legal_axis_never_reads_delegated() {
+        let view = delegations_view(&[]);
+        let tes: Vec<TermKind> = view
+            .items
+            .iter()
+            .filter(|item| item.inventory == InventoryId::TesGb)
+            .map(|item| item.axis)
+            .collect();
+        assert_eq!(
+            tes,
+            vec![
+                TermKind::Subject,
+                TermKind::Topic,
+                TermKind::ResourceType,
+                TermKind::Phase,
+                TermKind::Licence,
+            ],
+            "every axis the marketplace binds appears, whether or not a rule exists for it"
+        );
+        assert!(
+            view.items.iter().all(|item| !item.delegated),
+            "a tenant with no rules is opted into nothing, which is the shipped behaviour"
+        );
+        let licence = view
+            .items
+            .iter()
+            .find(|item| item.inventory == InventoryId::TesGb && item.axis == TermKind::Licence);
+        assert_eq!(
+            licence.map(|item| (item.native.as_str(), item.delegation.kind)),
+            Some(("licence", crate::vocabulary::DelegationKind::Never)),
+            "the tick names what it does not cover, in the field's own wire name"
+        );
     }
 }

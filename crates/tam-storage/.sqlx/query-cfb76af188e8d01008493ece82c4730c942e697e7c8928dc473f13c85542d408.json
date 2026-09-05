@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM election_rule WHERE org_id = $1 AND inventory = $2 AND answer_kind = 'delegate'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cfb76af188e8d01008493ece82c4730c942e697e7c8928dc473f13c85542d408"
+}

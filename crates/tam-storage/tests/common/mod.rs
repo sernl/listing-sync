@@ -24,7 +24,7 @@ pub(crate) fn minimal_product() -> CanonicalProduct {
             body: "Fixture body.".to_owned(),
             format: CopyFormat::Markdown,
         },
-        payload: PayloadSet::new(
+        payload: Some(PayloadSet::new(
             ProductFile {
                 id: FileId(Uuid([0x21; 16])),
                 role: FileRole::Payload,
@@ -36,7 +36,7 @@ pub(crate) fn minimal_product() -> CanonicalProduct {
                 },
             },
             vec![],
-        ),
+        )),
         cover: None,
         previews: vec![],
         subjects: vec![],
