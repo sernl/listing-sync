@@ -2,12 +2,19 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { api } from '$lib/api';
+	import Banner from '$lib/Banner.svelte';
+	import Button from '$lib/Button.svelte';
 	import { present } from '$lib/connection-status';
 	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import Placeholder from '$lib/Placeholder.svelte';
 	import StatCard from '$lib/StatCard.svelte';
+	import StatusPill, { type Tone } from '$lib/StatusPill.svelte';
+	import { badgeTone } from '$lib/pages/account/tones';
 	import { queryKeys } from '$lib/query';
+	import '$lib/pages/account/account.css';
+	import '$lib/pages/admin/admin.css';
 
 	const orgId = $derived(page.params.id ?? '');
 
@@ -21,14 +28,14 @@
 	const subscription = $derived(view?.subscription);
 	const now = Date.now();
 
-	/** Paddle's vocabulary carries no tone of its own, so the two states that
-	 *  mean money is not arriving are the ones marked. Anything unrecognised is
+	/** Paddle's vocabulary carries no tone of its own, so the states that mean
+	 *  money is not arriving are the ones marked. Anything unrecognised is
 	 *  rendered plainly rather than guessed at. */
-	function tone(status: string): string {
+	function tone(status: string): Tone {
 		if (status === 'active' || status === 'trialing') {
 			return 'ok';
 		}
-		return status === 'past_due' || status === 'canceled' || status === 'paused' ? 'bad' : 'mut';
+		return status === 'past_due' || status === 'canceled' || status === 'paused' ? 'bad' : 'soon';
 	}
 
 	function instant(at: number | undefined): string {
@@ -43,7 +50,7 @@
 		description={view === undefined ? 'Reading this tenant…' : `Tenant ${view.org.org}`}
 	>
 		{#snippet aside()}
-			<a class="btn" href="/admin/orgs">All organisations</a>
+			<Button tier="outline" icon="arrow-left" href="/admin/orgs">All organisations</Button>
 		{/snippet}
 	</PageHead>
 
@@ -71,21 +78,21 @@
 				description="The same status the seller's own page renders, derived the same way."
 			>
 				{#if view.connections.length === 0}
-					<div class="clear">
-						<span class="big" aria-hidden="true">⚲</span>
-						This tenant has linked no marketplace.
-					</div>
+					<Placeholder
+						icon="store"
+						headline="This tenant has linked no marketplace"
+						body="Nothing can sync for them until one is linked, which only they can do."
+					/>
 				{:else}
 					{#each view.connections as link (link.id)}
-						<div class="row">
-							<span class="pill {present(link.status).tone}">{link.status}</span>
-							<span class="what">
+						<div class="acct-state-row">
+							<span class="who">
 								<span class="t">{link.marketplace}</span>
-								<span class="s">{present(link.status).explanation}</span>
+								<span class="why">{present(link.status).explanation}</span>
 							</span>
-							<span class="grow"></span>
-							<span class="badge">{link.state}</span>
-							<span class="when">updated {agoLabel(link.updated_at, now)}</span>
+							<StatusPill tone={badgeTone(present(link.status).tone)} label={link.status} />
+							<StatusPill tone="flat" label={link.state} />
+							<span class="why">updated {agoLabel(link.updated_at, now)}</span>
 						</div>
 					{/each}
 				{/if}
@@ -93,15 +100,15 @@
 
 			<Panel title="Billing" description="What Paddle last told us, passed through untranslated.">
 				{#if subscription === undefined}
-					<div class="clear">
-						<span class="big" aria-hidden="true">◇</span>
-						This tenant has never reached checkout. That is a different fact from a cancelled
-						subscription, which would appear here carrying Paddle's cancelled status.
-					</div>
+					<Placeholder
+						icon="credit-card"
+						headline="This tenant has never reached checkout"
+						body="That is a different fact from a cancelled subscription, which would appear here carrying Paddle's cancelled status."
+					/>
 				{:else}
-					<dl class="facts">
+					<dl class="acct-detail">
 						<dt>Status</dt>
-						<dd><span class="pill {tone(subscription.status)}">{subscription.status}</span></dd>
+						<dd><StatusPill tone={tone(subscription.status)} label={subscription.status} /></dd>
 						<dt>Current period ends</dt>
 						<dd>
 							{#if subscription.current_period_end === undefined}
@@ -123,19 +130,19 @@
 
 		<Panel title="Halts" description="Work this tenant is not allowed to perform right now.">
 			{#if view.halts.length === 0}
-				<div class="clear">
-					<span class="big" aria-hidden="true">✓</span>
-					Nothing is halted for this tenant.
-				</div>
+				<Placeholder
+					icon="circle-check"
+					headline="Nothing is halted for this tenant"
+					body="Every inventory they sell on is accepting work."
+				/>
 			{:else}
 				{#each view.halts as halt (`${halt.inventory ?? 'tenant'}-${halt.raised_at}`)}
-					<div class="attn">
-						<div class="t">
-							{halt.inventory === undefined ? 'The whole tenant' : halt.inventory} — raised
-							{agoLabel(halt.raised_at, now)} by {halt.raised_by}
-						</div>
-						<p>{halt.reason}</p>
-					</div>
+					<Banner
+						tone="warn"
+						title={`${halt.inventory === undefined ? 'The whole tenant' : halt.inventory} — raised ${agoLabel(halt.raised_at, now)} by ${halt.raised_by}`}
+					>
+						{halt.reason}
+					</Banner>
 				{/each}
 			{/if}
 		</Panel>

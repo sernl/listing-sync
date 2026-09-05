@@ -15,6 +15,7 @@ import Bell from '@lucide/svelte/icons/bell';
 import BookOpen from '@lucide/svelte/icons/book-open';
 import Building2 from '@lucide/svelte/icons/building-2';
 import ChartLine from '@lucide/svelte/icons/chart-line';
+import ChevronDown from '@lucide/svelte/icons/chevron-down';
 import CircleAlert from '@lucide/svelte/icons/circle-alert';
 import CircleCheck from '@lucide/svelte/icons/circle-check';
 import CirclePlus from '@lucide/svelte/icons/circle-plus';
@@ -25,6 +26,7 @@ import Copy from '@lucide/svelte/icons/copy';
 import CreditCard from '@lucide/svelte/icons/credit-card';
 import Download from '@lucide/svelte/icons/download';
 import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
+import Eye from '@lucide/svelte/icons/eye';
 import FileDown from '@lucide/svelte/icons/file-down';
 import HeartPulse from '@lucide/svelte/icons/heart-pulse';
 import Image from '@lucide/svelte/icons/image';
@@ -57,6 +59,7 @@ export const ICONS = {
 	'book-open': BookOpen,
 	'building-2': Building2,
 	'chart-line': ChartLine,
+	'chevron-down': ChevronDown,
 	'circle-alert': CircleAlert,
 	'circle-check': CircleCheck,
 	'circle-plus': CirclePlus,
@@ -67,6 +70,7 @@ export const ICONS = {
 	'credit-card': CreditCard,
 	download: Download,
 	'ellipsis-vertical': EllipsisVertical,
+	eye: Eye,
 	'file-down': FileDown,
 	'heart-pulse': HeartPulse,
 	image: Image,

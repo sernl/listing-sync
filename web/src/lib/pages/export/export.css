@@ -1,0 +1,127 @@
+/* The Export page. One card, so the rules here are the card's inside: what
+   the spreadsheet carries, the action, and the two notes under it.
+
+   Every colour is a token from tokens.css. The measures are the
+   specification's own scale — 12/16/20/24 spacing, a 12px footnote, and the
+   40px control height the button already keeps. */
+
+.export-lede {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.55;
+	color: var(--text);
+}
+
+.export-lede + .export-lede {
+	margin-top: 12px;
+}
+
+/* What the file holds, as two named groups rather than a column list: the
+   seller is deciding whether to press the button, not reconciling a header
+   row, and the exact spelling of each column is in the file itself. */
+.export-carries {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 16px;
+	margin: 20px 0 0;
+	padding: 16px;
+	background: color-mix(in srgb, var(--text) 2%, var(--card));
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+}
+
+.export-carries > div {
+	min-width: 0;
+}
+
+.export-carries dt {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.export-carries dd {
+	margin: 6px 0 0;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--text);
+}
+
+/* The action and whatever the last press left behind, on one line at desk
+   width and stacked once the card is narrow. */
+.export-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	margin-top: 24px;
+}
+
+/* Why the page is not offering the file yet. Inside the live region, so a
+   screen reader hears the wait begin rather than meeting a button that has
+   stopped answering. */
+.export-working {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+/* The reason the action is unavailable, said on the page rather than only in
+   the control's tooltip: a disabled button leaves the tab order, so a tooltip
+   is reachable by neither keyboard nor touch. */
+.export-empty {
+	margin: 0;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.export-pulse {
+	width: 8px;
+	height: 8px;
+	border-radius: var(--r-pill);
+	background: var(--accent);
+	animation: export-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes export-pulse {
+	0%,
+	100% {
+		opacity: 0.35;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.export-pulse {
+		animation: none;
+	}
+}
+
+.export-outcome {
+	margin-top: 20px;
+}
+
+.export-note {
+	margin: 16px 0 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--faint);
+}
+
+.export-note + .export-note {
+	margin-top: 8px;
+}
+
+.export-file {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11.5px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}

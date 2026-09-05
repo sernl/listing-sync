@@ -1,0 +1,286 @@
+/* The import screen and the request page it opens.
+ *
+ * Only what the component catalogue does not already carry: the marketplace
+ * cards, the site choice inside one, and the request row. Every colour is a
+ * token.
+ */
+
+/* The D27 footnote closes the cards above it and is not the chrome of the
+   panel below, so it carries the page's own card gap. `.foot-note` has a top
+   margin and no bottom one, and no page-rhythm rule covers a paragraph
+   followed by a panel. */
+.import-cards + .foot-note {
+	margin-bottom: 24px;
+}
+
+.import-lead {
+	margin: 0 0 20px;
+	max-width: 62ch;
+	font-size: 13.5px;
+	color: var(--muted);
+}
+
+.import-cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+	align-items: start;
+	gap: 20px;
+	margin-bottom: 22px;
+}
+
+.import-card {
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-2);
+	padding: 22px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-width: 0;
+}
+
+.import-card .head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.import-card h2 {
+	margin: 0;
+	font-family: var(--display);
+	font-size: 20px;
+	font-weight: 600;
+	margin-right: auto;
+}
+
+.import-card .badges {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+/* The child combinator is load-bearing: as a descendant this has the same
+   specificity as `.banner p` and loads later, so it flattened the gap under a
+   refusal banner's title wherever one is rendered inside a card. */
+.import-card > p {
+	margin: 0;
+}
+
+.import-card .field {
+	max-width: 280px;
+}
+
+/* The reason a marketplace cannot be read is the card's whole content, so it
+   is set as body text rather than as a footnote under something. */
+.import-card .why {
+	font-size: 13px;
+	color: var(--muted);
+}
+
+/* A card is about 420px wide at 1280 and narrower in one column, so a banner
+   inside one is always in the condition the catalogue already treats as the
+   phone case: its action takes the right half and the sentence is left in a
+   column a few words wide. Same treatment as `components.css` gives at 620px,
+   applied by container rather than by viewport. */
+.import-card .banner {
+	flex-wrap: wrap;
+}
+
+.import-card .banner .say {
+	flex: 1 1 100%;
+}
+
+.import-card .banner .act {
+	flex: 1 1 100%;
+	align-self: stretch;
+}
+
+/* --- the import list ----------------------------------------------------- */
+
+/* A row card without the catalogue's cover thumbnail: an import has no image,
+   and the component's placeholder glyph would claim a missing one. The stage
+   badge takes the leading position instead. */
+.import-row {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	padding: 14px 16px;
+	box-shadow: var(--sh-1);
+	min-width: 0;
+}
+
+.import-row + .import-row {
+	margin-top: 10px;
+}
+
+.import-row:hover {
+	background: var(--hover);
+}
+
+/* The badge sits in a column of its own width above the phone breakpoint, so
+   the shop names line up: the stage words run from "Waiting" to "Nothing
+   imported" and a ragged left edge is what makes a list hard to read down.
+   Below it the row is two lines and the column would only cost width. */
+@media (min-width: 621px) {
+	.import-row .mark {
+		flex: none;
+		width: 152px;
+	}
+}
+
+.import-row .who {
+	flex: 1;
+	min-width: 0;
+}
+
+.import-row .who .t {
+	font-size: 15.5px;
+	font-weight: 600;
+	line-height: 1.25;
+	overflow-wrap: anywhere;
+}
+
+.import-row .who .w {
+	display: block;
+	font-size: 12.5px;
+	color: var(--muted);
+	margin-top: 3px;
+}
+
+.import-row .at {
+	flex: none;
+	font-size: 12px;
+	color: var(--faint);
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- the request page ---------------------------------------------------- */
+
+/* The panel's own bottom gap lives on its description, which this panel does
+   not carry, so the stage line supplies it. */
+.import-stage {
+	margin: 10px 0 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.import-stage + p {
+	margin: 5px 0 0;
+}
+
+/* The coverage figures, which are read as a set rather than one at a time. */
+.import-figures {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.import-figures li {
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	padding: 9px 13px;
+	min-width: 120px;
+}
+
+.import-figures .k {
+	display: block;
+	font-size: 11px;
+	color: var(--muted);
+}
+
+.import-figures .v {
+	font-size: 18px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* One listing the import reached. Flat rows rather than cards: a shop of two
+   hundred listings is read as a list, and two hundred shadowed cards is not a
+   list. */
+/* The rule is on the adjacent pair rather than a `:first-of-type` exception:
+   inside `Panel` the first `div` sibling is its own head row, so the exception
+   never matched a listing and every row kept a top border, including the one
+   under the legend. */
+.import-listing {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	padding: 10px 2px;
+	flex-wrap: wrap;
+}
+
+.import-listing + .import-listing {
+	border-top: 1px solid var(--line);
+}
+
+.import-listing .what {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+}
+
+.import-listing .what .w {
+	display: block;
+	font-size: 12.5px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+/* Above the phone breakpoint the badge sits in a column of its own width, so
+   the locators line up: the five state words differ in length and a ragged
+   left edge is what makes a list of two hundred listings hard to read down.
+   Below it the row wraps anyway and the column would only cost width. */
+@media (min-width: 621px) {
+	.import-listing .mark {
+		flex: none;
+		width: 116px;
+	}
+}
+
+.import-listing .ord {
+	flex: none;
+	font-size: 12px;
+	color: var(--faint);
+	font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 620px) {
+	.import-cards {
+		grid-template-columns: 1fr;
+		gap: 14px;
+	}
+
+	.import-card {
+		padding: 18px;
+	}
+
+	/* On a phone the row is two lines rather than three columns: the badge and
+	   the age share the first, and the title and its line take the whole of the
+	   second. Left as columns, a hundred-character sentence rendered in a
+	   column a few characters wide. */
+	.import-row {
+		align-items: baseline;
+		flex-wrap: wrap;
+		gap: 6px 10px;
+	}
+
+	.import-row .at {
+		order: 1;
+		margin-left: auto;
+	}
+
+	.import-row .who {
+		order: 2;
+		flex: 1 1 100%;
+	}
+}

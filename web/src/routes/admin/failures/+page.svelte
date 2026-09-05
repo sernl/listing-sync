@@ -4,7 +4,10 @@
 	import { agoLabel } from '$lib/elapsed';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
+	import StatusPill from '$lib/StatusPill.svelte';
+	import '$lib/pages/admin/admin.css';
 
 	const failures = createQuery(() => ({
 		queryKey: queryKeys.adminFailures,
@@ -22,7 +25,7 @@
 		description="Write attempts that recorded a failure, and attempts stranded in flight whose run is gone. Stranded first, then newest, across every tenant."
 	>
 		{#snippet aside()}
-			<span class="tag-note">newest 100</span>
+			<StatusPill tone="soon" label="newest 100" />
 		{/snippet}
 	</PageHead>
 
@@ -32,12 +35,13 @@
 		{:else if failures.isError}
 			<p class="quiet">The failed attempts could not be read.</p>
 		{:else if rows.length === 0}
-			<div class="clear">
-				<span class="big" aria-hidden="true">✓</span>
-				No write attempt on the platform has recorded a failure.
-			</div>
+			<Placeholder
+				icon="circle-check"
+				headline="No write attempt has recorded a failure"
+				body="Nothing on the platform is stranded in flight either. This page fills itself the moment one is."
+			/>
 		{:else}
-			<div class="tbl-wrap scroll-tbl">
+			<div class="op-table op-tall">
 				<table>
 					<thead>
 						<tr>
@@ -51,42 +55,45 @@
 					<tbody>
 						{#each rows as write (write.attempt)}
 							<tr>
-								<td class="title-cell">
-									<div class="t">{agoLabel(write.opened_at, now)}</div>
-									<div class="s">
+								<td class="op-cell" data-label="Opened">
+									<span class="t">{agoLabel(write.opened_at, now)}</span>
+									<span class="s">
 										{write.settled_at === undefined
 											? 'not settled'
 											: `settled ${agoLabel(write.settled_at, now)}`}
-									</div>
+									</span>
 								</td>
-								<td class="title-cell">
-									<div class="t mono" title={write.attempt}>{write.attempt.slice(0, 8)}…</div>
-									<div class="s">{write.state}</div>
+								<td class="op-cell" data-label="Attempt">
+									<span class="t mono" title={write.attempt}>{write.attempt.slice(0, 8)}…</span>
+									<span class="s">{write.state}</span>
 								</td>
-								<td>
-									{#if write.failure_code !== undefined}
-										<span class="pill bad">{write.failure_code}</span>
-									{:else}
-										<span class="pill run">in flight past its lease</span>
-									{/if}
-									{#if write.ambiguity_cause !== undefined}
-										<div class="s">{write.ambiguity_cause}</div>
-									{/if}
+								<td data-label="Failure">
+									<span>
+										{#if write.failure_code !== undefined}
+											<StatusPill tone="bad" label={write.failure_code} />
+										{:else}
+											<StatusPill tone="run" label="in flight past its lease" />
+										{/if}
+										{#if write.ambiguity_cause !== undefined}
+											<span class="s">{write.ambiguity_cause}</span>
+										{/if}
+									</span>
 								</td>
-								<td class="title-cell">
-									<div class="t mono" title={write.item}>{write.item.slice(0, 8)}…</div>
+								<td class="op-cell" data-label="Item">
+									<span class="t mono" title={write.item}>{write.item.slice(0, 8)}…</span>
 									{#if write.item_failure_code !== undefined}
-										<div class="s" title={write.item_failure_detail}>
-											<span class="badge">{write.item_failure_code}</span>
-											{write.item_failure_detail ?? ''}
-										</div>
+										<span class="s" title={write.item_failure_detail}>
+											{write.item_failure_code} · {write.item_failure_detail ?? ''}
+										</span>
 									{/if}
 								</td>
-								<td class="title-cell">
-									<div class="t">
-										<a class="link" title={write.org} href={`/admin/orgs/${write.org}`}>{write.org.slice(0, 8)}…</a>
-									</div>
-									<div class="s mono" title={write.mapping}>mapping {write.mapping.slice(0, 8)}…</div>
+								<td class="op-cell" data-label="Tenant">
+									<span class="t">
+										<a class="link" title={write.org} href={`/admin/orgs/${write.org}`}
+											>{write.org.slice(0, 8)}…</a
+										>
+									</span>
+									<span class="s mono" title={write.mapping}>mapping {write.mapping.slice(0, 8)}…</span>
 								</td>
 							</tr>
 						{/each}

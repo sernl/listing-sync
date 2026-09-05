@@ -23,8 +23,9 @@ export interface NavItem {
 	 *
 	 *  A route's place in the URL is not always its place in the navigation.
 	 *  `/sync/requests/<id>` is the one case: it lives under `/sync` because a
-	 *  sync request is what carries an import, but what the seller is looking at
-	 *  is an import, so it belongs under Import. */
+	 *  sync request is what carries it, and it is opened from the Marketplace
+	 *  Migration list, so it belongs there rather than under the path it sits
+	 *  beneath. */
 	owns?: readonly string[];
 }
 
@@ -59,11 +60,11 @@ export const SECTIONS: readonly NavSection[] = [
 		primary: { href: '/inventory/new', label: 'New resource', icon: 'circle-plus' },
 		items: [
 			{ href: '/inventory', label: 'Resources', icon: 'layout-list' },
-			{ href: '/labels', label: 'Labels', icon: 'tag', soon: true },
-			{ href: '/import', label: 'Import', icon: 'download', soon: true, owns: ['/sync/requests'] },
+			{ href: '/labels', label: 'Labels', icon: 'tag' },
+			{ href: '/import', label: 'Import', icon: 'download' },
 			{ href: '/analytics', label: 'Analytics', icon: 'chart-line' },
-			{ href: '/templates', label: 'Template Manager', icon: 'layout-template', soon: true },
-			{ href: '/export', label: 'Export', icon: 'file-down', soon: true }
+			{ href: '/templates', label: 'Template Manager', icon: 'layout-template' },
+			{ href: '/export', label: 'Export', icon: 'file-down' }
 		]
 	},
 	{
@@ -76,12 +77,18 @@ export const SECTIONS: readonly NavSection[] = [
 		// items below.
 		href: '/automations',
 		items: [
+			// Flagged although the page is built: the schedule it saves cannot run
+			// until the device release ships. `nav-routes.test.ts` carries the
+			// reason and refuses a flag that no longer earns its exception.
 			{ href: '/automations/sharing', label: 'Marketplace Sharing', icon: 'share-2', soon: true },
 			{
 				href: '/automations/migration',
 				label: 'Marketplace Migration',
 				icon: 'arrow-right-left',
-				soon: true
+				// A past migrate request is opened from this page's own list, so
+				// `/sync/requests/<id>` belongs here rather than under the path it
+				// happens to sit beneath (D8).
+				owns: ['/sync/requests']
 			},
 			// The sync list stays at `/sync` rather than moving under
 			// `/automations/`, because `/sync/<id>` and `/sync/requests/<id>` are
@@ -308,6 +315,17 @@ export function isCurrent(pathname: string, href: string): boolean {
  *  longest matching destination wins, so `/sync/<id>` reads as Marketplace
  *  Sync rather than as the first nav entry that happens to prefix it. */
 export function breadcrumbFor(pathname: string): string {
+	return currentDestination(pathname)?.label ?? 'Console';
+}
+
+/** The one destination this path belongs to, by longest claim, or null.
+ *
+ * Longest rather than first, and across claims rather than hrefs, because both
+ * matter: `/sync/<id>` belongs to Marketplace Sync while `/sync/requests/<id>`
+ * belongs to Import, which owns that prefix without containing it. A caller
+ * asking `isCurrent` per item instead gets two answers on the first path and
+ * none on the second. */
+export function currentDestination(pathname: string): NavItem | null {
 	let best: { item: NavItem; length: number } | null = null;
 	for (const item of ALL_ITEMS) {
 		const length = claimed(pathname, item);
@@ -315,7 +333,7 @@ export function breadcrumbFor(pathname: string): string {
 			best = { item, length };
 		}
 	}
-	return best?.item.label ?? 'Console';
+	return best?.item ?? null;
 }
 
 /** Where a path from the old information architecture now lives.

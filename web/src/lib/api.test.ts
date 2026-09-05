@@ -12,6 +12,47 @@ function jsonResponse(status: number, body: unknown): Response {
 	});
 }
 
+describe('a failing response whose body is not the error envelope', () => {
+	// The server always sends `{ status, errors: [...] }`, so these bodies are
+	// off-contract by construction — which is the point: the client is what
+	// meets a proxy's 401, a gateway's HTML, or a handler that answered `{}`,
+	// and it must not turn that into a TypeError. The cast is deliberate.
+	const off = (body: unknown) => new ApiFailure(401, body as never);
+
+	it('falls back to the status when the body carries no errors array', () => {
+		expect(off({}).message).toBe('request failed with 401');
+	});
+
+	it('answers no code rather than throwing on the same body', () => {
+		expect(off({}).code()).toBeUndefined();
+	});
+
+	it('survives an errors array that is empty', () => {
+		expect(off({ status: 401, errors: [] }).message).toBe('request failed with 401');
+		expect(off({ status: 401, errors: [] }).code()).toBeUndefined();
+	});
+
+	it('survives a null body, which is what a non-JSON response gives', () => {
+		expect(new ApiFailure(502, null).message).toBe('request failed with 502');
+		expect(new ApiFailure(502, null).code()).toBeUndefined();
+	});
+
+	it('still reads the envelope when there is one', () => {
+		const failure = new ApiFailure(409, {
+			status: 409,
+			errors: [{ code: 'conflict', message: 'already bound' }] as never
+		});
+		expect(failure.message).toBe('already bound');
+		expect(failure.code()).toBe('conflict');
+	});
+
+	it('is an ApiFailure in every one of those cases, so a caller can catch it', () => {
+		for (const failure of [off({}), off({ status: 401, errors: [] }), new ApiFailure(502, null)]) {
+			expect(failure).toBeInstanceOf(ApiFailure);
+		}
+	});
+});
+
 describe('the api client', () => {
 	it('parses the structured error into a typed failure', async () => {
 		vi.stubGlobal(

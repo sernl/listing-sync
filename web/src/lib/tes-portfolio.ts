@@ -11,7 +11,7 @@ import type { InventoryId } from '$lib/generated/vocab';
  * A total map rather than a membership list: the union is generated from the
  * Rust enum, so a Tes site added there stops this file type-checking instead
  * of silently going uncounted. */
-const IS_TES: Record<InventoryId, boolean> = {
+export const IS_TES: Record<InventoryId, boolean> = {
 	TesGb: true,
 	TesUs: true,
 	TesNz: true,

@@ -442,11 +442,17 @@ describe('the refusals the form mirrors', () => {
 		expect(fields).toContain('platforms');
 	});
 
-	it('says platforms cannot be added later, because no endpoint adds one', () => {
+	// The refusal used to add "platforms cannot be added after the draft
+	// exists", which the resource page disproves: it renders "Cross-list here"
+	// for every unmapped marketplace and posts to
+	// `POST /v1/products/{product}/mappings`. The refusal now says only what it
+	// is refusing.
+	it('asks for a marketplace without claiming one cannot be added later', () => {
 		const platforms = refusalsOf(emptyDraft(), VOCABULARIES).find(
 			(one) => one.field === 'platforms'
 		);
-		expect(platforms?.message).toMatch(/cannot be added after the draft exists/);
+		expect(platforms?.message).toBe('Choose at least one marketplace to create this draft on.');
+		expect(platforms?.message).not.toMatch(/cannot be added/);
 	});
 
 	it('warns about a cap the projection shortens rather than refuses', () => {

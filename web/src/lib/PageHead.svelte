@@ -30,7 +30,7 @@
 	{:else}
 		<div class="page-ico"><Icon name={icon} size={18} /></div>
 	{/if}
-	<div>
+	<div class="head-titles">
 		<h1>{title}</h1>
 		<p>{description}</p>
 	</div>

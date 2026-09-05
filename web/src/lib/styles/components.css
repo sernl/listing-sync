@@ -167,10 +167,6 @@
 
 /* --- counted tab bar ----------------------------------------------------- */
 
-/* Distinct from `.tabs`/`.tab`, which the create form uses with
-   `aria-selected`: these are navigation between filtered views of one list and
-   carry a count, and conflating them would give the form a count it has no
-   figure for. */
 .tab-bar {
 	display: grid;
 	grid-auto-flow: column;
@@ -495,9 +491,8 @@
 
 /* The log's own filter. Deliberately not the shell's `.search`: that one is
    top-bar furniture shaped around a keyboard hint this control does not have,
-   and borrowing it left a stray pill end past the input. Here the field takes
-   app.css's ordinary `input[type='search']` shape, which is what a control
-   inside a panel should look like, and the magnifier sits beside it. */
+   and borrowing it left a stray pill end past the input. The field carries
+   the ordinary panel-control shape itself, and the magnifier sits beside it. */
 .log-search {
 	display: flex;
 	align-items: center;
@@ -510,6 +505,13 @@
 .log-search input[type='search'] {
 	flex: 1;
 	min-width: 0;
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: 8px;
+	padding: 8px 11px;
+	font: inherit;
+	font-weight: 400;
+	color: var(--ink);
 }
 
 .log-count {

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { api, type FrameworkView } from '$lib/api';
+	import Banner from '$lib/Banner.svelte';
+	import TabBar from '$lib/TabBar.svelte';
 	import type { StandardPick } from '$lib/tpt-form';
 
 	let {
@@ -34,6 +36,25 @@
 	function drop(sourceGuid: string) {
 		onChange(chosen.filter((pick) => pick.source_guid !== sourceGuid));
 	}
+
+	/** The frameworks as the shared tab bar takes them.
+	 *
+	 *  Every count is null, and that is the honest figure rather than a missing
+	 *  one: how many standards a jurisdiction holds is not read until it is
+	 *  searched, and a framework that is not ingested at all holds none in a way
+	 *  a zero would misstate. A null prints the bare label. */
+	const tabs = $derived(
+		frameworks.map((framework) => ({
+			id: String(framework.jurisdiction_id),
+			label: framework.button_label,
+			count: null,
+			hint: framework.name
+		}))
+	);
+
+	const showing = $derived(
+		frameworks.find((framework) => framework.jurisdiction_id === active)?.name ?? ''
+	);
 </script>
 
 <!-- Four jurisdictions, each searched on its own, because no owner publishes a
@@ -41,49 +62,48 @@
      them. The catalogue is not ingested yet, and the panel says so rather than
      rendering an empty tree: "nothing matched your words" and "nothing exists
      here yet" are different answers and a seller acts on them differently. -->
-<div class="field">
-	<div class="tabs" role="tablist" aria-label="Standards framework">
-		{#each frameworks as framework (framework.jurisdiction_id)}
-			<button
-				type="button"
-				role="tab"
-				class="tab"
-				aria-selected={active === framework.jurisdiction_id}
-				onclick={() => (picked = framework.jurisdiction_id)}
-			>
-				{framework.button_label}
-			</button>
-		{/each}
-	</div>
+<div class="std">
+	<!-- Behind the same guard as the search box: an empty tab bar is a hairline
+	     with nothing above it, drawn over the sentence explaining that there is
+	     nothing to choose from. -->
+	{#if frameworks.length > 0}
+		<TabBar {tabs} current={String(active)} onselect={(id) => (picked = Number(id))} />
 
-	<input
-		type="search"
-		placeholder="Search this framework by code or words"
-		value={query}
-		oninput={(event) => (query = event.currentTarget.value)}
-	/>
+		<label class="sr-only" for="standards-search">Search this framework</label>
+		<input
+			class="std-search"
+			id="standards-search"
+			type="search"
+			placeholder="Search this framework by code or words"
+			value={query}
+			oninput={(event) => (query = event.currentTarget.value)}
+		/>
+	{/if}
 
-	{#if found.isPending}
-		<p class="quiet">Reading the standards…</p>
+	{#if frameworks.length === 0}
+		<p class="std-note">
+			No standards framework is offered here yet, so a draft is created without one. Standards
+			alignment is optional on TPT and can be added later.
+		</p>
+	{:else if found.isPending}
+		<p class="std-note">Reading the standards…</p>
 	{:else if found.isError}
-		<p class="refusal">The standards could not be read. A draft can still be created without one.</p>
+		<Banner tone="bad">
+			The standards could not be read. A draft can still be created without one.
+		</Banner>
 	{:else if found.data?.state === 'not_ingested'}
-		<div class="attn warn">
-			<div class="t">This framework is not loaded yet</div>
-			<p>
-				{frameworks.find((framework) => framework.jurisdiction_id === active)?.name} has not been
-				ingested, so there is nothing here to search — which is different from nothing matching.
-				Standards alignment is optional on TPT, so a listing publishes without one and can gain
-				one later.
-			</p>
-		</div>
+		<Banner tone="warn" title="This framework is not loaded yet">
+			{showing} has not been ingested, so there is nothing here to search — which is different from
+			nothing matching. Standards alignment is optional on TPT, so a listing publishes without one
+			and can gain one later.
+		</Banner>
 	{:else if (found.data?.items ?? []).length === 0}
-		<p class="quiet">Nothing in this framework matches “{query}”.</p>
+		<p class="std-note">Nothing in this framework matches “{query}”.</p>
 	{:else}
-		<div class="pick-list">
+		<div class="std-list">
 			{#each found.data?.items ?? [] as item (item.source_guid)}
 				{@const on = chosen.some((pick) => pick.source_guid === item.source_guid)}
-				<label class="tick">
+				<label class="std-item">
 					<input
 						type="checkbox"
 						checked={on}
@@ -95,9 +115,9 @@
 							)}
 					/>
 					<span>
-						<b>{item.code}</b>
-						{#if item.subject}<span class="tag-note">{item.subject}</span>{/if}
-						{#if item.grade_band}<span class="tag-note">{item.grade_band}</span>{/if}
+						<b class="std-code">{item.code}</b>
+						{#if item.subject}<span class="std-facet">{item.subject}</span>{/if}
+						{#if item.grade_band}<span class="std-facet">{item.grade_band}</span>{/if}
 						{item.statement}
 					</span>
 				</label>
@@ -106,13 +126,13 @@
 	{/if}
 
 	{#each found.data?.notices ?? [] as notice (notice.text)}
-		<p class="foot-note">{notice.text}</p>
+		<p class="std-notice">{notice.text}</p>
 	{/each}
 
 	{#if chosen.length > 0}
-		<div class="chips" role="list">
+		<div class="std-chosen" role="list">
 			{#each chosen as pick (pick.source_guid)}
-				<span class="chip-pick" role="listitem">
+				<span class="std-chip" role="listitem">
 					{pick.code}
 					<button
 						type="button"
@@ -124,3 +144,124 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	/* This picker's own rules, in the component rather than in a page sheet: it
+	   is a shared control with one consumer today and its shapes belong to it
+	   rather than to whichever page renders it. Tokens only. */
+	.std {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.std-search {
+		border: 1px solid var(--line);
+		background: var(--surface);
+		border-radius: var(--r-field);
+		padding: 9px 11px;
+		font: inherit;
+		font-weight: 400;
+		color: var(--text);
+		min-width: 0;
+	}
+
+	.std-search:focus-visible {
+		border-color: var(--accent);
+	}
+
+	.std-note {
+		margin: 0;
+		font-size: 12.5px;
+		color: var(--muted);
+	}
+
+	.std-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		max-height: 320px;
+		overflow-y: auto;
+	}
+
+	/* One standard: a statement long enough to wrap, so each is a panel rather
+	   than a line, and the checkbox holds its own column. */
+	.std-item {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		align-items: start;
+		gap: 10px;
+		border: 1px solid var(--line);
+		border-radius: var(--r-panel);
+		background: var(--surface);
+		padding: 10px 12px;
+		font-size: 13px;
+		cursor: pointer;
+	}
+
+	.std-item:hover {
+		border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+	}
+
+	.std-item input {
+		margin-top: 3px;
+	}
+
+	.std-code {
+		font-weight: 700;
+		margin-right: 6px;
+	}
+
+	/* The subject and the grade band the mirrored set carries, so a code never
+	   renders bare. */
+	.std-facet {
+		display: inline-block;
+		border: 1px solid var(--line);
+		background: var(--ground);
+		border-radius: var(--r-pill);
+		padding: 1px 8px;
+		margin-right: 6px;
+		font-size: 11px;
+		color: var(--muted);
+	}
+
+	/* A licence obligation rather than a footnote of ours, so it stays with the
+	   standards wherever they are shown. */
+	.std-notice {
+		margin: 0;
+		font-size: 11.5px;
+		color: var(--faint);
+	}
+
+	.std-chosen {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.std-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		border: 1px solid var(--line);
+		background: var(--ground);
+		border-radius: var(--r-pill);
+		padding: 3px 6px 3px 11px;
+		font-size: 12.5px;
+	}
+
+	.std-chip button {
+		border: 0;
+		background: none;
+		color: var(--muted);
+		font-size: 14px;
+		line-height: 1;
+		padding: 3px 5px;
+		border-radius: 50%;
+	}
+
+	.std-chip button:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+</style>

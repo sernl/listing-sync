@@ -129,6 +129,46 @@ button {
 	min-width: 0;
 }
 
+/* Below this width the header band stops relying on wrapping and says where
+   each part goes. Wrapping put the help control on the second row — sometimes
+   after the actions, sometimes alone at the far left, depending on what fitted
+   — and a control that moves rows as the title lengthens is not a control
+   anyone learns the position of. Three columns, and the actions span all of
+   them on a row of their own; with no actions there is no second row to make. */
+@media (max-width: 900px) {
+	.page-head {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+	}
+
+	/* Rows pinned, not left to auto-placement: the actions come before the help
+	   control in the markup and span every column, so auto-placement filled row
+	   two with them and pushed the help control to a row of its own below. */
+	.page-ico {
+		grid-column: 1;
+		grid-row: 1;
+	}
+
+	.head-titles {
+		grid-column: 2;
+		grid-row: 1;
+	}
+
+	.page-help {
+		grid-column: 3;
+		grid-row: 1;
+		margin-left: 0;
+		justify-self: end;
+	}
+
+	.head-aside {
+		grid-column: 1 / -1;
+		grid-row: 2;
+		margin-left: 0;
+		justify-content: flex-end;
+	}
+}
+
 .page-ico {
 	width: 38px;
 	height: 38px;
@@ -189,26 +229,18 @@ button {
 	color: var(--text);
 }
 
-.tag-note {
-	border: 1px solid var(--line);
-	background: var(--card);
-	border-radius: 8px;
-	padding: 7px 12px;
-	font-size: 12.5px;
-	color: var(--ink);
-}
-
 .cards {
 	display: grid;
 	grid-template-columns: repeat(4, 1fr);
-	gap: 14px;
+	gap: 16px;
 }
 
 .stat {
 	background: var(--card);
-	border: 1px solid var(--line);
-	border-radius: 12px;
-	padding: 16px 16px 14px;
+	border: 1px solid transparent;
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-2);
+	padding: 22px 22px 20px;
 	position: relative;
 	min-width: 0;
 }
@@ -289,10 +321,7 @@ button {
 }
 
 /* The card the specification's catalogue describes: a soft shadow and no
-   border, at the card radius, with room to breathe. The bordered no-shadow
-   variant is `.panel.bare`, which the Marketplaces grid uses — Vendoo draws
-   that one grid the same way and it is the only place a border reads better
-   than a shadow, because those cards sit in a grid rather than stacked. */
+   border, at the card radius, with room to breathe. */
 .panel {
 	background: var(--card);
 	border: 1px solid transparent;
@@ -302,17 +331,18 @@ button {
 	min-width: 0;
 }
 
-.panel.bare {
-	border-color: var(--line);
-	box-shadow: none;
-}
-
-/* The page-level rhythm. Reached only panel-after-panel before, so a panel
-   following the stat row, a band or an attention box sat flush against it. */
-.cards + .panel,
-.band + .panel,
-.attn + .panel,
-.panel + .panel {
+/* The page-level rhythm, and page-level is the operative word: `>` keeps it to
+   panels laid out in the page's own flow.
+   
+   Unscoped it also reached a panel that is a grid item, where a top margin is
+   not rhythm between siblings but an offset on that one item — two panels in a
+   grid row came out with the second dropped below the first. A container that
+   lays its panels out itself owns their spacing through its own `gap`, which
+   `.band` already sets, so a slice putting two panels side by side needs no
+   local undo. */
+.page > .cards + .panel,
+.page > .band + .panel,
+.page > .panel + .panel {
 	margin-top: 24px;
 }
 
@@ -338,53 +368,10 @@ button {
 	flex-wrap: wrap;
 }
 
-.head-row .more {
-	margin-left: auto;
-	font-size: 12px;
-	color: var(--accent-deep);
-	font-weight: 600;
-}
-
 .foot-note {
 	color: var(--faint);
 	font-size: 12px;
 	margin-top: 12px;
-}
-
-.job {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	padding: 9px 2px;
-	border-top: 1px solid var(--line);
-	color: inherit;
-}
-
-.job:first-of-type {
-	border-top: 0;
-}
-
-a.job:hover {
-	background: var(--ground);
-}
-
-.job .what {
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-}
-
-.job .what .t {
-	font-weight: 500;
-	font-size: 13px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.job .what .w {
-	font-size: 12px;
-	color: var(--muted);
 }
 
 .when {
@@ -396,10 +383,6 @@ a.job:hover {
 .s {
 	font-size: 12px;
 	color: var(--muted);
-}
-
-.job .when {
-	margin-left: auto;
 }
 
 .row {
@@ -425,119 +408,11 @@ a.job:hover {
 	min-width: 0;
 }
 
-.pill {
-	font-size: 11px;
-	font-weight: 600;
-	border-radius: 999px;
-	padding: 3px 9px;
-	white-space: nowrap;
-	background: var(--hover);
-	color: var(--muted);
-}
-
-.pill.ok {
-	background: var(--ok-soft);
-	color: var(--ok);
-}
-
-.pill.run {
-	background: var(--warn-soft);
-	color: var(--warn);
-}
-
-.pill.bad {
-	background: var(--bad-soft);
-	color: var(--bad);
-}
-
-.pill.mut {
-	background: var(--hover);
-	color: var(--muted);
-}
-
-.badge {
-	font-size: 10.5px;
-	font-weight: 600;
-	border-radius: 5px;
-	padding: 2px 6px;
-	border: 1px solid var(--line);
-	background: var(--ground);
-	color: var(--muted);
-	margin-right: 4px;
-	white-space: nowrap;
-}
-
-.badge.live {
-	border-color: color-mix(in srgb, var(--ok) 30%, var(--line));
-	color: var(--ok);
-	background: var(--ok-soft);
-}
-
 .mono {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 11.5px;
 	color: var(--muted);
 	overflow-wrap: anywhere;
-}
-
-.attn {
-	border: 1px solid var(--line);
-	border-left: 3px solid var(--bad);
-	border-radius: 10px;
-	padding: 11px 12px;
-	margin-top: 12px;
-	background: var(--card);
-}
-
-.attn:first-of-type {
-	margin-top: 0;
-}
-
-.attn.warn {
-	border-left-color: var(--warn);
-}
-
-.attn .t {
-	font-weight: 600;
-	font-size: 13px;
-}
-
-.attn p {
-	margin: 3px 0 8px;
-	color: var(--muted);
-	font-size: 12.5px;
-}
-
-.attn .act {
-	display: inline-block;
-	border: 1px solid var(--line);
-	background: var(--ground);
-	border-radius: 7px;
-	padding: 5px 10px;
-	font-size: 12px;
-	font-weight: 600;
-	color: var(--ink);
-}
-
-.attn .act:hover {
-	background: var(--hover);
-}
-
-.clear {
-	text-align: center;
-	color: var(--muted);
-	font-size: 12.5px;
-	padding: 18px 8px 8px;
-}
-
-.clear .big {
-	font-size: 20px;
-	display: block;
-	margin-bottom: 6px;
-}
-
-.tbl-wrap {
-	overflow-x: auto;
 }
 
 table {
@@ -574,29 +449,6 @@ th.num {
 	font-variant-numeric: tabular-nums;
 }
 
-/* A title cell holds a product title or an identifier per line. Each is
-   clipped rather than allowed to widen the table, and carries the whole value
-   in its `title` attribute. */
-.title-cell .t,
-.title-cell .s,
-.title-cell .mono {
-	display: block;
-	max-width: 34ch;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.title-cell .t {
-	font-weight: 500;
-}
-
-/* The price on a phone card, where the column it lives in on the desktop is
-   one of the three the card drops. */
-.card-price {
-	display: none;
-}
-
 /* One reason per line inside a footnote, for the bulk verbs that are not
    built: run together as prose they read as one excuse rather than as a list
    of what the API stream still owes. */
@@ -606,45 +458,6 @@ th.num {
 
 .foot-note .block + .block {
 	margin-top: 4px;
-}
-
-.scroll-tbl {
-	max-height: 70vh;
-	overflow: auto;
-}
-
-.scroll-tbl thead th {
-	position: sticky;
-	top: 0;
-	background: var(--card);
-	z-index: 1;
-}
-
-.tes-band {
-	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	gap: 12px;
-	margin-top: 12px;
-}
-
-.mini {
-	border: 1px solid var(--line);
-	border-radius: 10px;
-	padding: 12px 14px;
-	background: var(--ground);
-}
-
-.mini .n {
-	font-family: var(--serif);
-	font-size: 24px;
-	font-weight: 500;
-	font-variant-numeric: tabular-nums;
-}
-
-.mini .l {
-	font-size: 11px;
-	color: var(--muted);
-	margin-top: 2px;
 }
 
 .placeholder {
@@ -711,8 +524,7 @@ th.num {
 
 input[type='text'],
 input[type='email'],
-input[type='password'],
-input[type='search'] {
+input[type='password'] {
 	border: 1px solid var(--line);
 	background: var(--card);
 	border-radius: 8px;
@@ -743,61 +555,6 @@ input:focus-visible {
 	margin-top: 12px;
 }
 
-.item {
-	border-top: 1px solid var(--line);
-}
-
-.item:first-of-type {
-	border-top: 0;
-}
-
-.item-head {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	width: 100%;
-	padding: 10px 2px;
-	border: 0;
-	background: none;
-	text-align: left;
-	flex-wrap: wrap;
-	color: inherit;
-}
-
-.item-head:hover {
-	background: var(--ground);
-}
-
-.item-detail {
-	background: var(--ground);
-	border: 1px solid var(--line);
-	border-radius: 10px;
-	padding: 12px;
-	margin: 0 0 12px;
-}
-
-.item-detail h2 {
-	margin: 0;
-	font-size: 13px;
-	font-weight: 600;
-}
-
-.steps {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	font-size: 12px;
-}
-
-.steps li {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-}
-
 .gate-row td {
 	font-weight: 600;
 }
@@ -814,19 +571,6 @@ td.flag {
 	border-radius: 9px;
 	padding: 9px 11px;
 	font-size: 12.5px;
-}
-
-.question {
-	border-top: 1px solid var(--line);
-	padding: 12px 2px;
-}
-
-.question:first-of-type {
-	border-top: 0;
-}
-
-.question .head-row {
-	margin-bottom: 8px;
 }
 
 .divider {
@@ -848,25 +592,6 @@ td.flag {
 
 .form.spaced {
 	margin-top: 12px;
-}
-
-dl.facts {
-	margin: 0 0 12px;
-}
-
-dl.facts dt {
-	color: var(--muted);
-	font-size: 12px;
-}
-
-dl.facts dd {
-	margin: 2px 0 10px;
-	font-weight: 500;
-	overflow-wrap: anywhere;
-}
-
-dl.facts dd:last-child {
-	margin-bottom: 0;
 }
 
 /* The wordmark, which since the shell was redrawn appears only on the
@@ -945,14 +670,6 @@ dl.facts dd:last-child {
 	color: var(--muted);
 }
 
-.outcome {
-	display: flex;
-	height: 16px;
-	overflow: hidden;
-	border-radius: 8px;
-	background: var(--hover);
-}
-
 .seg-ok {
 	background: var(--ok);
 }
@@ -1024,95 +741,10 @@ dl.facts dd:last-child {
 }
 
 /* The phone layout's page-level half. The shell's own half — the rail and the
-   navigation card giving way to the tab bar — is in `lib/styles/shell.css`.
-   Here the inventory table becomes one card per item, and the verbs Vendoo's
-   own app does not carry — importing and the many-item bulk actions — are
-   hidden rather than disabled, because they are absent here rather than broken
-   (`docs/research/rethink/vendoo-console-cross-reference.md:178` and `:180`). */
+   navigation card giving way to the tab bar — is in `lib/styles/shell.css`. */
 @media (max-width: 620px) {
-	.cards,
-	.tes-band {
+	.cards {
 		grid-template-columns: 1fr;
-	}
-
-	/* One card per item, on the table the desktop already renders: the rows
-	   stay rows in the markup so the windowing arithmetic and the sort order
-	   are untouched, and only the boxes move. The row height the windowing
-	   reads is matched to `PHONE_ROW_HEIGHT` in the board, so a card that grows
-	   here has to grow there too or the scroll spacers drift. */
-	.card-tbl thead,
-	.card-tbl td:first-child,
-	.card-tbl .num {
-		display: none;
-	}
-
-	.card-tbl,
-	.card-tbl tbody,
-	.card-tbl tr {
-		display: block;
-		width: 100%;
-	}
-
-	/* A divided list rather than detached cards, because the windowing reads a
-	   fixed row height and a margin between rows would sit outside it: every
-	   card would then drift the scroll spacers by its own gap. The separation
-	   is a rule inside the row's own box instead. */
-	.card-tbl tr {
-		border-bottom: 1px solid var(--line);
-		padding: 12px 2px;
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		overflow: hidden;
-	}
-
-	.card-tbl td {
-		display: block;
-		padding: 0;
-		border: 0;
-	}
-
-	/* The windowing's two padding rows are height and nothing else: giving
-	   them a card's padding and rule would add both to every scroll position
-	   above and below the visible slice. */
-	.card-tbl tr.spacer {
-		padding: 0;
-		border: 0;
-	}
-
-	.card-tbl .title-cell .t {
-		max-width: none;
-		white-space: normal;
-		font-weight: 600;
-		font-size: 14px;
-	}
-
-	/* The price rides with the title rather than in a column of its own, which
-	   is the one figure a phone card carries. */
-	.card-tbl .card-price {
-		display: block;
-		font-variant-numeric: tabular-nums;
-		color: var(--muted);
-		font-size: 12.5px;
-	}
-
-	/* One line, scrolled sideways where a seller sells on five inventories: a
-	   wrapped strip would make the card taller than the height the windowing
-	   was told to expect. */
-	.card-tbl .strip {
-		max-width: 100%;
-		overflow-x: auto;
-	}
-
-	.scroll-tbl {
-		max-height: none;
-		overflow: visible;
-	}
-
-	/* Absent on the phone rather than refused: selecting rows exists only to
-	   drive the many-item verbs, which Vendoo's own app does not carry. */
-	.bulk-only {
-		display: none;
 	}
 
 	/* A dialog becomes a sheet at the bottom edge, which is where the app's one
@@ -1236,148 +868,12 @@ dl.facts dd:last-child {
 	cursor: default;
 }
 
-/* The signup chart: rows rather than a plotted chart, because two counts a day
-   over a fortnight is a list that happens to be sorted, and a chart library
-   would render the same figures less legibly and less honestly. */
-
-.series-key {
-	display: flex;
-	gap: 16px;
-	flex-wrap: wrap;
-	font-size: 12px;
-	color: var(--muted);
-	margin-bottom: 12px;
-}
-
-.series-key span {
-	display: inline-flex;
-	align-items: center;
-	gap: 7px;
-}
-
-.swatch {
-	width: 11px;
-	height: 11px;
-	border-radius: 3px;
-	display: inline-block;
-	background: var(--accent);
-}
-
-.swatch.second {
-	background: var(--ok);
-}
-
-.bar-row {
-	display: grid;
-	grid-template-columns: 92px 1fr;
-	gap: 12px;
-	align-items: center;
-	padding: 7px 2px;
-	border-top: 1px solid var(--line);
-}
-
-.bar-row:first-of-type {
-	border-top: 0;
-}
-
-.bar-row .day {
-	font-size: 12px;
-	color: var(--muted);
-	font-variant-numeric: tabular-nums;
-}
-
-.bar-pair {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	min-width: 0;
-}
-
-.bar {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-
-.bar .fill {
-	height: 9px;
-	border-radius: 999px;
-	background: var(--accent);
-	min-width: 0;
-}
-
-.bar.second .fill {
-	background: var(--ok);
-}
-
-.bar .n {
-	font-size: 11.5px;
-	color: var(--muted);
-	font-variant-numeric: tabular-nums;
-	flex: none;
-}
-
-.bar .absent {
-	font-size: 11.5px;
-	color: var(--faint);
-}
-
-/* The operator's own filter bar, which is a search box plus its result count
-   rather than the console-wide search in the top bar. */
-
-.filter-bar {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-	margin-bottom: 12px;
-}
-
-.filter-bar + .notice {
-	margin-top: 0;
-}
-
-.filter-bar input[type='search'] {
-	flex: 1;
-	min-width: 200px;
-}
-
-.row-actions {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	flex-wrap: wrap;
-	justify-content: flex-end;
-}
-
-.row-actions .btn {
-	padding: 4px 10px;
-	font-size: 12px;
-}
-
-.row-actions select {
-	border: 1px solid var(--line);
-	background: var(--card);
-	border-radius: 8px;
-	padding: 4px 8px;
-	font: inherit;
-	font-size: 12px;
-	color: var(--ink);
-}
-
 /* The authoring surface: the create form, the platform pickers, the upload
    control, and the two dialogs the publish and the delete open. Everything
    below is used under /inventory/new and /inventory/<id>. */
 
 .form.wide {
 	max-width: none;
-}
-
-.field-row {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-	gap: 12px;
-	align-items: start;
 }
 
 .field textarea,
@@ -1470,19 +966,6 @@ dl.facts dd:last-child {
 	color: var(--muted);
 }
 
-/* A long tick-box list — the canonical subjects, of which there are forty-odd —
-   kept in its own scroll box so the rows do not push the rest of the form off
-   the screen. */
-.pick-list {
-	max-height: 232px;
-	overflow-y: auto;
-	border: 1px solid var(--line);
-	border-radius: 8px;
-	background: var(--card);
-	padding: 0 11px;
-	font-weight: 400;
-}
-
 .inline-choices {
 	display: flex;
 	gap: 16px;
@@ -1537,78 +1020,6 @@ dl.facts dd:last-child {
 .drop:focus-within {
 	outline: 2px solid var(--accent);
 	outline-offset: 2px;
-}
-
-.meter {
-	height: 8px;
-	border-radius: 999px;
-	background: var(--hover);
-	overflow: hidden;
-	margin: 10px 0 6px;
-}
-
-.meter .fill {
-	height: 100%;
-	background: var(--accent);
-	border-radius: 999px;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-	.meter .fill {
-		transition: width 120ms linear;
-	}
-}
-
-.file-row {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	padding: 9px 2px;
-	border-top: 1px solid var(--line);
-	font-size: 13px;
-}
-
-.file-row:first-of-type {
-	border-top: 0;
-}
-
-.file-row .name {
-	min-width: 0;
-	flex: 1;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.file-row .when {
-	margin-left: 0;
-}
-
-/* The platform sections of the create form, one card per selected
-   marketplace, so the divergences read as belonging to a platform rather
-   than to the product. */
-.platform-card {
-	border: 1px solid var(--line);
-	border-radius: 10px;
-	background: var(--ground);
-	padding: 13px 14px;
-	margin-top: 12px;
-}
-
-.platform-card:first-of-type {
-	margin-top: 0;
-}
-
-.platform-card > h3 {
-	margin: 0 0 2px;
-	font-size: 13px;
-	font-weight: 600;
-}
-
-.platform-card .desc {
-	color: var(--muted);
-	font-size: 12.5px;
-	margin: 0 0 10px;
 }
 
 .disclosure {
@@ -1712,63 +1123,6 @@ dialog::backdrop {
 	margin-left: 8px;
 }
 
-/* The grade grid, read down its columns: primary grades, middle grades,
-   high-school grades, then the three non-grade bands. The column arrangement
-   is the segregation, so it survives the narrowest breakpoint by halving
-   rather than collapsing to one list. */
-.grade-grid {
-	display: grid;
-	grid-template-columns: repeat(4, minmax(0, 1fr));
-	gap: 4px 14px;
-	border: 1px solid var(--line);
-	border-radius: 8px;
-	background: var(--card);
-	padding: 10px 12px;
-}
-
-.grade-col {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-
-@media (max-width: 720px) {
-	.grade-grid {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-}
-
-/* One checkbox and its words, tighter than `.choice`: these run to seventeen
-   in a grid and to 133 in a scroll box, where a bordered row per option is
-   noise rather than structure. */
-.tick {
-	display: flex;
-	align-items: flex-start;
-	gap: 8px;
-	padding: 5px 0;
-	font-weight: 400;
-	font-size: 13px;
-	min-width: 0;
-	overflow-wrap: anywhere;
-}
-
-.tick input {
-	margin: 3px 0 0;
-	flex: none;
-}
-
-.tick.off {
-	color: var(--faint);
-}
-
-.picker input[type='search'] {
-	margin-top: 6px;
-}
-
-.picker .pick-list {
-	margin-top: 6px;
-}
-
 /* The chosen members of a capped picker, shown as removable chips so the
    selection is legible without opening the list. */
 .chips {
@@ -1776,114 +1130,6 @@ dialog::backdrop {
 	flex-wrap: wrap;
 	gap: 6px;
 	margin: 6px 0 2px;
-}
-
-.chip-pick {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	padding: 3px 6px 3px 9px;
-	border: 1px solid var(--line);
-	border-radius: 999px;
-	background: var(--accent-soft);
-	font-size: 12px;
-	font-weight: 500;
-}
-
-.chip-pick button {
-	border: 0;
-	background: none;
-	color: var(--muted);
-	font-size: 14px;
-	line-height: 1;
-	padding: 0 2px;
-}
-
-.chip-pick button:hover {
-	color: var(--bad);
-}
-
-/* The destination rail, and the framework rail inside Education Standards. */
-.tabs {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 4px;
-	border-bottom: 1px solid var(--line);
-	margin-bottom: 14px;
-}
-
-.tab {
-	display: inline-flex;
-	align-items: center;
-	gap: 7px;
-	border: 0;
-	background: none;
-	padding: 9px 13px;
-	font-size: 13px;
-	font-weight: 500;
-	color: var(--muted);
-	border-bottom: 2px solid transparent;
-	margin-bottom: -1px;
-}
-
-.tab[aria-selected='true'] {
-	color: var(--ink);
-	border-bottom-color: var(--accent);
-}
-
-.tab:hover {
-	color: var(--ink);
-}
-
-/* The four fixed thumbnail slots, revealed under "upload thumbnails now"
-   exactly as TPT's own conditional does. */
-.thumb-slots {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-	gap: 10px;
-	margin-top: 10px;
-}
-
-.thumb-slot {
-	display: flex;
-	flex-direction: column;
-	gap: 3px;
-	border: 1px dashed var(--line);
-	border-radius: 8px;
-	background: var(--card);
-	padding: 14px 12px;
-	text-align: center;
-	color: var(--muted);
-}
-
-.thumb-slot b {
-	color: var(--ink);
-	font-size: 13px;
-}
-
-/* The seller's own shelves, visually apart from the three platform pickers
-   because the values are theirs rather than the marketplace's. */
-.custom-shelf {
-	margin-top: 14px;
-	padding-top: 14px;
-	border-top: 1px dashed var(--line);
-}
-
-.preamble {
-	margin: 0 0 10px;
-	font-size: 13px;
-	color: var(--muted);
-	line-height: 1.55;
-}
-
-/* A field on a marketplace tab whose value has been taken away from the
-   canonical one. */
-.override + .override {
-	margin-top: 14px;
-}
-
-.override .inline-choices {
-	margin-top: 8px;
 }
 
 .refusals li a {

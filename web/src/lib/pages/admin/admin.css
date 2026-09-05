@@ -1,0 +1,341 @@
+/* The operator backoffice's own rules.
+ *
+ * These five screens are the console's only genuinely tabular ones: a failed
+ * write is five facts about one attempt, and folding them into row cards would
+ * lose the column an operator scans down. So the table survives here where the
+ * catalogue board retired it, and what is below is that table drawn in the
+ * palette, plus the signup chart and the account search the pages already had.
+ *
+ * Below the phone breakpoint each row becomes a card and each cell states its
+ * own column name, because the console is also the Android app and a
+ * five-column table there is a horizontal scroll nobody can read.
+ */
+
+/* --- the operator table --------------------------------------------------- */
+
+.op-table {
+	overflow-x: auto;
+}
+
+.op-table table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+}
+
+.op-table th {
+	text-align: left;
+	font-size: 10.5px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+	font-weight: 600;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--line);
+	white-space: nowrap;
+}
+
+.op-table td {
+	padding: 11px 10px;
+	border-bottom: 1px solid var(--line);
+	vertical-align: middle;
+}
+
+.op-table tr:last-child td {
+	border-bottom: 0;
+}
+
+.op-table td.num,
+.op-table th.num {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+/* A long list is scrolled inside itself with its header pinned, so the page
+   header and the footnote below stay where the operator left them. */
+.op-table.op-tall {
+	max-height: 70vh;
+	overflow: auto;
+}
+
+.op-table.op-tall thead th {
+	position: sticky;
+	top: 0;
+	background: var(--surface);
+	z-index: 1;
+}
+
+/* A cell of two lines: a name over an identifier, each clipped rather than
+   allowed to widen the table, with the whole value in its `title`. */
+.op-cell .t {
+	display: block;
+	max-width: 34ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 500;
+}
+
+.op-cell .s,
+.op-table .s {
+	display: block;
+	max-width: 34ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.op-acts {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.op-table select {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-field);
+	padding: 7px 9px;
+	font: inherit;
+	font-size: 13px;
+	color: var(--text);
+	min-height: 36px;
+}
+
+/* --- the account search --------------------------------------------------- */
+
+.op-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+}
+
+.op-search input[type='search'] {
+	flex: 1;
+	min-width: 200px;
+	height: 40px;
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: var(--r-pill);
+	padding-inline: 14px;
+	font: inherit;
+	color: var(--ink);
+}
+
+/* --- a label against a figure --------------------------------------------- */
+
+.op-tally {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 2px;
+	border-top: 1px solid var(--line);
+}
+
+.op-tally:first-of-type {
+	border-top: 0;
+}
+
+.op-tally .n {
+	margin-left: auto;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- the signup series ---------------------------------------------------- */
+
+.op-plane-key {
+	display: flex;
+	gap: 16px;
+	flex-wrap: wrap;
+	margin-bottom: 12px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.op-plane-key span {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.op-plane-key i {
+	width: 10px;
+	height: 10px;
+	border-radius: 3px;
+	background: var(--accent);
+	flex: none;
+}
+
+.op-plane-key i.second {
+	background: var(--additive);
+}
+
+.op-day-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 6px 0;
+	border-top: 1px solid var(--line);
+}
+
+.op-day-row:first-of-type {
+	border-top: 0;
+}
+
+.op-day-row .day {
+	width: 92px;
+	flex: none;
+	font-size: 12px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.op-day-row .pair {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.op-day-row .op-plane-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 14px;
+}
+
+.op-day-row .op-plane-bar .fill {
+	height: 100%;
+	border-radius: var(--r-pill);
+	background: var(--accent);
+	min-width: 2px;
+}
+
+.op-day-row .op-plane-bar.second .fill {
+	background: var(--additive);
+}
+
+.op-day-row .op-plane-bar .n {
+	font-size: 11.5px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	flex: none;
+}
+
+.op-day-row .op-plane-bar .absent {
+	font-size: 11.5px;
+	color: var(--faint);
+}
+
+/* --- narrow, and the phone ---------------------------------------------- */
+
+/* 900px rather than the phone breakpoint. `.op-table` scrolls inside itself,
+   so a five-column table below about 900px hides its last column behind an
+   inner scrollbar with nothing on screen saying it is there — on Identity
+   users that column is Ban and Impersonate, the only two controls the page
+   has. The band from 720px up is one the specification calls supported and the
+   Android build actually renders, so the cards start where the columns stop
+   fitting rather than where the phone begins. */
+@media (max-width: 900px) {
+	/* Every row becomes a card and every cell names its own column, because
+	   these tables are five columns wide and the Android build shows this same
+	   console. The column name comes from each cell's `data-label`, so a
+	   column added without one shows a cell with no name rather than the wrong
+	   one. */
+	.op-table,
+	.op-table.op-tall {
+		overflow: visible;
+		max-height: none;
+	}
+
+	.op-table thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+
+	.op-table tr {
+		display: block;
+		border: 1px solid var(--line);
+		border-radius: var(--r-panel);
+		padding: 4px 12px;
+		margin-bottom: 10px;
+		background: var(--surface);
+	}
+
+	.op-table td,
+	.op-table tr:last-child td {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 4px 12px;
+		padding: 7px 0;
+		border-bottom: 1px solid var(--line);
+	}
+
+	/* A two-line cell keeps its first line beside the column name and drops
+	   the second to a row of its own: side by side they read as two columns
+	   the table does not have. */
+	.op-table td.op-cell > .t {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
+	.op-table td.op-cell > .s {
+		flex: 1 1 100%;
+	}
+
+	.op-table tr td:last-child {
+		border-bottom: 0;
+	}
+
+	/* The column name, which has to be the same word the `<th>` uses. Sized to
+	   its content above a floor rather than fixed at 84px: `.page` sets
+	   `overflow-wrap: break-word`, so a name wider than the box — ORGANISATION,
+	   CONNECTIONS — was broken mid-word into a second line. It wraps between
+	   words or not at all. */
+	.op-table td::before {
+		content: attr(data-label);
+		flex: 0 0 auto;
+		min-width: 84px;
+		max-width: 45%;
+		overflow-wrap: normal;
+		word-break: keep-all;
+		font-size: 10.5px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--muted);
+		font-weight: 600;
+	}
+
+	.op-table td.num,
+	.op-table th.num {
+		text-align: left;
+	}
+
+	.op-cell .t,
+	.op-cell .s,
+	.op-table .s {
+		max-width: none;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	.op-acts {
+		justify-content: flex-start;
+	}
+
+	.op-day-row .day {
+		width: 72px;
+	}
+}

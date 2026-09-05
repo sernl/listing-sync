@@ -1,0 +1,554 @@
+/* The Automations section's own shape: the landing's three cards, the
+ * two-column body all three pages share, and the row a run or a migration is
+ * drawn as.
+ *
+ * Every colour is a token. The specification's marketplace-brand treatment —
+ * a brand-coloured left bar and a brand-filled selected row — is not drawn
+ * here, because this console holds no brand colours and a page sheet may not
+ * introduce literal ones; the selected row takes `--primary` instead, which is
+ * still unlike the accent pill used everywhere else and so keeps the
+ * distinction the treatment was for.
+ */
+
+/* The landing */
+
+.auto-cards {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 24px;
+}
+
+.auto-card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-1);
+	padding: 28px;
+}
+
+/* Named `card-head` rather than `top`: the shell sheet owns a bare `.top` for
+   the strip above the page header, and a card heading row called `.top` picks
+   up its padding and its bottom hairline. */
+
+.auto-card .card-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.auto-card .ring {
+	display: grid;
+	place-items: center;
+	width: 38px;
+	height: 38px;
+	flex: none;
+	border-radius: var(--r-pill);
+	background: var(--accent-soft);
+	color: var(--accent-ink);
+}
+
+.auto-card h2 {
+	margin: 0;
+	font-family: var(--display);
+	font-size: 20px;
+	font-weight: 600;
+	line-height: 1.2;
+	/* Two lines' worth whether the name takes one or two, so the three
+	   descriptions in the row start on the same baseline. */
+	min-height: 2.4em;
+	display: flex;
+	align-items: center;
+}
+
+.auto-card p {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.55;
+	color: var(--muted);
+	flex: 1;
+}
+
+.auto-card .go {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 4px;
+}
+
+/* The two-column body */
+
+.auto-body {
+	display: grid;
+	grid-template-columns: 230px minmax(0, 1fr);
+	gap: 24px;
+	align-items: start;
+}
+
+.auto-right {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+	min-width: 0;
+}
+
+/* The marketplace column */
+
+.mk-list {
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-1);
+	overflow: hidden;
+}
+
+.mk-list h2 {
+	margin: 0;
+	padding: 16px 20px;
+	border-bottom: 1px solid var(--line);
+	font-family: var(--sans);
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+
+.mk-empty {
+	margin: 0;
+	padding: 16px 20px;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+
+.mk-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 55px;
+	padding: 8px 16px 8px 0;
+	border: 0;
+	border-bottom: 1px solid var(--line);
+	background: none;
+	font: inherit;
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+
+.mk-row:last-child {
+	border-bottom: 0;
+}
+
+/* Drawn inside the row rather than around it: the row fills the card and the
+   card clips, so a ring at the default positive offset is cut off on both
+   sides of every row. */
+
+.mk-row:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -3px;
+}
+
+.mk-row:hover {
+	background: var(--hover);
+}
+
+/* Named `edge` rather than `bar`: the page sheet owns a bare `.bar` for a
+   proportion meter, and a row rule called `.bar` inherits its flex layout. */
+
+.mk-row .edge {
+	width: 4px;
+	align-self: stretch;
+	flex: none;
+	background: var(--accent);
+}
+
+.mk-row .who {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 4px;
+	min-width: 0;
+	flex: 1;
+	padding-left: 6px;
+}
+
+.mk-row .who .t {
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 1.25;
+}
+
+.mk-row .count {
+	flex: none;
+	min-width: 22px;
+	padding: 2px 6px;
+	border-radius: 6px;
+	background: var(--soon-soft);
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+}
+
+.mk-row[aria-pressed='true'] {
+	background: var(--primary);
+	color: var(--surface);
+}
+
+.mk-row[aria-pressed='true'] .edge {
+	background: var(--surface);
+}
+
+.mk-row[aria-pressed='true'] .count {
+	background: color-mix(in srgb, var(--surface) 22%, transparent);
+	color: var(--surface);
+}
+
+.mk-row[aria-pressed='true'] .status {
+	background: color-mix(in srgb, var(--surface) 22%, transparent);
+	color: var(--surface);
+}
+
+.mk-row[aria-pressed='true'] .status i {
+	background: var(--surface);
+}
+
+/* A run or a migration, drawn as a card in the catalogue's row rhythm. The
+   catalogue's own `RowCard` is not used: its 88px cover thumbnail is a
+   resource affordance, and a run has no cover to put in it. */
+
+.auto-row {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 14px 18px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	box-shadow: var(--sh-1);
+	text-decoration: none;
+	color: inherit;
+}
+
+.auto-row + .auto-row {
+	margin-top: 10px;
+}
+
+.auto-row:hover {
+	border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.auto-row .who {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+	flex: 1;
+}
+
+.auto-row .who .t {
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.auto-row .who .meta {
+	font-size: 13px;
+	line-height: 1.4;
+	color: var(--muted);
+}
+
+.auto-row .when {
+	flex: none;
+	font-size: 12px;
+	color: var(--faint);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The paragraph that says what a migration does, set before anything is
+   chosen. Wider measure than a hint and narrower than the card, because it is
+   read once rather than referred back to. */
+
+.migrate-lead {
+	margin: 0 0 20px;
+	max-width: 62ch;
+	font-size: 14px;
+	line-height: 1.55;
+	color: var(--muted);
+}
+
+/* The settings a schedule card lays out */
+
+.set-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 20px;
+}
+
+/* A time field, which the shared sheet's input rules do not reach: they name
+   the text-like types one by one and a time input is not among them. Scoped to
+   this slice's own container, because a page sheet is global and `.field`
+   belongs to a shared component. */
+
+.set-grid input[type='time'] {
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: var(--r-field);
+	padding: 8px 11px;
+	font: inherit;
+	font-weight: 400;
+	color: var(--text);
+	min-width: 0;
+}
+
+/* A control that will not respond has to look like one. The shared sheets
+   style a disabled button and the toggle track and stop there, so a disabled
+   select or input rendered identically to a live one and a seller clicked it.
+   The fill darkens rather than the text fading, which keeps a disabled value
+   readable; the stated reason travels as the field's own hint, because a
+   `title` on a disabled control reaches neither a pointer reliably nor a
+   screen reader at all. */
+
+.set-grid select:disabled,
+.set-grid input:disabled {
+	background: var(--soon-soft);
+	border-color: var(--line);
+	color: var(--text);
+	cursor: not-allowed;
+	opacity: 1;
+}
+
+.set-toggle {
+	display: flex;
+	align-items: center;
+	min-height: 40px;
+}
+
+.set-foot {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-top: 20px;
+	padding-top: 20px;
+	border-top: 1px solid var(--line);
+}
+
+.rule-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 12px 16px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--ground);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--muted);
+}
+
+/* The run page's own shapes, which the retired sheet held under names the
+   catalogue now uses for something else */
+
+.run-outcome {
+	display: flex;
+	height: 16px;
+	overflow: hidden;
+	border-radius: 8px;
+	background: var(--hover);
+}
+
+.run-item {
+	border-top: 1px solid var(--line);
+}
+
+.run-item:first-of-type {
+	border-top: 0;
+}
+
+.run-item-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 10px 2px;
+	border: 0;
+	background: none;
+	text-align: left;
+	flex-wrap: wrap;
+	color: inherit;
+	cursor: pointer;
+}
+
+.run-item-head:hover {
+	background: var(--ground);
+}
+
+.run-detail {
+	background: var(--ground);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	padding: 12px;
+	margin: 0 0 12px;
+}
+
+.run-detail h3 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.run-steps {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+}
+
+.run-steps li {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.run-refusal {
+	margin: 10px 0 0;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--bad);
+}
+
+/* The three-figure queue tally the open-questions header carries.
+   Scoped name because page sheets are global once injected and the admin
+   sheet declares a bare `.tally` of its own. */
+
+.queue-tally {
+	font-size: 12px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The import-drain table. Its scroller and its two cell modifiers live here
+   rather than in the sheet this wave retires, where this page was their only
+   consumer: `overflow-x` on the wrapper is the only thing standing between a
+   nine-column table and horizontal page scroll at 390. `.num` stays shared,
+   because four other tables use it. */
+
+.drain-wrap {
+	overflow-x: auto;
+}
+
+.drain-wrap .gate-row td {
+	font-weight: 600;
+}
+
+.drain-wrap td.flag {
+	color: var(--warn);
+}
+
+/* The question a reconciliation row asks */
+
+.question-row {
+	padding: 16px 18px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	box-shadow: var(--sh-1);
+}
+
+.question-row + .question-row {
+	margin-top: 10px;
+}
+
+.question-row .t {
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.3;
+	word-break: break-word;
+}
+
+.question-row .meta {
+	margin-top: 3px;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.question-row .answer {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	margin-top: 14px;
+}
+
+.question-row .answer input {
+	flex: 1 1 220px;
+	min-width: 0;
+}
+
+@media (max-width: 1080px) {
+	.auto-cards {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (max-width: 900px) {
+	.auto-body {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	/* The rows wrap into a strip; the card keeps its clip, because without it
+	   the square rows paint over its own rounded corners. */
+	.mk-rows {
+		display: flex;
+		flex-wrap: wrap;
+	}
+
+	.mk-row {
+		flex: 1 1 200px;
+		border-bottom: 0;
+		border-right: 1px solid var(--line);
+	}
+
+	.mk-row:last-child {
+		border-right: 0;
+	}
+}
+
+@media (max-width: 620px) {
+	.auto-cards {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.auto-card {
+		padding: 20px;
+	}
+
+	.mk-row {
+		flex: 1 0 100%;
+		border-right: 0;
+		border-bottom: 1px solid var(--line);
+		min-height: 52px;
+	}
+
+	.mk-row:last-child {
+		border-bottom: 0;
+	}
+
+	.auto-row {
+		align-items: flex-start;
+		flex-wrap: wrap;
+	}
+
+	.set-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}

@@ -455,8 +455,12 @@ describe('the branches a settled import can end in', () => {
 			})
 		);
 		const shown = presentStage(stage);
-		expect(shown.headline).toBe('0 listings imported.');
-		expect(shown.detail).toContain('2 listings skipped');
+		// The headline carries it, not the detail: a list row reads the headline
+		// alone, so a count that only appears underneath never reaches the list.
+		expect(shown.label).toBe('Nothing imported');
+		expect(shown.headline).toBe('Nothing was imported: 2 listings skipped.');
+		expect(shown.headline).not.toContain('0 listings imported');
+		expect(shown.detail).toContain('Open this import');
 		expect(shown.tone).toBe('run');
 	});
 
@@ -623,7 +627,28 @@ describe('the list of a seller own imports', () => {
 		const shown = presentStage(
 			headStage(head({ state: 'enqueued', resources_total: 1, resources_failed: 4 }))
 		);
-		expect(shown.headline).toBe('0 listings imported.');
+		// Clamped to zero rather than negative, and read as nothing imported.
+		expect(shown.headline).not.toContain('-');
+		expect(shown.headline).toBe('Nothing was imported: 4 listings skipped.');
+	});
+
+	it('still reads a partly skipped import by what arrived', () => {
+		const shown = presentStage(
+			headStage(head({ state: 'enqueued', resources_total: 5, resources_failed: 2 }))
+		);
+		expect(shown.label).toBe('Imported');
+		expect(shown.headline).toBe('3 listings imported.');
+		expect(shown.tone).toBe('run');
+	});
+
+	it('says nothing was imported without inventing a reason it does not hold', () => {
+		const shown = presentStage(
+			headStage(head({ state: 'enqueued', resources_total: 2, resources_failed: 2 }))
+		);
+		// The head counts; it does not carry any resource's reason, so the row
+		// points at the page that does rather than implying it has read them.
+		expect(shown.headline).toBe('Nothing was imported: 2 listings skipped.');
+		expect(shown.detail).toBe('Open this import to see what was recorded against each one.');
 	});
 
 	it('degrades on a state it does not know, exactly as the page does', () => {

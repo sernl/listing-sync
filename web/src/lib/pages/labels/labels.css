@@ -1,0 +1,232 @@
+/* The Labels page's own rules. Everything here is scoped under `.labels-page`
+ * so that a class this page names cannot reach another page's markup: these
+ * rules are loaded globally, as every page-level stylesheet in this console is.
+ */
+
+/* --- toolbar ------------------------------------------------------------- */
+
+.labels-page .labels-toolbar {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 14px;
+	flex-wrap: wrap;
+	margin: 4px 0 14px;
+}
+
+.labels-page .labels-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-field);
+	padding-left: 11px;
+	color: var(--muted);
+	min-width: 0;
+}
+
+.labels-page .labels-search:focus-within {
+	border-color: var(--accent);
+}
+
+/* The field's own border is the wrapper's, so the input inside carries none:
+   two nested rounded rectangles would read as a control inside a control. */
+.labels-page .labels-search input[type='search'] {
+	border: 0;
+	background: none;
+	padding-block: 8px;
+	padding-left: 0;
+	padding-right: 11px;
+	width: 260px;
+	max-width: 100%;
+	font: inherit;
+	font-weight: 400;
+	color: var(--ink);
+	min-width: 0;
+}
+
+.labels-page .labels-search input[type='search']:focus-visible {
+	outline: none;
+}
+
+.labels-page .labels-total {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+	padding-bottom: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- the list ------------------------------------------------------------ */
+
+/* Each row card is wrapped in a list item, so the stacking `.row-card +
+   .row-card` rule never matches and the gap is the list's own. */
+.labels-page .labels-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.labels-page .labels-nomatch {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+/* --- the swatch ---------------------------------------------------------- */
+
+/* A label's mark is its colour, so the row card's cover square carries the
+   colour rather than a cover: the glyph inside it is the one `RowCard` draws
+   for a resource with no picture, and a label has no picture to be missing. */
+.labels-page .label-row .thumb svg {
+	display: none;
+}
+
+.labels-page .label-row .thumb {
+	background: var(--soon-soft);
+	box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* The eight colours of migration 0046's closed set, which `LabelsDialog.svelte`
+   also spells out: the colour of a label is a value the server derived from
+   its name rather than a choice from this console's palette, so there is no
+   token for it. Mixed into the surface rather than used flat, because a row of
+   68px blocks at full strength would out-shout every status on the page, and
+   held at thirty percent over a firm ring rather than lower, because eight
+   pastels at row size stop being eight colours. */
+.labels-page .label-row.c-slate .thumb {
+	background: var(--soon-soft);
+	box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.labels-page .label-row.c-red .thumb {
+	background: color-mix(in srgb, #d1495b 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #d1495b 62%, transparent);
+}
+
+.labels-page .label-row.c-amber .thumb {
+	background: color-mix(in srgb, #b3760e 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #b3760e 62%, transparent);
+}
+
+.labels-page .label-row.c-green .thumb {
+	background: color-mix(in srgb, #2f8f5b 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #2f8f5b 62%, transparent);
+}
+
+.labels-page .label-row.c-teal .thumb {
+	background: color-mix(in srgb, #10808c 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #10808c 62%, transparent);
+}
+
+.labels-page .label-row.c-blue .thumb {
+	background: color-mix(in srgb, #2f6fb3 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #2f6fb3 62%, transparent);
+}
+
+.labels-page .label-row.c-violet .thumb {
+	background: color-mix(in srgb, #6a4bb3 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #6a4bb3 62%, transparent);
+}
+
+.labels-page .label-row.c-pink .thumb {
+	background: color-mix(in srgb, #b3407f 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #b3407f 62%, transparent);
+}
+
+/* --- rename and delete, both inline -------------------------------------- */
+
+/* Neither asks in a modal: a rename and a delete both belong to one row, and
+   this console raises no dialog over a page.
+
+   The panel is joined to its own row rather than floated under it. A gap of
+   8px between the panel and its card, in a list whose own gap is 10px, reads as
+   a card of its own standing between two rows: the negative margin folds the
+   two borders into one line and the squared corners finish the join, so a
+   sentence about destroying a label cannot be read against the wrong row.
+
+   `scroll-margin-block` is what the panel is brought into view against. The
+   lower figure clears the phone's fixed tab bar, which owns the last band of
+   the viewport and would otherwise take the tap aimed at "Delete label". */
+.labels-page .row-action {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: 0 0 var(--r-card) var(--r-card);
+	padding: 14px;
+	margin-top: -1px;
+	scroll-margin-block: 20px 120px;
+}
+
+.labels-page .row-action:focus {
+	outline: none;
+}
+
+.labels-page .label-row.open .row-card {
+	border-bottom-left-radius: 0;
+	border-bottom-right-radius: 0;
+	box-shadow: none;
+}
+
+.labels-page .row-action .field {
+	max-width: 420px;
+}
+
+.labels-page .row-warning {
+	margin: 0;
+	font-size: 13px;
+	color: var(--text);
+}
+
+.labels-page .row-refusal {
+	margin: 8px 0 0;
+	font-size: 13px;
+	color: var(--bad);
+}
+
+/* Nothing has failed and there is nothing to correct, so the line that says why
+   Save is greyed is muted rather than red. */
+.labels-page .row-note {
+	margin: 8px 0 0;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.labels-page .row-buttons {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 12px;
+}
+
+@media (max-width: 620px) {
+	.labels-page .labels-toolbar {
+		align-items: stretch;
+	}
+
+	.labels-page .labels-search input[type='search'] {
+		width: 100%;
+	}
+
+	.labels-page .labels-total {
+		padding-bottom: 0;
+	}
+
+	/* Both row actions are reached by thumb on a phone, so each control takes
+	   the width rather than a 90px target beside another one. */
+	.labels-page .row-buttons {
+		flex-direction: column;
+	}
+
+	.labels-page .row-buttons .btn,
+	.labels-page .row-buttons .cta {
+		width: 100%;
+		justify-content: center;
+	}
+}

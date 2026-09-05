@@ -2,10 +2,14 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { SIGNUP_DAYS, barWidth, dayLabel, signupPeak, signupSeries } from '$lib/admin';
 	import { api } from '$lib/api';
+	import Button from '$lib/Button.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import Placeholder from '$lib/Placeholder.svelte';
 	import StatCard from '$lib/StatCard.svelte';
 	import { queryKeys } from '$lib/query';
+	import { sumOf, tileFor } from '$lib/pages/admin/ledger-tile';
+	import '$lib/pages/admin/admin.css';
 
 	const signups = createQuery(() => ({
 		queryKey: queryKeys.adminSignups,
@@ -20,10 +24,22 @@
 	const peak = $derived(signupPeak(rows));
 	const identityVisible = $derived(signups.data?.identity !== undefined);
 	const ledger = $derived(health.data);
+
+	// Undefined rather than zero where the ledger has not been read, so the
+	// glyph, the tint and the figure on each card all read one source and
+	// cannot come to disagree about whether there is a figure at all.
 	const inFlight = $derived(
-		ledger === undefined ? 0 : ledger.queued + ledger.leased + ledger.running + ledger.verifying
+		sumOf(ledger?.queued, ledger?.leased, ledger?.running, ledger?.verifying)
 	);
-	const parked = $derived(ledger === undefined ? 0 : ledger.parked_live + ledger.parked_cold);
+	const parked = $derived(sumOf(ledger?.parked_live, ledger?.parked_cold));
+	const failed = $derived(ledger?.failed);
+
+	const parkedTile = $derived(
+		tileFor(parked, { icon: 'pause', tone: 'warn' }, { icon: 'circle-check', tone: 'ok' })
+	);
+	const failedTile = $derived(
+		tileFor(failed, { icon: 'circle-x', tone: 'bad' }, { icon: 'circle-check', tone: 'ok' })
+	);
 </script>
 
 <div class="page">
@@ -43,27 +59,27 @@
 			label="Items moving"
 			sub="queued, leased, running or verifying"
 		>
-			{ledger === undefined ? '—' : inFlight}
+			{inFlight ?? '—'}
 		</StatCard>
 		<StatCard
-			icon={parked > 0 ? 'pause' : 'circle-check'}
-			tone={parked > 0 ? 'warn' : 'ok'}
+			icon={parkedTile.icon}
+			tone={parkedTile.tone}
 			label="Parked items"
 			sub={ledger === undefined
 				? 'the ledger has not been read'
 				: `${ledger.parked_live} live, ${ledger.parked_cold} cold`}
 		>
-			{ledger === undefined ? '—' : parked}
+			{parked ?? '—'}
 		</StatCard>
 		<StatCard
-			icon={(ledger?.failed ?? 0) > 0 ? 'circle-x' : 'circle-check'}
-			tone={(ledger?.failed ?? 0) > 0 ? 'bad' : 'ok'}
+			icon={failedTile.icon}
+			tone={failedTile.tone}
 			label="Failed items"
 			sub={ledger === undefined
 				? 'the ledger has not been read'
 				: `${ledger.settled} settled in all`}
 		>
-			{ledger?.failed ?? '—'}
+			{failed ?? '—'}
 		</StatCard>
 	</div>
 
@@ -72,7 +88,7 @@
 		description="The newest {SIGNUP_DAYS} days each plane recorded, by UTC day."
 	>
 		{#snippet more()}
-			<a class="more" href="/admin/health">Sync health</a>
+			<Button tier="quiet" icon="heart-pulse" href="/admin/health">Sync health</Button>
 		{/snippet}
 
 		{#if signups.isPending}
@@ -80,21 +96,22 @@
 		{:else if signups.isError}
 			<p class="quiet">The signup series could not be read.</p>
 		{:else if rows.length === 0}
-			<div class="clear">
-				<span class="big" aria-hidden="true">◈</span>
-				Nobody has signed up yet on either plane.
-			</div>
+			<Placeholder
+				icon="users"
+				headline="Nobody has signed up yet"
+				body="Neither the identity plane nor the platform's own user table holds a row."
+			/>
 		{:else}
-			<div class="series-key">
-				<span><i class="swatch second" aria-hidden="true"></i> Identity signups</span>
-				<span><i class="swatch" aria-hidden="true"></i> Provisioned platform users</span>
+			<div class="op-plane-key">
+				<span><i class="second" aria-hidden="true"></i> Identity signups</span>
+				<span><i aria-hidden="true"></i> Provisioned platform users</span>
 			</div>
 
 			{#each rows as row (row.day)}
-				<div class="bar-row">
+				<div class="op-day-row">
 					<div class="day">{dayLabel(row.day)}</div>
-					<div class="bar-pair">
-						<div class="bar second">
+					<div class="pair">
+						<div class="op-plane-bar second">
 							{#if row.identity === null}
 								<span class="absent">identity trail not visible from this database</span>
 							{:else}
@@ -102,7 +119,7 @@
 								<span class="n">{row.identity}</span>
 							{/if}
 						</div>
-						<div class="bar">
+						<div class="op-plane-bar">
 							<span class="fill" style={`width:${barWidth(row.provisioned, peak)}%`}></span>
 							<span class="n">{row.provisioned}</span>
 						</div>

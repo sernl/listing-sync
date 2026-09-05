@@ -1,10 +1,22 @@
 <script lang="ts">
 	import { api, type DrainStats, type QueueItem } from '$lib/api';
+	import Banner from '$lib/Banner.svelte';
+	import Button from '$lib/Button.svelte';
 	import { formatShare, gateWindow, readMeasurement, toRun, type DrainRun } from '$lib/drain';
 	import { createLedger } from '$lib/ledger';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import Placeholder from '$lib/Placeholder.svelte';
 	import { toast } from '$lib/toast';
+	import {
+		DRAINED_BODY,
+		DRAINED_TITLE,
+		TARGET_PLACEHOLDER,
+		TARGET_REFUSAL,
+		questionRows,
+		tallyLine
+	} from '$lib/pages/automations/questions';
+	import '$lib/pages/automations/automations.css';
 
 	let items = $state<QueueItem[]>([]);
 	let stats = $state<DrainStats | null>(null);
@@ -15,6 +27,7 @@
 	let truncated = $state(false);
 
 	const gate = $derived(gateWindow(runs));
+	const questions = $derived(questionRows(items, Date.now()));
 
 	async function refetch() {
 		const [queue, drain] = await Promise.all([api.queue(), api.drainStats()]);
@@ -31,9 +44,7 @@
 		// which a busy tenant's item traffic would push them out of.
 		const seen = new Map<number, DrainRun>();
 		let resyncs = 0;
-		const ledger = createLedger(
-			(cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`)
-		);
+		const ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
 		const unsubscribe = ledger.subscribe((state) => {
 			if (state.resyncs !== resyncs) {
 				resyncs = state.resyncs;
@@ -68,7 +79,7 @@
 			.map((part) => part.trim())
 			.filter((part) => part.length > 0);
 		if (segments.length === 0) {
-			toast('error', 'Give the target path as segments separated by “/”.');
+			toast('error', TARGET_REFUSAL);
 			return;
 		}
 		busy = item.id;
@@ -105,39 +116,77 @@
 <div class="page">
 	<PageHead
 		icon="circle-question-mark"
-		title="Reconciliation"
+		back={{ href: '/sync', label: 'Back to Marketplace Sync' }}
+		title="Open questions"
 		description="The few questions sync cannot answer for you."
 	>
 		{#snippet aside()}
 			{#if stats}
-				<span class="tag-note">
-					open {stats.open} · resolved {stats.resolved} · no counterpart {stats.no_counterpart}
-				</span>
+				<span class="queue-tally">{tallyLine(stats.open, stats.resolved, stats.no_counterpart)}</span>
 			{/if}
 		{/snippet}
 	</PageHead>
 
+	<Panel title="Every question waiting" description="Each one you answer stays answered.">
+		{#if !loaded}
+			<p class="quiet">Loading the queue…</p>
+		{:else if questions.length === 0}
+			<Placeholder icon="circle-check" headline={DRAINED_TITLE} body={DRAINED_BODY} />
+		{:else}
+			{#each questions as question (question.id)}
+				<div class="question-row">
+					<div class="t">{question.title}</div>
+					<div class="meta">{question.meta}</div>
+					<div class="answer">
+						<label class="sr-only" for={`target-${question.id}`}>Target path</label>
+						<input
+							id={`target-${question.id}`}
+							type="text"
+							placeholder={TARGET_PLACEHOLDER}
+							bind:value={drafts[question.id]}
+						/>
+						<Button
+							tier="primary"
+							disabled={busy === question.id}
+							reason={busy === question.id ? 'This answer is being recorded.' : undefined}
+							onclick={() => void resolve(question.item)}
+						>
+							Resolve
+						</Button>
+						<Button
+							tier="outline"
+							disabled={busy === question.id}
+							reason={busy === question.id ? 'This answer is being recorded.' : undefined}
+							onclick={() => void noCounterpart(question.item)}
+						>
+							No counterpart
+						</Button>
+					</div>
+				</div>
+			{/each}
+		{/if}
+	</Panel>
+
 	<Panel
 		title="Import drain"
-		description="The share of canonical terms each import raised a new item for."
+		description="The share of canonical terms each import raised a new question for."
 	>
 		{#if runs.length === 0}
 			<p class="quiet">
-				No import has recorded a drain report yet. Each run records one, and the ledger keeps
-				30 days of them.
+				No import has recorded a drain report yet. Each run records one, and the ledger keeps 30
+				days of them.
 			</p>
 		{:else}
 			<p class="s">
 				{#if gate.fall === null}
-					{runs.length} of 10 migrations recorded; the gate compares the first against the
-					tenth.
+					{runs.length} of 10 migrations recorded; the gate compares the first against the tenth.
 				{:else}
 					First {formatShare(gate.first?.share ?? null)} → tenth
 					{formatShare(gate.tenth?.share ?? null)}: a fall of {formatShare(gate.fall)}.
 				{/if}
 			</p>
 
-			<div class="tbl-wrap">
+			<div class="drain-wrap">
 				<table>
 					<thead>
 						<tr>
@@ -159,9 +208,7 @@
 								<td>{run.source} → {run.target}</td>
 								<td class="num">{run.rows}</td>
 								<td class="num">{run.terms_seen}</td>
-								<td class="num {run.terms_unmapped > 0 ? 'flag' : ''}">
-									{run.terms_unmapped}
-								</td>
+								<td class="num {run.terms_unmapped > 0 ? 'flag' : ''}">{run.terms_unmapped}</td>
 								<td class="num">{run.terms_covered}</td>
 								<td class="num">{run.items_new}</td>
 								<td class="num">{run.items_already_open}</td>
@@ -173,64 +220,16 @@
 			</div>
 
 			<p class="foot-note">
-				Unmapped terms never became canonical, so they are outside the share: a share that
-				falls while that column rises is an ingest gap rather than a converging crosswalk.
+				Unmapped terms never became canonical, so they are outside the share: a share that falls
+				while that column rises is an ingest gap rather than a converging crosswalk.
 			</p>
 		{/if}
 
 		{#if truncated}
-			<p class="notice">
-				The ledger was pruned past the start of this stream, so runs older than the 30-day
-				window are not shown and the first row above may not be the first migration.
-			</p>
-		{/if}
-	</Panel>
-
-	<Panel title="Open questions" description="Each one you answer stays answered.">
-		{#if !loaded}
-			<p class="quiet">Loading the queue…</p>
-		{:else if items.length === 0}
-			<div class="placeholder">
-				<span class="big" aria-hidden="true">✓</span>
-				<b>The queue is drained</b>
-				<p>
-					New items appear only when a listing carries a term with no translation yet — and
-					each one you resolve stays resolved.
-				</p>
-			</div>
-		{:else}
-			{#each items as item (item.id)}
-				<div class="question">
-					<div class="head-row">
-						<span class="mono" title={item.term}>{item.term.slice(0, 8)}…</span>
-						<span class="badge">{item.kind} → {item.inventory}</span>
-						<span class="grow"></span>
-						<span class="when">
-							raised {new Date(item.raised_at).toLocaleDateString()}
-						</span>
-					</div>
-					<div class="actions">
-						<label class="sr-only" for={`target-${item.id}`}>Target path</label>
-						<input
-							id={`target-${item.id}`}
-							class="grow"
-							type="text"
-							placeholder="Target path, e.g. Mathematics / Algebra"
-							bind:value={drafts[item.id]}
-						/>
-						<button class="cta" disabled={busy === item.id} onclick={() => resolve(item)}>
-							Resolve
-						</button>
-						<button
-							class="btn"
-							disabled={busy === item.id}
-							onclick={() => noCounterpart(item)}
-						>
-							No counterpart
-						</button>
-					</div>
-				</div>
-			{/each}
+			<Banner tone="warn">
+				The ledger was pruned past the start of this stream, so runs older than the 30-day window
+				are not shown and the first row above may not be the first migration.
+			</Banner>
 		{/if}
 	</Panel>
 </div>

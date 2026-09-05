@@ -6,6 +6,8 @@
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
+	import StatusPill, { type Tone } from '$lib/StatusPill.svelte';
+	import '$lib/pages/admin/admin.css';
 
 	const trail = createQuery(() => ({
 		queryKey: queryKeys.adminImpersonations,
@@ -17,7 +19,7 @@
 	const events = $derived(trail.data?.impersonations);
 	const now = Date.now();
 
-	function verb(event: string): { label: string; tone: string } {
+	function verb(event: string): { label: string; tone: Tone } {
 		return event === 'user_impersonated'
 			? { label: 'started', tone: 'bad' }
 			: { label: 'stopped', tone: 'ok' };
@@ -28,8 +30,12 @@
 	<PageHead
 		icon="copy"
 		title="Impersonations"
-		description="Every time an identity admin signed in as somebody else, newest first."
-	/>
+		description="When an identity admin signed in as somebody else, newest first."
+	>
+		{#snippet aside()}
+			<StatusPill tone="soon" label="newest 100" />
+		{/snippet}
+	</PageHead>
 
 	{#if trail.isPending}
 		<Panel><p class="quiet">Reading the audit trail…</p></Panel>
@@ -39,18 +45,18 @@
 		<Placeholder
 			icon="copy"
 			headline="The identity audit trail is not visible from here"
-			body="This database carries no identity schema, so there is no record to read. That is
-				not the same as nobody having been impersonated."
+			body="This database carries no identity schema, so there is no record to read. That is not the same as nobody having been impersonated."
 		/>
 	{:else}
 		<Panel>
 			{#if events.length === 0}
-				<div class="clear">
-					<span class="big" aria-hidden="true">✓</span>
-					Nobody has been impersonated.
-				</div>
+				<Placeholder
+					icon="circle-check"
+					headline="Nobody has been impersonated"
+					body="The trail is readable and empty, which is the fact this page is here to establish."
+				/>
 			{:else}
-				<div class="tbl-wrap scroll-tbl">
+				<div class="op-table op-tall">
 					<table>
 						<thead>
 							<tr>
@@ -64,18 +70,20 @@
 						<tbody>
 							{#each events as row (`${row.event}-${row.at}-${row.actor}-${row.target}`)}
 								<tr>
-									<td><span class="pill {verb(row.event).tone}">{verb(row.event).label}</span></td>
-									<td class="title-cell">
-										<span class="mono" title={row.actor}>{row.actor}</span>
+									<td data-label="Event">
+										<StatusPill tone={verb(row.event).tone} label={verb(row.event).label} />
 									</td>
-									<td class="title-cell">
-										<span class="mono" title={row.target}>{row.target}</span>
+									<td class="op-cell" data-label="Actor">
+										<span class="t mono" title={row.actor}>{row.actor}</span>
 									</td>
-									<td class="title-cell">
-										<div class="t">{agoLabel(row.at, now)}</div>
-										<div class="s mono">{utcInstant(row.at)}</div>
+									<td class="op-cell" data-label="Target">
+										<span class="t mono" title={row.target}>{row.target}</span>
 									</td>
-									<td class="mono">{row.ip ?? '—'}</td>
+									<td class="op-cell" data-label="When">
+										<span class="t">{agoLabel(row.at, now)}</span>
+										<span class="s mono">{utcInstant(row.at)}</span>
+									</td>
+									<td class="mono" data-label="From">{row.ip ?? '—'}</td>
 								</tr>
 							{/each}
 						</tbody>

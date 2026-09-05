@@ -4,7 +4,9 @@
 	import { api } from '$lib/api';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
+	import '$lib/pages/admin/admin.css';
 
 	const orgs = createQuery(() => ({
 		queryKey: queryKeys.adminOrgs,
@@ -28,12 +30,13 @@
 		{:else if orgs.isError}
 			<p class="quiet">The tenant list could not be read.</p>
 		{:else if rows.length === 0}
-			<div class="clear">
-				<span class="big" aria-hidden="true">⌂</span>
-				No organisation has been provisioned yet.
-			</div>
+			<Placeholder
+				icon="building-2"
+				headline="No organisation has been provisioned yet"
+				body="A tenant appears here the first time somebody signs in and the session exchange provisions them one."
+			/>
 		{:else}
-			<div class="tbl-wrap">
+			<div class="op-table">
 				<table>
 					<thead>
 						<tr>
@@ -48,17 +51,19 @@
 					<tbody>
 						{#each rows as row (row.org)}
 							<tr>
-								<td class="title-cell">
-									<div class="t" title={row.name}>
+								<td class="op-cell" data-label="Organisation">
+									<span class="t" title={row.name}>
 										<a class="link" href={`/admin/orgs/${row.org}`}>{row.name}</a>
-									</div>
-									<div class="s mono" title={row.org}>{row.org}</div>
+									</span>
+									<span class="s mono" title={row.org}>{row.org}</span>
 								</td>
-								<td class="num">{row.products}</td>
-								<td class="num">{row.mappings}</td>
-								<td class="num">{row.connections}</td>
-								<td class="num">{row.users}</td>
-								<td class="num" title={utcInstant(row.created_at)}>{agoLabel(row.created_at, now)}</td>
+								<td class="num" data-label="Products">{row.products}</td>
+								<td class="num" data-label="Mappings">{row.mappings}</td>
+								<td class="num" data-label="Connections">{row.connections}</td>
+								<td class="num" data-label="Users">{row.users}</td>
+								<td class="num" data-label="Created" title={utcInstant(row.created_at)}>
+									{agoLabel(row.created_at, now)}
+								</td>
 							</tr>
 						{/each}
 					</tbody>

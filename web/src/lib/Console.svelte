@@ -17,8 +17,8 @@
 		PHONE_BAR,
 		SECTIONS,
 		breadcrumbFor,
+		currentDestination,
 		initialsOf,
-		isCurrent,
 		searchHref,
 		sectionFor
 	} from '$lib/nav';
@@ -95,6 +95,11 @@
 	// destinations that answer 401.
 	const operator = $derived(verdict === 'operator');
 	const section = $derived(sectionFor(pathname, operator));
+	// The destination this path belongs to, rather than a per-item `isCurrent`.
+	// A page can be owned by an item it does not sit under — an import's detail
+	// page lives at `/sync/requests/<id>` and belongs to Import — and only the
+	// longest-claim answer gets that right without lighting two items elsewhere.
+	const owning = $derived(currentDestination(pathname));
 	// The card renders only for a section that has pages. The home path and the
 	// open-questions queue belong to no section at all, and on those the rail
 	// lights nothing rather than claiming one.
@@ -226,7 +231,7 @@
 					<a
 						class="nav-item"
 						href={item.href}
-						aria-current={isCurrent(pathname, item.href) ? 'page' : undefined}
+						aria-current={item.href === owning?.href ? 'page' : undefined}
 					>
 						<span class="ico"><Icon name={item.icon} size={16} /></span>
 						{item.label}
@@ -303,7 +308,7 @@
 				<a
 					class="tab-item"
 					href={tab.href}
-					aria-current={isCurrent(pathname, tab.href) ? 'page' : undefined}
+					aria-current={tab.href === section?.href ? 'page' : undefined}
 				>
 					<span class="ico"><Icon name={tab.icon} size={19} /></span>
 					<span>{tab.label}</span>

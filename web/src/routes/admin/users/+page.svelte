@@ -14,11 +14,15 @@
 		type IdentityRole,
 		type IdentityUser
 	} from '$lib/auth-client';
+	import Banner from '$lib/Banner.svelte';
+	import Button from '$lib/Button.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
+	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
+	import '$lib/pages/admin/admin.css';
 
 	/** How many accounts one listing carries. A rendering bound, not a policy
 	 *  one: the search narrows the list rather than paging it. */
@@ -184,7 +188,7 @@
 		/>
 	{:else}
 		<Panel>
-			<form class="filter-bar" role="search" onsubmit={search}>
+			<form class="op-search" role="search" onsubmit={search}>
 				<label class="sr-only" for="identity-search">Search accounts by email address</label>
 				<input
 					id="identity-search"
@@ -193,27 +197,43 @@
 					placeholder="Search by email address…"
 					bind:value={typed}
 				/>
-				<button class="cta small" type="submit">Search</button>
+				<Button tier="additive" type="submit" icon="search">Search</Button>
 				{#if applied.length > 0}
-					<button class="btn small" type="button" onclick={clearSearch}>Clear</button>
+					<Button tier="outline" onclick={clearSearch}>Clear</Button>
 				{/if}
 			</form>
 
 			{#if refusal}
-				<div class="notice">{refusal}</div>
+				<Banner tone="bad" title="The impersonation was refused">{refusal}</Banner>
 			{/if}
 
 			{#if users.isPending}
 				<p class="quiet">Reading the identity accounts…</p>
+			{:else if users.isError}
+				<!-- Before the empty arm, and not folded into it: `listRefusal`
+				     is null for anything that is not an `AuthFailure`, and
+				     without this the page reported an empty identity service
+				     from a read that failed, with `retry: false` so it never
+				     corrected itself. -->
+				<Placeholder
+					icon="users"
+					headline="The identity accounts could not be read"
+					body="The request did not come back with an answer we can act on, so this page
+						cannot say whether the service holds any accounts. Reloading is the only
+						thing worth trying from here."
+				/>
 			{:else if rows.length === 0}
-				<div class="clear">
-					<span class="big" aria-hidden="true">☺</span>
-					{applied.length === 0
-						? 'The identity service holds no accounts.'
+				<Placeholder
+					icon="users"
+					headline={applied.length === 0
+						? 'The identity service holds no accounts'
+						: 'No account matches that search'}
+					body={applied.length === 0
+						? 'The first account appears here the moment somebody registers.'
 						: `No account's address contains “${applied}”.`}
-				</div>
+				/>
 			{:else}
-				<div class="tbl-wrap scroll-tbl">
+				<div class="op-table op-tall">
 					<table>
 						<thead>
 							<tr>
@@ -228,11 +248,11 @@
 							{#each rows as user (user.id)}
 								{@const joinedAt = joined(user.createdAt)}
 								<tr>
-									<td class="title-cell">
-										<div class="t" title={user.name || user.email}>{user.name || user.email}</div>
-										<div class="s" title={user.email}>{user.email}</div>
+									<td class="op-cell" data-label="Account">
+										<span class="t" title={user.name || user.email}>{user.name || user.email}</span>
+										<span class="s" title={user.email}>{user.email}</span>
 									</td>
-									<td>
+									<td data-label="Role">
 										<label class="sr-only" for={`role-${user.id}`}>Role for {user.email}</label>
 										<select
 											id={`role-${user.id}`}
@@ -245,44 +265,58 @@
 											{/each}
 										</select>
 									</td>
-									<td>
+									<td class="op-cell" data-label="State">
 										{#if user.banned}
-											<span class="pill bad">banned</span>
-											{#if user.banReason}<div class="s">{user.banReason}</div>{/if}
+											<StatusPill tone="bad" label="banned" />
+											{#if user.banReason}<span class="s">{user.banReason}</span>{/if}
 										{:else if user.emailVerified}
-											<span class="pill ok">verified</span>
+											<StatusPill tone="ok" label="verified" />
 										{:else}
-											<span class="pill run">unverified</span>
+											<StatusPill tone="run" label="unverified" />
 										{/if}
 									</td>
-									<td class="num" title={joinedAt === null ? undefined : utcInstant(joinedAt)}>
+									<td
+										class="num"
+										data-label="Joined"
+										title={joinedAt === null ? undefined : utcInstant(joinedAt)}
+									>
 										{joinedAt === null ? '—' : agoLabel(joinedAt, now)}
 									</td>
-									<td>
-										<div class="row-actions">
+									<td data-label="Actions">
+										<div class="op-acts">
 											{#if user.banned}
-												<button
-													class="btn small"
-													type="button"
+												<Button
+													tier="outline"
+													small
 													disabled={unbanning.isPending}
-													onclick={() => unbanning.mutate(user.id)}>Unban</button
+													reason={unbanning.isPending ? 'An unban is in flight.' : undefined}
+													onclick={() => unbanning.mutate(user.id)}
 												>
+													Unban
+												</Button>
 											{:else}
-												<button
-													class="btn small danger"
-													type="button"
+												<Button
+													tier="outline"
+													small
+													danger
 													disabled={banning.isPending}
-													onclick={() => ban(user)}>Ban</button
+													reason={banning.isPending ? 'A ban is in flight.' : undefined}
+													onclick={() => ban(user)}
 												>
+													Ban
+												</Button>
 											{/if}
-											<button
-												class="btn small"
-												type="button"
+											<Button
+												tier="outline"
+												small
 												disabled={impersonating !== null}
+												reason={impersonating !== null
+													? 'An impersonation is already starting.'
+													: undefined}
 												onclick={() => impersonate(user)}
 											>
 												{impersonating === user.id ? 'Starting…' : 'Impersonate'}
-											</button>
+											</Button>
 										</div>
 									</td>
 								</tr>

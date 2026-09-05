@@ -1,8 +1,11 @@
 <script lang="ts">
+	import Button from '$lib/Button.svelte';
+	import Field from '$lib/Field.svelte';
 	import Turnstile from '$lib/Turnstile.svelte';
 	import { requestPasswordReset } from '$lib/auth-client';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { toast } from '$lib/toast';
+	import '$lib/pages/account/signed-out.css';
 
 	let email = $state('');
 	let busy = $state(false);
@@ -43,13 +46,13 @@
 	}
 </script>
 
-<div class="auth-card">
+<div class="auth-card acct-signed-out">
 	{#if sent}
 		<h1>Check your email</h1>
 		<p>
 			If <b>{email.trim()}</b> has an account, a link to choose a new password is on its way.
 		</p>
-		<div class="actions"><a class="btn" href="/login">Go to sign in</a></div>
+		<div class="actions"><Button tier="outline" href="/login">Go to sign in</Button></div>
 	{:else}
 		<h1>Reset your password</h1>
 		<p>
@@ -57,14 +60,22 @@
 		</p>
 
 		<form onsubmit={request} class="form">
-			<label class="field" for="email">
-				Email
+			<Field label="Email" id="email" required>
 				<input id="email" name="email" type="email" required autocomplete="username" bind:value={email} />
-			</label>
+			</Field>
 			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
-			<button class="cta" disabled={busy || challengePending}>
+			<Button
+				tier="primary"
+				type="submit"
+				disabled={busy || challengePending}
+				reason={busy
+					? 'The link is being sent.'
+					: challengePending
+						? 'The challenge above has not been answered yet.'
+						: undefined}
+			>
 				{busy ? 'Sending…' : 'Send the link'}
-			</button>
+			</Button>
 		</form>
 
 		<p class="auth-foot">

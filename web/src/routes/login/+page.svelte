@@ -11,10 +11,13 @@
 		signInWithPassword,
 		signInWithProvider
 	} from '$lib/auth-client';
+	import Button from '$lib/Button.svelte';
+	import Field from '$lib/Field.svelte';
 	import Turnstile from '$lib/Turnstile.svelte';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
+	import '$lib/pages/account/signed-out.css';
 
 	/** Named here rather than in the markup: a build with no social provider
 	 * offers no linked account, and saying otherwise sends the human looking
@@ -155,7 +158,7 @@
 	}
 </script>
 
-<div class="auth-card">
+<div class="auth-card acct-signed-out">
 	{#if awaitingVerification !== null}
 		<h1>Verify your email</h1>
 		<p>
@@ -163,29 +166,32 @@
 			confirmed.
 		</p>
 		<div class="actions">
-			<button class="cta" type="button" disabled={busy !== null} onclick={resend}>
-				{busy === 'resend' ? 'Sending…' : 'Send it again'}
-			</button>
-			<button
-				class="btn"
-				type="button"
+			<Button
+				tier="primary"
 				disabled={busy !== null}
+				reason={busy !== null ? 'A sign-in step is already running.' : undefined}
+				onclick={resend}
+			>
+				{busy === 'resend' ? 'Sending…' : 'Send it again'}
+			</Button>
+			<Button
+				tier="outline"
+				disabled={busy !== null}
+				reason={busy !== null ? 'A sign-in step is already running.' : undefined}
 				onclick={() => (awaitingVerification = null)}
 			>
 				Use a different account
-			</button>
+			</Button>
 		</div>
 	{:else}
 		<h1>Sign in</h1>
 		<p>{busy === 'resume' ? 'Completing sign-in…' : SIGN_IN_PROMPT}</p>
 
 		<form onsubmit={withPassword} class="form">
-			<label class="field" for="email">
-				Email
+			<Field label="Email" id="email" required>
 				<input id="email" name="email" type="email" required autocomplete="username" bind:value={email} />
-			</label>
-			<label class="field" for="password">
-				Password
+			</Field>
+			<Field label="Password" id="password" required>
 				<input
 					id="password"
 					name="password"
@@ -194,11 +200,20 @@
 					autocomplete="current-password"
 					bind:value={password}
 				/>
-			</label>
+			</Field>
 			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
-			<button class="cta" disabled={busy !== null || challengePending}>
+			<Button
+				tier="primary"
+				type="submit"
+				disabled={busy !== null || challengePending}
+				reason={busy !== null
+					? 'A sign-in step is already running.'
+					: challengePending
+						? 'The challenge above has not been answered yet.'
+						: undefined}
+			>
 				{busy === 'password' ? 'Signing in…' : 'Sign in'}
-			</button>
+			</Button>
 		</form>
 
 		<p class="auth-foot"><a class="link" href="/reset">Forgot your password?</a></p>
@@ -206,18 +221,23 @@
 		<div class="divider">or</div>
 
 		<div class="form">
-			<button class="btn" type="button" disabled={busy !== null} onclick={withPasskey}>
+			<Button
+				tier="outline"
+				disabled={busy !== null}
+				reason={busy !== null ? 'A sign-in step is already running.' : undefined}
+				onclick={withPasskey}
+			>
 				{busy === 'passkey' ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
-			</button>
+			</Button>
 			{#each ENABLED_SOCIAL_PROVIDERS as provider (provider.id)}
-				<button
-					class="btn"
-					type="button"
+				<Button
+					tier="outline"
 					disabled={busy !== null}
+					reason={busy !== null ? 'A sign-in step is already running.' : undefined}
 					onclick={() => withProvider(provider.id)}
 				>
 					{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}
-				</button>
+				</Button>
 			{/each}
 		</div>
 

@@ -17,6 +17,7 @@ import {
 	projectionOf,
 	standardsLoss,
 	refusalsOf,
+	standardsHelp,
 	refusalsIn,
 	searchFacets,
 	submittable,
@@ -655,5 +656,27 @@ describe('the standards a marketplace will not carry', () => {
 		]);
 		expect(loss).toContain('2 of 2');
 		expect(loss).toContain('They stay');
+	});
+});
+
+describe('the standards heading', () => {
+	it('names the count the server served', () => {
+		expect(standardsHelp(4)).toBe('Optional. Four frameworks, each searched on its own.');
+		expect(standardsHelp(2)).toBe('Optional. Two frameworks, each searched on its own.');
+	});
+
+	it('does not claim a framework when none is offered', () => {
+		// The sentence used to read "Four frameworks" over a panel saying none
+		// was offered at all, whenever the vocabulary served an empty list.
+		expect(standardsHelp(0)).toBe('Optional, and no framework is offered here yet.');
+		expect(standardsHelp(0)).not.toMatch(/frameworks/);
+	});
+
+	it('does not say "each" of one', () => {
+		expect(standardsHelp(1)).toBe('Optional. One framework.');
+	});
+
+	it('falls back to the digit above the words it spells', () => {
+		expect(standardsHelp(12)).toBe('Optional. 12 frameworks, each searched on its own.');
 	});
 });

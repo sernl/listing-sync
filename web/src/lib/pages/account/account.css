@@ -1,0 +1,216 @@
+/* The Account section's own rules: the subscription tier grid, the marketplace
+ * status list, and the small definition list the preferences and subscription
+ * pages state a recorded fact in.
+ *
+ * Everything else on these pages is the catalogue — `Panel`, `Field`,
+ * `Button`, `Banner`, `StatusPill`, `Placeholder` — so what is here is only
+ * what no component covers.
+ *
+ * The operator's tenant page imports this sheet as well, for the same fact
+ * list and the same status rows: duplicating either into the admin sheet would
+ * be two definitions of one shape.
+ */
+
+/* --- the subscription tiers ---------------------------------------------- */
+
+/* The cadence switch sits above the grid rather than on each card: one price
+   is shown at a time, so a per-card switch would let two cards disagree about
+   which cadence the seller is comparing. */
+.acct-cadence {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 16px;
+}
+
+.acct-cadence .saving {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.acct-plan-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+	gap: 16px;
+	align-items: stretch;
+}
+
+/* The Marketplaces card treatment: a border and no shadow, because four of
+   these sit side by side and four shadows read as clutter. */
+.acct-plan {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	padding: 20px 18px;
+	min-width: 0;
+}
+
+/* The tier the billing record actually proves, which today is only ever the
+   free one: one Paddle price cannot say which paid tier is running. */
+.acct-plan.acct-current {
+	border-color: var(--accent);
+	box-shadow: var(--sh-1);
+}
+
+.acct-plan .acct-plan-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.acct-plan .name {
+	font-family: var(--display);
+	font-size: 20px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.acct-plan .blurb {
+	font-size: 12.5px;
+	color: var(--muted);
+	margin: 0;
+}
+
+.acct-plan .price {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 2px;
+}
+
+.acct-plan .price .n {
+	font-size: 28px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+}
+
+.acct-plan .price .per {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+/* Always rendered, empty or not: the four cards are read across, and a note
+   on one of them would otherwise start its allowance list a line lower than
+   the three beside it. */
+.acct-plan .note {
+	font-size: 12px;
+	line-height: 1.4;
+	min-height: 1.4em;
+	color: var(--accent-ink);
+}
+
+.acct-plan ul {
+	list-style: none;
+	margin: 4px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	flex: 1;
+}
+
+.acct-plan li {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 13px;
+	line-height: 1.35;
+}
+
+.acct-plan li .acct-tick {
+	display: grid;
+	flex: none;
+	margin-top: 1px;
+	color: var(--ok);
+}
+
+/* Where the one checkout control would stand on a build that has no Paddle
+   price: a sentence rather than a greyed button nobody can press. */
+.acct-checkout-note {
+	margin: 18px 0 0;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+/* The one checkout control sits under the grid rather than inside a card,
+   because it buys the single price this deployment sells and not any one of
+   the tiers above it. */
+.acct-plan-grid + .actions {
+	margin-top: 18px;
+}
+
+/* --- a recorded fact ------------------------------------------------------ */
+
+/* Two columns on a wide screen and one on a phone, so a long identifier wraps
+   under its own label rather than pushing the value column off the card. */
+.acct-detail {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 6px 16px;
+	margin: 0 0 16px;
+	font-size: 13px;
+}
+
+.acct-detail dt {
+	color: var(--muted);
+	font-size: 12px;
+	padding-top: 1px;
+}
+
+.acct-detail dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 620px) {
+	.acct-detail {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 2px;
+	}
+
+	.acct-detail dd {
+		margin-bottom: 8px;
+	}
+}
+
+/* --- the marketplace status list ------------------------------------------ */
+
+.acct-state-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 12px 2px;
+	border-top: 1px solid var(--line);
+}
+
+.acct-state-row:first-of-type {
+	border-top: 0;
+}
+
+.acct-state-row .who {
+	flex: 1;
+	min-width: 0;
+}
+
+.acct-state-row .who .t {
+	display: block;
+	font-size: 15px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.acct-state-row .who .why {
+	display: block;
+	font-size: 12.5px;
+	color: var(--muted);
+	margin-top: 2px;
+}

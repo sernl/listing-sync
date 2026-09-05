@@ -1,0 +1,54 @@
+/* The signed-out screens, brought onto the Kauri shapes.
+ *
+ * A modifier beside `.auth-card` rather than a replacement for it: all four
+ * screens — sign in, sign up, reset and reset confirm — carry both classes, so
+ * the base rule in `app.css` keeps the card's fill, border and width and this
+ * sheet only retunes what the redraw changed. The two can be folded together
+ * whenever `.auth-card` moves out of `app.css`.
+ */
+
+.auth-card.acct-signed-out {
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-2);
+	padding: 28px;
+	max-width: 420px;
+}
+
+/* The display face at the card-heading step of the type ladder, which is what
+   separates a Teachouse screen from the system-font one it used to be. */
+.auth-card.acct-signed-out h1 {
+	font-family: var(--display);
+	font-size: 24px;
+	margin-bottom: 6px;
+}
+
+.auth-card.acct-signed-out > p {
+	font-size: 13.5px;
+	line-height: 1.5;
+	margin-bottom: 20px;
+}
+
+.auth-card.acct-signed-out .form {
+	gap: 14px;
+}
+
+/* Every control on these screens is full width and the same height, because
+   the card offers a stack of alternatives — password, passkey, a linked
+   account — and a ragged stack reads as a ranking that is not meant. */
+.auth-card.acct-signed-out .cta,
+.auth-card.acct-signed-out .btn {
+	width: 100%;
+	justify-content: center;
+	min-height: 40px;
+}
+
+.auth-card.acct-signed-out .actions {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 10px;
+}
+
+.auth-card.acct-signed-out .auth-foot {
+	margin-top: 20px;
+	text-align: center;
+}

@@ -313,22 +313,32 @@ web-wasm-fixtures:
     cargo run -q -p tam-core-wasm --bin verdict-fixtures > crates/tam-core-wasm/fixtures/verdicts.json
 
 # The web lane: lockfile install, vocabulary freshness, types, tests, build
+#
+# bash under `set -euo pipefail`, matching `purity` and `deny`, because a gate
+# that can fail quietly is a gate that passes vacuously. The vocabulary step is
+# the reason: written as `cargo run ... | diff`, a crate that does not compile
+# reaches `diff` as empty input, the whole vocabulary reads as deleted, and the
+# recipe reports that vocab.ts is stale — which is false, and sends the reader
+# to `just web-typegen`, which would then truncate a correct file.
 web-check: web-wasm
-    # Into a file rather than a pipe. A pipe discards typegen's own exit status,
-    # so a crate that does not compile reaches `diff` as empty input, the whole
-    # vocabulary reads as deleted, and the recipe reports "vocab.ts is stale" —
-    # which is false, and sends the reader to `just web-typegen` to fix a file
-    # that was never wrong. Observed twice on 2026-09-05, both times an uncached
-    # sqlx query in another slice's crate.
-    vocab="$(mktemp)"; trap 'rm -f "$vocab"' EXIT; \
-        { cargo run -p tam-api --bin typegen > "$vocab" \
-            || { echo "typegen did not build, so the vocabulary was not checked; the compiler's error is above" >&2; exit 1; }; }; \
-        diff -u web/src/lib/generated/vocab.ts "$vocab" \
-        || { echo "vocab.ts is stale; run just web-typegen" >&2; exit 1; }
-    cd web && npm ci --no-audit --no-fund
-    cd web && npx svelte-kit sync && npx svelte-check --fail-on-warnings
-    cd web && npx vitest run
-    cd web && npm run build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    vocab="$(mktemp)"
+    trap 'rm -f "$vocab"' EXIT
+    if ! cargo run -p tam-api --bin typegen > "$vocab"; then
+        echo "typegen did not build, so the vocabulary was not checked; the compiler's error is above" >&2
+        exit 1
+    fi
+    if ! diff -u web/src/lib/generated/vocab.ts "$vocab"; then
+        echo "vocab.ts is stale; run just web-typegen" >&2
+        exit 1
+    fi
+    cd web
+    npm ci --no-audit --no-fund
+    npx svelte-kit sync
+    npx svelte-check --fail-on-warnings
+    npx vitest run
+    npm run build
 
 # The client dev server, proxying /v1 to a locally running tam-server
 web-dev: web-wasm

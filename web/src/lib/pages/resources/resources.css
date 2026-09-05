@@ -1,0 +1,729 @@
+/* The Resources board's own rules: the filter card's four groups, the
+ * marketplace tiles, the toolbar strip, the two bulk bars and the stack of row
+ * cards. Everything scoped under `.resources-page`, because every page-level
+ * sheet in this console is loaded globally and a class named here must not be
+ * able to reach another page's markup.
+ */
+
+/* --- the filter card ----------------------------------------------------- */
+
+/* Four groups across one row, in the order the specification names them: what
+   you type, where it goes, how you group it, how it stands. They fall to two
+   columns before they fall to one, because the marketplace tiles and the
+   standing select are both wider than half a phone. */
+.resources-page .res-filters {
+	display: grid;
+	grid-template-columns: minmax(180px, 1fr) max-content minmax(120px, auto) minmax(150px, auto);
+	gap: 18px;
+	align-items: start;
+}
+
+.resources-page .res-filters > .field,
+.resources-page .res-filters > .res-group {
+	min-width: 0;
+}
+
+/* A filter whose control is a composite — a row of tiles, a menu — and so has
+   no single element for `Field`'s label to point at. The group is named by an
+   `aria-labelledby` on the composite instead. */
+.resources-page .res-group {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+
+.resources-page .res-group-label {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+@media (max-width: 1180px) {
+	.resources-page .res-filters {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 620px) {
+	.resources-page .res-filters {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 14px;
+	}
+}
+
+/* The search box carries its glyph inside the control rather than beside it,
+   so the four groups keep one control height between them. */
+.resources-page .res-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-field);
+	padding: 0 11px;
+	height: 40px;
+	color: var(--muted);
+}
+
+.resources-page .res-search:focus-within {
+	border-color: var(--accent);
+}
+
+.resources-page .res-search input {
+	flex: 1;
+	min-width: 0;
+	border: 0;
+	background: none;
+	padding: 0;
+	font: inherit;
+	font-weight: 400;
+	color: var(--text);
+}
+
+.resources-page .res-search input:focus-visible {
+	outline: none;
+}
+
+/* --- the marketplace tiles ----------------------------------------------- */
+
+.resources-page .mk-tiles {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.resources-page .mk-tile {
+	min-width: 52px;
+	height: 36px;
+	padding: 0 9px;
+	border-radius: var(--r-field);
+	border: 1px solid var(--line);
+	background: var(--surface);
+	color: var(--muted);
+	font-size: 11.5px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.resources-page .mk-tile:hover:not(:disabled) {
+	background: var(--hover);
+	color: var(--text);
+}
+
+.resources-page .mk-tile[aria-pressed='true'] {
+	background: var(--accent-soft);
+	border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+	color: var(--accent-ink);
+}
+
+/* Declared, refused and legible: a tile that cannot be chosen keeps its word
+   and states the reason, which is the discipline the bulk verbs already use. */
+.resources-page .mk-tile:disabled {
+	background: var(--soon-soft);
+	color: var(--soon);
+	cursor: not-allowed;
+}
+
+/* On a phone a tile takes a share of the row and 44px of height, because a
+   36px target beside four others is a mis-tap. */
+@media (max-width: 620px) {
+	.resources-page .mk-tile {
+		height: 44px;
+		flex: 1 0 auto;
+	}
+}
+
+/* --- the label multi-select ---------------------------------------------- */
+
+/* A menu of checkboxes rather than a `<select multiple>`: the label list is as
+   long as the seller has made it, and a native multiple select shows three
+   rows and no count of what is chosen. */
+.resources-page .label-menu {
+	max-height: 280px;
+	overflow-y: auto;
+	min-width: 220px;
+}
+
+.resources-page .label-menu label {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	padding: 8px 10px;
+	border-radius: 6px;
+	font-size: 13.5px;
+	font-weight: 400;
+	min-height: 38px;
+	cursor: pointer;
+}
+
+.resources-page .label-menu label:hover {
+	background: var(--hover);
+}
+
+.resources-page .label-menu .none {
+	padding: 8px 10px;
+	font-size: 12.5px;
+	font-weight: 400;
+	color: var(--muted);
+}
+
+.resources-page .res-clear {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 12px;
+}
+
+/* --- the toolbar strip --------------------------------------------------- */
+
+.resources-page .res-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin: 0 0 12px;
+}
+
+.resources-page .eyebrow {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.resources-page .res-sort {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-field);
+	padding: 7px 10px;
+	font: inherit;
+	font-size: 13px;
+	color: var(--text);
+	height: 36px;
+}
+
+.resources-page .res-sort:focus-visible {
+	border-color: var(--accent);
+}
+
+/* --- bulk selection ------------------------------------------------------ */
+
+/* The bar naming the verb the selection is being made for. Its own bar above
+   the stack rather than a line inside the first card, because it belongs to
+   the whole selection. */
+.resources-page .select-all {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	padding: 10px 14px;
+	margin-bottom: 10px;
+	font-size: 13.5px;
+	font-weight: 600;
+	box-shadow: var(--sh-1);
+}
+
+.resources-page .select-all input[type='checkbox'] {
+	width: 16px;
+	height: 16px;
+	flex: none;
+}
+
+/* Floating rather than sticky: the content region sets `overflow: hidden`, so
+   a sticky descendant sticks inside a box that never scrolls and simply sits
+   still. Centred on the viewport rather than inset from the rail, so the bar
+   does not have to know which columns the shell is drawing at this width. */
+.resources-page .bulk-bar {
+	position: fixed;
+	bottom: 18px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 25;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	justify-content: center;
+	width: max-content;
+	max-width: min(760px, calc(100vw - 32px));
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-pill);
+	box-shadow: var(--sh-2);
+	padding: 10px 14px;
+}
+
+/* The bar floats over the foot of the page, so the page grows a foot for it to
+   float over. */
+.page.resources-page.bulk-open {
+	padding-bottom: 110px;
+}
+
+@media (max-width: 620px) {
+	.resources-page .bulk-bar {
+		left: 8px;
+		right: 8px;
+		transform: none;
+		width: auto;
+		max-width: none;
+		border-radius: var(--r-card);
+		bottom: calc(62px + env(safe-area-inset-bottom));
+	}
+
+	.page.resources-page.bulk-open {
+		padding-bottom: 190px;
+	}
+}
+
+/* The two badges in the Marketplaces panel's head row: what the listing stands
+   at, and whether the page is being told about changes. They wrap under the
+   heading on a phone rather than squeezing it. */
+.resources-page .panel-badges {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	/* The shared head row is a wrapping flex line whose title block takes the
+	   space it needs; this pushes the badges to the far end of it rather than
+	   leaving them stranded under the description. */
+	margin-left: auto;
+}
+
+/* --- the resource page --------------------------------------------------- */
+
+/* One card per marketplace rather than a hairline row, so the resource page
+   reads as the same console as the board it is opened from. */
+.resources-page .mk-row {
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	box-shadow: var(--sh-1);
+	padding: 14px 16px;
+}
+
+.resources-page .mk-row + .mk-row {
+	margin-top: 10px;
+}
+
+.resources-page .mk-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.resources-page .mk-name {
+	font-size: 15.5px;
+	font-weight: 600;
+	line-height: 1.25;
+	overflow-wrap: anywhere;
+}
+
+.resources-page .mk-say {
+	margin: 5px 0 0;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.resources-page .mk-acts {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 10px;
+}
+
+.resources-page .mk-acts:empty {
+	display: none;
+}
+
+/* The one control that leaves the console. It keeps the outline tier's shape
+   and is an anchor rather than a button, because it carries `target` and `rel`
+   and the shared button takes neither. */
+.resources-page .res-out {
+	display: inline-flex;
+	align-items: center;
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-pill);
+	padding: 5px 12px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.resources-page .res-out:hover {
+	background: var(--hover);
+}
+
+.resources-page .mk-attach {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) max-content;
+	align-items: end;
+	gap: 12px;
+	margin-top: 12px;
+	padding-top: 12px;
+	border-top: 1px solid var(--line);
+}
+
+.resources-page .mk-attach input {
+	width: 100%;
+}
+
+@media (max-width: 620px) {
+	.resources-page .mk-attach {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/* A run, or a file: one line with a name at the left and one figure at the
+   right. Not a row card — these carry no thumbnail and no action. */
+.resources-page .res-line {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 11px 2px;
+	border-top: 1px solid var(--line);
+	color: var(--text);
+}
+
+.resources-page .res-line:first-of-type {
+	border-top: 0;
+}
+
+.resources-page a.res-line:hover {
+	background: var(--hover);
+}
+
+.resources-page .res-line-what {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+	min-width: 0;
+}
+
+.resources-page .res-line-t {
+	font-size: 13.5px;
+	font-weight: 600;
+}
+
+.resources-page .res-line-id {
+	font-size: 12px;
+	color: var(--faint);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.resources-page .res-line-at {
+	font-size: 12px;
+	color: var(--faint);
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- forms ---------------------------------------------------------------- */
+
+/* The catalogue's `Field` stacks label, control and hint; these are the shapes
+   around it that no component covers. */
+.resources-page .res-form {
+	display: block;
+}
+
+.resources-page .res-form .field + .field,
+.resources-page .res-form .field + .res-choices,
+.resources-page .res-form .res-choices + .field,
+.resources-page .res-form .field + .res-row,
+.resources-page .res-form .res-choices + .res-row,
+.resources-page .res-form .res-row + .field {
+	margin-top: 14px;
+}
+
+.resources-page .res-row {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 14px;
+}
+
+/* A radio or checkbox group. A fieldset rather than a div, so the legend names
+   the group for a screen reader rather than a `span` beside it doing so. */
+.resources-page .res-choices {
+	border: 0;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+
+.resources-page .res-choices legend {
+	float: left;
+	width: 100%;
+	padding: 0;
+	margin-bottom: 6px;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.resources-page .res-choices label {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 13.5px;
+	min-height: 32px;
+	cursor: pointer;
+}
+
+.resources-page .res-count {
+	align-self: flex-end;
+	font-size: 11.5px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.resources-page .res-count.over {
+	color: var(--bad);
+	font-weight: 600;
+}
+
+/* A group whose parts stack rather than sitting on one line: a legend, a
+   sentence, a row of radios and the slots they reveal. */
+.resources-page .res-choices.res-stack {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+}
+
+/* TPT's four thumbnail slots, drawn so the layout matches theirs. Dashed,
+   because nothing can be dropped on them yet and the page says so. */
+.resources-page .res-slots {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 10px;
+}
+
+.resources-page .res-slot {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	border: 1px dashed var(--line);
+	border-radius: var(--r-panel);
+	background: var(--ground);
+	padding: 16px 12px;
+	text-align: center;
+	font-size: 12.5px;
+}
+
+/* The seller's own shelves, once added. */
+.resources-page .res-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 8px;
+}
+
+.resources-page .res-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid var(--line);
+	background: var(--ground);
+	border-radius: var(--r-pill);
+	padding: 3px 6px 3px 11px;
+	font-size: 12.5px;
+}
+
+.resources-page .res-chip button {
+	border: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1;
+	padding: 3px 5px;
+	border-radius: 50%;
+}
+
+.resources-page .res-chip button:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+/* A choice that carries a consequence under its label — a copyright
+   attestation, a marketplace and what it will do with the files — so each is a
+   panel of its own rather than a line in a row. */
+.resources-page .res-picks {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.resources-page .res-pick {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: start;
+	gap: 4px 10px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	padding: 12px 14px;
+	cursor: pointer;
+}
+
+.resources-page .res-pick:hover:not(.off) {
+	border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.resources-page .res-pick input {
+	margin-top: 2px;
+}
+
+.resources-page .res-pick-t {
+	font-size: 13.5px;
+	font-weight: 600;
+}
+
+.resources-page .res-pick-why {
+	grid-column: 2;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.resources-page .res-pick-why.bad {
+	color: var(--bad);
+}
+
+/* Offered and refused, with the reason in place: the fill says it cannot be
+   chosen, and the sentence beneath says why. */
+.resources-page .res-pick.off {
+	background: var(--soon-soft);
+	cursor: not-allowed;
+}
+
+.resources-page .res-rail {
+	margin-top: 16px;
+}
+
+/* The sentence a marketplace states before its own options, quoted from them
+   rather than written by us. */
+.resources-page .res-lede {
+	margin: 0 0 10px;
+	font-size: 13px;
+	color: var(--text);
+}
+
+.resources-page .res-loss {
+	display: block;
+	margin-top: 4px;
+	color: var(--bad);
+}
+
+/* What the form is refusing, listed where it is refused. Not a banner: several
+   arrive at once and each names one group. */
+.resources-page .res-refusals {
+	list-style: none;
+	margin: 12px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.resources-page .res-refusal {
+	display: flex;
+	gap: 8px;
+	font-size: 12.5px;
+	color: var(--bad);
+}
+
+.resources-page .res-refusal::before {
+	content: '•';
+	flex: none;
+}
+
+.resources-page .res-refusal a {
+	color: inherit;
+	text-decoration: underline;
+}
+
+/* A loss or a constraint the marketplace imposes, disclosed rather than left
+   for the seller to discover. */
+.resources-page .res-disclose {
+	margin: 10px 0 0;
+	padding: 10px 12px;
+	border-radius: var(--r-panel);
+	background: var(--soon-soft);
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.resources-page .res-acts {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-top: 16px;
+}
+
+/* A sentence beside or beneath a control: smaller than body text, and the same
+   grey wherever it appears. */
+.resources-page .res-note {
+	font-size: 12.5px;
+	color: var(--muted);
+	margin: 0;
+}
+
+.resources-page .res-foot {
+	font-size: 12px;
+	color: var(--faint);
+	margin-top: 12px;
+}
+
+.resources-page .res-foot .block {
+	display: block;
+}
+
+.resources-page .res-foot .block + .block {
+	margin-top: 4px;
+}
+
+/* --- the stack ----------------------------------------------------------- */
+
+.resources-page .res-rows {
+	display: flex;
+	flex-direction: column;
+}
+
+.resources-page .res-more {
+	display: flex;
+	justify-content: center;
+	margin-top: 14px;
+}
+
+/* A menu item that navigates is an anchor, so it keeps middle-click and
+   open-in-new-tab; the shared menu styles its buttons only. */
+.resources-page .res-menu-link {
+	display: block;
+	border-radius: 6px;
+	padding: 9px 10px;
+	font-size: 14px;
+	color: var(--text);
+	min-height: 38px;
+}
+
+.resources-page .res-menu-link:hover {
+	background: var(--hover);
+}
+
+/* The row menu's destructive item. Its own name rather than a rule over the
+   shared menu's buttons, so two pages cannot come to colour one component
+   differently from two sheets. */
+.resources-page .res-danger {
+	color: var(--bad);
+}

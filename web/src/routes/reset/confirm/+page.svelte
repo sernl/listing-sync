@@ -2,7 +2,10 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resetPassword } from '$lib/auth-client';
+	import Button from '$lib/Button.svelte';
+	import Field from '$lib/Field.svelte';
 	import { toast } from '$lib/toast';
+	import '$lib/pages/account/signed-out.css';
 
 	// better-auth's `/reset-password/:token` callback hands the browser back
 	// here carrying either `?token=` or `?error=INVALID_TOKEN`, so both are read
@@ -59,18 +62,17 @@
 	}
 </script>
 
-<div class="auth-card">
+<div class="auth-card acct-signed-out">
 	{#if unusable}
 		<h1>That link no longer works</h1>
 		<p>A reset link expires, and each one can be spent once. Ask for a fresh one.</p>
-		<div class="actions"><a class="cta" href="/reset">Send a new link</a></div>
+		<div class="actions"><Button tier="primary" href="/reset">Send a new link</Button></div>
 	{:else}
 		<h1>Choose a new password</h1>
 		<p>This link signs off the change. Type the new password twice.</p>
 
 		<form onsubmit={choose} class="form">
-			<label class="field" for="password">
-				New password
+			<Field label="New password" id="password" required>
 				<input
 					id="password"
 					name="password"
@@ -79,9 +81,8 @@
 					autocomplete="new-password"
 					bind:value={password}
 				/>
-			</label>
-			<label class="field" for="confirmation">
-				Repeat it
+			</Field>
+			<Field label="Repeat it" id="confirmation" required>
 				<input
 					id="confirmation"
 					name="confirmation"
@@ -90,10 +91,15 @@
 					autocomplete="new-password"
 					bind:value={confirmation}
 				/>
-			</label>
-			<button class="cta" disabled={busy}>
+			</Field>
+			<Button
+				tier="primary"
+				type="submit"
+				disabled={busy}
+				reason={busy ? 'The new password is being saved.' : undefined}
+			>
 				{busy ? 'Saving…' : 'Change password'}
-			</button>
+			</Button>
 		</form>
 
 		<p class="auth-foot">

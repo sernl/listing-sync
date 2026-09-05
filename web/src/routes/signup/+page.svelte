@@ -5,10 +5,13 @@
 		signInWithProvider,
 		signUpWithPassword
 	} from '$lib/auth-client';
+	import Button from '$lib/Button.svelte';
+	import Field from '$lib/Field.svelte';
 	import Turnstile from '$lib/Turnstile.svelte';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
+	import '$lib/pages/account/signed-out.css';
 
 	type Busy = 'register' | 'resend' | SocialProvider;
 
@@ -91,25 +94,29 @@
 	}
 </script>
 
-<div class="auth-card">
+<div class="auth-card acct-signed-out">
 	{#if awaitingVerification !== null}
 		<h1>Check your email</h1>
 		<p>
 			We sent a link to <b>{awaitingVerification}</b>. Confirm that address, then sign in.
 		</p>
 		<div class="actions">
-			<button class="cta" type="button" disabled={busy !== null} onclick={resend}>
+			<Button
+				tier="primary"
+				disabled={busy !== null}
+				reason={busy !== null ? 'A sign-up step is already running.' : undefined}
+				onclick={resend}
+			>
 				{busy === 'resend' ? 'Sending…' : 'Send it again'}
-			</button>
-			<a class="btn" href="/login">Go to sign in</a>
+			</Button>
+			<Button tier="outline" href="/login">Go to sign in</Button>
 		</div>
 	{:else}
 		<h1>Create an account</h1>
 		<p>Signing up creates your organisation. You can invite people to it later.</p>
 
 		<form onsubmit={register} class="form">
-			<label class="field" for="name">
-				Name
+			<Field label="Name" id="name" required>
 				<input
 					id="name"
 					name="name"
@@ -119,13 +126,11 @@
 					autocomplete="name"
 					bind:value={name}
 				/>
-			</label>
-			<label class="field" for="email">
-				Email
+			</Field>
+			<Field label="Email" id="email" required>
 				<input id="email" name="email" type="email" required autocomplete="email" bind:value={email} />
-			</label>
-			<label class="field" for="password">
-				Password
+			</Field>
+			<Field label="Password" id="password" required>
 				<input
 					id="password"
 					name="password"
@@ -134,25 +139,34 @@
 					autocomplete="new-password"
 					bind:value={password}
 				/>
-			</label>
+			</Field>
 			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
-			<button class="cta" disabled={busy !== null || challengePending}>
+			<Button
+				tier="primary"
+				type="submit"
+				disabled={busy !== null || challengePending}
+				reason={busy !== null
+					? 'A sign-up step is already running.'
+					: challengePending
+						? 'The challenge above has not been answered yet.'
+						: undefined}
+			>
 				{busy === 'register' ? 'Creating…' : 'Create account'}
-			</button>
+			</Button>
 		</form>
 
 		{#if ENABLED_SOCIAL_PROVIDERS.length > 0}
 			<div class="divider">or</div>
 			<div class="form">
 				{#each ENABLED_SOCIAL_PROVIDERS as provider (provider.id)}
-					<button
-						class="btn"
-						type="button"
+					<Button
+						tier="outline"
 						disabled={busy !== null}
+						reason={busy !== null ? 'A sign-up step is already running.' : undefined}
 						onclick={() => withProvider(provider.id)}
 					>
 						{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}
-					</button>
+					</Button>
 				{/each}
 			</div>
 		{/if}

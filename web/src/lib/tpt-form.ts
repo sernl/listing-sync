@@ -56,9 +56,38 @@ export const GROUP_HELP: Partial<Record<FormGroup, string>> = {
 	files: 'The file buyers download, an optional preview, and the images that front the listing.',
 	price: 'Free hides the price and the tax code, exactly as it does on TPT.',
 	categories: 'How buyers find this. Each picker is its own vocabulary and its own limit.',
-	education_standards: 'Optional. Four frameworks, each searched on its own.',
 	details: 'Nothing here is required.',
 	product_status: 'Active listings are visible on the site and searchable. Inactive listings are only visible to you.'
+};
+
+/** The Education Standards heading's helper text.
+ *
+ *  A function rather than an entry in `GROUP_HELP` because the number is the
+ *  server's: the count was written out as "Four" and stood over a panel saying
+ *  no framework was offered at all, whenever the vocabulary served none. */
+export function standardsHelp(frameworks: number): string {
+	if (frameworks <= 0) {
+		return 'Optional, and no framework is offered here yet.';
+	}
+	if (frameworks === 1) {
+		return 'Optional. One framework.';
+	}
+	return `Optional. ${SPELLED[frameworks] ?? frameworks} frameworks, each searched on its own.`;
+}
+
+/** Small counts read as words in a sentence, which is the register the rest of
+ *  this helper text is written in. Above ten the digit reads better than the
+ *  word, and the list stops there. */
+const SPELLED: Record<number, string> = {
+	2: 'Two',
+	3: 'Three',
+	4: 'Four',
+	5: 'Five',
+	6: 'Six',
+	7: 'Seven',
+	8: 'Eight',
+	9: 'Nine',
+	10: 'Ten'
 };
 
 /** One alignment the seller claimed. */
@@ -337,7 +366,7 @@ export function refusalsOf(draft: TptDraft, vocabulary: FormVocabularyView | nul
 		found.push({
 			group: 'product_status',
 			control: null,
-			message: 'Choose at least one marketplace; platforms cannot be added after the draft exists.'
+			message: 'Choose at least one marketplace to create this draft on.'
 		});
 	}
 	return found;

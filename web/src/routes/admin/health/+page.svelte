@@ -4,7 +4,10 @@
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import StatCard from '$lib/StatCard.svelte';
+	import StatusPill, { type Tone } from '$lib/StatusPill.svelte';
 	import { queryKeys } from '$lib/query';
+	import { tileFor } from '$lib/pages/admin/ledger-tile';
+	import '$lib/pages/admin/admin.css';
 
 	const health = createQuery(() => ({
 		queryKey: queryKeys.operator,
@@ -12,6 +15,15 @@
 	}));
 
 	const ledger = $derived(health.data);
+
+	// Three answers rather than two: an unread figure is neither raised nor
+	// clear, and `count` below already prints an em dash for it.
+	const settledTile = $derived(
+		tileFor(ledger?.settled, { icon: 'circle-check', tone: 'ok' }, { icon: 'minus', tone: 'ok' })
+	);
+	const failedTile = $derived(
+		tileFor(ledger?.failed, { icon: 'circle-x', tone: 'bad' }, { icon: 'circle-check', tone: 'ok' })
+	);
 
 	/** The stored state vocabulary, uncollapsed. A seller's job page folds
 	 *  leased, running and verifying into one figure and both park states into
@@ -29,17 +41,23 @@
 		{ key: 'settled', label: 'Settled', note: 'finished, with an outcome below' }
 	];
 
-	const OUTCOMES: readonly { key: keyof SyncHealthView; label: string; tone: string }[] = [
+	const OUTCOMES: readonly { key: keyof SyncHealthView; label: string; tone: Tone }[] = [
 		{ key: 'succeeded', label: 'Succeeded', tone: 'ok' },
 		{ key: 'degraded', label: 'Degraded', tone: 'run' },
 		{ key: 'failed', label: 'Failed', tone: 'bad' },
 		{ key: 'ambiguous', label: 'Ambiguous', tone: 'bad' },
-		{ key: 'skipped', label: 'Skipped', tone: 'mut' },
-		{ key: 'outcome_blocked', label: 'Blocked', tone: 'mut' }
+		{ key: 'skipped', label: 'Skipped', tone: 'soon' },
+		{ key: 'outcome_blocked', label: 'Blocked', tone: 'soon' }
 	];
 
+	/** One figure from the ledger, or an em dash.
+	 *
+	 *  Guarded on the figure rather than on the ledger: a body that arrived
+	 *  without a field leaves the ledger defined and the field undefined, and
+	 *  guarding only the ledger printed the string "undefined" into the card. */
 	function count(key: keyof SyncHealthView): string {
-		return ledger === undefined ? '—' : String(ledger[key]);
+		const figure = ledger?.[key];
+		return figure === undefined ? '—' : String(figure);
 	}
 </script>
 
@@ -57,18 +75,20 @@
 	{:else}
 		<div class="cards">
 			<StatCard icon="refresh-cw" label="Sync runs" sub="every tenant">{count('jobs')}</StatCard>
-			<StatCard icon="layout-list" label="Items" sub="every run, every tenant">{count('items')}</StatCard>
+			<StatCard icon="layout-list" label="Items" sub="every run, every tenant">
+				{count('items')}
+			</StatCard>
 			<StatCard
-				icon={(ledger?.settled ?? 0) > 0 ? 'circle-check' : 'minus'}
-				tone="ok"
+				icon={settledTile.icon}
+				tone={settledTile.tone}
 				label="Settled"
 				sub="finished, with an outcome"
 			>
 				{count('settled')}
 			</StatCard>
 			<StatCard
-				icon={(ledger?.failed ?? 0) > 0 ? 'circle-x' : 'circle-check'}
-				tone={(ledger?.failed ?? 0) > 0 ? 'bad' : 'ok'}
+				icon={failedTile.icon}
+				tone={failedTile.tone}
 				label="Failed"
 				sub="settled with a failure"
 			>
@@ -78,7 +98,7 @@
 
 		<div class="band">
 			<Panel title="Items by state" description="Where every item in the ledger currently sits.">
-				<div class="tbl-wrap">
+				<div class="op-table">
 					<table>
 						<thead>
 							<tr><th>State</th><th>What it means</th><th class="num">Items</th></tr>
@@ -86,9 +106,11 @@
 						<tbody>
 							{#each STATES as state (state.key)}
 								<tr>
-									<td class="title-cell"><div class="t" title={state.label}>{state.label}</div></td>
-									<td class="s">{state.note}</td>
-									<td class="num">{count(state.key)}</td>
+									<td class="op-cell" data-label="State">
+										<span class="t" title={state.label}>{state.label}</span>
+									</td>
+									<td data-label="What it means"><span class="s">{state.note}</span></td>
+									<td class="num" data-label="Items">{count(state.key)}</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -98,10 +120,9 @@
 
 			<Panel title="Settled outcomes" description="How the finished items finished.">
 				{#each OUTCOMES as outcome (outcome.key)}
-					<div class="row">
-						<span class="pill {outcome.tone}">{outcome.label}</span>
-						<span class="grow"></span>
-						<span class="t">{count(outcome.key)}</span>
+					<div class="op-tally">
+						<StatusPill tone={outcome.tone} label={outcome.label} />
+						<span class="n">{count(outcome.key)}</span>
 					</div>
 				{/each}
 				<p class="foot-note">

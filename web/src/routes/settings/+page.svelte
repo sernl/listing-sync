@@ -19,15 +19,19 @@
 		type Identity,
 		type PasskeyRecord
 	} from '$lib/auth-client';
+	import Banner from '$lib/Banner.svelte';
+	import Button from '$lib/Button.svelte';
 	import { type BrowserSession, merge, sessionLabel } from '$lib/device-merge';
 	import { agoLabel } from '$lib/elapsed';
+	import Field from '$lib/Field.svelte';
 	import { NAME_MAX_CHARS, checkOrgName } from '$lib/org-name';
-	import { PADDLE_CONFIG, openCheckout, subscriptionTone } from '$lib/paddle';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import { passkeyLabel, passkeyReach } from '$lib/passkey-label';
 	import { queryKeys } from '$lib/query';
+	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
+	import '$lib/pages/account/account.css';
 
 	const queryClient = useQueryClient();
 
@@ -83,6 +87,16 @@
 		}
 	}));
 
+	const orgBlocked = $derived(
+		renaming.isPending
+			? 'The name is being saved.'
+			: !orgVerdict.accepted
+				? orgVerdict.message
+				: orgUnchanged
+					? 'The name has not changed.'
+					: null
+	);
+
 	function rename(event: SubmitEvent) {
 		event.preventDefault();
 		if (!orgVerdict.accepted) {
@@ -131,6 +145,16 @@
 			toast('error', refusalOf(failure, 'The display name was not saved.'));
 		}
 	}));
+
+	const nameBlocked = $derived(
+		renamingUser.isPending
+			? 'The name is being saved.'
+			: nameBlank
+				? 'A display name cannot be empty.'
+				: nameUnchanged
+					? 'The name has not changed.'
+					: null
+	);
 
 	function saveName(event: SubmitEvent) {
 		event.preventDefault();
@@ -235,44 +259,25 @@
 		}
 	}));
 
+	// Whether this browser's own session can be picked out of the list at all.
+	// `currentSessionToken` resolves to null on a refused read rather than
+	// throwing, so a failed read is indistinguishable from a signed-out one
+	// here and every row's `isCurrent` comes back false. Without this, ending
+	// the session the seller is reading the page in warned them about somebody
+	// else's browser and signed them out.
+	const currentKnown = $derived(current.isSuccess && current.data !== null);
+
 	function endSignIn(session: BrowserSession, isCurrent: boolean) {
 		const sure = confirm(
 			isCurrent
 				? 'End this sign-in? You are using it right now, so you will be signed out of this browser.'
-				: 'End this browser sign-in? That browser will have to sign in again.'
+				: currentKnown
+					? 'End this browser sign-in? That browser will have to sign in again.'
+					: 'End this browser sign-in? We could not tell which of these is the browser you are ' +
+						'using, so if it is this one you will be signed out here.'
 		);
 		if (sure) {
 			endingSignIn.mutate(session.token);
-		}
-	}
-
-	// -------------------------------------------------------------- billing
-
-	const billing = createQuery(() => ({
-		queryKey: queryKeys.billing,
-		queryFn: () => api.billing()
-	}));
-
-	const subscription = $derived(billing.data?.subscription ?? null);
-
-	// The button renders only where the build was given Paddle's client token
-	// and price. With neither, the panel states what is recorded and loads
-	// nothing from Paddle at all.
-	const checkout = PADDLE_CONFIG;
-	let opening = $state(false);
-
-	async function subscribe() {
-		const org = organisation.data?.id;
-		if (checkout === null || org === undefined) {
-			return;
-		}
-		opening = true;
-		try {
-			await openCheckout(checkout, org, profile.data?.email);
-		} catch {
-			toast('error', 'The checkout could not be opened.');
-		} finally {
-			opening = false;
 		}
 	}
 </script>
@@ -280,9 +285,13 @@
 <div class="page">
 	<PageHead
 		icon="sliders-horizontal"
-		title="Settings"
-		description="Organisation, profile, passkeys, devices and billing."
-	/>
+		title="Preferences"
+		description="Your organisation, your profile, and the ways you sign in."
+	>
+		{#snippet aside()}
+			<Button tier="quiet" icon="credit-card" href="/settings/subscription">Subscription</Button>
+		{/snippet}
+	</PageHead>
 
 	<Panel
 		title="Organisation"
@@ -294,26 +303,24 @@
 			<p class="quiet">The organisation could not be read.</p>
 		{:else}
 			<form onsubmit={rename} class="form">
-				<label class="field" for="org-name">
-					Name
-					<!-- No `maxlength`: it counts UTF-16 code units, so it would
-					     silently cut a name of accented or non-Latin letters short of
-					     the server's character bound. The verdict states the bound
-					     instead. -->
+				<!-- No `maxlength`: it counts UTF-16 code units, so it would silently
+				     cut a name of accented or non-Latin letters short of the server's
+				     character bound. The hint states the bound instead. -->
+				<Field
+					label="Name"
+					id="org-name"
+					required
+					hint={orgRefusal === null ? `At most ${NAME_MAX_CHARS} characters.` : undefined}
+				>
 					<input id="org-name" name="org-name" type="text" required bind:value={orgDraft} />
-				</label>
+				</Field>
 				{#if orgRefusal !== null}
-					<p class="refusal">{orgRefusal}</p>
-				{:else}
-					<p class="foot-note">At most {NAME_MAX_CHARS} characters.</p>
+					<Banner tone="bad">{orgRefusal}</Banner>
 				{/if}
 				<div class="actions">
-					<button
-						class="cta"
-						disabled={renaming.isPending || orgUnchanged || !orgVerdict.accepted}
-					>
+					<Button tier="primary" type="submit" disabled={orgBlocked !== null} reason={orgBlocked ?? undefined}>
 						{renaming.isPending ? 'Saving…' : 'Save organisation name'}
-					</button>
+					</Button>
 				</div>
 			</form>
 		{/if}
@@ -328,18 +335,17 @@
 		{:else if profile.isError || !profile.data}
 			<p class="quiet">Your profile could not be read.</p>
 		{:else}
-			<dl class="facts">
+			<dl class="acct-detail">
 				<dt>Email</dt>
 				<dd>
 					{profile.data.email}
 					{#if !profile.data.emailVerified}
-						<span class="pill run">unverified</span>
+						<StatusPill tone="run" label="unverified" />
 					{/if}
 				</dd>
 			</dl>
 			<form onsubmit={saveName} class="form">
-				<label class="field" for="display-name">
-					Display name
+				<Field label="Display name" id="display-name" required>
 					<input
 						id="display-name"
 						name="display-name"
@@ -348,11 +354,16 @@
 						autocomplete="name"
 						bind:value={displayName}
 					/>
-				</label>
+				</Field>
 				<div class="actions">
-					<button class="cta" disabled={renamingUser.isPending || nameUnchanged || nameBlank}>
+					<Button
+						tier="primary"
+						type="submit"
+						disabled={nameBlocked !== null}
+						reason={nameBlocked ?? undefined}
+					>
 						{renamingUser.isPending ? 'Saving…' : 'Save display name'}
-					</button>
+					</Button>
 				</div>
 			</form>
 		{/if}
@@ -376,34 +387,34 @@
 				<p class="quiet">No passkeys registered yet.</p>
 			{:else}
 				{#each passkeys.data as passkey (passkey.id)}
-					<div class="row">
-						<span class="what">
+					<div class="acct-state-row">
+						<span class="who">
 							<span class="t">{passkeyLabel(passkey)}</span>
-							<span class="s">
+							<span class="why">
 								{passkeyReach(passkey)}
 								{#if passkey.createdAt}
 									Added {new Date(passkey.createdAt).toLocaleDateString()}.
 								{/if}
 							</span>
 						</span>
-						<span class="grow"></span>
-						<button
-							type="button"
-							class="btn small danger"
+						<Button
+							tier="outline"
+							danger
+							small
 							disabled={removing.isPending && removing.variables === passkey.id}
+							reason={removing.isPending && removing.variables === passkey.id
+								? 'This passkey is being removed.'
+								: undefined}
 							onclick={() => remove(passkey)}
 						>
-							{removing.isPending && removing.variables === passkey.id
-								? 'Removing…'
-								: 'Remove'}
-						</button>
+							{removing.isPending && removing.variables === passkey.id ? 'Removing…' : 'Remove'}
+						</Button>
 					</div>
 				{/each}
 			{/if}
 
 			<form onsubmit={add} class="form spaced">
-				<label class="field" for="passkey-label">
-					Name for the new passkey <span class="hint">(optional)</span>
+				<Field label="Name for the new passkey" id="passkey-label" hint="Optional.">
 					<input
 						id="passkey-label"
 						name="passkey-label"
@@ -411,11 +422,16 @@
 						placeholder="Work laptop"
 						bind:value={newPasskeyLabel}
 					/>
-				</label>
+				</Field>
 				<div class="actions">
-					<button class="btn" disabled={registering.isPending}>
+					<Button
+						tier="outline"
+						type="submit"
+						disabled={registering.isPending}
+						reason={registering.isPending ? 'Your device is being asked for a passkey.' : undefined}
+					>
 						{registering.isPending ? 'Waiting for your device…' : 'Register a passkey'}
-					</button>
+					</Button>
 				</div>
 			</form>
 		{/if}
@@ -425,21 +441,22 @@
 		title="Browser sign-ins"
 		description="Where this account is signed in to the console. These are sign-ins to us, not to any marketplace; the identity service records only the address and the browser each was made from, which is why some cannot be pinned to a machine."
 	>
-		<div class="row">
-			<span class="what">
+		<div class="acct-state-row">
+			<span class="who">
 				<span class="t">Machines</span>
-				<span class="s">
-					A machine you no longer use is signed out on Marketplaces, beside the logins it
-					holds.
+				<span class="why">
+					A machine you no longer use is signed out on Marketplaces, beside the logins it holds.
 				</span>
 			</span>
-			<span class="grow"></span>
-			<a class="btn small" href="/marketplaces">Open</a>
+			<Button tier="outline" small href="/marketplaces">Open</Button>
 		</div>
 
-		{#if signIns.isPending}
+		<!-- All three reads, not just the list. `joined` merges the browser
+		     sessions with the device registry, so a failed registry read empties
+		     the device half and lists every session here as an orphan. -->
+		{#if signIns.isPending || registry.isPending || current.isPending}
 			<p class="quiet">Loading…</p>
-		{:else if signIns.isError}
+		{:else if signIns.isError || registry.isError}
 			<p class="quiet">Your browser sign-ins could not be listed.</p>
 		{:else if joined.orphans.length === 0}
 			<p class="quiet">
@@ -447,88 +464,41 @@
 			</p>
 		{:else}
 			{#each joined.orphans as orphan (orphan.session.token)}
-				<div class="row">
-					<span class="what">
+				<div class="acct-state-row">
+					<span class="who">
 						<span class="t">
 							{sessionLabel(orphan.session)}
-							{#if orphan.isCurrent}<span class="pill ok">this browser</span>{/if}
+							{#if orphan.isCurrent}<StatusPill tone="ok" label="this browser" />{/if}
 						</span>
 						{#if orphan.session.createdAt}
-							<span class="s">
+							<span class="why">
 								Signed in {agoLabel(new Date(orphan.session.createdAt).getTime(), Date.now())}
 							</span>
 						{/if}
 					</span>
-					<span class="grow"></span>
-					<button
-						type="button"
-						class="btn small danger"
+					<Button
+						tier="outline"
+						danger
+						small
 						disabled={endingSignIn.isPending && endingSignIn.variables === orphan.session.token}
+						reason={endingSignIn.isPending && endingSignIn.variables === orphan.session.token
+							? 'This sign-in is being ended.'
+							: undefined}
 						onclick={() => endSignIn(orphan.session, orphan.isCurrent)}
 					>
 						{endingSignIn.isPending && endingSignIn.variables === orphan.session.token
 							? 'Ending…'
 							: 'End sign-in'}
-					</button>
+					</Button>
 				</div>
 			{/each}
 		{/if}
 		<p class="foot-note">
 			Ending a sign-in takes effect on the next request that browser makes; the session cache
 			that would otherwise delay it is switched off for this account.
+			{#if !currentKnown}
+				We could not tell which of these is the browser you are using, so none is marked.
+			{/if}
 		</p>
-	</Panel>
-
-	<Panel
-		title="Billing"
-		description="What Paddle has recorded for this organisation. Nothing here gates a feature today; every tenant is served exactly as before."
-	>
-		{#if billing.isPending}
-			<p class="quiet">Loading…</p>
-		{:else if billing.isError}
-			<p class="quiet">Your billing could not be read.</p>
-		{:else if subscription === null}
-			<div class="placeholder">
-				<span class="big" aria-hidden="true">◇</span>
-				<b>No subscription</b>
-				<p>
-					This organisation has never reached checkout, which is a different fact from a
-					cancelled subscription — that one would be shown here with its status.
-				</p>
-			</div>
-		{:else}
-			<dl class="facts">
-				<dt>Status</dt>
-				<dd>
-					<span class="pill {subscriptionTone(subscription.status)}">{subscription.status}</span>
-				</dd>
-				<dt>Current period ends</dt>
-				<dd>
-					{subscription.current_period_end === null
-						? 'Paddle recorded no billing period'
-						: new Date(subscription.current_period_end).toLocaleDateString()}
-				</dd>
-				<dt>Last recorded</dt>
-				<dd>{new Date(subscription.occurred_at).toLocaleString()}</dd>
-			</dl>
-			<p class="foot-note">
-				Subscription <span class="mono">{subscription.paddle_subscription_id}</span> ·
-				customer <span class="mono">{subscription.paddle_customer_id}</span>. The status is
-				Paddle's own word for it, passed through rather than translated.
-			</p>
-		{/if}
-
-		{#if checkout !== null}
-			<div class="actions">
-				<button
-					class="cta"
-					type="button"
-					disabled={opening || organisation.data === undefined}
-					onclick={subscribe}
-				>
-					{opening ? 'Opening…' : subscription === null ? 'Subscribe' : 'Change plan'}
-				</button>
-			</div>
-		{/if}
 	</Panel>
 </div>

@@ -410,7 +410,7 @@ export function refusalsOf(
 	if (draft.inventories.length === 0) {
 		found.push({
 			field: 'platforms',
-			message: 'Choose at least one marketplace; platforms cannot be added after the draft exists.',
+			message: 'Choose at least one marketplace to create this draft on.',
 			blocking: true
 		});
 	}

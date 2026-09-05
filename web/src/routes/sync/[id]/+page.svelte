@@ -1,13 +1,17 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { api, type ItemDetail, type ItemView, type JobView } from '$lib/api';
+	import Button from '$lib/Button.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import { gateLabel } from '$lib/gates';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import { segments } from '$lib/outcome';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import { platformTitle } from '$lib/platforms';
+	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
+	import '$lib/pages/automations/automations.css';
 
 	const jobId = $derived(page.params.id ?? '');
 
@@ -39,9 +43,7 @@
 
 	$effect(() => {
 		void refetch();
-		ledger = createLedger(
-			(cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`)
-		);
+		ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
 		const unsubscribe = ledger.subscribe((state) => {
 			live = state.connected;
 			if (state.events.length > 0 || state.resyncs > 0) {
@@ -65,9 +67,7 @@
 	}
 
 	function download(detail: ItemDetail) {
-		const blob = new Blob([JSON.stringify(detail, null, 2)], {
-			type: 'application/json'
-		});
+		const blob = new Blob([JSON.stringify(detail, null, 2)], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
 		const anchor = document.createElement('a');
 		anchor.href = url;
@@ -83,12 +83,16 @@
 		{@const run = job}
 		<PageHead
 			icon="refresh-cw"
+			back={{ href: '/sync', label: 'Back to Marketplace Sync' }}
 			title={`Run ${run.job.slice(0, 8)}…`}
-			description={`${run.inventory} · started ${agoLabel(run.created_at, Date.now())}`}
+			description={`${platformTitle(run.inventory)} · started ${agoLabel(run.created_at, Date.now())}`}
 		>
 			{#snippet aside()}
-				<span class="pill {run.phase === 'settled' ? 'ok' : 'run'}">{run.phase}</span>
-				<span class="tag-note">{live ? 'live' : 'reconnecting…'}</span>
+				<StatusPill
+					tone={run.phase === 'settled' ? 'ok' : 'run'}
+					label={run.phase}
+				/>
+				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'live' : 'reconnecting'} />
 			{/snippet}
 		</PageHead>
 
@@ -96,7 +100,7 @@
 			title="Outcomes"
 			description="Every outcome the ledger recorded, kept apart rather than collapsed into a verdict."
 		>
-			<div class="outcome" role="img" aria-label="outcome distribution">
+			<div class="run-outcome" role="img" aria-label="outcome distribution">
 				{#each segments(run.counts) as segment (segment.label)}
 					<div
 						class={segment.tone}
@@ -119,55 +123,57 @@
 				<p class="quiet">No items recorded on this run yet.</p>
 			{/if}
 			{#each items as item (item.item)}
-				<div class="item">
-					<button class="item-head" onclick={() => expand(item)}>
+				<div class="run-item">
+					<button class="run-item-head" onclick={() => expand(item)}>
 						<span class="mono" title={item.item}>{item.item.slice(0, 8)}…</span>
-						<span class="pill mut">{item.state}</span>
+						<StatusPill tone="soon" label={item.state} />
 						{#if item.outcome}
-							<span class="pill mut">{item.outcome}</span>
+							<StatusPill tone="soon" label={item.outcome} />
 						{/if}
 						{#if item.blocked_on}
-							<span class="pill run">blocked on {gateLabel(item.blocked_on)}</span>
+							<StatusPill tone="run" label={`blocked on ${gateLabel(item.blocked_on)}`} />
 						{/if}
 						{#if item.failure_code}
-							<span class="pill bad">{item.failure_code}</span>
+							<StatusPill tone="bad" label={item.failure_code} />
 						{/if}
 						<span class="grow"></span>
 						<span class="when">attempts {item.attempt_count}</span>
 					</button>
 					{#if expanded[item.item]}
 						{@const detail = expanded[item.item]}
-						<div class="item-detail">
+						<div class="run-detail">
 							<div class="head-row">
-								<h2>Step timeline</h2>
+								<h3>Step timeline</h3>
 								<span class="grow"></span>
-								<button class="btn small" onclick={() => download(detail)}>
+								<Button tier="outline" small onclick={() => download(detail)}>
 									Download result
-								</button>
+								</Button>
 							</div>
 							{#if detail.events.length === 0}
 								<p class="quiet">No steps recorded yet.</p>
 							{:else}
-								<ol class="steps">
+								<ol class="run-steps">
 									{#each detail.events as event (event.org_seq)}
 										<li>
 											<span class="mono">#{event.org_seq}</span>
 											<b>{event.kind}</b>
-											<span class="s">{new Date(event.created_at).toLocaleTimeString()}</span>
+											<span class="s">
+												{new Date(event.created_at).toLocaleTimeString()}
+											</span>
 										</li>
 									{/each}
 								</ol>
 							{/if}
 							{#if detail.failure_detail}
-								<p class="refusal">{detail.failure_detail}</p>
+								<p class="run-refusal">{detail.failure_detail}</p>
 							{/if}
 						</div>
 					{/if}
 				</div>
 			{/each}
 			{#if nextCursor}
-				<div class="actions">
-					<button class="btn" onclick={more}>Load more items</button>
+				<div class="set-foot">
+					<Button tier="outline" onclick={more}>Load more items</Button>
 				</div>
 			{/if}
 		</Panel>

@@ -248,12 +248,28 @@ export function presentStage(stage: SyncStage): StagePresentation {
 				tone: 'ok'
 			};
 		case 'imported':
-			return {
-				label: 'Imported',
-				headline: `${listings(stage.tally.imported)} imported.`,
-				detail: skippedSentence(stage.tally),
-				tone: settledCleanly(stage.tally) ? 'ok' : 'run'
-			};
+			// An import where nothing landed is not an import, and the list row
+			// reads the headline alone, so the fact has to be in the headline
+			// rather than in the detail beneath it. Left as the general case it
+			// read as a running amber "Imported" over "0 listings imported.",
+			// which is a label claiming the opposite of what happened and a
+			// figure with no account of itself.
+			return stage.tally.imported === 0 && stage.tally.total > 0
+				? {
+						label: 'Nothing imported',
+						headline: nothingImportedHeadline(stage.tally),
+						detail:
+							stage.tally.skipped > 0
+								? 'Open this import to see what was recorded against each one.'
+								: 'Nothing was recorded against them.',
+						tone: 'run'
+					}
+				: {
+						label: 'Imported',
+						headline: `${listings(stage.tally.imported)} imported.`,
+						detail: skippedSentence(stage.tally),
+						tone: settledCleanly(stage.tally) ? 'ok' : 'run'
+					};
 		case 'failed':
 			return {
 				label: 'Failed',
@@ -276,6 +292,28 @@ export function presentStage(stage: SyncStage): StagePresentation {
  *  resource can fail to be imported it took. */
 function settledCleanly(counted: ResourceTally): boolean {
 	return counted.skipped === 0 && counted.unsettled === 0 && counted.unrecognised === 0;
+}
+
+/** The headline for an import that named resources and landed none of them.
+ *
+ * Every count it carries is one the head already holds. It does not say why any
+ * one was skipped, because the head does not know: a reason is recorded per
+ * resource and read on the request's own page, so the row says where to look
+ * rather than implying it has already looked. */
+function nothingImportedHeadline(counted: ResourceTally): string {
+	const parts: string[] = [];
+	if (counted.skipped > 0) {
+		parts.push(`${listings(counted.skipped)} skipped`);
+	}
+	if (counted.unsettled > 0) {
+		parts.push(`${listings(counted.unsettled)} still unsettled`);
+	}
+	if (counted.unrecognised > 0) {
+		parts.push(`${listings(counted.unrecognised)} in a state this page does not recognise`);
+	}
+	return parts.length === 0
+		? 'Nothing was imported.'
+		: `Nothing was imported: ${parts.join(', ')}.`;
 }
 
 function skippedSentence(counted: ResourceTally): string {

@@ -49,7 +49,12 @@ export class ApiFailure extends Error {
 	readonly body: APIErrorBody | null;
 
 	constructor(status: number, body: APIErrorBody | null) {
-		super(body?.errors[0]?.message ?? `request failed with ${status}`);
+		// `errors?.[0]` rather than `errors[0]`: the optional chain has to guard
+		// the array too. A failing response whose body parses but carries no
+		// `errors` — a bare `{}` — threw a TypeError here, inside the
+		// constructor, so the ApiFailure was never built and the throw escaped
+		// every `catch` that tests for one, taking the app to its 500 page.
+		super(body?.errors?.[0]?.message ?? `request failed with ${status}`);
 		this.status = status;
 		this.body = body;
 	}

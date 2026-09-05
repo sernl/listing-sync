@@ -10,6 +10,7 @@ import {
 	PHONE_BAR,
 	SECTIONS,
 	breadcrumbFor,
+	currentDestination,
 	initialsOf,
 	isCurrent,
 	legacyDestination,
@@ -93,21 +94,9 @@ describe('the navigation model', () => {
 		]);
 	});
 
-	it('marks as unbuilt exactly the pages that have no feature behind them', () => {
-		const soon = SECTIONS.flatMap((section) => section.items)
-			.filter((item) => item.soon === true)
-			.map((item) => item.href);
-		expect(soon).toEqual([
-			'/labels',
-			'/import',
-			'/templates',
-			'/export',
-			'/automations/sharing',
-			'/automations/migration',
-			'/notifications',
-			'/guides'
-		]);
-	});
+	// Which pages are unbuilt is asserted in `nav-routes.test.ts`, against the
+	// routes themselves. A list kept here would pass while a slice finished its
+	// page and left the flag on, which is the failure that actually happens.
 
 	it('never marks the landing page of a section unbuilt', () => {
 		for (const section of SECTIONS) {
@@ -224,9 +213,12 @@ describe('the section the rail lights', () => {
 
 	// An import's detail page sits under `/sync` in the URL because a sync
 	// request carries it, but what the seller is looking at is an import.
-	it('follows an import detail page to Import rather than to Marketplace Sync', () => {
-		expect(sectionFor('/sync/requests/9f2c8a11')?.id).toBe('crosslist');
-		expect(breadcrumbFor('/sync/requests/9f2c8a11')).toBe('Import');
+	// A past migrate request is opened from the Marketplace Migration list, so
+	// it belongs to Automations rather than to the section that owns the path
+	// it happens to sit beneath (D8).
+	it('follows a request detail page to Migration rather than to Marketplace Sync', () => {
+		expect(sectionFor('/sync/requests/9f2c8a11')?.id).toBe('automations');
+		expect(breadcrumbFor('/sync/requests/9f2c8a11')).toBe('Marketplace Migration');
 	});
 
 	it('leaves every other path under /sync on Marketplace Sync', () => {
@@ -303,6 +295,44 @@ describe('the operator section', () => {
 	});
 });
 
+describe('the destination a path belongs to', () => {
+	it('is the item whose own href contains it', () => {
+		expect(currentDestination('/inventory')?.href).toBe('/inventory');
+		expect(currentDestination('/inventory/9f2c8a11')?.href).toBe('/inventory');
+	});
+
+	// The reason this exists rather than an `isCurrent` per item: an import's
+	// detail page sits under `/sync` and belongs to Import, so asking each item
+	// whether the path is under it lights Marketplace Sync, or nothing.
+	it('is the item that owns a prefix it does not contain', () => {
+		expect(currentDestination('/sync/requests/9f2c8a11')?.href).toBe('/automations/migration');
+		expect(currentDestination('/sync/requests')?.href).toBe('/automations/migration');
+	});
+
+	it('leaves every other path under /sync on Marketplace Sync', () => {
+		expect(currentDestination('/sync')?.href).toBe('/sync');
+		expect(currentDestination('/sync/9f2c8a11')?.href).toBe('/sync');
+	});
+
+	it('answers exactly one destination, so no two items can light at once', () => {
+		for (const path of ['/sync/requests/9f2c', '/sync/9f2c', '/admin/orgs/9f2c', '/settings']) {
+			const owner = currentDestination(path);
+			expect(owner).not.toBeNull();
+			const claimants = ALL_DESTINATIONS.filter((item) => item.href === owner?.href);
+			expect(claimants).toHaveLength(1);
+		}
+	});
+
+	it('prefers the longer claim where two could answer', () => {
+		expect(currentDestination('/admin/orgs/9f2c8a11')?.href).toBe('/admin/orgs');
+		expect(currentDestination('/settings/subscription')?.href).toBe('/settings/subscription');
+	});
+
+	it('answers null for a path no destination owns', () => {
+		expect(currentDestination('/nowhere')).toBeNull();
+	});
+});
+
 describe('the breadcrumb', () => {
 	it('names the page the browser is on', () => {
 		expect(breadcrumbFor('/app')).toBe('Resources');
@@ -317,11 +347,18 @@ describe('the breadcrumb', () => {
 	});
 
 	it('lets a destination claim a path that is not under its own href', () => {
-		const importItem = SECTIONS.flatMap((section) => section.items).find(
-			(item) => item.href === '/import'
+		const owner = SECTIONS.flatMap((section) => section.items).find(
+			(item) => item.href === '/automations/migration'
 		);
-		expect(importItem?.owns).toEqual(['/sync/requests']);
-		expect(breadcrumbFor('/sync/requests')).toBe('Import');
+		expect(owner?.owns).toEqual(['/sync/requests']);
+		expect(breadcrumbFor('/sync/requests')).toBe('Marketplace Migration');
+	});
+
+	it('leaves exactly one destination owning that prefix', () => {
+		const owners = SECTIONS.flatMap((section) => section.items).filter((item) =>
+			item.owns?.includes('/sync/requests')
+		);
+		expect(owners.map((item) => item.href)).toEqual(['/automations/migration']);
 	});
 
 	it('names the operator page rather than its group', () => {

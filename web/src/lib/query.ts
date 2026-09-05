@@ -35,6 +35,10 @@ export const queryKeys = {
 	 *  answer. */
 	catalogue: (label: string | null) => ['products', label] as const,
 	labels: ['labels'] as const,
+	/** The published release manifest the Marketplaces page's download cards
+	 *  read. Served from our own origin rather than the API, and cached like
+	 *  every other read so the key lives here with them. */
+	downloadsManifest: ['downloads-manifest'] as const,
 	/** The seller's own projection overrides, which the Templates screen reads
 	 *  and writes. */
 	overrides: ['overrides'] as const,
@@ -75,7 +79,6 @@ export const queryKeys = {
 	identity: ['identity'] as const,
 	passkeys: ['passkeys'] as const,
 	billing: ['billing'] as const,
-	drainStats: ['drain-stats'] as const,
 	/** The newest runs read in full, which the jobs list alone cannot give:
 	 *  its heads carry no phase and no counts. */
 	activity: ['job-activity'] as const,
