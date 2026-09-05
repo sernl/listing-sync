@@ -213,6 +213,76 @@
             tam-auth = tamAuth;
             tam-auth-test = tamAuth.override { runTests = true; };
 
+            # The shape claims tam-server's static tiers are written against,
+            # asserted where the artefacts exist.
+            #
+            # `crates/tam-server/src/serving.rs` decides which tier answers a
+            # path from a hand-written set of names, and two tests used to check
+            # that decision against the real builds by reading
+            # `apps/landing/dist` and `web/build` off disk. Both are gitignored
+            # and neither matches the `src` filter above, so in every sandboxed
+            # run they returned early and reported a pass — a skip `cargo test`
+            # and `cargo nextest` both discard. The claims are made here instead,
+            # against the store paths `checks.landing` and `checks.console`
+            # already build.
+            served-artefacts = pkgs.runCommand "served-artefacts" { } ''
+              landing=${teachouseLanding}
+              console=${teachouseConsole}
+
+              # tam-server refuses to start without this file, and resolves `/`
+              # through it.
+              test -f "$landing/index.html"
+
+              # Every page resolves through its own index rather than as an
+              # extensionless file, which is the shape `route` probes for.
+              for page in pricing privacy terms; do
+                test -f "$landing/$page/index.html"
+              done
+
+              # Hashed assets live under _astro/, which is the prefix the
+              # year-long freshness rule keys on.
+              test -n "$(find "$landing/_astro" -name '*.css' -print -quit)"
+
+              # The namespaces `route` reserves ahead of the landing probe. A
+              # build that emitted one of these would have the console's home,
+              # its whole client bundle or the download surface; the reservation
+              # turns that into a 404 rather than a marketing page, and either
+              # way the build must not carry them.
+              for reserved in app _app downloads; do
+                if [ -e "$landing/$reserved" ]; then
+                  echo "the landing build carries $reserved, which tam-server reserves" >&2
+                  exit 1
+                fi
+              done
+
+              # No symlink: `walk` neither follows nor serves one, so a build
+              # that used symlinkJoin would serve a page whose fonts and
+              # stylesheet 404 into the console shell.
+              if [ -n "$(find "$landing" -type l -print -quit)" ]; then
+                echo "the landing build carries a symlink, which tam-server does not serve" >&2
+                exit 1
+              fi
+
+              # The console's shell boots from an inline script block, which is
+              # the premise its policy rests on: a policy carrying no hash for
+              # it renders an empty window for every seller.
+              #
+              # Newlines are folded to spaces first, so an open tag broken
+              # across lines is still one match — otherwise a shell emitting
+              # `<script\nsrc="…">` would fail this check with a message saying
+              # the opposite of what happened. The `src` test is spelled with
+              # its leading space to match `inline_script_hashes`, which looks
+              # for `" src="`, so the two cannot disagree about what counts as
+              # inline.
+              test -f "$console/index.html"
+              if ! tr '\n' ' ' < "$console/index.html" | grep -o '<script[^>]*>' | grep -qv ' src='; then
+                echo "the console shell carries no inline script block, so its policy needs no hash" >&2
+                echo "and tam-server's console_policy is computing one for nothing" >&2
+                exit 1
+              fi
+
+              touch $out
+            '';
 
             # The default --ignore yanked stands. Measured: -n leaves the
             # sandbox without a crates.io index, so cargo-audit logs "couldn't

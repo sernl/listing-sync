@@ -1,13 +1,24 @@
 //! The internet-facing HTTP process: an address, a listener, a pool, and the
 //! router `tam-api` builds. Every route, extractor and error mapping lives in
-//! the library, so this binary holds nothing a test would want to reach.
+//! the library, so this binary holds none of them.
+//!
+//! It does hold one thing a test wants to reach, and holds it deliberately:
+//! [`assemble`], which orders the four tiers and decides which policy each
+//! answer carries. That ordering is invisible to a test of any single tier, so
+//! the `composition` module below drives the assembled router. Reaching it from
+//! `tests/` would need this crate to grow a library target; the composition is
+//! twenty lines and the binary is where it belongs, so the test comes here
+//! instead.
 //!
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--disclose-internals]
 
 #![forbid(unsafe_code)]
+
+mod downloads;
+mod serving;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -56,6 +67,31 @@ const PADDLE_WEBHOOK_SECRET_FLAG: &str = "--paddle-webhook-secret";
 /// and the UI share one origin; unknown paths fall through to index.html,
 /// which is what a single-page app's client router needs.
 const UI_FLAG: &str = "--ui-dir";
+
+/// The built landing page, served ahead of the console at the paths it holds a
+/// file for and nowhere else.
+///
+/// The founder's decision of 2026-09-05 gives the public page the origin's root
+/// and moves the console's home to `/app`; the console's deep routes do not
+/// move. Absent, behaviour is exactly what it was before this flag existed: the
+/// console answers `/` like every other unclaimed path.
+///
+/// A separate directory rather than a route inside the console, because the two
+/// are separate builds for the reason `docs/notes/design/landing-page.md` gives
+/// — the console's root layout turns off both server rendering and
+/// prerendering — and separate content-security policies for the reason
+/// [`serving::Landing`] gives.
+pub(crate) const LANDING_FLAG: &str = "--landing-dir";
+
+/// The directory the desktop installers and their manifest are read from,
+/// served under `/downloads/`.
+///
+/// This process never writes it and never fetches anything into it: its unit
+/// denies IP egress, and `teachouse-downloads-refresh` — a separate oneshot on
+/// a timer, with its own account and its own egress allowance — is what puts
+/// files there. Absent, `/downloads/…` is an unknown path like any other and
+/// the console's shell answers it.
+pub(crate) const DOWNLOADS_FLAG: &str = "--downloads-dir";
 
 /// The identity service's issuer, which every login assertion's `iss` must
 /// equal. Absent, no assertion is accepted and the break-glass token minted by
@@ -359,45 +395,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spawn_event_pruner(PruneRepo::new(engine), loops.clone());
     }
 
-    let app = match &invocation.ui_dir {
+    let console = match &invocation.ui_dir {
         Some(dir) => {
             eprintln!("tam-server serving the client from {}", dir.display());
-            // The single-page shell is read once and served explicitly with
-            // 200 for any path the API and the asset tree do not claim;
-            // tower-http's not_found_service coerces the status to 404 by
-            // design; its `fallback` passes the shell through as the 200 the
-            // client router needs.
-            let shell = read_shell(&dir.join("index.html"))?;
-            // Read once at start-up, so the hashes in the policy are the ones
-            // for the shell this process is actually serving.
-            let shell_text = String::from_utf8(shell.clone())
-                .map_err(|_| "the console shell is not utf-8, so its policy cannot be computed")?;
-            let spa = axum::routing::any(move || {
-                let shell = shell.clone();
-                async move {
-                    (
-                        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                        shell,
-                    )
-                }
-            });
-            // On the console's own service rather than on the whole router, so
-            // it covers the shell, the fallback page and every asset beside
-            // them and none of the `/v1` answers. A policy on a JSON response
-            // governs nothing — no browser applies one to a fetch — so putting
-            // it there was noise on every API call and a claim this comment
-            // would have had to make and could not.
-            let policy: std::sync::Arc<str> = std::sync::Arc::from(console_policy(&shell_text));
-            let console = axum::Router::new()
-                .fallback_service(tower_http::services::ServeDir::new(dir).fallback(spa))
-                .layer(axum::middleware::from_fn_with_state(
-                    policy,
-                    console_security_headers,
-                ));
-            tam_api::router(state).fallback_service(console)
+            Some(console_router(dir)?)
         }
-        None => tam_api::router(state),
+        None => None,
     };
+    let landing = match &invocation.landing_dir {
+        Some(dir) => {
+            eprintln!("tam-server serving the landing page from {}", dir.display());
+            Some(std::sync::Arc::new(serving::Landing::load(dir)?))
+        }
+        None => None,
+    };
+    let downloads = match &invocation.downloads_dir {
+        Some(dir) => {
+            eprintln!(
+                "tam-server serving the desktop downloads from {}",
+                dir.display()
+            );
+            Some(std::sync::Arc::new(downloads::Downloads::open(dir)?))
+        }
+        None => None,
+    };
+    let app = assemble(state, console, landing, downloads);
     let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await;
@@ -413,6 +435,13 @@ struct Invocation {
     engine_db_url: Option<String>,
     backoffice_db_url: Option<String>,
     ui_dir: Option<std::path::PathBuf>,
+    /// The built landing page, if this deployment serves one at its root.
+    /// Independent of `ui_dir`: either, both or neither is a coherent
+    /// deployment.
+    landing_dir: Option<std::path::PathBuf>,
+    /// The directory the desktop installers are read from, if this deployment
+    /// serves them. Independent of both directories above.
+    downloads_dir: Option<std::path::PathBuf>,
     /// The issuer and the key-set url, which are meaningless apart and so are
     /// parsed as one value.
     identity: Option<(String, String)>,
@@ -435,6 +464,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut engine_db_url = None;
     let mut backoffice_db_url = None;
     let mut ui_dir = None;
+    let mut landing_dir = None;
+    let mut downloads_dir = None;
     let mut auth_issuer = None;
     let mut auth_jwks_url = None;
     let mut blob_kek_path = None;
@@ -467,6 +498,18 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         } else if argument == UI_FLAG {
             ui_dir = Some(std::path::PathBuf::from(
                 arguments.next().ok_or("--ui-dir needs a path argument")?,
+            ));
+        } else if argument == LANDING_FLAG {
+            landing_dir = Some(std::path::PathBuf::from(
+                arguments
+                    .next()
+                    .ok_or("--landing-dir needs a path argument")?,
+            ));
+        } else if argument == DOWNLOADS_FLAG {
+            downloads_dir = Some(std::path::PathBuf::from(
+                arguments
+                    .next()
+                    .ok_or("--downloads-dir needs a path argument")?,
             ));
         } else if argument == AUTH_ISSUER_FLAG {
             auth_issuer = Some(
@@ -560,6 +603,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         engine_db_url,
         backoffice_db_url,
         ui_dir,
+        landing_dir,
+        downloads_dir,
         identity,
         blobs,
         entitlement_key_path,
@@ -605,6 +650,135 @@ fn load_entitlement_key(path: &str) -> Result<EntitlementKey, Box<dyn std::error
     Ok(EntitlementKey::new(bytes))
 }
 
+/// The console's own service: its asset tree, its single-page shell for every
+/// path that tree does not claim, and the policy both are served under.
+fn console_router(dir: &std::path::Path) -> Result<axum::Router, Box<dyn std::error::Error>> {
+    // The single-page shell is read once and served explicitly with 200 for any
+    // path the API and the asset tree do not claim; tower-http's
+    // not_found_service coerces the status to 404 by design; its `fallback`
+    // passes the shell through as the 200 the client router needs.
+    let shell = read_shell(&dir.join("index.html"))?;
+    // Read once at start-up, so the hashes in the policy are the ones for the
+    // shell this process is actually serving.
+    let shell_text = String::from_utf8(shell.clone())
+        .map_err(|_| "the console shell is not utf-8, so its policy cannot be computed")?;
+    let spa = axum::routing::any(move || {
+        let shell = shell.clone();
+        async move {
+            (
+                [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                shell,
+            )
+        }
+    });
+    // On the console's own service rather than on the whole router, so it
+    // covers the shell, the fallback page and every asset beside them and none
+    // of the `/v1` answers. A policy on a JSON response governs nothing — no
+    // browser applies one to a fetch — so putting it there was noise on every
+    // API call and a claim this comment would have had to make and could not.
+    let policy: std::sync::Arc<str> = std::sync::Arc::from(console_policy(&shell_text));
+    Ok(axum::Router::new()
+        .fallback_service(tower_http::services::ServeDir::new(dir).fallback(spa))
+        .layer(axum::middleware::from_fn_with_state(
+            policy,
+            console_security_headers,
+        )))
+}
+
+/// The whole router, from the four tiers this deployment was configured with.
+///
+/// A function rather than a block inside `main`, and that is what lets it be
+/// driven by a test: the ordering it encodes is invisible to a test of any
+/// single tier, and three mutations of it — swapping the two `.layer()` calls,
+/// dropping the policy from a landing response, serving the API's namespace
+/// from a static tier — produce a router that answers wrongly while every unit
+/// test still passes.
+///
+/// The static tiers go ahead of the console rather than beside it: the decision
+/// is one function, and layering it here is what puts it in front of the
+/// console's policy layer, which inserts its own header over anything already
+/// there.
+fn assemble(
+    state: AppState,
+    console: Option<axum::Router>,
+    landing: Option<std::sync::Arc<serving::Landing>>,
+    downloads: Option<std::sync::Arc<downloads::Downloads>>,
+) -> axum::Router {
+    let fallback = if landing.is_some() || downloads.is_some() {
+        let tiers = std::sync::Arc::new(Tiers { landing, downloads });
+        Some(
+            console
+                .unwrap_or_else(|| axum::Router::new().fallback(nothing_here))
+                .layer(axum::middleware::from_fn_with_state(tiers, static_tiers)),
+        )
+    } else {
+        console
+    };
+    match fallback {
+        Some(fallback) => tam_api::router(state).fallback_service(fallback),
+        None => tam_api::router(state),
+    }
+}
+
+/// The two static tiers this deployment was configured with, either of which
+/// may be absent.
+struct Tiers {
+    landing: Option<std::sync::Arc<serving::Landing>>,
+    downloads: Option<std::sync::Arc<downloads::Downloads>>,
+}
+
+/// The landing page and the downloads directory ahead of the console, at the
+/// paths each holds a file for.
+///
+/// Outermost so their answers short-circuit before the console's policy layer
+/// runs: that layer inserts the console's policy over whatever is already
+/// there, and the policies are deliberately different — the landing carries its
+/// own, and an installer carries none, because a policy governs a document and
+/// nothing renders one of these.
+async fn static_tiers(
+    axum::extract::State(tiers): axum::extract::State<std::sync::Arc<Tiers>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let answer = serving::route(
+        request.uri().path(),
+        |file| tiers.landing.as_ref().is_some_and(|it| it.has(file)),
+        tiers.downloads.is_some(),
+    );
+    let serves_static = matches!(
+        answer,
+        serving::Answer::Landing(_) | serving::Answer::Downloads(_)
+    );
+    if serves_static && !serving::method_serves_static(request.method()) {
+        return serving::method_not_allowed();
+    }
+    let if_none_match = request
+        .headers()
+        .get(axum::http::header::IF_NONE_MATCH)
+        .cloned();
+    match answer {
+        serving::Answer::Landing(file) => match &tiers.landing {
+            Some(landing) => landing.respond(&file, if_none_match.as_ref()),
+            None => next.run(request).await,
+        },
+        serving::Answer::Downloads(file) => match &tiers.downloads {
+            Some(downloads) => downloads.respond(&file, if_none_match.as_ref()).await,
+            None => next.run(request).await,
+        },
+        // The API's own routes are matched before this ever runs, so both of
+        // these mean the same thing here and are named separately anyway: one
+        // is a path the API owns and no static tier may answer, the other is
+        // the console's.
+        serving::Answer::Api | serving::Answer::Console => next.run(request).await,
+    }
+}
+
+/// What a deployment carrying a landing page and no console answers where the
+/// landing page has no file: the same 404 it answered before either existed.
+async fn nothing_here() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
+}
+
 /// The console's content-security policy, now that the desktop window loads the
 /// console from here rather than from its own bundle.
 ///
@@ -643,7 +817,7 @@ fn load_entitlement_key(path: &str) -> Result<EntitlementKey, Box<dyn std::error
 /// rather than failing a build.
 fn console_policy(shell: &str) -> String {
     let mut script = String::from("script-src 'self' 'wasm-unsafe-eval'");
-    for hash in inline_script_hashes(shell) {
+    for hash in serving::inline_script_hashes(shell) {
         script.push_str(" '");
         script.push_str(&hash);
         script.push('\'');
@@ -656,56 +830,6 @@ fn console_policy(shell: &str) -> String {
          font-src 'self' data: https://fonts.gstatic.com; \
          frame-src 'self' https://challenges.cloudflare.com"
     )
-}
-
-/// The `sha256-…` token for every inline `<script>` block in the shell.
-///
-/// The hash is over the element's exact text content, which is what the CSP
-/// specification says a hash source matches, so a byte of whitespace changed by
-/// a later SvelteKit release changes the token — and that is the point: the
-/// policy is computed from the shell actually being served rather than pinned
-/// to a shell somebody saw once.
-///
-/// A script element carrying a `src` is not inline and contributes no hash.
-fn inline_script_hashes(shell: &str) -> Vec<String> {
-    use base64::Engine as _;
-    use sha2::Digest as _;
-
-    // Over bytes rather than string slices: tag syntax is ASCII, the hash is
-    // over bytes anyway, and slicing a `str` by a byte index is a panic waiting
-    // for the first non-ASCII character in a page title.
-    let bytes = shell.as_bytes();
-    let mut hashes = Vec::new();
-    let mut at = 0usize;
-    while let Some(open) = find_from(bytes, at, b"<script") {
-        let Some(gt) = find_from(bytes, open, b">") else {
-            break;
-        };
-        let attributes = &bytes[open..gt];
-        let body_start = gt + 1;
-        let Some(close) = find_from(bytes, body_start, b"</script>") else {
-            break;
-        };
-        let body = &bytes[body_start..close];
-        if find_from(attributes, 0, b" src=").is_none() && !body.iter().all(u8::is_ascii_whitespace)
-        {
-            hashes.push(format!(
-                "sha256-{}",
-                base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body))
-            ));
-        }
-        at = close + b"</script>".len();
-    }
-    hashes
-}
-
-/// The first occurrence of `needle` at or after `from`.
-fn find_from(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-    haystack
-        .get(from..)?
-        .windows(needle.len())
-        .position(|window| window == needle)
-        .map(|offset| from + offset)
 }
 
 async fn console_security_headers(
@@ -735,83 +859,40 @@ async fn shutdown() {
 
 #[cfg(test)]
 mod tests {
-    /// A shell's inline bootstrap gets a hash, and it is the hash the browser
-    /// will compute.
-    ///
-    /// The exact token is asserted rather than merely its shape, because the
-    /// whole value of this routine is that the browser and we agree on the
-    /// digest to the byte. `sha256-` over the element's text content is what
-    /// the specification says a hash source matches, and this fixture is the
-    /// smallest thing that has one.
-    #[test]
-    fn an_inline_script_gets_the_token_the_browser_will_compute() {
-        let shell = "<html><body><script>\nkit.start();\n</script></body></html>";
-        let hashes = super::inline_script_hashes(shell);
-        assert_eq!(hashes.len(), 1, "one inline block, one hash");
-        // sha256 of "\nkit.start();\n" in base64, computed independently rather
-        // than copied out of this implementation's own output — otherwise the
-        // test would assert only that the routine agrees with itself, which it
-        // would also do if the digest and the encoding were wrong together.
-        assert_eq!(
-            hashes[0],
-            "sha256-VjAiOu2+5hLy4jzOw1UoUpq6dLNOdmsOvp6FQGkcMSI="
-        );
-    }
-
-    /// A script with a `src` is not inline and contributes no hash.
-    ///
-    /// Hashing it would produce a token matching nothing, and a policy full of
-    /// tokens that match nothing is one nobody can read.
-    #[test]
-    fn a_sourced_script_contributes_no_hash() {
-        let shell = "<script src=\"/_app/start.js\"></script><script>\nboot();\n</script>";
-        assert_eq!(
-            super::inline_script_hashes(shell).len(),
-            1,
-            "only the inline one"
-        );
-    }
-
-    /// The policy computed for the console this repository actually builds
-    /// carries a hash for its bootstrap.
+    /// Every hash a shell needs is in the policy that shell is served with.
     ///
     /// This is the assertion the first version of the header needed and did not
     /// have. The two tests it shipped with read the string and never loaded a
     /// shell, so `script-src 'self'` looked correct and would have rendered an
-    /// empty window for every seller. Skipped rather than failed where the
-    /// console has not been built, because a clone must still run the lane —
-    /// and it says so rather than passing silently.
+    /// empty window for every seller.
+    ///
+    /// Over a fixture rather than over `web/build/index.html`, which is
+    /// gitignored and outside the sandbox's source filter: the version that
+    /// read it returned early in every CI run and reported a pass. The claim it
+    /// was making about the real artefact — that SvelteKit's shell does boot
+    /// from an inline block — is now `checks.served-artefacts` in `flake.nix`,
+    /// where the artefact exists.
     #[test]
-    fn the_real_console_shell_is_admitted_by_its_own_policy() {
-        let shell =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/build/index.html");
-        // Through the crate's own reader rather than `fs::read_to_string`, which
-        // the lint table disallows: one way of reading a file in this binary.
-        let Ok(text) = super::read_shell(&shell)
-            .map(String::from_utf8)
-            .and_then(|utf8| utf8.map_err(|_| "not utf-8".into()))
-        else {
-            eprintln!(
-                "skipped: {} does not exist, so there is no built console to check. \
-                 Run `just web-check` to build one.",
-                shell.display()
-            );
-            return;
-        };
-        let hashes = super::inline_script_hashes(&text);
-        assert!(
-            !hashes.is_empty(),
-            "SvelteKit's shell boots from an inline script; a policy with no hash for it \
-             refuses the boot and the window renders empty"
+    fn every_hash_a_shell_needs_is_in_its_policy() {
+        let shell = "<html><head><script>\n\t{__sveltekit_1a2b3c = {};\n}\n</script>\
+                     <script src=\"/_app/immutable/entry/start.js\"></script></head></html>";
+        let hashes = crate::serving::inline_script_hashes(shell);
+        assert_eq!(
+            hashes.len(),
+            1,
+            "the sourced block contributes nothing; the inline one is the boot"
         );
-        let policy = super::console_policy(&text);
+        let policy = super::console_policy(shell);
         for hash in &hashes {
             assert!(
                 policy.contains(hash.as_str()),
-                "every hash the shell needs is in the policy it is served with"
+                "every hash the shell needs is in the policy it is served with: {policy}"
             );
         }
-        assert!(policy.contains("'wasm-unsafe-eval'"));
+        assert!(
+            policy.contains("'wasm-unsafe-eval'"),
+            "the console's WebAssembly is refused without it: {policy}"
+        );
     }
 
     /// The policy admits each third-party host on the directive it needs, and
@@ -867,6 +948,441 @@ mod tests {
         assert!(
             axum::http::HeaderValue::from_str(&policy).is_ok(),
             "the computed policy has to survive being put in a header: {policy}"
+        );
+    }
+}
+
+/// The assembled router, driven without a listener.
+///
+/// Every other test in this crate reads one tier's decision or one policy's
+/// string. None of them can see the thing those pieces are assembled into, and
+/// three mutations of that assembly answer wrongly while the whole suite stays
+/// green: swapping the two `.layer()` calls, which puts the console's policy —
+/// `wasm-unsafe-eval`, Turnstile, Paddle, no `frame-ancestors` — on every
+/// marketing page; dropping the policy header from `Landing::respond`, which
+/// serves the public root under no policy at all; and answering the API's
+/// namespace from a static tier. Each is asserted below.
+///
+/// The pool is built lazily and never connects. Nothing here reaches a handler
+/// that would use it: `/healthz` predates version negotiation and takes no
+/// extractor, and the four static tiers touch no database at all.
+#[cfg(test)]
+mod composition {
+    use axum::body::Body;
+    use axum::http::{header, Method, Request, StatusCode};
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+
+    use crate::serving::Landing;
+
+    /// A landing build that claims the console's home, the console's client
+    /// bundle and a path in the API's namespace.
+    ///
+    /// Hostile on purpose: a fixture that merely omitted those names would let
+    /// every reservation below pass without being enforced, which is how the
+    /// rule went unenforced while a design note said it held.
+    const GREEDY_LANDING: [(&str, &str); 6] = [
+        (
+            "index.html",
+            "<!doctype html><title>the public page</title>",
+        ),
+        (
+            "pricing/index.html",
+            "<!doctype html><title>pricing</title>",
+        ),
+        ("_astro/Base.abc123.css", "body{color:red}"),
+        (
+            "app/index.html",
+            "<!doctype html><title>NOT the console</title>",
+        ),
+        ("_app/immutable/start.js", "// NOT the console bundle"),
+        ("v1/nothing", "NOT the api"),
+    ];
+
+    const DOWNLOADS: [(&str, &str); 2] = [
+        (
+            "downloads.json",
+            r#"{"version":"0.2.0","apple":null,"refreshed_at":"2026-09-05T00:00:00Z"}"#,
+        ),
+        (
+            "Teachouse_0.2.0_x64-setup.exe",
+            "MZ not really an installer",
+        ),
+    ];
+
+    const CONSOLE_SHELL: &str =
+        "<!doctype html><head><script>\n\t{__sveltekit = {};\n}\n</script></head>";
+
+    /// The three directories, written once for the whole test binary.
+    ///
+    /// Once rather than per test, because these tests run concurrently and
+    /// `File::create` truncates: a second test rewriting the fixture while the
+    /// first was serving it handed back a zero-length page, which is how this
+    /// harness failed on its first run while every test passed alone.
+    struct Fixtures {
+        console: std::path::PathBuf,
+        landing: std::path::PathBuf,
+        downloads: std::path::PathBuf,
+    }
+
+    fn fixtures() -> &'static Fixtures {
+        static WRITTEN: std::sync::OnceLock<Fixtures> = std::sync::OnceLock::new();
+        WRITTEN.get_or_init(|| Fixtures {
+            console: tree("console", &[("index.html", CONSOLE_SHELL)]),
+            landing: tree("landing", &GREEDY_LANDING),
+            downloads: tree("downloads", &DOWNLOADS),
+        })
+    }
+
+    /// A directory tree under one per-process root, named for what it stands in
+    /// for so a failure leaves something greppable.
+    ///
+    /// The root is removed before it is written, so a run leaves one tree rather
+    /// than accumulating one per run. The last run's tree does survive: libtest
+    /// has no after-all hook, and a `Drop` on the `OnceLock` would run while
+    /// another test could still be reading it.
+    fn tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        use std::io::Write as _;
+        let root = std::env::temp_dir()
+            .join(format!("tam-server-composition-{}", std::process::id()))
+            .join(name);
+        drop(std::fs::remove_dir_all(&root));
+        for (relative, body) in files {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("a temporary directory");
+            }
+            let mut file = std::fs::File::create(&path).expect("a temporary file");
+            file.write_all(body.as_bytes())
+                .expect("writing the fixture");
+        }
+        root
+    }
+
+    /// The router `main` builds, over the three directories above.
+    fn assembled() -> axum::Router {
+        let state = tam_api::AppState {
+            // Lazy: this never opens a socket, and no route reached below would
+            // use it if it did.
+            pool: sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://tam_app@127.0.0.1/tam")
+                .expect("a lazy pool needs no server"),
+            config: tam_api::Config::default(),
+            wall: crate::wall_now,
+            auth: None,
+            backoffice: None,
+            blobs: None,
+        };
+        let built = fixtures();
+        crate::assemble(
+            state,
+            Some(
+                crate::console_router(&built.console)
+                    .expect("the console fixture is a built console"),
+            ),
+            Some(std::sync::Arc::new(
+                Landing::load(&built.landing).expect("the landing fixture is a built site"),
+            )),
+            Some(std::sync::Arc::new(
+                crate::downloads::Downloads::open(&built.downloads).expect("a directory"),
+            )),
+        )
+    }
+
+    struct Answer {
+        status: StatusCode,
+        headers: axum::http::HeaderMap,
+        body: String,
+    }
+
+    impl Answer {
+        fn header(&self, name: header::HeaderName) -> &str {
+            self.headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+        }
+    }
+
+    async fn ask(method: Method, path: &str) -> Answer {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::empty())
+            .expect("a well-formed request");
+        let response = assembled()
+            .oneshot(request)
+            .await
+            .expect("the router is infallible");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("a complete body")
+            .to_bytes();
+        Answer {
+            status,
+            headers,
+            body: String::from_utf8_lossy(&body).into_owned(),
+        }
+    }
+
+    async fn get(path: &str) -> Answer {
+        ask(Method::GET, path).await
+    }
+
+    /// Each of the four tiers answers, and answers as itself.
+    #[tokio::test]
+    async fn all_four_tiers_answer_through_one_router() {
+        let api = get("/healthz").await;
+        assert_eq!(api.status, StatusCode::OK, "the API keeps its own routes");
+
+        let landing = get("/").await;
+        assert_eq!(landing.status, StatusCode::OK, "the public page takes /");
+        assert!(
+            landing.body.contains("the public page"),
+            "the root is the landing page, not the console shell: {}",
+            landing.body
+        );
+
+        let download = get("/downloads/downloads.json").await;
+        assert_eq!(download.status, StatusCode::OK, "the manifest is served");
+        assert_eq!(
+            download.header(header::CONTENT_TYPE),
+            "application/json",
+            "the console parses this"
+        );
+
+        let console = get("/inventory").await;
+        assert_eq!(console.status, StatusCode::OK, "an unknown path is the SPA");
+        assert!(
+            console.body.contains("__sveltekit"),
+            "the console's shell answers its own deep routes: {}",
+            console.body
+        );
+    }
+
+    /// The landing page carries the landing policy and not the console's.
+    ///
+    /// This is the assertion that fails if the two `.layer()` calls are
+    /// swapped, and the one that fails if the policy is dropped from
+    /// `Landing::respond`. Both mutations leave every other test green.
+    #[tokio::test]
+    async fn a_landing_answer_carries_only_the_landing_policy() {
+        let landing = get("/").await;
+        let policy = landing.header(header::CONTENT_SECURITY_POLICY);
+        assert!(
+            policy.contains("frame-ancestors 'none'"),
+            "the landing policy, not the console's and not none at all: {policy}"
+        );
+        assert!(
+            !policy.contains("'wasm-unsafe-eval'") && !policy.contains("https://"),
+            "the console's policy has been written over the landing one: {policy}"
+        );
+        assert_eq!(
+            landing.header(header::CACHE_CONTROL),
+            "no-cache",
+            "a cutover has to be visible on the next request"
+        );
+        assert!(
+            landing.header(header::ETAG).starts_with('"'),
+            "a landing response carries a validator"
+        );
+
+        let asset = get("/_astro/Base.abc123.css").await;
+        assert_eq!(
+            asset.header(header::CACHE_CONTROL),
+            "public, max-age=31536000, immutable",
+            "a content-addressed asset is held for a year"
+        );
+
+        let console = get("/inventory").await;
+        assert!(
+            console
+                .header(header::CONTENT_SECURITY_POLICY)
+                .contains("'wasm-unsafe-eval'"),
+            "the console keeps its own policy: {}",
+            console.header(header::CONTENT_SECURITY_POLICY)
+        );
+    }
+
+    /// A download carries its own type and freshness rule, and no policy.
+    #[tokio::test]
+    async fn a_download_carries_its_type_and_no_policy() {
+        let installer = get("/downloads/Teachouse_0.2.0_x64-setup.exe").await;
+        assert_eq!(installer.status, StatusCode::OK, "the installer is served");
+        assert_eq!(
+            installer.header(header::CONTENT_TYPE),
+            "application/vnd.microsoft.portable-executable",
+            "a browser's download prompt says what the file is"
+        );
+        assert_eq!(
+            installer.header(header::CACHE_CONTROL),
+            "public, max-age=3600",
+            "the name carries the version"
+        );
+        assert_eq!(
+            installer.header(header::CONTENT_SECURITY_POLICY),
+            "",
+            "a policy governs a document, and nothing renders an installer"
+        );
+        assert_eq!(
+            get("/downloads/downloads.json")
+                .await
+                .header(header::CACHE_CONTROL),
+            "no-cache",
+            "a held manifest shows the previous release"
+        );
+        assert_eq!(
+            get("/downloads").await.status,
+            StatusCode::OK,
+            "the directory itself is the console's unknown path, never a listing"
+        );
+        assert!(
+            get("/downloads").await.body.contains("__sveltekit"),
+            "and what answers it is the shell"
+        );
+    }
+
+    /// The reserved namespaces hold against a landing build that claims them.
+    ///
+    /// The fixture really does contain `app/index.html`, `_app/immutable/…` and
+    /// `v1/nothing`, so each of these passes only because `route` refuses them
+    /// before the landing probe.
+    #[tokio::test]
+    async fn the_reserved_namespaces_hold_against_a_hostile_landing_build() {
+        for path in ["/app", "/app/settings", "/_app/immutable/start.js"] {
+            let answer = get(path).await;
+            assert!(
+                answer.body.contains("__sveltekit"),
+                "{path} is the console's, and the landing build claims it: {} {}",
+                answer.status,
+                answer.body
+            );
+        }
+        // Under a version this build serves but at no route it has. The API
+        // router declines, and the landing build must not answer for it.
+        let api = get("/v1/nothing").await;
+        assert!(
+            api.body.contains("__sveltekit"),
+            "the API's namespace is never a static tier's: {}",
+            api.body
+        );
+    }
+
+    /// Only GET and HEAD reach a static tier, through the assembled router.
+    #[tokio::test]
+    async fn a_static_tier_answers_no_other_method() {
+        for path in ["/", "/downloads/downloads.json"] {
+            let answer = ask(Method::POST, path).await;
+            assert_eq!(
+                answer.status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "POST {path} was a 405 before this tier existed"
+            );
+            assert_eq!(
+                answer.header(header::ALLOW),
+                "GET, HEAD",
+                "and the refusal says what would have been allowed"
+            );
+        }
+        let head = ask(Method::HEAD, "/").await;
+        assert_eq!(head.status, StatusCode::OK, "HEAD reads a static file");
+
+        // The gate covers the static tiers and stops there. A console path is
+        // refused by the console's own `ServeDir`, which has answered 405 to
+        // every non-GET/HEAD since before any of these tiers existed and does
+        // not consult its fallback for one.
+        //
+        // So widening the gate to `Answer::Console` changes which component
+        // writes the 405 and not what a client sees — except for one byte.
+        // tower-http writes `GET,HEAD` and this crate writes `GET, HEAD`, and
+        // tower-http asserts its own spelling in its test suite
+        // (`serve_dir/tests.rs:765`), so the separator is a contract rather
+        // than an accident. That byte is the whole observable difference, and
+        // it is what this asserts; a reader who finds that too fine a hook may
+        // delete this knowing what it was for.
+        let posted = ask(Method::POST, "/login").await;
+        assert_eq!(
+            posted.status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "a console path has always refused a POST"
+        );
+        assert_eq!(
+            posted.header(header::ALLOW),
+            "GET,HEAD",
+            "and the console's own service is what refused it, not this crate's gate"
+        );
+    }
+
+    /// A validator the client already holds earns a 304 with no body.
+    ///
+    /// Through the router rather than through either `respond`, because the
+    /// header has to survive being read off the request and handed down: the
+    /// whole conditional path can be deleted by passing `None` where
+    /// `if-none-match` is extracted, and every other test here still passes.
+    #[tokio::test]
+    async fn a_held_validator_earns_a_304_from_both_static_tiers() {
+        for path in ["/", "/_astro/Base.abc123.css", "/downloads/downloads.json"] {
+            let first = get(path).await;
+            assert_eq!(first.status, StatusCode::OK, "{path} answers");
+            let etag = first.header(header::ETAG).to_owned();
+            assert!(!etag.is_empty(), "{path} carries a validator");
+
+            let request = Request::builder()
+                .method(Method::GET)
+                .uri(path)
+                .header(header::IF_NONE_MATCH, &etag)
+                .body(Body::empty())
+                .expect("a well-formed request");
+            let response = assembled()
+                .oneshot(request)
+                .await
+                .expect("the router is infallible");
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_MODIFIED,
+                "{path} was already held under {etag}"
+            );
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("a complete body")
+                .to_bytes();
+            assert!(
+                body.is_empty(),
+                "a 304 carries no body, and {path} sent one"
+            );
+        }
+    }
+
+    /// A download the directory does not hold is a 404, through the router.
+    #[tokio::test]
+    async fn an_unpublished_download_is_a_404() {
+        let answer = get("/downloads/Teachouse_9.9.9_arm64.apk").await;
+        assert_eq!(
+            answer.status,
+            StatusCode::NOT_FOUND,
+            "nothing invents a download the refresh did not publish"
+        );
+    }
+
+    /// A traversal answers the console shell rather than a file.
+    #[tokio::test]
+    async fn a_traversal_answers_no_file() {
+        let answer = get("/downloads/%2e%2e%2f%2e%2e%2fetc%2fpasswd").await;
+        assert_eq!(
+            answer.status,
+            StatusCode::OK,
+            "it is not an error, it is a page"
+        );
+        assert!(
+            answer.body.contains("__sveltekit"),
+            "an encoded traversal names no file of any tier: {}",
+            answer.body
         );
     }
 }

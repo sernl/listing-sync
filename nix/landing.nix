@@ -1,5 +1,5 @@
 # The teachouse.io landing page as a store path: the static Astro build that
-# `services.teachouse.landing.package` serves at the origin root.
+# `services.teachouse.landingPackage` serves at the origin root.
 #
 # It is a separate build from the console for the reason recorded in
 # `apps/landing/README.md`, and it takes no build-time argument, because

@@ -139,7 +139,7 @@ The site is not deployed to a static host of its own, and no Cloudflare account 
 `tam-server` serves it, from the directory named by `--landing-dir`.
 
 `nix/landing.nix` builds `apps/landing` into a store path holding the `dist` tree, exposed as the flake package `teachouse-landing` and as the flake check `landing`.
-The NixOS module passes that package as `services.teachouse.landing.package`, and the unit passes its path to `tam-server --landing-dir`.
+The NixOS module passes that package as `services.teachouse.landingPackage`, and the unit passes its path to `tam-server --landing-dir`.
 `serving::Landing::load` reads the whole directory into memory once at start-up and refuses a directory with no `index.html`, so a broken or empty build fails the process rather than serving a 404 at the root.
 
 Three tiers answer a request, in order, and `serving::route` decides between them.

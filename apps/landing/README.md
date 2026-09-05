@@ -7,7 +7,7 @@ It is a separate Astro build rather than a console route, because the console's 
 `nix/landing.nix` builds the same site as a store path, exposed as the flake package `teachouse-landing` and as the flake check `landing`.
 
 Deployment is not a static host of its own.
-`tam-server --landing-dir <path>` reads the built directory into memory at start-up and answers from it ahead of the console, which is what `services.teachouse.landing.package` supplies.
+`tam-server --landing-dir <path>` reads the built directory into memory at start-up and answers from it ahead of the console, which is what `services.teachouse.landingPackage` supplies.
 A request goes to the API if its first segment is a version, then to this build if it holds a file for the path, and to the console otherwise; a directory route resolves through its own `index.html`, which is how `/pricing`, `/privacy` and `/terms` work.
 So this site owns `/`, and the console keeps `/app` and every route below it, along with `/login` and everything else this build holds no file for.
 The server computes the landing page's Content-Security-Policy from the files it just read, so a page that grew an inline script would be served under a policy carrying that script's hash rather than under a stale one.

@@ -18,9 +18,19 @@ tam-limits = { path = "../tam-limits" }
 tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
-tokio-util = "0.7"
+# `fs` and tokio-util's `io` are the downloads tier: its directory changes
+# under a running process, so each request opens the file again and streams it
+# rather than holding an installer in this process's heap.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
 tower-http = { version = "0.6", features = ["fs"] }
+
+# The assembled router driven without a listener, which is the only way to see
+# the tier ordering and the per-tier headers at once. Both versions are the ones
+# tam-api's own dev-dependencies pin, for the same use.
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true
