@@ -60,14 +60,18 @@ export const GROUP_HELP: Partial<Record<FormGroup, string>> = {
 	product_status: 'Active listings are visible on the site and searchable. Inactive listings are only visible to you.'
 };
 
-/** The Education Standards heading's helper text.
+/** The Education Standards heading's helper text, or nothing.
  *
  *  A function rather than an entry in `GROUP_HELP` because the number is the
  *  server's: the count was written out as "Four" and stood over a panel saying
- *  no framework was offered at all, whenever the vocabulary served none. */
-export function standardsHelp(frameworks: number): string {
+ *  no framework was offered at all, whenever the vocabulary served none.
+ *
+ *  Nothing at all when none is offered, rather than a shorter version of the
+ *  same fact: the picker below says it at more length, in the place the seller
+ *  is already looking, and two sentences saying one thing read as two things. */
+export function standardsHelp(frameworks: number): string | undefined {
 	if (frameworks <= 0) {
-		return 'Optional, and no framework is offered here yet.';
+		return undefined;
 	}
 	if (frameworks === 1) {
 		return 'Optional. One framework.';

@@ -665,11 +665,13 @@ describe('the standards heading', () => {
 		expect(standardsHelp(2)).toBe('Optional. Two frameworks, each searched on its own.');
 	});
 
-	it('does not claim a framework when none is offered', () => {
+	it('says nothing at all when none is offered', () => {
 		// The sentence used to read "Four frameworks" over a panel saying none
-		// was offered at all, whenever the vocabulary served an empty list.
-		expect(standardsHelp(0)).toBe('Optional, and no framework is offered here yet.');
-		expect(standardsHelp(0)).not.toMatch(/frameworks/);
+		// was offered at all, whenever the vocabulary served an empty list. It
+		// says nothing now rather than a shorter version of what the picker
+		// below already says at more length.
+		expect(standardsHelp(0)).toBeUndefined();
+		expect(standardsHelp(-1)).toBeUndefined();
 	});
 
 	it('does not say "each" of one', () => {
