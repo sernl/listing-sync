@@ -583,6 +583,41 @@ fn major_units(minor: i64) -> String {
     format!("{whole}.{part:02}")
 }
 
+/// What the form refuses about a price the seller has actually typed, for a
+/// draft nobody has finished.
+///
+/// Exists because [`verdict`] cannot answer this question about a partial
+/// draft. Its two price rules live in [`draft_refusals`], and both of those
+/// fire on absence as well as on a value: a blank price and a blank tax code
+/// are refusals of a submission, and a template is not one. The stated half is
+/// different — a price the seller typed below TPT's floor is a value, and the
+/// template surface has to refuse it exactly as `POST /{version}/products`
+/// does, or a template prefills a form that will not submit.
+///
+/// `None` where the draft is free, where no price is typed, or where the price
+/// typed clears the floor. `Some` carries the form's own sentence, rendered by
+/// the same [`refusal_of_draft`] the check endpoint renders it with, so the two
+/// surfaces cannot come to differently-worded conclusions about one rule.
+///
+/// Public where `DraftRefusal` and its renderer stay private: the caller needs
+/// this one answer, and widening the refusal vocabulary would let a caller
+/// assemble a verdict of its own instead of asking for one.
+#[must_use]
+pub fn stated_price_refusal(draft: &DraftInput) -> Option<RefusalView> {
+    if draft.free {
+        return None;
+    }
+    let stated = draft.price_minor_units?;
+    let floor = min_price_minor_units();
+    if stated >= floor {
+        return None;
+    }
+    Some(refusal_of_draft(DraftRefusal::PriceUnderFloor {
+        stated: Some(stated),
+        floor,
+    }))
+}
+
 /// The three submission rules, in the order the form's own groups read.
 fn draft_refusals(draft: &DraftInput) -> Vec<DraftRefusal> {
     let mut found = Vec::new();

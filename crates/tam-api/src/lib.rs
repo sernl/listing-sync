@@ -32,6 +32,7 @@ pub mod org;
 pub mod paddle;
 pub mod product;
 pub mod quota;
+pub mod resource_templates;
 pub mod resources;
 pub mod session;
 pub mod stream;
@@ -209,6 +210,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/products/{product}/labels",
             get(resources::product_labels).put(resources::set_product_labels),
+        )
+        // The Template Manager's second tab: a named partial draft of the
+        // create form, saved to prefill the next one.
+        .route(
+            "/{version}/templates",
+            get(resource_templates::list).post(resource_templates::create),
+        )
+        .route(
+            "/{version}/templates/{template}",
+            get(resource_templates::get)
+                .patch(resource_templates::update)
+                .delete(resource_templates::delete),
         )
         .route("/{version}/labels", get(resources::list_labels))
         // Named by the label's own text, because that is how a label is

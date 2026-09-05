@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 68] = [
+pub const ROUTES: [Route; 73] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -203,6 +203,31 @@ pub const ROUTES: [Route; 68] = [
         method: "put",
         path: "/{version}/products/{product}/labels",
         summary: "Replace the labels on one item, minting any the org has not used",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/templates",
+        summary: "The organisation's saved starting points for a new resource",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/templates",
+        summary: "Save a named partial draft of the create form",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/templates/{template}",
+        summary: "One template whole, with the draft a new resource is prefilled from",
+    },
+    Route {
+        method: "patch",
+        path: "/{version}/templates/{template}",
+        summary: "Rename a template, replace its draft, or both",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/templates/{template}",
+        summary: "Remove a template",
     },
     Route {
         method: "get",
@@ -425,13 +450,15 @@ mod tests {
             .and_then(|paths| paths.as_object())
             .map(serde_json::Map::len);
         // /v1/jobs, /v1/session, /v1/org, /v1/devices,
-        // /v1/devices/{device}/reads, /v1/products/{product}/labels and
-        // /v1/labels/{name} each carry two operations, /v1/products carries
-        // two, /v1/products/{product} three and /v1/mappings/overrides three, so
-        // distinct paths are twelve fewer than the operations in the table.
+        // /v1/devices/{device}/reads, /v1/products/{product}/labels,
+        // /v1/labels/{name} and /v1/templates each carry two operations,
+        // /v1/products carries two, and /v1/products/{product},
+        // /v1/mappings/overrides and /v1/templates/{template} each carry
+        // three, so distinct paths are fifteen fewer than the operations in
+        // the table.
         assert_eq!(
             paths,
-            Some(ROUTES.len() - 12),
+            Some(ROUTES.len() - 15),
             "each operation lands in the document exactly once"
         );
     }

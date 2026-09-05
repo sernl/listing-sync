@@ -29,6 +29,7 @@ pub mod org;
 pub mod overrides;
 mod product;
 pub mod pruning;
+pub mod resource_templates;
 pub mod sessions;
 pub mod taxonomy;
 pub mod tpt_base;
@@ -86,6 +87,10 @@ pub use product::{
     ExportedListing, ExportedResource, ProductEdit, ProductRecord, ProductRepo, ProductSummary,
 };
 pub use pruning::{PruneRepo, PruneReport};
+pub use resource_templates::{
+    NewResourceTemplate, ResourceTemplateRecord, ResourceTemplateRepo, ResourceTemplateSummary,
+    TemplateChange, TemplateEdit, TemplateWrite, TEMPLATES_PER_ORG_MAX,
+};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub use tpt_base::{TptBaseRecord, TptBaseRepo};
 pub mod elections;

@@ -258,6 +258,11 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "field_audit",
         "blob",
         "platform_operator",
+        // Migration 0056's decision, asserted rather than left to that file's
+        // silence: a template is listing copy the seller has not published, no
+        // operator route reads one, and cross-tenant reach over every tenant's
+        // private drafting is not granted against a need nobody has stated.
+        "resource_template",
     ] {
         let denied = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)
