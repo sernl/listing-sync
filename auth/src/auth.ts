@@ -7,6 +7,7 @@ import pg from 'pg';
 import { type AuthEvent, record } from './audit.ts';
 import { deliver } from './email.ts';
 import { env } from './env.ts';
+import { greetingFor, utcTime } from './template.ts';
 
 export const pool = new pg.Pool({ connectionString: env.databaseUrl });
 
@@ -67,6 +68,72 @@ const impersonatedBy = (session: Record<string, unknown>): string | undefined =>
 // A rejected endpoint leaves its APIError on ctx.context.returned rather than
 // skipping the after hooks (packages/better-auth/src/api/dispatch.ts:405-431),
 // which is what makes a failed sign-in recordable at all.
+interface Recipient {
+  readonly email: string;
+  readonly name: string | null;
+}
+
+const recipient = (value: unknown): Recipient | undefined => {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+  const { email, name } = value as { email?: unknown; name?: unknown };
+  return typeof email === 'string' && email.length > 0
+    ? { email, name: typeof name === 'string' ? name : null }
+    : undefined;
+};
+
+// /change-password answers with the user it changed
+// (`dist/api/routes/update-user.mjs`), and dispatch puts that body on
+// ctx.context.returned immediately before the after hooks run
+// (`dist/api/dispatch.mjs:240-242`). /admin/set-user-password answers with
+// `{status: true}` and names its subject only in the request body, which is why
+// the two paths read different places for the same fact.
+const changedUser = (returned: unknown): Recipient | undefined =>
+  recipient(
+    typeof returned === 'object' && returned !== null
+      ? (returned as { user?: unknown }).user
+      : undefined,
+  );
+
+const targetUserId = (body: unknown): string | undefined => {
+  if (typeof body !== 'object' || body === null) {
+    return undefined;
+  }
+  const id = (body as { userId?: unknown }).userId;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+};
+
+type Changer = 'the account holder' | 'a Teachouse administrator';
+
+/**
+ * Tell the account holder their password moved, whoever moved it.
+ *
+ * Three endpoints store a new password and better-auth's `onPasswordReset`
+ * fires from exactly one of them, the token reset
+ * (`dist/api/routes/password.mjs:172`). The other two are reached through the
+ * after hook below. A seller who is told about the change they asked for and
+ * not about the one an administrator made would be worse informed the more
+ * serious the event.
+ */
+const passwordChanged = (to: string, name: string | null, changer: Changer): void => {
+  const byAdministrator = changer === 'a Teachouse administrator';
+  deliver({
+    to,
+    subject: 'Your Teachouse password was changed',
+    greeting: greetingFor(name),
+    lead: byAdministrator
+      ? `Your Teachouse password was changed by a Teachouse administrator on ${utcTime(new Date())}.`
+      : `Your Teachouse password was changed on ${utcTime(new Date())}.`,
+    action: 'Request a new reset',
+    url: `${env.baseUrl}/reset`,
+    illustration: undefined,
+    closing: byAdministrator
+      ? 'If you did not expect this, use the button above to set a password only you know.'
+      : 'If this was not you, use the button above to request a new reset straight away.',
+  });
+};
+
 const failureCode = (returned: unknown): string | undefined => {
   if (!isAPIError(returned)) {
     return undefined;
@@ -101,12 +168,39 @@ export const auth = betterAuth({
   session: { cookieCache: { enabled: false } },
   emailAndPassword: {
     enabled: true,
+    // The password-changed notice tells the reader that resetting again evicts
+    // whoever changed it. Without this better-auth skips deleteUserSessions
+    // entirely (`dist/api/routes/password.mjs:173`) and, with the session
+    // cookie cache off, a stolen session row stays valid through the reset the
+    // email just asked for -- so the sentence would name a remedy the service
+    // does not perform.
+    revokeSessionsOnPasswordReset: true,
     sendResetPassword: async ({ user, url }) => {
       deliver({
         to: user.email,
-        subject: 'Reset your Listing Sync password',
-        lead: 'Use this link to choose a new password.',
+        subject: 'Reset your Teachouse password',
+        greeting: greetingFor(user.name),
+        lead: 'You asked to reset the password on your Teachouse account. Choose a new one below and you will be straight back in.',
+        action: 'Choose a new password',
         url,
+        illustration: undefined,
+        closing: 'If you did not request this, you can ignore this message.',
+      });
+    },
+    // better-auth calls this after the new password is stored and before it
+    // revokes sessions (`dist/api/routes/password.mjs`). It hands over the user
+    // and no URL, so the button points at the console's request-a-reset page
+    // rather than a tokenised link, which only `sendResetPassword` can mint.
+    onPasswordReset: async ({ user }) => {
+      deliver({
+        to: user.email,
+        subject: 'Your Teachouse password was changed',
+        greeting: greetingFor(user.name),
+        lead: `Your Teachouse password was changed on ${utcTime(new Date())}.`,
+        action: 'Request a new reset',
+        url: `${env.baseUrl}/reset`,
+        illustration: undefined,
+        closing: 'If this was not you, use the button above to request a new reset straight away.',
       });
     },
   },
@@ -115,9 +209,14 @@ export const auth = betterAuth({
     sendVerificationEmail: async ({ user, url }) => {
       deliver({
         to: user.email,
-        subject: 'Verify your Listing Sync email address',
-        lead: 'Use this link to confirm this address belongs to you.',
+        subject: 'Welcome to Teachouse: confirm your email address',
+        greeting: greetingFor(user.name),
+        lead: 'Welcome to Teachouse. We keep your teaching resources in one place and list them on every marketplace you sell on, so you write a listing once instead of once per site.',
+        action: 'Confirm your email address',
         url,
+        illustration:
+          'A courier with a satchel hands a book to someone at their front door, with New Zealand hills and ferns behind them.',
+        closing: 'If you did not request this, you can ignore this message.',
       });
     },
   },
@@ -174,6 +273,37 @@ export const auth = betterAuth({
       // redirects the link-click to the client and changes no password.
       if (ctx.path === '/reset-password' && failed === undefined) {
         audit({ event: 'password_reset_completed', ...where });
+        return;
+      }
+
+      // The two password-mutation paths onPasswordReset does not reach. The
+      // notice is sent from here rather than from a database hook because the
+      // acting party is only distinguishable at the endpoint: both write the
+      // same account row.
+      if (ctx.path === '/change-password' && failed === undefined) {
+        const changed = changedUser(ctx.context.returned);
+        if (changed !== undefined) {
+          passwordChanged(changed.email, changed.name, 'the account holder');
+        }
+        return;
+      }
+
+      if (ctx.path === '/admin/set-user-password' && failed === undefined) {
+        const id = targetUserId(ctx.body);
+        if (id === undefined) {
+          return;
+        }
+        // The lookup is the only thing between a successful password set and
+        // the notice, so a failing read must not turn a completed change into
+        // a 500 the administrator would retry.
+        try {
+          const target = recipient(await ctx.context.internalAdapter.findUserById(id));
+          if (target !== undefined) {
+            passwordChanged(target.email, target.name, 'a Teachouse administrator');
+          }
+        } catch (cause: unknown) {
+          console.error('tam-auth: could not notify a user of an administrative password set', cause);
+        }
       }
     }),
   },

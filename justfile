@@ -224,11 +224,14 @@ db-test-all: db-wait db-verify
 # Everything that can fail before a push. The gated lane compiles the
 # pg-gated tests but never runs them, so a query built from a literal SQL
 # string and an assertion whose expected value has moved both reach main
-# green; this runs them. web-check sits second because its first step is the
-# vocabulary diff, and a Rust enum that moved leaves vocab.ts stale without
-# failing anything in `check` -- cheaper to learn that before the database
-# lane than after it.
-pre-push: check web-check landing-check db-verify db-test-all check-portable
+# green; this runs them. auth-check sits first because it is the cheapest lane
+# by an order of magnitude -- npm ci, tsc and node --test, a few seconds against
+# the Rust lane's clippy and nextest -- so a TypeScript error in the identity
+# service surfaces in seconds rather than after them. web-check sits after
+# `check` because its first step is the vocabulary diff, and a Rust enum that
+# moved leaves vocab.ts stale without failing anything in `check` -- cheaper to
+# learn that before the database lane than after it.
+pre-push: auth-check check web-check landing-check db-verify db-test-all check-portable
 
 # Regenerate the client's vocabulary from the closed Rust enums
 web-typegen:
@@ -458,10 +461,11 @@ auth-env:
         || printf 'BETTER_AUTH_SECRET=%s\n' "$secret" >> auth/.env
     echo 'created auth/.env from auth/.env.example with a fresh BETTER_AUTH_SECRET'
 
-# The auth lane: lockfile install, types
+# The auth lane: lockfile install, types, tests
 auth-check:
     cd auth && npm ci --no-audit --no-fund
     cd auth && npx tsc --noEmit
+    cd auth && npm test
 
 # Emit the DDL auth/src/auth.ts implies, to diff against db/auth/
 auth-ddl: db-wait auth-env

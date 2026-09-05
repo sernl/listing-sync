@@ -211,6 +211,8 @@
             console = teachouseConsole;
             landing = teachouseLanding;
             tam-auth = tamAuth;
+            tam-auth-test = tamAuth.override { runTests = true; };
+
 
             # The default --ignore yanked stands. Measured: -n leaves the
             # sandbox without a crates.io index, so cargo-audit logs "couldn't

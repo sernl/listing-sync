@@ -168,7 +168,7 @@ const load = (): Env => {
     secret: readRequired('BETTER_AUTH_SECRET'),
     databaseUrl: readRequired('TAM_AUTH_DATABASE_URL'),
     passkeyRpId: read('TAM_AUTH_PASSKEY_RP_ID') ?? baseUrl.hostname,
-    passkeyRpName: read('TAM_AUTH_PASSKEY_RP_NAME') ?? 'Listing Sync',
+    passkeyRpName: read('TAM_AUTH_PASSKEY_RP_NAME') ?? 'Teachouse',
     resendApiKey,
     emailFrom,
     turnstileSecretKey: readRequiredInProduction(mode, 'TURNSTILE_SECRET_KEY'),

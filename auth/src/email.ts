@@ -1,31 +1,21 @@
 import { Resend } from 'resend';
 import { env } from './env.ts';
-
-export interface Delivery {
-  readonly to: string;
-  readonly subject: string;
-  readonly lead: string;
-  readonly url: string;
-}
+import { transportWarning } from './log.ts';
+import { type Delivery, plainText, render } from './template.ts';
 
 const resend = env.resendApiKey === undefined ? undefined : new Resend(env.resendApiKey);
 
-const body = (delivery: Delivery): string =>
-  [delivery.lead, '', delivery.url, '', 'If you did not request this, ignore this message.'].join('\n');
-
 const send = async (delivery: Delivery): Promise<void> => {
   if (resend === undefined || env.emailFrom === undefined) {
-    console.warn(
-      `tam-auth: no email transport configured; to ${delivery.to}; ` +
-        `subject ${delivery.subject}; link: ${delivery.url}`,
-    );
+    console.warn(transportWarning(delivery.subject, delivery.url, env.mode));
     return;
   }
   const { error } = await resend.emails.send({
     from: env.emailFrom,
     to: delivery.to,
     subject: delivery.subject,
-    text: body(delivery),
+    html: render(delivery, env.baseUrl),
+    text: plainText(delivery, env.baseUrl),
   });
   if (error !== null) {
     throw new Error(`resend rejected the message: ${error.name}: ${error.message}`);

@@ -5,15 +5,23 @@
 # TypeScript types without a flag, and every import in `auth/src` carries its
 # `.ts` extension, which is what that stripping requires. So this derivation
 # resolves node_modules and places the sources beside it.
+#
+# With `runTests`, the same derivation also runs `npm test` in the sandbox. It
+# is a parameter rather than an unconditional `doCheck` so that a deployment
+# does not wait on the test run, and it is this file rather than a separate one
+# so that the tests execute against the node_modules the deployed artefact gets
+# -- a test lane resolved from a different lock would prove something about a
+# tree nobody ships.
 {
   lib,
   stdenv,
   nodejs,
   importNpmLock,
   makeWrapper,
+  runTests ? false,
 }:
 stdenv.mkDerivation {
-  pname = "tam-auth";
+  pname = if runTests then "tam-auth-test" else "tam-auth";
   version = "0.0.0";
 
   src = ../auth;
@@ -30,6 +38,17 @@ stdenv.mkDerivation {
   };
 
   dontBuild = true;
+
+  doCheck = runTests;
+
+  # `npm test` rather than `node --test` with the file list repeated here: the
+  # script's own guard checks that list against the files on disk, and a copy
+  # of it in this file would be the thing that silently drifts.
+  checkPhase = ''
+    runHook preCheck
+    npm test
+    runHook postCheck
+  '';
 
   installPhase = ''
     runHook preInstall
