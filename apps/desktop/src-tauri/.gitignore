@@ -2,3 +2,6 @@
 # ignores them; capabilities/default.json points at the desktop one only so an
 # editor can validate the file.
 /gen/schemas
+
+# tauri icon writes an iOS set although no iOS target exists
+icons/ios/
