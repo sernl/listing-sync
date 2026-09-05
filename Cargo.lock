@@ -5232,6 +5232,7 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "http-body-util",
  "reqwest 0.12.28",
  "sha2",
  "sqlx",
@@ -5243,6 +5244,7 @@ dependencies = [
  "tam-types",
  "tokio",
  "tokio-util",
+ "tower",
  "tower-http",
 ]
 
