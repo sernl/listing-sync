@@ -70,9 +70,8 @@
 	<div class="mp-sect">
 		<h2>Who made this work</h2>
 		<p>
-			Your own statement of who holds the copyright in what we send. It is a fact about you
-			rather than about any one machine, so it is declared once per marketplace and outlives
-			every device you sign in on.
+			Your own statement of who holds the copyright in what we send. You declare it once per
+			marketplace, and it covers every machine you sign in on.
 		</p>
 	</div>
 
@@ -103,10 +102,8 @@
 					</p>
 				{:else if row.marketplace === 'Tpt'}
 					<p class="mp-warned">
-						Not declared. TPT asks every listing to name who holds the copyright, so
-						anything sent to it fails until this is here. It does not wait and it is not
-						retried, and declaring afterwards does not send it again — you would need to
-						send it once more yourself.
+						Not declared. Anything sent to TPT fails until you declare this, and declaring
+						later does not resend it — you would need to send it again yourself.
 					</p>
 				{:else}
 					<p class="spec">
@@ -125,7 +122,7 @@
 								id="mp-authorship-{row.marketplace}"
 								type="text"
 								maxlength="200"
-								placeholder="The name that should appear as the copyright holder"
+								placeholder="The name to show as the copyright holder"
 								disabled={saving}
 								bind:value={typed}
 							/>

@@ -82,7 +82,7 @@
 	<PageHead
 		icon="download"
 		title="Import"
-		description="Bring a shop across. Your own machine reads it under your own session and sends us what it finds."
+		description="Bring a shop across: your own device reads it, signed in as you, and sends us what it finds."
 	/>
 
 	<p class="import-lead">{WHAT_AN_IMPORT_IS}</p>
@@ -169,7 +169,7 @@
 
 	<Panel
 		title="Your imports"
-		description="Every shop you have brought across, newest first. An import still waiting for your device has no run of its own yet, so this is where it lives."
+		description="Every shop you have brought across, newest first."
 	>
 		{#if requestsUnread}
 			<p class="quiet">{IMPORTS_UNREAD}</p>
@@ -179,7 +179,7 @@
 			<Placeholder
 				icon="download"
 				headline={NO_IMPORT_YET}
-				body="Choose a marketplace above and start one. Every import keeps its own record here."
+				body="Choose a marketplace above to start one."
 			/>
 		{:else}
 			{#each rows as row (row.request)}

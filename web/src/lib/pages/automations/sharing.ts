@@ -10,22 +10,21 @@
 export const NOT_BUILT_TITLE = 'Scheduled sharing is not built yet';
 
 export const NOT_BUILT_BODY =
-	'This page shows what it will do. The Teachouse app on your own computer will run the ' +
-	'schedule, in a coming release; nothing on this page reaches a marketplace today.';
+	'This page shows what it will do. Nothing here reaches a marketplace yet.';
 
-export const NO_DEVICE_TITLE = 'Sharing runs on your own machine';
+export const NO_DEVICE_TITLE = 'Sharing runs on your own computer';
 
 export const NO_DEVICE_BODY =
-	'Install the Teachouse app so there is a computer to run the schedule on. Your marketplace ' +
-	'sign-in never leaves it.';
+	'Install the Teachouse app to give the schedule a computer to run on. Your marketplace ' +
+	'sign-in stays there.';
 
 /** What the settings card is, stated on the card itself rather than only in
  *  the banner above it: nothing here is a setting in force, because no route
  *  stores one. Without this line a control's position reads as the current
  *  value of something. */
 export const SETTINGS_ARE_A_PREVIEW =
-	'What sharing would offer here, once it is built. None of these is a setting in force — ' +
-	'nothing on this card is stored, and nothing is saved.';
+	'What sharing would offer here once it is built. None of these is switched on, and ' +
+	'nothing here is saved.';
 
 /** Why every control on this page is disabled. Every disabled control in this
  *  console states its reason, because one that does not reads as a fault. */

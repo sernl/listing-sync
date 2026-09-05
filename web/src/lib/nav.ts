@@ -161,6 +161,7 @@ export const ADMIN_SECTION: NavSection = {
 		{ href: '/admin/orgs', label: 'Organisations', icon: 'building-2' },
 		{ href: '/admin/health', label: 'Sync health', icon: 'heart-pulse' },
 		{ href: '/admin/failures', label: 'Failed writes', icon: 'circle-x' },
+		{ href: '/admin/import-drain', label: 'Import drain', icon: 'chart-line' },
 		{ href: '/admin/users', label: 'Identity users', icon: 'users' },
 		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' }
 	]
@@ -385,8 +386,11 @@ export function initialsOf(name: string | undefined | null): string {
 	return words.slice(0, 2).join('').toUpperCase();
 }
 
-/** Where the top-bar search sends the browser. A blank query is the inventory
- *  board with no filter rather than an empty `?q=`. */
+/** Where a query with more matches than the palette shows sends the browser:
+ *  the catalogue board, filtered to that same query. The top bar no longer
+ *  holds a search box -- it opens the Ctrl-K palette -- so the palette's
+ *  overflow link is the one caller. A blank query is the board with no filter
+ *  rather than an empty `?q=`. */
 export function searchHref(query: string): string {
 	const trimmed = query.trim();
 	return trimmed.length === 0 ? '/inventory' : `/inventory?q=${encodeURIComponent(trimmed)}`;

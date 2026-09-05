@@ -22,6 +22,7 @@
 	background: var(--surface);
 	border-radius: var(--r-field);
 	padding-left: 11px;
+	min-height: var(--control-h);
 	color: var(--muted);
 	min-width: 0;
 }

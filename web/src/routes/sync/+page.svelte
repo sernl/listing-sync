@@ -99,7 +99,7 @@
 	<PageHead
 		icon="refresh-cw"
 		title="Marketplace Sync"
-		description="Keep each marketplace’s copy of a resource agreeing with your catalogue."
+		description="Keep every marketplace’s copy of a resource up to date."
 	>
 		{#snippet aside()}
 			<Button href="/reconciliation" tier="outline" icon="circle-question-mark">

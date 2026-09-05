@@ -23,6 +23,15 @@ So copy `web/build` to a snapshot directory whose name nothing else will take, s
 Grep the snapshot for a string only the new code contains — a class name the change added, or one it deleted — and refuse to render when the string is missing.
 That check costs one command and is the only thing standing between a green render and a render of last week.
 
+## A build outside the web lane uses whichever core happens to be there
+
+Some of the console's rules are decided by a compiled core that is generated rather than committed, and the directory holding it is ignored, so a fresh checkout has none of it at all.
+Every sanctioned lane rebuilds it: `just web-check` and the dev server both depend on the recipe that produces it, and the packaged console builds it from source.
+A bare `npm run build` or `npx vitest` inside `web/` does not, and both succeed anyway.
+They use whatever core is already sitting there — the one the last local build left, another session's, or on a clean tree nothing — so a page can render its rules from one version of the source while every other file on screen comes from another.
+Nothing in the output says which one it used, which is what makes this the same species as the stale snapshot above rather than a build failure.
+So anyone rendering or testing outside the web lane runs `just web-wasm` once first, inside `nix develop`, because the default toolchain here cannot build for the browser and the recipe fails outside the development shell with an error that reads like a broken recipe rather than a missing target.
+
 ## Failing one named endpoint is how an unread state is reached
 
 The console deliberately separates a collection that has not been read from one that is empty, and both states have to be renderable or the distinction is untested.
@@ -41,6 +50,32 @@ It is also what makes one run comparable to the last, since two text dumps diff 
 Images in this console are lazily loaded, so a capture sized to the nominal window height photographs everything below the fold as an empty box and reports a styling failure that does not exist.
 Capturing at the full document height loads the images a real reader would scroll to before the shutter opens.
 The same short viewport truncates the text dump, so both artefacts are taken from the full-height page for the same reason.
+
+## Full document height is not enough at phone width
+
+Capturing at the document's height fixes the fold, and at 1280 and 768 that is the whole of it.
+At 390 it is not.
+A phone-width render of the Marketplaces console makes a document over seven thousand pixels tall, and Firefox decides which lazily-loaded images to fetch before the full-page capture expands the viewport to that height, so marks far down the page are never requested and photograph as empty tiles.
+The picture then reports a styling failure on a page that was rendering every one of them correctly, which is the same class of lie as the opening fade: the capture succeeds and the answer is wrong.
+Four marks were lost this way before the cause was found, and nothing in the image said so.
+
+The repair is to force eager loading in the harness immediately before the shutter, which changes when an image is fetched and nothing about how it is laid out, sized or drawn.
+It belongs to the capture and never to shipped markup: the attribute is flipped by the harness's own injected script on a query switch, so the built page keeps its lazy loading and only the render sees eager.
+That distinction is what separates this from suppressing the fade animation, which would have changed the thing being photographed rather than the moment of photographing it.
+
+## A framework reset can silently un-centre a native element
+
+The console imports Tailwind, whose preflight sets `margin: 0` on every element.
+A modal `<dialog>` is centred by the user agent's own `margin: auto` acting against its `position: fixed; inset: 0`, so the reset collapses every modal to the top-left corner of the window, and the sheet's own `dialog` rule restored `padding` but not `margin`.
+Nothing about that reads as a bug in the page being rendered: the dialog draws correctly, its backdrop draws correctly, and it is simply in the wrong place.
+
+What made it survive was that one dialog looked right.
+The command palette positions itself in `shell.css`, so the console showed one centred overlay and one cornered one, which reads as an inconsistency between two components rather than as a single missing declaration.
+A local workaround in the component that was noticed is the thing that hides the shared cause from the components that were not.
+
+The general form: when a framework reset is in play, a native element's user-agent defaults are not a safe baseline, and the ones that position rather than paint are the ones whose loss does not look like a style bug.
+The same file had the fault twice over — a `max-width: 620px` block sitting *earlier* than the base `dialog` rule, so the phone sheet's `width`, `max-height` and corners were overridden by the desktop rule beneath it and had never once applied.
+A media query adds no specificity, so ordering is the whole of it.
 
 ## The fixtures are checked against nothing
 

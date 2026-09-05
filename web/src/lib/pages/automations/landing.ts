@@ -45,19 +45,15 @@ export interface AutomationFacts {
 }
 
 const SHARING_WHAT =
-	'Publish one resource to every marketplace you are connected to, in a single scheduled ' +
-	'action. Write a worksheet once and it reaches every shop you keep, instead of you opening ' +
-	'each marketplace and pasting the same thing again.';
+	'Publish one resource to every marketplace you are connected to, in one scheduled action.';
 
 const MIGRATION_WHAT =
-	'Move a whole shop from one marketplace to another, once. Your own computer reads the shop ' +
-	'you already sell on and sends us what it finds, and everything arrives here as a draft for ' +
-	'you to check before anything is published.';
+	'Move a whole shop from one marketplace to another, once. Everything arrives as a draft ' +
+	'for you to check before anything is published.';
 
 const SYNC_WHAT =
-	'Keep each marketplace’s copy of a resource agreeing with your catalogue. Change a price or ' +
-	'a description here and the change is carried out to every marketplace that holds that ' +
-	'resource, so the copies never drift apart.';
+	'Keep every marketplace’s copy of a resource up to date. Change a price or a description ' +
+	'here and it is carried out to each marketplace that has it.';
 
 /** Whether a request is still doing something, read off the stage the request
  *  list already presents rather than off the raw state, so this page and the
@@ -91,7 +87,7 @@ export function migrationState(facts: AutomationFacts): CardState {
 		return { label: 'No shop connected', tone: 'warn' };
 	}
 	if (!mayMigrate(targetAuthorship(facts.connections))) {
-		return { label: 'Authorship needed', tone: 'warn' };
+		return { label: 'Copyright needed', tone: 'warn' };
 	}
 	return { label: 'Ready', tone: 'ok' };
 }

@@ -48,7 +48,7 @@
 	<PageHead
 		icon="layout-template"
 		title="Template Manager"
-		description="Saved answers you reuse — how your words map onto a marketplace, and what a new resource starts with."
+		description="Saved answers you reuse when you add a resource or list it on a marketplace."
 	>
 		{#snippet aside()}
 			<Button tier="primary" icon="circle-plus" onclick={newTemplate}>New template</Button>

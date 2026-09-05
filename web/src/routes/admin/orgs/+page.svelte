@@ -55,7 +55,12 @@
 									<span class="t" title={row.name}>
 										<a class="link" href={`/admin/orgs/${row.org}`}>{row.name}</a>
 									</span>
-									<span class="s mono" title={row.org}>{row.org}</span>
+									<!-- The slug where the tenant has claimed one, because that
+									     is what a seller quotes in a support email; the row id
+									     otherwise, which is all there was to identify them by. -->
+									<span class="s mono" title={row.slug ?? row.org}
+										>{row.slug ?? row.org}</span
+									>
 								</td>
 								<td class="num" data-label="Products">{row.products}</td>
 								<td class="num" data-label="Mappings">{row.mappings}</td>

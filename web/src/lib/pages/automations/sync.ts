@@ -51,26 +51,24 @@ export function openQuestionsLabel(open: number | null): string {
  * reads or writes one, so a Save that appeared to set a schedule would be a
  * promise nothing keeps. Every disabled control in this console states its
  * reason, because one that does not reads as a fault. */
-export const SCHEDULE_NOT_SETTABLE = 'The console cannot set a schedule yet.';
+export const SCHEDULE_NOT_SETTABLE = 'Teachouse cannot set a schedule yet.';
 
 /** What the settings card is, stated on the card rather than only in the
  *  banner: no route stores a cadence, so a control's position here is not the
  *  current value of anything. Both Automations settings cards say this, in the
  *  same words, because they are the same kind of claim. */
 export const SETTINGS_ARE_A_PREVIEW =
-	'What a schedule would offer here, once the console can set one. None of these is a setting ' +
-	'in force — nothing on this card is stored, and nothing is saved.';
+	'What a schedule would offer here once Teachouse can set one. None of these is switched ' +
+	'on, and nothing here is saved.';
 
 export const NO_RUN_YET =
-	'Start one from Resources: choose the items to send, and the engine takes them from there. ' +
-	'Every run keeps its own record here.';
+	'Start one from Resources: choose what to send, and we take it from there.';
 
 export const SCHEDULE_TITLE = 'The schedule runs on your own computer';
 
 export const SCHEDULE_BODY =
-	'TES and TPT are only ever reached from your own machine under your own sign-in, so the ' +
-	'timer for them runs there too. Setting that cadence from here is not built yet; the ' +
-	'Teachouse app checks in on its own for now.';
+	'TES and TPT are only ever reached from your own computer, signed in as you, so the timer ' +
+	'runs there too. Setting it from here is not built yet.';
 
 /** How often the console would ask a device to look for changes. Laid out so
  *  the shape can be corrected before anything is written against it. */

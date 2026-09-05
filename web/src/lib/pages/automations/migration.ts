@@ -206,6 +206,6 @@ export function seededSource(
  * for. What travels and what does not is `FILES_STAY_ON_YOUR_COMPUTER`, set
  * under the card rather than repeated here. */
 export const WHAT_A_MIGRATION_IS =
-	'A migration reads the whole shop you already sell on and writes every listing it finds to ' +
-	'TPT as a draft. Your own computer does the reading, under your own sign-in, so it starts ' +
-	'when that machine next checks in. Nothing is published: every draft waits for you.';
+	'A migration reads the whole shop you already sell on and drafts every listing on TPT — ' +
+	'nothing is published without you. Your own device does the reading, so it starts the ' +
+	'next time that device checks in.';

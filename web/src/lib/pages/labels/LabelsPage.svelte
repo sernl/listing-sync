@@ -225,7 +225,7 @@
 	<PageHead
 		icon="tag"
 		title="Labels"
-		description="Your own words for grouping resources. A resource can carry up to twenty."
+		description="Your own words for grouping resources, up to twenty on each one."
 	>
 		{#snippet aside()}
 			<Button tier="additive" icon="plus" onclick={() => (newAsked = !newAsked)}>New label</Button>
@@ -234,8 +234,8 @@
 
 	{#if bannerShown}
 		<Banner title="What are labels?">
-			Use labels to group and filter your resources. A label's colour is chosen for you from its
-			name, so the same label looks the same everywhere it appears.
+			Use labels to group and filter your resources; the colour of each is picked from its
+			name.
 			{#snippet action()}
 				<Button
 					tier="quiet"
@@ -258,9 +258,8 @@
 	<div role="status" aria-live="polite">
 		{#if newAsked}
 			<Banner title="A label starts on a resource">
-				A label comes into being the first time you put it on a resource, and it stops
-				existing when the last resource lets it go. Open a resource, or select several on the
-				Resources list, and add the label there.
+				You make a label by putting it on a resource: open one, or pick several on the
+				Resources list, and add it there.
 				{#snippet action()}
 					<Button href="/inventory" icon="layout-list">Go to Resources</Button>
 				{/snippet}
@@ -272,7 +271,7 @@
 		<p class="quiet">Loading…</p>
 	{:else if labels.isError}
 		<Banner tone="bad" title="Your labels could not be read">
-			Nothing has changed; the list simply could not be fetched.
+			Nothing has changed; we could not load the list just now.
 			{#snippet action()}
 				<Button onclick={() => labels.refetch()}>Try again</Button>
 			{/snippet}
@@ -281,7 +280,7 @@
 		<Placeholder
 			icon="tag"
 			headline="Create your first label to get started."
-			body="A label is your own word for a group of resources. You make one by opening a resource and adding it there; it appears on this page as soon as something carries it."
+			body="A label is your own word for a group of resources; add one on a resource and it appears here."
 		>
 			{#snippet actions()}
 				<Button tier="additive" href="/inventory" icon="layout-list">Go to Resources</Button>
@@ -305,8 +304,7 @@
 
 		{#if uncounted}
 			<Banner tone="warn" title="Some resource counts could not be read">
-				Your labels are listed below; the only thing missing is the number of resources
-				carrying the ones that say so.
+				Your labels are all listed below; we could not read all of the counts.
 				{#snippet action()}
 					<Button onclick={() => counts.refetch()}>Try again</Button>
 				{/snippet}
@@ -355,7 +353,7 @@
 								<Field
 									label="New name"
 									id="label-rename"
-									hint={`A label is at most ${LABEL_MAX_CHARS} characters, and every resource carrying it keeps it.`}
+									hint={`At most ${LABEL_MAX_CHARS} characters; every resource that has it keeps it.`}
 								>
 									<!-- No `maxlength`: it counts UTF-16 code units, so a name
 									     written in astral characters would be cut at thirty while

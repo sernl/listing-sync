@@ -9,7 +9,7 @@ describe('gateLabel', () => {
 
 	it('reads as a sentence after the prefix the render site adds', () => {
 		expect(`blocked on ${gateLabel('election')}`).toBe('blocked on your answer');
-		expect(`blocked on ${gateLabel('cover_missing')}`).toBe('blocked on a missing cover image');
+		expect(`blocked on ${gateLabel('cover_missing')}`).toBe('blocked on a missing thumbnail');
 	});
 
 	// The label completes someone else's sentence, so it is a noun phrase

@@ -121,7 +121,7 @@
 
 		{#if refusal !== null}
 			<Banner tone="bad" title="This import could not be read just now">
-				{refusal} What is shown below is the last state that was read.
+				{refusal} Below is the last state we read.
 			</Banner>
 		{/if}
 
@@ -168,7 +168,7 @@
 			{#if coverage !== null}
 				<Panel
 					title="Coverage"
-					description="What the import measured against our own taxonomy. A zero here is a measurement, not a missing one."
+					description="What the import measured against our own word lists — a zero here was measured, not missing."
 				>
 					<ul class="import-figures">
 						{#each coverageRows(coverage) as figure (figure.label)}
@@ -180,7 +180,7 @@
 
 			<Panel
 				title="Listings"
-				description="Each listing the import has reached, in the order it read them. A skipped one carries the reason it was given, in the words it was given in."
+				description="Each listing the import has reached, in order, with the reason given for any it skipped."
 			>
 				{#if rows.length === 0}
 					<p class="quiet">{emptyListingsLine(stageOf(request))}</p>

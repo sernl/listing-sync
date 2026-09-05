@@ -38,9 +38,9 @@ export function tallyLine(open: number, resolved: number, noCounterpart: number)
 export const DRAINED_TITLE = 'The queue is drained';
 
 export const DRAINED_BODY =
-	'New questions appear only when a listing carries a term with no translation yet — and each ' +
-	'one you answer stays answered.';
+	'A question appears only when a listing uses a word we have no match for, and each one ' +
+	'you answer stays answered.';
 
-export const TARGET_PLACEHOLDER = 'Target path, e.g. Mathematics / Algebra';
+export const TARGET_PLACEHOLDER = 'Where it belongs, e.g. Mathematics / Algebra';
 
-export const TARGET_REFUSAL = 'Give the target path as segments separated by “/”.';
+export const TARGET_REFUSAL = 'Type where it belongs, like Mathematics / Algebra.';

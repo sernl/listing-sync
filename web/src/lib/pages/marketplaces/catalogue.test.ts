@@ -173,11 +173,15 @@ describe('the tile catalogue', () => {
 
 describe('the wordmark tile', () => {
 	it('sets a short name large and a long one small', () => {
-		expect(wordmarkSize('Etsy')).toBeGreaterThan(wordmarkSize('Shopify'));
+		// Past the ceiling rather than either side of it: the tile is wide enough
+		// that every word of seven characters or fewer now clamps to the same
+		// size, so a pair that short would compare two ceilings and pass whatever
+		// the taper did.
+		expect(wordmarkSize('Etsy')).toBeGreaterThan(wordmarkSize('Lemon Squeezy'));
 	});
 
 	it('never sets a mark larger than the tile reads as a mark', () => {
-		expect(wordmarkSize('X')).toBe(15);
+		expect(wordmarkSize('X')).toBe(22);
 	});
 
 	it('never shrinks past reading, returning the floor instead', () => {

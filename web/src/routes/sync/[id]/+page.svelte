@@ -98,7 +98,7 @@
 
 		<Panel
 			title="Outcomes"
-			description="Every outcome the ledger recorded, kept apart rather than collapsed into a verdict."
+			description="Every outcome we recorded, kept apart rather than rolled into one."
 		>
 			<div class="run-outcome" role="img" aria-label="outcome distribution">
 				{#each segments(run.counts) as segment (segment.label)}
@@ -118,7 +118,7 @@
 			</p>
 		</Panel>
 
-		<Panel title="Items" description="Open one for its step timeline and its stored result.">
+		<Panel title="Items" description="Open one to see its steps and its result.">
 			{#if items.length === 0}
 				<p class="quiet">No items recorded on this run yet.</p>
 			{/if}

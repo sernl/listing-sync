@@ -13,8 +13,8 @@
 	<div class="mp-sect">
 		<h2>Downloads</h2>
 		<p>
-			The desktop app is what runs the work for TES and TPT on your own machine, and the only
-			surface that can run it while you are away.
+			The desktop app does the TES and TPT work on your own computer, and it is the only thing
+			that can do it while you are away.
 		</p>
 	</div>
 

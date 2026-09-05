@@ -163,7 +163,7 @@ export function liveFace(held: LiveRead): LiveFace {
 			return {
 				status: { tone: 'soon', label: 'Not known' },
 				handle: null,
-				body: 'We could not read this one just now, so what it is doing is unknown. Reload to try again.'
+				body: 'We could not read this one just now. Reload to try again.'
 			};
 	}
 }

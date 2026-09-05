@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { page } from '$app/state';
 	import { ApiFailure, api, type OrgView } from '$lib/api';
 	import {
 		currentSessionToken,
@@ -25,6 +26,7 @@
 	import { agoLabel } from '$lib/elapsed';
 	import Field from '$lib/Field.svelte';
 	import { NAME_MAX_CHARS, checkOrgName } from '$lib/org-name';
+	import { checkOrgSlug } from '$lib/org-slug';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import { passkeyLabel, passkeyReach } from '$lib/passkey-label';
@@ -66,7 +68,7 @@
 	);
 
 	const renaming = createMutation(() => ({
-		mutationFn: (name: string) => api.renameOrg(name),
+		mutationFn: (name: string) => api.updateOrg({ name }),
 		onSuccess: (stored: OrgView) => {
 			// The server trims on the way in and answers with what it kept, so
 			// the cache and the field both take the stored value rather than
@@ -105,6 +107,71 @@
 		}
 		orgRefusal = null;
 		renaming.mutate(orgVerdict.name);
+	}
+
+	// ------------------------------------------------------- the org's name
+
+	// A second form rather than a second field on the one above, and the reason
+	// is attribution: one PATCH carrying both fields answers one refusal, and
+	// nothing in that answer says which field it was about. One field per form
+	// means a 422 and a 409 both land beside the control they are about.
+
+	let slugDraft = $state('');
+	let slugSeeded = $state(false);
+	let slugRefusal = $state<string | null>(null);
+
+	$effect(() => {
+		const stored = organisation.data?.slug;
+		if (stored !== undefined && !slugSeeded) {
+			slugDraft = stored ?? '';
+			slugSeeded = true;
+		}
+	});
+
+	const slugVerdict = $derived(checkOrgSlug(slugDraft));
+	const slugUnchanged = $derived(
+		slugVerdict.accepted && slugVerdict.slug === organisation.data?.slug
+	);
+
+	const claiming = createMutation(() => ({
+		mutationFn: (slug: string) => api.updateOrg({ slug }),
+		onSuccess: (stored: OrgView) => {
+			queryClient.setQueryData(queryKeys.org, stored);
+			slugDraft = stored.slug ?? '';
+			slugRefusal = null;
+			toast('info', 'Organisation name saved.');
+		},
+		onError: (failure: Error) => {
+			// A 409 says another organisation holds the name and a 422 says the
+			// name is malformed or reserved. Both are about the field, so both
+			// answer beside it -- the 409 included, because the availability
+			// check is advisory and only the server's index decides.
+			if (failure instanceof ApiFailure && (failure.status === 409 || failure.status === 422)) {
+				slugRefusal = failure.message;
+				return;
+			}
+			toast('error', 'The organisation name was not saved.');
+		}
+	}));
+
+	const slugBlocked = $derived(
+		claiming.isPending
+			? 'The name is being saved.'
+			: !slugVerdict.accepted
+				? slugVerdict.message
+				: slugUnchanged
+					? 'The name has not changed.'
+					: null
+	);
+
+	function claim(event: SubmitEvent) {
+		event.preventDefault();
+		if (!slugVerdict.accepted) {
+			slugRefusal = slugVerdict.message;
+			return;
+		}
+		slugRefusal = null;
+		claiming.mutate(slugVerdict.slug);
 	}
 
 	// -------------------------------------------------------------- profile
@@ -295,7 +362,7 @@
 
 	<Panel
 		title="Organisation"
-		description="The name this account trades under. It appears wherever the console names your organisation; it is not sent to any marketplace."
+		description="What this account is called. The display name is what we print; the name below is yours alone and appears in your address. Neither is ever sent to a marketplace."
 	>
 		{#if organisation.isPending}
 			<p class="quiet">Loading…</p>
@@ -307,7 +374,7 @@
 				     cut a name of accented or non-Latin letters short of the server's
 				     character bound. The hint states the bound instead. -->
 				<Field
-					label="Name"
+					label="Display name"
 					id="org-name"
 					required
 					hint={orgRefusal === null ? `At most ${NAME_MAX_CHARS} characters.` : undefined}
@@ -319,7 +386,51 @@
 				{/if}
 				<div class="actions">
 					<Button tier="primary" type="submit" disabled={orgBlocked !== null} reason={orgBlocked ?? undefined}>
-						{renaming.isPending ? 'Saving…' : 'Save organisation name'}
+						{renaming.isPending ? 'Saving…' : 'Save display name'}
+					</Button>
+				</div>
+			</form>
+
+			<hr class="acct-rule" />
+
+			<form onsubmit={claim} class="form">
+				<Field
+					label="Name"
+					id="org-slug"
+					required
+					hint={slugRefusal === null ? 'Letters, numbers and hyphens.' : undefined}
+				>
+					<input
+						id="org-slug"
+						name="org-slug"
+						type="text"
+						required
+						autocomplete="off"
+						autocapitalize="none"
+						spellcheck="false"
+						bind:value={slugDraft}
+					/>
+				</Field>
+				<p class="acct-slug-preview">
+					<span class="acct-slug-host">{page.url.host}/</span><span class="acct-slug-said"
+						>{slugVerdict.accepted ? slugVerdict.slug : 'your-name'}</span
+					>
+				</p>
+				{#if slugRefusal !== null}
+					<Banner tone="bad">{slugRefusal}</Banner>
+				{/if}
+				<div class="actions">
+					<Button
+						tier="primary"
+						type="submit"
+						disabled={slugBlocked !== null}
+						reason={slugBlocked ?? undefined}
+					>
+						{claiming.isPending
+							? 'Saving…'
+							: organisation.data?.slug === null
+								? 'Choose name'
+								: 'Save name'}
 					</Button>
 				</div>
 			</form>
@@ -328,7 +439,7 @@
 
 	<Panel
 		title="Profile"
-		description="Who you are signed in as. Changing your email address is done from the sign-in service's own verification flow, not here."
+		description="Who you are signed in as. Your email address cannot be changed yet."
 	>
 		{#if profile.isPending}
 			<p class="quiet">Loading…</p>
@@ -371,12 +482,12 @@
 
 	<Panel
 		title="Passkeys"
-		description="A passkey signs you in with the same fingerprint, face or PIN that unlocks your device. Each one is registered to this account and can be removed here."
+		description="A passkey signs you in with the fingerprint, face or PIN that unlocks your device."
 	>
 		{#if !supported}
 			<p class="quiet">
-				This browser does not support passkeys, so none can be registered or listed here. Your
-				password and any linked account still work.
+				This browser does not support passkeys. Your password and any linked account still
+				work.
 			</p>
 		{:else}
 			{#if passkeys.isPending}
@@ -439,13 +550,13 @@
 
 	<Panel
 		title="Browser sign-ins"
-		description="Where this account is signed in to the console. These are sign-ins to us, not to any marketplace; the identity service records only the address and the browser each was made from, which is why some cannot be pinned to a machine."
+		description="Where this account is signed in to Teachouse. These are sign-ins to us, not to any marketplace, and some cannot be matched to a machine."
 	>
 		<div class="acct-state-row">
 			<span class="who">
 				<span class="t">Machines</span>
 				<span class="why">
-					A machine you no longer use is signed out on Marketplaces, beside the logins it holds.
+					Sign a machine you no longer use out on Marketplaces, beside the logins it holds.
 				</span>
 			</span>
 			<Button tier="outline" small href="/marketplaces">Open</Button>
@@ -494,8 +605,7 @@
 			{/each}
 		{/if}
 		<p class="foot-note">
-			Ending a sign-in takes effect on the next request that browser makes; the session cache
-			that would otherwise delay it is switched off for this account.
+			Ending a sign-in takes effect the next time that browser asks us for anything.
 			{#if !currentKnown}
 				We could not tell which of these is the browser you are using, so none is marked.
 			{/if}

@@ -36,7 +36,7 @@
 	<PageHead
 		icon="waves-horizontal"
 		title="Automations"
-		description="The three things this console keeps doing for you, on a schedule rather than on a button."
+		description="The three things Teachouse can keep doing for you on a schedule."
 	/>
 
 	<div class="auto-cards">

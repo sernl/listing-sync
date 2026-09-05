@@ -47,6 +47,12 @@
 			menuOpen = false;
 		}
 	}
+
+	// Which cover URL failed to load, rather than a bare flag: a row that is
+	// handed a different cover must try it, and a flag would keep showing the
+	// placeholder for a picture nothing has been asked for yet.
+	let failed = $state<string | null>(null);
+	const drawable = $derived(cover != null && cover !== failed);
 </script>
 
 <div class="row-card">
@@ -59,9 +65,18 @@
 		/>
 	{/if}
 
+	<!-- The alt is empty on purpose: the title beside it names the resource, and
+	     a second name here would be read out twice. Lazily loaded, because a
+	     catalogue draws sixty of these and only the first few are on screen. -->
 	<span class="thumb">
-		{#if cover}
-			<img src={cover} alt="" />
+		{#if drawable}
+			<img
+				src={cover}
+				alt=""
+				loading="lazy"
+				decoding="async"
+				onerror={() => (failed = cover ?? null)}
+			/>
 		{:else}
 			<Icon name="image" size={24} />
 		{/if}

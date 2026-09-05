@@ -144,40 +144,40 @@ export interface PortfolioRow {
 export const PORTFOLIO_ROWS: readonly PortfolioRow[] = [
 	{
 		key: 'live',
-		label: 'Live on Tes',
-		explanation: 'Bound to a listing that Tes was last recorded as showing.'
+		label: 'Live on TES',
+		explanation: 'TES was last recorded showing this listing.'
 	},
 	{
 		key: 'livePriced',
-		label: 'with a price in your catalogue',
-		explanation: 'Of the live listings, those whose product carries a price here.',
+		label: 'with a price in your Resources',
+		explanation: 'Of the live listings, those whose resource carries a price here.',
 		breakdown: true
 	},
 	{
 		key: 'liveFree',
-		label: 'free in your catalogue',
-		explanation: 'Of the live listings, those whose product is recorded as free here.',
+		label: 'free in your Resources',
+		explanation: 'Of the live listings, those whose resource is recorded as free here.',
 		breakdown: true
 	},
 	{
 		key: 'drafts',
 		label: 'Drafts waiting to go live',
-		explanation: 'Created on Tes and not published yet.'
+		explanation: 'Created on TES and not published yet.'
 	},
 	{
 		key: 'unsent',
-		label: 'Not sent to Tes yet',
-		explanation: 'Mapped to a Tes site, with nothing created there yet.'
+		label: 'Not sent to TES yet',
+		explanation: 'Set up for a TES site, with nothing created there yet.'
 	},
 	{
 		key: 'other',
 		label: 'In another state',
 		explanation:
-			'Sent for review, in review, rejected, withdrawn, being created, or removed from Tes.'
+			'Sent for review, in review, rejected, withdrawn, being created, or removed from TES.'
 	},
 	{
 		key: 'productsWithoutListing',
-		label: 'Products with no Tes listing',
-		explanation: 'In your catalogue, with no mapping onto any Tes site.'
+		label: 'Resources with no TES listing',
+		explanation: 'In your Resources, and not set up for any TES site.'
 	}
 ];

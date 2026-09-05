@@ -6,7 +6,7 @@ describe('the two tabs', () => {
 	it('names the mapping tab first, which is where the page lands', () => {
 		const tabs = tabsOf(3, 0);
 		expect(tabs.map((tab) => tab.id)).toEqual([MAPPING, RESOURCE]);
-		expect(tabs.map((tab) => tab.label)).toEqual(['Marketplace mapping', 'New resource']);
+		expect(tabs.map((tab) => tab.label)).toEqual(['Marketplace words', 'New resource']);
 	});
 
 	it('counts each tab from its own list, so neither reports the other', () => {
@@ -27,7 +27,7 @@ describe('the two tabs', () => {
 describe('the wording the specification fixes', () => {
 	it('states the licence refusal the domain already enforces', () => {
 		expect(OVERRIDABLE.licence).toBe(false);
-		expect(LICENCE_REFUSAL).toContain('Licence is never mapped for you.');
+		expect(LICENCE_REFUSAL).toContain('We never pick a marketplace’s licence for you');
 	});
 
 	it('keeps the empty state exactly as specified', () => {
@@ -35,7 +35,7 @@ describe('the wording the specification fixes', () => {
 			"Save a resource's details as a starting point for the next one."
 		);
 		expect(EMPTY_BODY).toBe(
-			'A template keeps the fields you fill the same way every time — subject, year levels, licence, price — so a new resource starts most of the way there.'
+			'A template fills in the things you set the same way every time: subject, year levels, licence and price.'
 		);
 	});
 });

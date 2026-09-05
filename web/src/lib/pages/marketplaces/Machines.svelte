@@ -52,7 +52,7 @@
 		},
 		onSuccess: async (done: { deviceEnded: boolean; signInEnded: boolean | null }) => {
 			if (!done.deviceEnded) {
-				toast('error', 'The machine was not signed out. Nothing changed on our side.');
+				toast('error', 'The machine was not signed out, so it still holds its marketplace logins.');
 			} else if (done.signInEnded === false) {
 				toast(
 					'error',
@@ -61,7 +61,7 @@
 			} else {
 				toast(
 					'info',
-					'Signed out. This machine wipes its marketplace logins when it next checks in.'
+					'Signed out. This machine forgets its marketplace logins when it next checks in.'
 				);
 			}
 			await Promise.all([
@@ -77,10 +77,9 @@
 	function signOut(device: DeviceView, session: BrowserSession | null) {
 		const sure = confirm(
 			`Sign "${device.name}" out?\n\n` +
-				'It stops syncing, and it forgets its marketplace logins the next time it ' +
-				'reaches us. Until then — and forever, if it never reconnects — it still ' +
-				'holds those logins, because they are on that machine and never on our ' +
-				'servers. Signing in again on that machine restores it.'
+				'It stops syncing and forgets its marketplace logins the next time it reaches ' +
+				'us. Until then it still holds them, because they are on that machine and ' +
+				'never on our servers. Signing in again there restores it.'
 		);
 		if (sure) {
 			signingOut.mutate({ device, session });
@@ -96,9 +95,9 @@
 	<div class="mp-sect">
 		<h2>Your machines</h2>
 		<p>
-			Each machine running the desktop app registers itself here. Your marketplace logins live
-			on the machine that captured them and never on our servers, so this list is what each
-			one reports holding — never the logins themselves.
+			Each machine running the desktop app appears here. Your marketplace logins stay on that
+			machine and never reach our servers, so this list only says what each one reports
+			holding.
 		</p>
 	</div>
 
@@ -109,8 +108,8 @@
 	{:else if joined.rows.length === 0}
 		<div class="mp-card">
 			<p class="mp-body">
-				No machine is registered yet. Install the desktop app and sign in on it: it registers
-				itself here on first run, and every marketplace you connect on it appears beside it.
+				No machine is registered yet. Install the desktop app and sign in on it, and it
+				appears here.
 			</p>
 			<div class="mp-foot"><a class="go" href="#downloads">Downloads <span aria-hidden="true">→</span></a></div>
 		</div>
@@ -148,10 +147,9 @@
 					{#if row.device.wipe_outstanding}
 						<p class="mp-warned">
 							Signed out {agoLabel(row.device.revoked_at ?? now, now)}, and this machine has
-							not checked in since. It still holds the marketplace logins below until it
-							does. If it never reconnects, they stay on that machine until each
-							marketplace expires them — there is nothing we can do from here, because we
-							have never held them.
+							not checked in since, so it still holds the logins below. If it never checks
+							in again, they stay there until each marketplace expires them — we cannot
+							remove them, because we have never held them.
 						</p>
 					{/if}
 

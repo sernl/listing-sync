@@ -76,6 +76,7 @@ export const queryKeys = {
 	mappings: ['mappings'] as const,
 	status: ['status'] as const,
 	org: ['org'] as const,
+	orgSlug: (slug: string) => ['org-slug', slug] as const,
 	identity: ['identity'] as const,
 	passkeys: ['passkeys'] as const,
 	billing: ['billing'] as const,
@@ -95,6 +96,7 @@ export const queryKeys = {
 	adminOrgs: ['admin-orgs'] as const,
 	adminOrg: (org: string) => ['admin-org', org] as const,
 	adminFailures: ['admin-failed-writes'] as const,
+	adminImportDrain: ['admin-import-drain'] as const,
 	adminImpersonations: ['admin-impersonations'] as const,
 	/** The identity plane's user list, keyed by the search that produced it. */
 	identityUsers: (search: string) => ['identity-users', search] as const

@@ -75,7 +75,7 @@ export const PLANS: readonly Plan[] = [
 	{
 		id: 'publisher',
 		name: 'Publisher',
-		blurb: 'A catalogue large enough that the sync has to keep up with it.',
+		blurb: 'A big catalogue that needs the sync to keep up.',
 		monthly: 48,
 		annual: 480,
 		allowances: [
@@ -166,7 +166,7 @@ export function standingFor(read: BillingRead): Standing {
 			status: null,
 			headline: 'The billing record has not answered.',
 			detail:
-				'Until it does, nothing here can say which plan you are on, so no plan below is marked and nothing can be bought.'
+				'Until it does, we cannot say which plan you are on, so nothing below is marked and nothing can be bought.'
 		};
 	}
 	if (read.subscription === null) {
@@ -176,7 +176,7 @@ export function standingFor(read: BillingRead): Standing {
 			status: null,
 			headline: 'You are on the free tier.',
 			detail:
-				'This organisation has never reached checkout, which is a different fact from a cancelled subscription — that one would be shown here with its status.'
+				'You have never reached checkout; a cancelled subscription would show here with its status instead.'
 		};
 	}
 	return {
@@ -185,7 +185,7 @@ export function standingFor(read: BillingRead): Standing {
 		status: read.subscription.status,
 		headline: `Paddle records this subscription as ${read.subscription.status}.`,
 		detail:
-			'There is one price on this deployment, so the record says that a subscription is running and not which plan below it pays for.'
+			'We sell one price today, so this says a subscription is running, not which plan below it pays for.'
 	};
 }
 

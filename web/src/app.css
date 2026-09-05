@@ -67,6 +67,7 @@ button {
 	font-weight: 600;
 	font-size: 13px;
 	padding: 8px 14px;
+	min-height: var(--control-h);
 	border: 1px solid var(--line);
 	background: var(--card);
 	color: var(--ink);
@@ -99,6 +100,7 @@ button {
 .btn.small,
 .cta.small {
 	padding: 5px 10px;
+	min-height: var(--control-h-sm);
 	font-size: 12px;
 }
 
@@ -529,6 +531,7 @@ input[type='password'] {
 	background: var(--card);
 	border-radius: 8px;
 	padding: 8px 11px;
+	min-height: var(--control-h);
 	font: inherit;
 	font-weight: 400;
 	color: var(--ink);
@@ -553,14 +556,6 @@ input:focus-visible {
 
 .panel > .actions:last-child {
 	margin-top: 12px;
-}
-
-.gate-row td {
-	font-weight: 600;
-}
-
-td.flag {
-	color: var(--warn);
 }
 
 .notice {
@@ -747,32 +742,6 @@ td.flag {
 		grid-template-columns: 1fr;
 	}
 
-	/* A dialog becomes a sheet at the bottom edge, which is where the app's one
-	   sourced positional fact puts an item's actions — "a pink down arrow in
-	   the bottom right corner"
-	   (`docs/research/rethink/vendoo-console-cross-reference.md:163`). */
-	dialog {
-		width: 100vw;
-		max-width: 100vw;
-		margin: auto auto 0;
-		border-radius: 14px 14px 0 0;
-		border-bottom: 0;
-		max-height: 86vh;
-	}
-
-	.dialog-body {
-		max-height: 86vh;
-		padding-bottom: calc(16px + env(safe-area-inset-bottom));
-	}
-
-	.dialog-body .actions {
-		justify-content: stretch;
-	}
-
-	.dialog-body .actions > * {
-		flex: 1;
-	}
-
 	/* An item's per-marketplace actions stack to the full width under the row
 	   they belong to, rather than crowding its right edge. */
 	.row {
@@ -876,13 +845,25 @@ td.flag {
 	max-width: none;
 }
 
+/* `url` and `time` are here rather than left to the user agent because a
+   `Field` holding one sits directly beside a `Field` holding a text input --
+   the marketplace request form pairs `#mp-name` with `#mp-url`, and the
+   sharing form pairs the `When` select with `#share-time` -- and an
+   undecorated control beside a decorated one reads as a fault rather than as a
+   different kind of field. `search` is deliberately not here: every search
+   input in this console is a bare input inside a decorated wrapper, so
+   decorating it too would draw a control inside a control, and the wrapper is
+   what carries the metric. */
 .field textarea,
 .field select,
-.field input[type='number'] {
+.field input[type='number'],
+.field input[type='url'],
+.field input[type='time'] {
 	border: 1px solid var(--line);
 	background: var(--card);
 	border-radius: 8px;
 	padding: 8px 11px;
+	min-height: var(--control-h);
 	font: inherit;
 	font-weight: 400;
 	color: var(--ink);
@@ -1064,9 +1045,56 @@ dialog {
 	background: var(--card);
 	color: var(--ink);
 	padding: 0;
+	/* Restores what Tailwind's preflight zeroed. A modal dialog is centred by
+	   the user-agent's `margin: auto` against its `position: fixed; inset: 0`;
+	   preflight sets `margin: 0` on every element, which collapses that to the
+	   top-left corner. The phone sheet below sets its own margin and so was
+	   never affected, which is why this only ever showed above 620px. */
+	margin: auto;
 	width: min(560px, calc(100vw - 32px));
 	max-height: calc(100vh - 64px);
 	font: inherit;
+}
+
+/* A dialog becomes a sheet at the bottom edge on a phone, which is where the
+   app's one sourced positional fact puts an item's actions — "a pink down
+   arrow in the bottom right corner"
+   (`docs/research/rethink/vendoo-console-cross-reference.md:163`).
+
+   It lives here, after the base rule, rather than with the rest of the phone
+   layout above it. Both blocks set `width`, `max-height`, `border-radius` and
+   `margin`; a media query adds no specificity, so whichever comes last wins,
+   and while this sat above the base rule every one of its declarations was
+   dead except the two the base rule does not name. Moving a rule is what makes
+   this one apply at all. */
+@media (max-width: 620px) {
+	dialog {
+		width: 100vw;
+		max-width: 100vw;
+		margin: auto auto 0;
+		border-radius: 14px 14px 0 0;
+		border-bottom: 0;
+		max-height: 86vh;
+	}
+
+	/* The body and its actions move with the dialog for the same reason: the
+	   base `.dialog-body` sets `max-height` and a `padding` shorthand, and the
+	   base `.dialog-body .actions` sets `justify-content`, so every one of
+	   these was overridden from above. The safe-area inset is the one that
+	   mattered — without it the sheet's last row sits under the home
+	   indicator. */
+	.dialog-body {
+		max-height: 86vh;
+		padding-bottom: calc(16px + env(safe-area-inset-bottom));
+	}
+
+	.dialog-body .actions {
+		justify-content: stretch;
+	}
+
+	.dialog-body .actions > * {
+		flex: 1;
+	}
 }
 
 dialog::backdrop {

@@ -69,7 +69,7 @@ export function refusalOf(form: TemplateForm): string | null {
 		return `A name is at most ${NAME_MAX} characters.`;
 	}
 	if (/\p{Cc}/u.test(name)) {
-		return 'A name cannot carry a line break or other control character.';
+		return 'A name cannot contain a line break or other hidden character.';
 	}
 	if (!form.free && form.price.trim().length > 0 && minorUnitsOf(form.price) === null) {
 		return 'A price is a number of dollars and cents, like 4.50.';

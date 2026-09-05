@@ -45,7 +45,7 @@ describe('what a template may be saved with', () => {
 
 	it('refuses a control character in the name, which the column cannot hold', () => {
 		expect(refusalOf(form({ name: 'Year 4\u0000maths', subjects: ['maths'] }))).toMatch(
-			/control character/
+			/hidden character/
 		);
 	});
 

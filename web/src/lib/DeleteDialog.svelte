@@ -92,7 +92,7 @@
 	<div class="dialog-body">
 		<h2 id="delete-title">Delete “{title}”</h2>
 		<p>
-			Deleting removes it from your catalogue here. Whether it also disappears from a marketplace
+			Deleting removes it from your Resources here. Whether it also disappears from a marketplace
 			is a separate choice, and it is the irreversible one.
 		</p>
 

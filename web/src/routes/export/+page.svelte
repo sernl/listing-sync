@@ -51,16 +51,15 @@
 	<PageHead
 		icon="file-down"
 		title="Export"
-		description="A spreadsheet of your catalogue, with each marketplace's status, price and link."
+		description="A spreadsheet of your Resources, with each marketplace's status, price and link."
 	/>
 
-	<Panel title="Export your catalogue">
+	<Panel title="Export your Resources">
 		<p class="export-lede">
-			One row per resource: its title, price, labels and dates, then a status, price and link for
-			every marketplace it is listed on.
+			One row per resource, with a status, price and link for every marketplace it is listed on.
 		</p>
 		<p class="export-lede">
-			Details only. No file a buyer downloads, and no marketplace login, is in it.
+			Details only: no file a buyer downloads, and no marketplace login.
 		</p>
 
 		<dl class="export-carries">
@@ -115,11 +114,11 @@
 		</div>
 
 		<p class="export-note">
-			Each file is named <span class="export-file">{FILENAME_PATTERN}</span>. The date is the day it
-			was built, in UTC, so it can read a day behind yours.
+			Each file is named <span class="export-file">{FILENAME_PATTERN}</span>, dated in UTC, so the
+			date can read a day behind yours.
 		</p>
 		<p class="export-note">
-			The file is built when you ask for it, so a large catalogue can take a minute.
+			The file is built when you ask for it, so a long list can take a minute.
 		</p>
 	</Panel>
 </div>

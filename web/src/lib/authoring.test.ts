@@ -1,23 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
 	axisControls,
-	createBodyOf,
-	emptyDraft,
 	formatBytes,
 	licenceElections,
+	licenceGated,
 	licenceOptions,
 	licenceValues,
 	measure,
+	missingFields,
 	payloadRefusal,
 	priceOf,
 	quotaSentence,
-	refusalsOf,
+	requiredFieldSentence,
 	rightsOf,
-	submittable,
 	toMinorUnits,
-	toggleSubject,
-	unansweredRequired,
-	type Draft
+	type LicenceIntent
 } from './authoring';
 import { AUTHORABLE_PLATFORMS, platformTitle } from './platforms';
 import type { VocabularyView } from '$lib/api';
@@ -177,8 +174,32 @@ function handle(hash: string) {
 	return { hash, kind: 'pdf' as const, byte_len: 10 };
 }
 
-function draftWith(patch: Partial<Draft>): Draft {
-	return { ...emptyDraft(), ...patch };
+/** A draft as these tests build one.
+ *
+ *  The production `Draft` type is gone: it belonged to a second create path no
+ *  page ever rendered, which still carried the marketplace rule the founder had
+ *  removed. The functions it used to feed — the payload rule, the licence
+ *  helpers, the price — are live and reached from the TPT form through narrower
+ *  parameter types, so the fixture shape lives here rather than being exported
+ *  for one consumer. */
+interface DraftFixture extends LicenceIntent {
+	amount: string;
+	currency: string;
+	payload: { hash: string; kind: 'pdf'; byte_len: number }[];
+	title: string;
+}
+
+function draftWith(patch: Partial<DraftFixture>): DraftFixture {
+	return {
+		title: '',
+		branch: 'free',
+		amount: '',
+		currency: 'Gbp',
+		payload: [],
+		inventories: [],
+		licence: null,
+		...patch
+	};
 }
 
 describe('the multi-file rule', () => {
@@ -196,30 +217,6 @@ describe('the multi-file rule', () => {
 		expect(payloadRefusal('exactly_one', 0)).toMatch(/carries none/);
 	});
 
-	it('makes a multi-file product TES-only, as a blocking refusal naming TPT', () => {
-		const multi = draftWith({
-			title: 'A bundle',
-			payload: [handle('a'), handle('b')],
-			inventories: ['TesGb', 'Tpt'],
-			licence: 'CC-BY'
-		});
-		const refusals = refusalsOf(multi, VOCABULARIES);
-		const files = refusals.filter((refusal) => refusal.field === 'files');
-		expect(files).toHaveLength(1);
-		expect(files[0].message).toMatch(/^TPT \(Teachers Pay Teachers\)/);
-		expect(files[0].blocking).toBe(true);
-		expect(submittable(refusals)).toBe(false);
-	});
-
-	it('leaves the same product submittable once TPT is dropped', () => {
-		const tesOnly = draftWith({
-			title: 'A bundle',
-			payload: [handle('a'), handle('b')],
-			inventories: ['TesGb'],
-			licence: 'CC-BY'
-		});
-		expect(submittable(refusalsOf(tesOnly, VOCABULARIES))).toBe(true);
-	});
 });
 
 describe('the licence, which is the one required field anywhere', () => {
@@ -265,19 +262,6 @@ describe('the licence, which is the one required field anywhere', () => {
 		expect(licenceOptions(unlabelled, 'paid')).toEqual([
 			{ id: 'TES-PAID', label: 'TES-PAID' }
 		]);
-	});
-
-	it('reads a Tes selection as unanswered until a licence is chosen', () => {
-		const bare = draftWith({ inventories: ['TesGb'] });
-		expect(unansweredRequired(bare, VOCABULARIES)).toEqual([
-			{ inventory: 'TesGb', native: 'licence' }
-		]);
-		const answered = draftWith({ inventories: ['TesGb'], licence: 'CC-BY' });
-		expect(unansweredRequired(answered, VOCABULARIES)).toEqual([]);
-	});
-
-	it('asks nothing of a platform that declares no required field', () => {
-		expect(unansweredRequired(draftWith({ inventories: ['Tpt'] }), VOCABULARIES)).toEqual([]);
 	});
 
 	it('writes one supply election per licence-gating platform, keyed on the price branch', () => {
@@ -343,48 +327,6 @@ describe('the platform field controls', () => {
 	});
 });
 
-describe('the subject picker', () => {
-	// Canonical term ids, which are the hyphenated UUIDs `subjects` carries.
-	const MATHS = '1b4d2a70-0000-4000-8000-000000000001';
-	const ENGLISH = '1b4d2a70-0000-4000-8000-000000000002';
-
-	it('adds a ticked term, in the order the seller ticked it', () => {
-		expect(toggleSubject([], MATHS, true)).toEqual([MATHS]);
-		expect(toggleSubject([MATHS], ENGLISH, true)).toEqual([MATHS, ENGLISH]);
-	});
-
-	it('removes an unticked term and leaves the rest alone', () => {
-		expect(toggleSubject([MATHS, ENGLISH], MATHS, false)).toEqual([ENGLISH]);
-		expect(toggleSubject([ENGLISH], MATHS, false)).toEqual([ENGLISH]);
-	});
-
-	it('writes a term already held once rather than twice', () => {
-		expect(toggleSubject([MATHS], MATHS, true)).toEqual([MATHS]);
-	});
-
-	it('never mutates the list it was handed', () => {
-		const chosen = [MATHS];
-		toggleSubject(chosen, ENGLISH, true);
-		expect(chosen).toEqual([MATHS]);
-	});
-
-	it('carries the chosen ids into the create body’s subjects', () => {
-		const draft = draftWith({
-			title: 'A worksheet',
-			payload: [handle('a')],
-			inventories: ['TesGb'],
-			licence: 'CC-BY',
-			subjects: [MATHS, ENGLISH]
-		});
-		expect(createBodyOf(draft, VOCABULARIES)?.subjects).toEqual([MATHS, ENGLISH]);
-	});
-
-	it('sends an empty list where none was chosen, which is what the server defaults to', () => {
-		const draft = draftWith({ title: 'A worksheet', payload: [handle('a')] });
-		expect(createBodyOf(draft, VOCABULARIES)?.subjects).toEqual([]);
-	});
-});
-
 describe('the price', () => {
 	it('reads a free draft as the bare Free intent', () => {
 		expect(priceOf(draftWith({ branch: 'free' }))).toBe('Free');
@@ -402,120 +344,6 @@ describe('the price', () => {
 		expect(toMinorUnits('4.50', 'Eur')).toBeNull();
 	});
 
-	it('blocks a paid draft with no readable amount, as Money::new would', () => {
-		const draft = draftWith({
-			title: 'A thing',
-			payload: [handle('a')],
-			inventories: ['Tpt'],
-			branch: 'paid',
-			amount: '0'
-		});
-		const price = refusalsOf(draft, VOCABULARIES).filter((one) => one.field === 'price');
-		expect(price[0].blocking).toBe(true);
-	});
-
-	it('warns about a floor the create does not enforce but the write does', () => {
-		const draft = draftWith({
-			title: 'A thing',
-			payload: [handle('a')],
-			inventories: ['Tpt'],
-			branch: 'paid',
-			amount: '0.50'
-		});
-		const floor = refusalsOf(draft, VOCABULARIES).find((one) => one.field === 'price');
-		expect(floor?.message).toMatch(/refuses a price below 95 minor units/);
-		expect(floor?.blocking).toBe(false);
-	});
-});
-
-describe('the refusals the form mirrors', () => {
-	it('names the payload one with the server’s own remedy', () => {
-		const draft = draftWith({ title: 'A thing', inventories: ['TesGb'], licence: 'CC-BY' });
-		const files = refusalsOf(draft, VOCABULARIES).find((one) => one.field === 'files');
-		expect(files?.message).toMatch(/upload the bytes first/);
-		expect(files?.blocking).toBe(true);
-	});
-
-	it('refuses a blank title and an empty platform set', () => {
-		const fields = refusalsOf(emptyDraft(), VOCABULARIES).map((one) => one.field);
-		expect(fields).toContain('title');
-		expect(fields).toContain('platforms');
-	});
-
-	// The refusal used to add "platforms cannot be added after the draft
-	// exists", which the resource page disproves: it renders "Cross-list here"
-	// for every unmapped marketplace and posts to
-	// `POST /v1/products/{product}/mappings`. The refusal now says only what it
-	// is refusing.
-	it('asks for a marketplace without claiming one cannot be added later', () => {
-		const platforms = refusalsOf(emptyDraft(), VOCABULARIES).find(
-			(one) => one.field === 'platforms'
-		);
-		expect(platforms?.message).toBe('Choose at least one marketplace to create this draft on.');
-		expect(platforms?.message).not.toMatch(/cannot be added/);
-	});
-
-	it('warns about a cap the projection shortens rather than refuses', () => {
-		const draft = draftWith({
-			title: 'A thing',
-			body: 'x'.repeat(45_001),
-			payload: [handle('a')],
-			inventories: ['Tpt']
-		});
-		const body = refusalsOf(draft, VOCABULARIES).find((one) => one.field === 'description');
-		expect(body?.message).toMatch(/caps the description at 45000/);
-		expect(body?.blocking).toBe(false);
-		expect(submittable(refusalsOf(draft, VOCABULARIES))).toBe(true);
-	});
-
-	it('measures a cap in the unit the cap declares', () => {
-		expect(measure('é', 'Bytes')).toBe(2);
-		expect(measure('é', 'Utf16CodeUnits')).toBe(1);
-		expect(measure('😀', 'Utf16CodeUnits')).toBe(2);
-		expect(measure('😀', 'Codepoints')).toBe(1);
-		expect(measure('😀', 'GraphemeClusters')).toBe(1);
-	});
-});
-
-describe('the request the draft composes', () => {
-	it('carries the payload, the platforms, the grades and both election kinds', () => {
-		const draft = draftWith({
-			title: '  A worksheet  ',
-			body: '# Heading',
-			bodyFormat: 'Markdown',
-			payload: [handle('a')],
-			inventories: ['TesGb'],
-			licence: 'CC-BY',
-			axes: { 'TesGb:ageRanges': ['2', '3'], 'TesGb:mainType': ['99002'] }
-		});
-		const body = createBodyOf(draft, VOCABULARIES);
-		expect(body?.title).toBe('A worksheet');
-		expect(body?.inventories).toEqual(['TesGb']);
-		expect(body?.grades).toEqual([
-			{ inventory: 'TesGb', kind: 'phase', segments: ['2'], native_id: '2' },
-			{ inventory: 'TesGb', kind: 'phase', segments: ['3'], native_id: '3' }
-		]);
-		expect(body?.elections).toEqual([
-			{
-				inventory: 'TesGb',
-				axis: 'licence',
-				trigger: 'supply',
-				trigger_key: 'free',
-				answers: [{ segments: ['CC-BY'], native_id: 'CC-BY' }]
-			},
-			{
-				inventory: 'TesGb',
-				axis: 'resource_type',
-				trigger: 'elect_one',
-				answers: [{ segments: ['99002'], native_id: '99002' }]
-			}
-		]);
-	});
-
-	it('composes nothing from a price it would have to alter', () => {
-		const draft = draftWith({ branch: 'paid', amount: 'free', payload: [handle('a')] });
-		expect(createBodyOf(draft, VOCABULARIES)).toBeNull();
-	});
 });
 
 describe('the quota refusal', () => {
@@ -540,5 +368,108 @@ describe('the quota refusal', () => {
 		expect(formatBytes(0)).toBe('0 B');
 		expect(formatBytes(1 << 30)).toBe('1.0 GB');
 		expect(formatBytes(-1)).toBe('—');
+	});
+});
+
+describe('the refusal that a marketplace wants a field this listing lacks', () => {
+	// The server has always carried the identity: `required_fields_answered`
+	// in `crates/tam-api/src/catalogue.rs` composes `detail.missing` as
+	// `{inventory, field}` entries. The client read none of it, so a seller
+	// creating for Tes was told only that "a selected platform requires a
+	// field this product does not carry".
+
+	it('names the marketplace and the field in words a seller reads', () => {
+		expect(requiredFieldSentence({ missing: [{ inventory: 'TesGb', field: 'licence' }] })).toBe(
+			`${platformTitle('TesGb')} needs a licence, and this listing does not carry one yet.`
+		);
+	});
+
+	it('names every marketplace that asked, rather than only the first', () => {
+		const said = requiredFieldSentence({
+			missing: [
+				{ inventory: 'TesGb', field: 'licence' },
+				{ inventory: 'TesUs', field: 'licence' }
+			]
+		});
+		expect(said).toContain(platformTitle('TesGb'));
+		expect(said).toContain(platformTitle('TesUs'));
+	});
+
+	it('reads the server’s own label for the field where it sent one', () => {
+		expect(
+			requiredFieldSentence({
+				missing: [{ inventory: 'TesGb', field: 'licence', label: 'Licence' }]
+			})
+		).toContain('needs a licence');
+	});
+
+	it('stands a field the registry adds later in for itself rather than guessing', () => {
+		expect(requiredFieldSentence({ missing: [{ inventory: 'TesGb', field: 'age_range' }] })).toContain(
+			'needs a age_range'
+		);
+	});
+
+	it('falls back to the server’s own sentence for a detail it cannot read', () => {
+		expect(requiredFieldSentence({ missing: 'licence' })).toBeNull();
+		expect(requiredFieldSentence(null)).toBeNull();
+		expect(missingFields({ missing: [{ inventory: 'TesGb' }] })).toEqual([]);
+	});
+});
+
+describe('a marketplace that carries no licence field', () => {
+	// The wire omits the key — `licence` carries `skip_serializing_if =
+	// "Option::is_none"` — but a JSON source that writes `"licence": null`
+	// instead used to pass an `=== undefined` guard and throw one line later on
+	// `gate.native`. The whole create form went down with it: the tick was
+	// checked, the effect that read the vocabulary threw, and the draft never
+	// recorded the marketplace, so the seller saw a ticked box beside a counter
+	// reading "kept here". Absent and null are read the same way now.
+
+	function withLicence(value: unknown): VocabularyView {
+		return {
+			inventory: 'Tpt',
+			marketplace: 'Tpt',
+			canonical: [],
+			natives: [],
+			axes: [],
+			absent_axes: [],
+			authoring: {
+				payload_files: 'exactly_one',
+				body_wire: 'renders_to_html',
+				body_formats: ['Markdown'],
+				licence: value
+			}
+		} as unknown as VocabularyView;
+	}
+
+	it('is not gated when the key is absent', () => {
+		const absent = withLicence(undefined);
+		expect(licenceGated(['Tpt'], new Map([['Tpt', absent]]))).toEqual([]);
+		expect(licenceOptions(absent, 'free')).toEqual([]);
+	});
+
+	it('is not gated when the key is written out as null', () => {
+		const written = withLicence(null);
+		expect(licenceGated(['Tpt'], new Map([['Tpt', written]]))).toEqual([]);
+		expect(() => licenceOptions(written, 'free')).not.toThrow();
+		expect(licenceOptions(written, 'free')).toEqual([]);
+	});
+});
+
+describe('measuring a value against a cap', () => {
+	// `unit` comes off the wire and the index had no guard, so a unit added to
+	// the registry and served before this client is rebuilt threw inside a
+	// render — which blanks the whole page rather than the counter.
+
+	it('counts in each unit this client knows', () => {
+		expect(measure('abc', 'Utf16CodeUnits')).toBe(3);
+		expect(measure('é', 'Bytes')).toBe(2);
+		expect(measure('é', 'Codepoints')).toBe(1);
+	});
+
+	it('falls back rather than throwing on a unit it has never seen', () => {
+		const unknown = 'Furlongs' as unknown as Parameters<typeof measure>[1];
+		expect(() => measure('abc', unknown)).not.toThrow();
+		expect(measure('abc', unknown)).toBe(3);
 	});
 });

@@ -3,7 +3,7 @@
 // exist to prevent are both invisible from the screen until they happen.
 
 import { ApiFailure } from '$lib/api';
-import { quotaSentence } from '$lib/authoring';
+import { quotaSentence, requiredFieldSentence } from '$lib/authoring';
 
 /**
  * A refusal in the seller's words, or the page's own sentence where the
@@ -40,7 +40,13 @@ export function createRefusal(failure: unknown): string {
 		case 'quota_exceeded':
 			return quotaSentence(entry?.detail) ?? entry?.message ?? said;
 		case 'payload_missing':
-			return 'The bytes have to be uploaded before the draft is created.';
+			return 'Upload your file before creating the draft.';
+		// The server names the marketplace and the field in `detail.missing` and
+		// always has; this case is the reason a seller creating for Tes read only
+		// "a selected platform requires a field this product does not carry",
+		// which names neither and cannot be acted on.
+		case 'required_field_missing':
+			return requiredFieldSentence(entry?.detail) ?? said;
 		case 'upload_rejected':
 			return `${said} Upload the file again.`;
 		default:

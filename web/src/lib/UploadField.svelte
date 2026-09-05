@@ -75,8 +75,8 @@
 
 <label class="drop" for={inputId}>
 	<b>{sending ? 'Uploading…' : 'Choose the file buyers download'}</b>
-	A PDF, PowerPoint, Word document, image or ZIP, up to 256 MB. The bytes are scanned before
-	anything is stored.
+	A PDF, PowerPoint, Word document, image or ZIP, up to 256 MB, checked for viruses before it is
+	kept.
 	<input id={inputId} type="file" disabled={sending} onchange={chosen} />
 </label>
 
@@ -93,9 +93,8 @@
 	</label>
 </div>
 <p class="foot-note">
-	A ZIP is unpacked into one file per entry by default, which every Tes site carries and TPT does
-	not: a TPT listing takes exactly one file. Tick this to upload the bundle as the single file it
-	is.
+	A ZIP is unpacked into one file per item inside it. Tes carries all of them; TPT takes only one,
+	so tick this to send the ZIP as a single file.
 </p>
 
 {#if sending}
@@ -135,10 +134,9 @@
 	{/each}
 	<p class="foot-note">
 		{uploaded.payload.length}
-		{uploaded.payload.length === 1 ? 'payload file' : 'payload files'}, a generated cover, and
+		{uploaded.payload.length === 1 ? 'file' : 'files'}, a thumbnail made from it, and
 		{uploaded.previews.length}
-		{uploaded.previews.length === 1 ? 'preview' : 'previews'}. Uploading again replaces all of
-		them.
+		{uploaded.previews.length === 1 ? 'preview' : 'previews'}. Uploading again replaces all of them.
 	</p>
 {/if}
 

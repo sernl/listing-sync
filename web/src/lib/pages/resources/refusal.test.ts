@@ -17,9 +17,7 @@ describe('a refused create', () => {
 			status: 422,
 			errors: [{ code: 'payload_missing', message: 'no payload', detail: undefined }]
 		} as never);
-		expect(createRefusal(refused)).toBe(
-			'The bytes have to be uploaded before the draft is created.'
-		);
+		expect(createRefusal(refused)).toBe('Upload your file before creating the draft.');
 	});
 
 	it('does not hand the seller a status line when the body did not parse', () => {
@@ -31,6 +29,36 @@ describe('a refused create', () => {
 	it('says the draft was not created for anything that is not a refusal', () => {
 		expect(createRefusal(new Error('offline'))).toBe(NOT_CREATED);
 		expect(createRefusal(undefined)).toBe(NOT_CREATED);
+	});
+});
+
+describe('a marketplace refusing a field this listing does not carry', () => {
+	// The founder met this creating for Tes and read a sentence naming neither
+	// the marketplace nor the field. The server always sent both.
+	function refusedFor(detail: unknown) {
+		return new ApiFailure(422, {
+			status: 422,
+			errors: [
+				{
+					code: 'required_field_missing',
+					message: 'a selected platform requires a field this product does not carry',
+					detail
+				}
+			]
+		} as never);
+	}
+
+	it('names the marketplace and the field instead of the server sentence', () => {
+		const said = createRefusal(refusedFor({ missing: [{ inventory: 'TesGb', field: 'licence' }] }));
+		expect(said).toContain('needs a licence');
+		expect(said).toContain('does not carry one yet');
+		expect(said).not.toContain('a selected platform requires a field');
+	});
+
+	it('falls back to the server sentence for a detail it cannot read', () => {
+		expect(createRefusal(refusedFor({ missing: 'licence' }))).toBe(
+			'a selected platform requires a field this product does not carry'
+		);
 	});
 });
 

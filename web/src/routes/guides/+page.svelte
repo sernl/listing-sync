@@ -12,6 +12,6 @@
 	<Placeholder
 		icon="book-open"
 		headline="Guides are not written yet"
-		body="This will hold the walkthroughs for connecting a marketplace, importing a shop and cross-listing a resource."
+		body="This will hold the guides for connecting a marketplace, bringing a shop across and listing a resource everywhere."
 	/>
 </div>

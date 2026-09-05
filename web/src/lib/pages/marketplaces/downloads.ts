@@ -24,7 +24,7 @@ const NOTHING_YET = 'Not available yet.';
 /** What each card says once a build is published. */
 const OFFERED: Record<Platform, string> = {
 	windows:
-		'The desktop app, which holds your marketplace logins on your own machine and runs the schedule there.',
+		'The desktop app: it keeps your marketplace logins on your own computer and runs the schedule there.',
 	android: 'The same console on your phone.',
 	apple: 'The desktop app for macOS.'
 };

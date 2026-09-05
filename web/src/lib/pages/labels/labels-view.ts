@@ -54,7 +54,7 @@ export function checkRename(
 		return {
 			accepted: false,
 			problem: 'slash',
-			message: 'A label cannot contain a slash, because a label is addressed by its own name.'
+			message: 'A label cannot contain a slash.'
 		};
 	}
 	const folded = name.toLowerCase();

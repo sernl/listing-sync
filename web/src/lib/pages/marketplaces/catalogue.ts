@@ -29,8 +29,22 @@ import type { Marketplace } from '$lib/generated/vocab';
  *  fetched. `docs/notes/design/marketplace-logo-sources.md` records every file,
  *  where it came from, and why the one exception is one. */
 export type Mark =
-	| { kind: 'image'; src: string }
+	| { kind: 'image'; src: string; shape: Shape }
 	| { kind: 'wordmark'; text: string };
+
+/** Which tile a mark is drawn in, which follows the mark's own proportions.
+ *
+ *  An `icon` is square or near it, a glyph drawn to sit in a square, and takes
+ *  the square tile. A `wordmark` is wider than it is tall and takes the wide
+ *  one, because a square tile draws a five-to-one wordmark nine pixels tall.
+ *  A marketplace's own app icon is the usual source of a square mark, but a
+ *  square logo we already held is one too, which is why TES and TPT are icons
+ *  without an icon ever having been fetched for them.
+ *
+ *  It sits on the mark rather than on the tile because the card is handed the
+ *  mark, not the tile, and the page that hands it over is not this pass's to
+ *  edit. A text mark carries no shape: it has no file and is never square. */
+export type Shape = 'icon' | 'wordmark';
 
 /** One marketplace we do not work with yet.
  *
@@ -71,13 +85,13 @@ export const LIVE: readonly LiveTile[] = [
 	{
 		marketplace: 'Tes',
 		name: 'TES',
-		mark: { kind: 'image', src: '/marketplaces/tes-mark.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tes-mark.png' },
 		home: 'https://www.tes.com/'
 	},
 	{
 		marketplace: 'Tpt',
 		name: 'TPT',
-		mark: { kind: 'image', src: '/marketplaces/tpt-mark.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tpt-mark.png' },
 		home: 'https://www.teacherspayteachers.com/'
 	}
 ];
@@ -95,17 +109,17 @@ export const PLANNED: readonly ProspectTile[] = [
 	{
 		slug: 'etsy',
 		name: 'Etsy',
-		mark: { kind: 'image', src: '/marketplaces/etsy.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/etsy.png' },
 		home: 'https://www.etsy.com/',
-		body: 'Etsy publishes an official seller API, so this one would run on our servers.',
+		body: 'Etsy has an official API, so this one would run on our servers.',
 		marketplace: 'Etsy'
 	},
 	{
 		slug: 'shopify',
 		name: 'Shopify',
-		mark: { kind: 'image', src: '/marketplaces/shopify.svg' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/shopify.png' },
 		home: 'https://www.shopify.com/',
-		body: 'Shopify publishes an official Admin API, so this one would run on our servers.'
+		body: 'Shopify has an official API, so this one would run on our servers.'
 	}
 ];
 
@@ -119,16 +133,16 @@ export const LISTED: readonly ProspectTile[] = [
 	{
 		slug: 'made-by-teachers',
 		name: 'Made By Teachers',
-		mark: { kind: 'image', src: '/marketplaces/made-by-teachers.jpg' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/made-by-teachers.jpg' },
 		home: 'https://madebyteachers.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'classful',
 		name: 'Classful',
-		mark: { kind: 'image', src: '/marketplaces/classful.svg' },
+		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/classful.svg' },
 		home: 'https://classful.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		// The one mark shown as a wordmark. Boom Learning's guidelines make a
@@ -140,105 +154,126 @@ export const LISTED: readonly ProspectTile[] = [
 		name: 'Boom Learning',
 		mark: { kind: 'wordmark', text: 'Boom' },
 		home: 'https://www.boomlearning.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'teach-simple',
 		name: 'Teach Simple',
-		mark: { kind: 'image', src: '/marketplaces/teach-simple.svg' },
+		// Wide, though 421 by 362 is nearly square, because the file is a lockup
+		// rather than a glyph: an owl above a separate `TeachSimple` wordmark. In
+		// the square tile the owl stays legible and the word falls to about five
+		// pixels, which is below the nine that had `eduki-icon.png` and
+		// `teach-mzantsi-icon.webp` rejected. Its ratio of 1.16 is also a 16 per
+		// cent deviation, outside the ten per cent the provenance note holds every
+		// other icon on this page to.
+		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/teach-simple.svg' },
 		home: 'https://teachsimple.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'amped-up-learning',
 		name: 'Amped Up Learning',
-		mark: { kind: 'image', src: '/marketplaces/amped-up-learning.png' },
+		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/amped-up-learning.png' },
 		home: 'https://ampeduplearning.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'teacha',
 		name: 'Teacha!',
-		mark: { kind: 'image', src: '/marketplaces/teacha.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/teacha.svg' },
 		home: 'https://www.teacharesources.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'teachshare',
 		name: 'TeachShare',
-		mark: { kind: 'image', src: '/marketplaces/teachshare.svg' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/teachshare.svg' },
 		home: 'https://www.teachshare.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'eduki',
 		name: 'eduki',
-		mark: { kind: 'image', src: '/marketplaces/eduki.png' },
+		// Not an `icon`, though an `eduki-icon.png` was fetched, because that file
+		// is this same wordmark centred on a square canvas: its ink measures 131
+		// by 46, so a square tile would draw the word nine pixels tall. eduki
+		// publishes no square glyph, so the wordmark in the wide tile is the
+		// largest this mark can be drawn.
+		//
+		// The file itself was cropped for the same reason. eduki published a 643
+		// by 208 wordmark inside a 1018 by 880 white canvas; the bytes here are
+		// that canvas cropped to the mark and nothing else, and the provenance
+		// note records the crop.
+		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/eduki.png' },
 		home: 'https://eduki.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'teachbuysell',
 		name: 'TeachBuySell',
-		mark: { kind: 'image', src: '/marketplaces/teachbuysell.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/teachbuysell.png' },
 		home: 'https://teachbuysell.com.au/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'teach-mzantsi',
 		name: 'TeachMzantsi',
-		mark: { kind: 'image', src: '/marketplaces/teach-mzantsi.png' },
+		// A `teach-mzantsi-icon.webp` was fetched and is deliberately not used: it
+		// is a cropped promotional image rather than a glyph, carrying an address
+		// line that cannot be read at tile size. A mark that says something
+		// illegible says less than the wordmark does.
+		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/teach-mzantsi.png' },
 		home: 'https://teachmzantsi.com/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'lesson-planned',
 		name: 'Lesson Planned',
-		mark: { kind: 'image', src: '/marketplaces/lesson-planned.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/lesson-planned.png' },
 		home: 'https://lessonplanned.co.uk/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'school-ninja',
 		name: 'School Ninja',
-		mark: { kind: 'image', src: '/marketplaces/school-ninja.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/school-ninja.png' },
 		home: 'https://schoolninja.au/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'tpd',
 		name: 'TPD',
-		mark: { kind: 'image', src: '/marketplaces/tpd.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tpd.jpg' },
 		home: 'https://tpd.edu.au/',
-		body: 'No official API is published, so this one would run on your own device.'
+		body: 'This one has no official API, so it would run on your own computer.'
 	},
 	{
 		slug: 'gumroad',
 		name: 'Gumroad',
-		mark: { kind: 'image', src: '/marketplaces/gumroad.svg' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/gumroad.svg' },
 		home: 'https://gumroad.com/',
-		body: 'Gumroad publishes an official API, so this one would run on our servers.'
+		body: 'Gumroad has an official API, so this one would run on our servers.'
 	},
 	{
 		slug: 'payhip',
 		name: 'Payhip',
-		mark: { kind: 'image', src: '/marketplaces/payhip.svg' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/payhip.png' },
 		home: 'https://payhip.com/',
-		body: "Payhip's public API does not yet cover products, so we are waiting on it."
+		body: "Payhip's API does not cover products yet, so we are waiting on it."
 	},
 	{
 		slug: 'sellfy',
 		name: 'Sellfy',
-		mark: { kind: 'image', src: '/marketplaces/sellfy.svg' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/sellfy.svg' },
 		home: 'https://sellfy.com/',
-		body: 'Sellfy publishes no product API, so this one would run on your own device.'
+		body: 'Sellfy has no product API, so this one would run on your own computer.'
 	},
 	{
 		slug: 'lemon-squeezy',
 		name: 'Lemon Squeezy',
-		mark: { kind: 'image', src: '/marketplaces/lemon-squeezy.svg' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/lemon-squeezy.jpg' },
 		home: 'https://www.lemonsqueezy.com/',
-		body: 'Lemon Squeezy publishes an official API, so this one would run on our servers.'
+		body: 'Lemon Squeezy has an official API, so this one would run on our servers.'
 	}
 ];
 
@@ -261,27 +296,44 @@ export const EXTENSIONS: readonly ProspectTile[] = [
 	}
 ];
 
-/** The 40px tile, less its 4px of padding on each side. */
-const TILE_INNER_PX = 32;
+/** How much of the mark tile a word may cross: the 96px tile, less its 1px
+ *  border and its 8px of padding on each side. */
+const TILE_INNER_PX = 78;
 
-/** How wide a Fraunces glyph runs against its own point size, averaged over the
- *  mixed-case words this tile holds. Close enough to fit a word, and the clamp
- *  below catches where it is not. */
-const GLYPH_WIDTH_RATIO = 0.5;
+/** How wide a Fraunces glyph runs against its own point size: an upper bound
+ *  over the words this tile holds, not an average over them.
+ *
+ *  An average is what the tile had, and it clipped. Measured at 22px in the
+ *  rendered page, `Boom` runs 0.700 of its point size per character, `Chrome`
+ *  0.636 and `Firefox` 0.483 — a spread wide enough that the mean sized
+ *  `Chrome` to 84px across a 78px tile, and `overflow: hidden` took the rest
+ *  silently. Only a bound at the widest word makes the function's own promise
+ *  true, so 0.700 it is: a word of narrow letters is then set smaller than it
+ *  strictly needs, which costs a few points of size and cannot cut a mark in
+ *  half. */
+const GLYPH_WIDTH_RATIO = 0.7;
 
 /**
  * What point size sets `text` across a logo tile without clipping it.
  *
- * A wordmark tile is a fixed 40px square holding a word of no fixed length, so
- * the size follows the word. Below 8px the name stops being readable and above
- * 15px it stops looking like a mark, so both ends are clamped. A word long
- * enough to reach the floor is one whose tile text should be shortened instead;
- * the floor keeps it legible rather than letting it shrink to nothing, and the
- * catalogue's own test says none of the words we draw gets near it.
+ * A wordmark tile is a fixed 96 by 56 holding a word of no fixed length, so the
+ * size follows the word. Below 8px the name stops being readable and above 22px
+ * it stops looking like a mark and starts competing with the 17px name beside
+ * it, so both ends are clamped. A word long enough to reach the floor is one
+ * whose tile text should be shortened instead; the floor keeps it legible
+ * rather than letting it shrink to nothing, and the catalogue's own test says
+ * none of the words we draw gets near it.
+ *
+ * The ceiling binds only at five characters or fewer, since 78 / (5 * 0.7) is
+ * 22.3 and a sixth character puts the fitted size under the cap. Of the three
+ * words this page draws, that is Boom alone: Boom sets at 22, Chrome at 19 and
+ * Firefox at 16. The three wordmark tiles therefore read at three sizes, not
+ * one, which is the price of a bound that no word can overflow rather than an
+ * average that Chrome overflowed by six pixels.
  */
 export function wordmarkSize(text: string): number {
 	const fitted = TILE_INNER_PX / (text.length * GLYPH_WIDTH_RATIO);
-	return Math.max(8, Math.min(15, Math.round(fitted)));
+	return Math.max(8, Math.min(22, Math.round(fitted)));
 }
 
 /** What sits under the grid, and under nothing else.

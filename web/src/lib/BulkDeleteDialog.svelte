@@ -103,7 +103,7 @@
 			{rows.length === 1 ? 'item' : 'items'}
 		</h2>
 		<p>
-			This removes {rows.length === 1 ? 'it' : 'them'} from your catalogue here, and it cannot be
+			This removes {rows.length === 1 ? 'it' : 'them'} from your Resources here, and it cannot be
 			undone. What happens to the listings already on a marketplace is the choice below, and there
 			is no default.
 		</p>

@@ -417,6 +417,18 @@
 	flex-direction: column;
 }
 
+/* A menu opens leftward from its trigger, which is right for the triggers that
+   sit at the right edge of a row or a header — every kebab, and the header
+   asides — and wrong for one that sits at the left, where 200px of panel runs
+   off the content column and under the navigation card, taking the first word
+   of every item with it. CSS cannot choose the side by measuring, so the side
+   is named: this modifier opens the menu rightward, and a trigger nearer the
+   left edge than the menu is wide takes it. */
+.menu.menu-start {
+	right: auto;
+	left: 0;
+}
+
 .menu button {
 	text-align: left;
 	background: none;
@@ -425,7 +437,7 @@
 	padding: 9px 10px;
 	font-size: 14px;
 	color: var(--text);
-	min-height: 38px;
+	min-height: var(--control-h);
 }
 
 .menu button:hover:not(:disabled) {
@@ -509,6 +521,7 @@
 	background: var(--card);
 	border-radius: 8px;
 	padding: 8px 11px;
+	min-height: var(--control-h);
 	font: inherit;
 	font-weight: 400;
 	color: var(--ink);

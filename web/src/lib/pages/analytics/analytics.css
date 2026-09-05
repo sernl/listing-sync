@@ -61,7 +61,7 @@
 /* A tile is a card of the catalogue's own kind, sitting on the page beside
    the panels rather than inside one, so it takes the card's radius, padding
    and shadow rather than a treatment of its own. The 190px floor is what that
-   padding leaves room for: the widest tag, "from your catalogue", and the
+   padding leaves room for: the widest tag, "from your Resources", and the
    widest figure both have to clear it. */
 .an-tile {
 	background: var(--card);
@@ -141,7 +141,6 @@
 	display: grid;
 	grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
 	gap: 24px;
-	align-items: start;
 	margin: 0 0 24px;
 }
 

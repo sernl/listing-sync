@@ -27,7 +27,9 @@ import type {
 } from '$lib/api';
 import type { FormGroup, InventoryId, TermKind } from '$lib/generated/vocab';
 import { core, loadCore } from '$lib/core';
+import { licenceElections, licenceGated, rightsOf, type LicenceIntent } from '$lib/authoring';
 import { MARKETPLACE_OF } from '$lib/listings-view';
+import { platformTitle } from '$lib/platforms';
 
 // Started at module scope so the rules are ready before the seller has typed
 // anything; guarded because there is no asset to fetch while prerendering.
@@ -55,9 +57,9 @@ export const GROUP_HEADINGS: Record<FormGroup, string> = {
 export const GROUP_HELP: Partial<Record<FormGroup, string>> = {
 	files: 'The file buyers download, an optional preview, and the images that front the listing.',
 	price: 'Free hides the price and the tax code, exactly as it does on TPT.',
-	categories: 'How buyers find this. Each picker is its own vocabulary and its own limit.',
+	categories: 'How buyers find this, and each list has its own limit.',
 	details: 'Nothing here is required.',
-	product_status: 'Active listings are visible on the site and searchable. Inactive listings are only visible to you.'
+	product_status: 'Active listings show up in search; inactive ones only you can see.'
 };
 
 /** The Education Standards heading's helper text, or nothing.
@@ -151,6 +153,13 @@ export interface TptDraft {
 	copyright: string | null;
 	/** `0` draft, `1` live. */
 	status: string;
+	/** The rights grant the seller states, where a chosen marketplace gates one.
+	 *
+	 *  One value for the whole listing rather than one per marketplace: the Tes
+	 *  inventories serve the identical refdata set, and a licence that differed
+	 *  between them would be the same grant issued twice. Never defaulted — a
+	 *  rights grant is the seller's to make. */
+	licence: string | null;
 	inventories: InventoryId[];
 	/** One marketplace's own value for one field, held only where the seller
 	 *  edited it away from the canonical one. Keyed `inventory:field`. */
@@ -184,6 +193,7 @@ export function emptyTptDraft(): TptDraft {
 		answerKey: null,
 		copyright: null,
 		status: '0',
+		licence: null,
 		inventories: [],
 		overrides: {}
 	};
@@ -341,7 +351,11 @@ export interface Refusal {
  *  `vocabulary` is still taken because it is what the page has and what the
  *  caller passes; the caps it carries are no longer read here, since the module
  *  holds the same numbers from the same capture. */
-export function refusalsOf(draft: TptDraft, vocabulary: FormVocabularyView | null): Refusal[] {
+export function refusalsOf(
+	draft: TptDraft,
+	vocabulary: FormVocabularyView | null,
+	known: ReadonlyMap<InventoryId, VocabularyView> = new Map()
+): Refusal[] {
 	void vocabulary;
 	const found: Refusal[] = [];
 	const rules = core();
@@ -366,14 +380,67 @@ export function refusalsOf(draft: TptDraft, vocabulary: FormVocabularyView | nul
 	// The one rule the core does not hold, and the reason it does not: the
 	// domain describes a product, and which marketplaces to publish it to is a
 	// decision about this listing rather than a property of the product.
-	if (draft.inventories.length === 0) {
+	//
+	// A resource with no marketplace is a draft kept here, which is a thing a
+	// seller is allowed to want, so no marketplace is no longer refused. What
+	// is refused is a marketplace chosen without a file, because that is the
+	// combination the marketplace itself will not take.
+	if (needsFileBeforeMarketplace(draft)) {
 		found.push({
 			group: 'product_status',
 			control: null,
-			message: 'Choose at least one marketplace to create this draft on.'
+			message: 'Add your file before sending this to a marketplace.'
+		});
+	}
+	// The second rule the core does not hold, and for the same reason: which
+	// marketplaces carry this listing is a decision about the listing, and only
+	// that decision makes a licence necessary.
+	//
+	// Refused rather than left to the server, because the server refuses it
+	// either way: `required_fields_answered` in `crates/tam-api/src/catalogue.rs`
+	// rejects a create naming a marketplace whose registry declares a required
+	// field it cannot see answered. Sending it and reading the refusal back was
+	// how every Tes create from this form failed.
+	for (const inventory of unlicensed(draft, known)) {
+		found.push({
+			group: 'product_status',
+			control: 'Licence',
+			message: `Choose a licence for ${platformTitle(inventory)}; it will not list without one.`
 		});
 	}
 	return found;
+}
+
+/** Every chosen marketplace that gates a licence and has not been given one. */
+export function unlicensed(
+	draft: TptDraft,
+	known: ReadonlyMap<InventoryId, VocabularyView>
+): InventoryId[] {
+	if (draft.licence !== null && draft.licence.length > 0) {
+		return [];
+	}
+	return licenceGated(draft.inventories, known);
+}
+
+/** The pricing branch this listing's licence is gated on. Tes refuses a
+ *  Creative Commons licence with a price and refuses `TES-PAID` without one,
+ *  so the free tick decides which values are offered. */
+export function licenceIntentOf(draft: TptDraft): LicenceIntent {
+	return {
+		licence: draft.licence,
+		inventories: draft.inventories,
+		branch: draft.free ? 'free' : 'paid'
+	};
+}
+
+/** Whether the seller has asked for a marketplace listing without the file it
+ *  would carry, which is what opens the warning on this form.
+ *
+ *  A function rather than a condition written into the markup, so one
+ *  assertion holds it: a rule reachable only by rendering the page is a rule
+ *  nothing cheap can check. */
+export function needsFileBeforeMarketplace(draft: TptDraft): boolean {
+	return draft.inventories.length > 0 && draft.payload.length === 0;
 }
 
 /** Something worth saying that blocks nothing. */
@@ -768,6 +835,9 @@ export function applyToAll(draft: TptDraft, field: string, value: string): TptDr
 export function draftInputOf(draft: TptDraft): DraftInput {
 	return {
 		name: draft.name,
+		// D32: the file becomes necessary only where a marketplace is named, and
+		// the core cannot know the destination, so the form states it.
+		for_marketplace: draft.inventories.length > 0,
 		payload_hash: draft.payload[0]?.hash ?? null,
 		preview_hash: draft.previews[0]?.hash ?? null,
 		video_preview_hash: draft.videoPreview?.hash ?? null,
@@ -863,12 +933,28 @@ export function tptBaseOf(draft: TptDraft): TptBaseInput {
 /** The draft as `POST /v1/products` reads it.
  *
  *  Every field the form collects travels: what `product` itself holds on the
- *  body, and everything else in the `tpt_base` block the sidecar stores. */
-export function createBodyOf(draft: TptDraft): CreateProductBody | null {
+ *  body, and everything else in the `tpt_base` block the sidecar stores.
+ *
+ *  `known` is what each chosen marketplace declares, and it is what turns the
+ *  seller's licence into the two shapes the server reads it in — the product's
+ *  own rights declaration and one already-answered election per gating
+ *  marketplace. Both are composed by `$lib/authoring`, which held the tested
+ *  answer while this function sent `elections: []` and no `rights` at all: the
+ *  server's `required_fields_answered` then refused every Tes create, and no
+ *  Tes listing could be made from this form. Passing no map composes neither,
+ *  which is correct for a listing that names no marketplace. */
+export function createBodyOf(
+	draft: TptDraft,
+	known: ReadonlyMap<InventoryId, VocabularyView> = new Map()
+): CreateProductBody | null {
 	const price = priceIntentOf(draft);
-	if (price === null || draft.payload.length === 0) {
+	// No file is a resource kept here (D32), so only an unsendable price stops
+	// the body being composed. The marketplace case is a refusal the form
+	// already carries, not a body it declines to build.
+	if (price === null) {
 		return null;
 	}
+	const intent = licenceIntentOf(draft);
 	return {
 		title: draft.name.trim(),
 		body: draft.description,
@@ -879,8 +965,9 @@ export function createBodyOf(draft: TptDraft): CreateProductBody | null {
 		previews: draft.previews,
 		subjects: [],
 		grades: gradePathsOf(draft),
+		rights: rightsOf(intent, known),
 		inventories: draft.inventories,
-		elections: [],
+		elections: licenceElections(intent, known),
 		tpt_base: tptBaseOf(draft)
 	};
 }
@@ -888,10 +975,112 @@ export function createBodyOf(draft: TptDraft): CreateProductBody | null {
 /** What the form renders and does not collect, named so the page can say so
  *  rather than implying otherwise.
  *
- *  One entry. The four thumbnail slots are laid out as TPT lays them out, and
- *  attaching bytes to a named slot needs a per-slot upload `POST /v1/uploads`
- *  does not offer: it takes one file per request with no slot to name it. The
- *  thumbnail *mode* is collected and stored; the images are not. */
-export const UNCOLLECTED_FIELDS: readonly string[] = [
-	'the four thumbnail images, whose slots are rendered but collect no bytes yet'
-];
+ *  Empty, and the page says nothing where it is. The four thumbnail slots used
+ *  to be the one entry, on the reasoning that a per-slot upload needed an
+ *  endpoint `POST /{version}/uploads` does not offer. That was wrong about the
+ *  endpoint rather than about the slots: it takes one file per request and
+ *  answers with that file's own handle, so the slot is named by which request
+ *  the client made rather than by anything the wire carries, and the handles
+ *  land in the sidecar's `thumbnail_hashes` in slot order. */
+export const UNCOLLECTED_FIELDS: readonly string[] = [];
+
+/** One thumbnail slot's state, in the order TPT lays the four out.
+ *
+ *  `local` is the seller's own bytes as the browser can draw them, held from
+ *  the instant the file is chosen so the picture appears before the upload
+ *  finishes. `handle` is what the server answered with, and only a slot that
+ *  has one is a slot the create carries. The two are separate because the gap
+ *  between them is exactly the interval the seller is told about. */
+export interface ThumbnailSlot {
+	local: string | null;
+	handle: FileHandle | null;
+	sending: boolean;
+	refusal: string | null;
+}
+
+export function emptySlots(): ThumbnailSlot[] {
+	return [0, 1, 2, 3].map(() => ({
+		local: null,
+		handle: null,
+		sending: false,
+		refusal: null
+	}));
+}
+
+/** The handles the create carries, in slot order and skipping the empty ones.
+ *
+ *  Skipping rather than padding: the sidecar stores a list and a slot nobody
+ *  filled is not a thumbnail, so a placeholder would be a hash standing for no
+ *  bytes — which is the thing `create_product`'s own check refuses. */
+export function thumbnailHandles(slots: readonly ThumbnailSlot[]): FileHandle[] {
+	return slots.flatMap((slot) => (slot.handle === null ? [] : [slot.handle]));
+}
+
+/** Whether any slot is still being sent, which is what the form waits on
+ *  before it will submit: a create composed mid-upload would carry fewer
+ *  thumbnails than the seller chose and say nothing about it. */
+export function slotsSettling(slots: readonly ThumbnailSlot[]): boolean {
+	return slots.some((slot) => slot.sending);
+}
+
+/** What the seller is told once the draft exists.
+ *
+ *  Three arms, and the zero one is the reason this is a function rather than a
+ *  ternary in the handler: an empty mapping list fell through to the plural and
+ *  read "Draft created on 0 marketplaces. Publish when you are ready.", which
+ *  miscounts and then tells a seller to publish something they deliberately
+ *  kept here. The page's own footer already says "kept here"; this is the one
+ *  place that disagreed with it.
+ *
+ *  Lifted out of the template for the reason `sweep-triage.md` gives: a
+ *  substitution written in markup is reachable only by rendering the page. */
+export function createdToast(marketplaces: number): string {
+	if (marketplaces === 0) {
+		return 'Draft saved here. Choose marketplaces when you are ready.';
+	}
+	if (marketplaces === 1) {
+		return 'Draft created on one marketplace. Publish when you are ready.';
+	}
+	return `Draft created on ${marketplaces} marketplaces. Publish when you are ready.`;
+}
+
+/** Whether the create should navigate to the resource it just made.
+ *
+ *  No, where the seller has left the create form while the request was in
+ *  flight. A create takes seconds against a real server, and `goto` after the
+ *  response yanks a seller who has moved on to some other page onto a detail
+ *  page they did not ask for — reproduced six times in six. The toast still
+ *  fires, because the draft really was created and saying so is the point;
+ *  only the navigation is abandoned.
+ *
+ *  Compares the path the submit was made from with the path now, rather than a
+ *  boolean set on unmount: the form is not unmounted by every navigation that
+ *  matters, and a path is the thing a test can hold. */
+export function shouldLandOnCreated(submittedFrom: string, nowAt: string): boolean {
+	return submittedFrom === nowAt;
+}
+
+/** Why this file cannot be a thumbnail, or `null` where it can.
+ *
+ *  Two refusals the browser can make before a byte is sent. `accept="image/*"`
+ *  on the input is a picker hint only — it does not survive a drag-and-drop —
+ *  and the create's own held-bytes check proves a blob exists without proving
+ *  it is an image or that it is small, because `blob` records a size but no
+ *  kind. So a seller who drops a PDF or a 200 MB photo on a slot learns here
+ *  rather than from a thumbnail that is permanently broken on the listing.
+ *
+ *  This does not close the same gap for a crafted API call, which is a
+ *  server-side check against bytes the server would have to read. */
+export function thumbnailRefusal(
+	kind: string,
+	bytes: number,
+	maxBytes: number
+): string | null {
+	if (!kind.startsWith('image/')) {
+		return 'Thumbnails have to be pictures. Choose a JPEG, PNG or GIF.';
+	}
+	if (bytes > maxBytes) {
+		return `That picture is ${Math.round(bytes / 1024 / 1024)} MB and the limit is ${Math.round(maxBytes / 1024 / 1024)} MB.`;
+	}
+	return null;
+}

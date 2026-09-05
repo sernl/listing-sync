@@ -436,24 +436,6 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* The import-drain table. Its scroller and its two cell modifiers live here
-   rather than in the sheet this wave retires, where this page was their only
-   consumer: `overflow-x` on the wrapper is the only thing standing between a
-   nine-column table and horizontal page scroll at 390. `.num` stays shared,
-   because four other tables use it. */
-
-.drain-wrap {
-	overflow-x: auto;
-}
-
-.drain-wrap .gate-row td {
-	font-weight: 600;
-}
-
-.drain-wrap td.flag {
-	color: var(--warn);
-}
-
 /* The question a reconciliation row asks */
 
 .question-row {

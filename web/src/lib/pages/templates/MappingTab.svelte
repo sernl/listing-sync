@@ -181,7 +181,7 @@
 
 <Panel
 	title="Add an override"
-	description="An override tells us which of a marketplace's own values one of your subjects, topics, resource types or phases should land in. It applies to your catalogue alone and reaches no one else."
+	description="Choose which of a marketplace's own values one of your own words lands in. This applies to your resources alone."
 >
 	<div class="tpl-grid">
 		<Field label="Marketplace" id="{base}-inventory">
@@ -242,17 +242,16 @@
 				<span>
 					{platformTitle(inventory)} has no field of its own for {AXIS_LABEL[
 						axis
-					].toLowerCase()}, so there is nothing here to map onto.
+					].toLowerCase()}, so there is nothing to choose here.
 				</span>
 			</div>
 		{:else}
 			<div class="tpl-absent">
 				<b>Lands in, on {platformTitle(inventory)}</b>
 				<span>
-					{platformTitle(inventory)} publishes no value list for {AXIS_LABEL[
+					{platformTitle(inventory)} publishes no list of values for {AXIS_LABEL[
 						axis
-					].toLowerCase()}, so there is nothing here to pick from. Nothing is offered rather
-					than a free-text box that would be guessed at.
+					].toLowerCase()}, so there is nothing to pick from here.
 				</span>
 			</div>
 		{/if}
@@ -282,9 +281,7 @@
 		</div>
 	</fieldset>
 	<p class="tpl-note">
-		Belongs under: buyers on this marketplace see the heading, not your term. The difference is
-		recorded either way, so a later reader knows whether the mapping matched cleanly or lost
-		detail.
+		Belongs under: buyers on this marketplace see the heading, not your own term.
 	</p>
 
 	{#if refusal !== null}
@@ -292,9 +289,7 @@
 	{/if}
 
 	<p class="tpl-note">
-		Changing an override is saving it again: one marketplace, axis and term hold one answer, so a
-		save replaces what is there rather than adding a second beside it. This is not Reconciliation,
-		which answers a gap in the shared mapping once, for everybody.
+		Saving again replaces your answer for the same marketplace, field and term.
 	</p>
 
 	<div class="tpl-actions">

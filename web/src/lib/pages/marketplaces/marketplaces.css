@@ -72,37 +72,77 @@
 	background: none;
 }
 
+/* Wraps at every width rather than in the two-column band alone. A marketplace
+   name is the one string on this page that must not be broken to fit — the grid
+   exists to say which marketplace an entry is, and `TeachBuyS / ell` says a
+   different one — so when the row runs short the status pill takes its own line
+   and the name keeps the width it needs. `min-width` on the name is what forces
+   that: without it the flex algorithm shrinks the name to nothing rather than
+   wrapping the pill, because `overflow-wrap` lets it. The floor is the name's
+   own min-content width rather than a number, so each card asks for exactly
+   what its name needs: `Etsy` keeps its pill on the first line where
+   `TeachMzantsi` cannot, instead of one number deciding for both. */
 .mp-cap {
 	display: flex;
 	align-items: flex-start;
 	gap: 12px;
+	flex-wrap: wrap;
 	min-width: 0;
 }
 
 /* Wider than it is tall, against the specification's 40px square. Most of
    these marketplaces publish a wordmark rather than a glyph, several at better
-   than four to one, and a square tile renders those a few pixels tall. The
-   height is the specification's; only the width moves, and it moves once for
-   every tile so the grid still reads as one row of marks. */
+   than four to one, and a square tile renders those a few pixels tall. Both
+   axes are that square scaled up rather than the width alone: at 78 by 38 of
+   usable room a five-to-one wordmark draws 15px tall, where the earlier 46 by
+   30 drew it at 9. One size for every mark, so the grid still reads as one row
+   of marks.
+
+   Flex rather than grid, for the tile's one invariant: nothing it holds may
+   exceed it. A grid row sized `auto` grows to its own content, so an image
+   asking for `height: 100%` grew the row past the tile and `overflow` clipped
+   the difference — which cropped every mark whose proportions were squarer than
+   the tile's own, twelve of the twenty, TES, TPT and Etsy among them; Lemon
+   Squeezy lost half its height. A flex container of fixed height resolves
+   that percentage against the tile, so the image cannot outgrow what holds
+   it. */
 .mp-mark {
-	width: 56px;
-	height: 40px;
+	width: 96px;
+	height: 56px;
 	flex: none;
-	border-radius: 10px;
+	border-radius: 12px;
 	border: 1px solid var(--line);
 	background: var(--surface);
-	display: grid;
-	place-items: center;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	overflow: hidden;
-	padding: 4px;
+	padding: 8px;
+}
+
+/* The square tile, for a mark whose own proportions are square: a glyph, an
+   app icon, or a logo that was already square before any of this. Same height
+   and same padding as the wide tile, so a row mixing the two keeps one line of
+   marks and one baseline for the names beside them; only the width moves, and
+   it moves to exactly the room a square mark uses, 38px, rather than leaving
+   40px of tile empty either side of it.
+
+   A square mark draws the same 38 by 38 in either tile, so this is a change of
+   box and not of mark — what it removes is the dead space, which is what made
+   the grid read as though the square marks were smaller than the wide ones. */
+.mp-mark.mp-square {
+	width: 56px;
 }
 
 /* Fills the tile rather than capping at an intrinsic size. `width`/`height`
    attributes on the image would set the used size and leave `max-*` only
    capping it, which laid every mark out in a 32px box inside a 48px one and
    undid the widening above. No layout shift is risked by dropping them: the
-   tile itself is a fixed 56 by 40. */
+   tile itself is a fixed 96 by 56. `contain` then draws the mark at the largest
+   size fitting both axes and centres it, so no mark is stretched off its own
+   proportions and none is cut. */
 .mp-mark img {
+	display: block;
 	width: 100%;
 	height: 100%;
 	object-fit: contain;
@@ -122,16 +162,24 @@
 }
 
 .mp-who {
-	min-width: 0;
+	min-width: auto;
 	flex: 1;
 }
 
+/* `break-word` rather than `anywhere`, and the difference is the whole of the
+   rule above: `anywhere` lets a name count as one character wide when the
+   layout asks how little it can take, which is what made a fixed `min-width`
+   necessary. `break-word` answers with the longest word instead, so the name
+   asks for the room it needs and breaks only where nothing else would fit.
+   The handle below keeps `anywhere` deliberately — an account label is
+   arbitrary text the marketplace reports, and an unbroken sixty character one
+   must not set the card's width. */
 .mp-who .t {
 	display: inline-block;
 	font-size: 17px;
 	font-weight: 600;
 	line-height: 1.2;
-	overflow-wrap: anywhere;
+	overflow-wrap: break-word;
 	color: var(--text);
 	text-decoration: none;
 }
@@ -167,9 +215,15 @@ a.mp-mark:hover {
 	overflow-wrap: anywhere;
 }
 
+/* `margin-left: auto` puts the pill at the card's right edge on whichever line
+   it lands on. Inline it changes nothing, because the name beside it already
+   takes the slack; wrapped it keeps the pill where an unwrapped one sits, so a
+   card that ran out of room on the first line still reads like the cards next
+   to it rather than like a different layout. */
 .mp-cap .status {
 	flex: none;
 	margin-top: 2px;
+	margin-left: auto;
 }
 
 .mp-body {
@@ -401,26 +455,14 @@ a.mp-mark:hover {
 	}
 }
 
-/* The two-column band, where a card's interior is about 269px and a status pill
-   takes a third of it. A marketplace name is the one string on this page that
-   must not be broken to fit — the grid exists to say which marketplace an entry
-   is, and `TeachBuyS / ell` says a different one — so the pill drops to its own
-   line instead. `min-width` on the name is what forces that: without it the flex
-   algorithm shrinks the name to nothing rather than wrapping, because
-   `overflow-wrap` lets it. */
-@media (min-width: 721px) and (max-width: 980px) {
-	.mp-cap {
-		flex-wrap: wrap;
-	}
-
+/* Below the three-column band a card's interior is about 269px in two columns
+   and about 320px in one, and against a 96px mark and a status pill either
+   leaves the name too little. A floor above what any name asks for sends every
+   pill in the band to its own line, rather than only the pills on the cards
+   with the longest names, so a narrow grid reads as one layout. */
+@media (max-width: 980px) {
 	.mp-who {
 		min-width: 130px;
-	}
-
-	/* Indented by the mark's width and its gap, so a wrapped pill sits under
-	   the name rather than under the logo. */
-	.mp-cap .status {
-		margin-left: 68px;
 	}
 }
 

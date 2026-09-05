@@ -61,7 +61,7 @@
 	background: var(--surface);
 	border-radius: var(--r-field);
 	padding: 0 11px;
-	height: 40px;
+	min-height: var(--control-h);
 	color: var(--muted);
 }
 
@@ -94,7 +94,7 @@
 
 .resources-page .mk-tile {
 	min-width: 52px;
-	height: 36px;
+	min-height: var(--control-h);
 	padding: 0 9px;
 	border-radius: var(--r-field);
 	border: 1px solid var(--line);
@@ -201,7 +201,7 @@
 	font: inherit;
 	font-size: 13px;
 	color: var(--text);
-	height: 36px;
+	min-height: var(--control-h);
 }
 
 .resources-page .res-sort:focus-visible {
@@ -442,6 +442,16 @@
 .resources-page .res-form .res-choices + .res-row,
 .resources-page .res-form .res-row + .field {
 	margin-top: 14px;
+}
+
+/* The stacking margin above is for fields in column flow. `.field + .field`
+   also matches adjacent grid items inside `.res-row`, where `gap` already
+   supplies the space, and there the margin drops every field after the first
+   by 14px and shortens it by the same — equal bottoms, staggered controls. */
+.resources-page .res-form .res-row > .field + .field,
+.resources-page .res-form .res-row > .res-choices + .field,
+.resources-page .res-form .res-row > .field + .res-choices {
+	margin-top: 0;
 }
 
 .resources-page .res-row {
@@ -726,4 +736,183 @@
    differently from two sheets. */
 .resources-page .res-danger {
 	color: var(--bad);
+}
+
+/* --- the thumbnail preview ----------------------------------------------- */
+
+/* What the seller's picture actually looks like, at the proportion the cover
+   is generated at: `COVER_WIDTH` and `COVER_HEIGHT` in
+   crates/tam-pipeline/src/render.rs are 512x384, so a preview at any other
+   aspect would show a crop the listing will not have. */
+.resources-page .res-thumb {
+	margin-top: 10px;
+}
+
+.resources-page .res-thumb-img,
+.resources-page .res-thumb-none {
+	width: min(256px, 100%);
+	aspect-ratio: 512 / 384;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--hover);
+}
+
+.resources-page .res-thumb-img {
+	object-fit: contain;
+	display: block;
+}
+
+/* The empty state says which empty it is in words. A grey rectangle alone
+   reads as a thumbnail that failed to load. */
+.resources-page .res-thumb-none {
+	display: grid;
+	place-items: center;
+}
+
+.resources-page .res-thumb-mark {
+	font-size: 12px;
+	color: var(--faint);
+}
+
+/* --- the file-first warning ---------------------------------------------- */
+
+/* Narrower than the console's other dialogs, which carry lists of choices;
+   this one carries two sentences and a button, and a wide box around them
+   reads as a page rather than as a warning.
+
+   Only above the phone breakpoint, and that bound is the whole point of the
+   rule's shape. Centring is the shared sheet's — `dialog` carries `margin:
+   auto` — and below 620px that sheet deliberately makes every dialog a
+   full-width bottom sheet. This selector outranks the element rule a media
+   query cannot add specificity to, so an unbounded width here would make this
+   the one dialog in the console that is not a sheet on a phone, which is a
+   convention broken by accident rather than a decision. */
+@media (min-width: 621px) {
+	.resources-page .res-warn {
+		width: min(420px, calc(100vw - 32px));
+	}
+}
+
+/* --- file rows ------------------------------------------------------------
+   The Files panel's rows carry controls, which the plain `.res-line` above
+   deliberately does not: its comment says a run or a file has none, and that
+   stopped being true when a seller could replace one. */
+
+.resources-page .res-file {
+	align-items: center;
+}
+
+.resources-page .res-file-acts {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-left: auto;
+}
+
+/* The whole width, so a question or a refusal reads as one sentence under the
+   row it belongs to rather than wrapping around the figures beside it. */
+.resources-page .res-file-say {
+	flex-basis: 100%;
+	margin: 6px 0 0;
+	font-size: 12.5px;
+	color: var(--faint);
+	line-height: 1.5;
+}
+
+.resources-page .res-file-no {
+	color: var(--bad);
+}
+
+.resources-page .res-file-ask {
+	flex-basis: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 8px;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--hover);
+}
+
+.resources-page .res-file-ask .res-file-say {
+	margin: 0;
+	color: var(--text);
+}
+
+.resources-page .res-file-ask .res-file-acts {
+	margin-left: 0;
+}
+
+.resources-page .res-file-add {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	padding-top: 12px;
+	border-top: 1px solid var(--line);
+}
+
+/* Off-screen rather than display:none: an input that is not rendered cannot be
+   opened by a click in every browser, and this one is opened by script. */
+.resources-page .res-file-pick {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* --- the four thumbnail slots ------------------------------------------- */
+
+/* The seller's own picture inside a slot, at the same proportion the cover is
+   drawn at, so a slot and the cover above it are comparable rather than two
+   different croppings of one image. */
+.resources-page .res-slot-img {
+	width: 100%;
+	aspect-ratio: 512 / 384;
+	object-fit: cover;
+	border-radius: 6px;
+	display: block;
+}
+
+/* The whole empty slot is the target, so a seller aiming at a small link does
+   not miss it. The input is moved out of sight rather than hidden, because
+   `display: none` would take it out of the tab order too. */
+.resources-page .res-slot-pick {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+	cursor: pointer;
+}
+
+.resources-page .res-slot-pick input[type='file'] {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.resources-page .res-slot-drop {
+	border: 0;
+	background: none;
+	padding: 0;
+	font: inherit;
+	font-size: 12px;
+	color: var(--muted);
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+.resources-page .res-slot-drop:hover {
+	color: var(--bad);
+}
+
+/* A file nobody named. Muted rather than italic, because the row's heading is
+   a placeholder for a name and not an emphasis of one. */
+.resources-page .res-file-anon {
+	color: var(--faint);
+	font-weight: 500;
 }

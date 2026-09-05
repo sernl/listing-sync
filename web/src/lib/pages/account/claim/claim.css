@@ -1,0 +1,124 @@
+/* The claim screen. Every class here is prefixed `claim-`, so nothing this
+   sheet declares can reach the shell's markup and nothing the shared sheets
+   declare reaches this page: a bare name is the same namespace in both
+   directions, which is what `docs/notes/engineering/sweep-triage.md` records. */
+
+.claim-page {
+	max-width: 34rem;
+	margin: 0 auto;
+	padding: 3rem 1.25rem 4rem;
+}
+
+.claim-lead {
+	margin: 0 0 1.75rem;
+	color: var(--muted);
+	line-height: 1.55;
+}
+
+.claim-card {
+	background: var(--card);
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	padding: 1.5rem;
+}
+
+.claim-title {
+	margin: 0 0 0.5rem;
+	font-size: 1.35rem;
+	font-weight: 650;
+	letter-spacing: -0.01em;
+}
+
+.claim-preview {
+	display: flex;
+	align-items: baseline;
+	gap: 0.15rem;
+	margin-top: 0.4rem;
+	font-size: 0.8rem;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+.claim-preview .claim-host {
+	opacity: 0.75;
+}
+
+.claim-preview .claim-said {
+	font-weight: 600;
+	color: var(--ink);
+}
+
+/* One row that holds whichever of the four the field is in, sized so the card
+   does not jump as the seller types. */
+.claim-verdict {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	min-height: 1.5rem;
+	margin-top: 0.5rem;
+	font-size: 0.82rem;
+}
+
+.claim-verdict.claim-good {
+	color: var(--ok);
+}
+
+.claim-verdict.claim-bad {
+	color: var(--bad);
+}
+
+.claim-verdict.claim-waiting {
+	color: var(--muted);
+}
+
+/* The glyph is blockified by the preflight, so it needs its own flex box to
+   sit on the text's baseline rather than above it. */
+.claim-verdict .claim-glyph {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.claim-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.6rem;
+	margin-top: 1.5rem;
+}
+
+.claim-banner {
+	margin: 0 0 1rem;
+}
+
+@media (max-width: 30rem) {
+	.claim-page {
+		padding: 1.75rem 1rem 3rem;
+	}
+
+	.claim-card {
+		padding: 1.15rem;
+	}
+
+	.claim-actions {
+		flex-direction: column-reverse;
+	}
+
+	.claim-actions :global(a),
+	.claim-actions :global(button) {
+		width: 100%;
+		justify-content: center;
+	}
+}
+
+.claim-out {
+	margin: 1.25rem 0 0;
+	text-align: center;
+	font-size: 0.82rem;
+}
+
+.claim-out button {
+	background: none;
+	border: 0;
+	padding: 0;
+	font: inherit;
+	cursor: pointer;
+}

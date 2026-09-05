@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { api, type DrainStats, type QueueItem } from '$lib/api';
-	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { formatShare, gateWindow, readMeasurement, toRun, type DrainRun } from '$lib/drain';
 	import { createLedger } from '$lib/ledger';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -23,10 +21,7 @@
 	let loaded = $state(false);
 	let drafts = $state<Record<string, string>>({});
 	let busy = $state<string | null>(null);
-	let runs = $state<DrainRun[]>([]);
-	let truncated = $state(false);
 
-	const gate = $derived(gateWindow(runs));
 	const questions = $derived(questionRows(items, Date.now()));
 
 	async function refetch() {
@@ -38,31 +33,21 @@
 
 	$effect(() => {
 		void refetch();
-		// The stream replays the whole un-pruned ledger from cursor zero, so
-		// the series rebuilds on load without a route of its own. Events are
-		// kept by seq here rather than read out of the store's rolling buffer,
+		// An import finishing is when new questions appear, so the queue is
+		// refetched on the event that reports one rather than polled. Events
+		// are kept by seq rather than read out of the store's rolling buffer,
 		// which a busy tenant's item traffic would push them out of.
-		const seen = new Map<number, DrainRun>();
-		let resyncs = 0;
+		const seen = new Set<number>();
 		const ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
 		const unsubscribe = ledger.subscribe((state) => {
-			if (state.resyncs !== resyncs) {
-				resyncs = state.resyncs;
-				truncated = true;
-			}
 			let fresh = false;
 			for (const event of state.events) {
-				if (event.kind !== 'ImportDrainMeasured' || seen.has(event.seq)) {
-					continue;
-				}
-				const measurement = readMeasurement(event.payload);
-				if (measurement) {
-					seen.set(event.seq, toRun(event.seq, measurement));
+				if (event.kind === 'ImportDrainMeasured' && !seen.has(event.seq)) {
+					seen.add(event.seq);
 					fresh = true;
 				}
 			}
 			if (fresh) {
-				runs = [...seen.values()].sort((left, right) => left.seq - right.seq);
 				void refetch();
 			}
 		});
@@ -85,10 +70,10 @@
 		busy = item.id;
 		try {
 			await api.resolve(item.id, segments);
-			toast('info', 'Resolved; every later product carrying this term finds the edge.');
+			toast('info', 'Saved. Every later resource with this word will use it.');
 			await refetch();
 		} catch {
-			toast('error', 'The resolution was refused; the path may already be claimed.');
+			toast('error', 'That answer was refused. The path may already be in use.');
 		} finally {
 			busy = null;
 		}
@@ -96,8 +81,8 @@
 
 	async function noCounterpart(item: QueueItem) {
 		const sure = confirm(
-			'Record that this term has no counterpart? Items will omit it in ' +
-				'this inventory from now on.'
+			'Record that this word has no match on that marketplace? Listings will ' +
+				'leave it out from now on.'
 		);
 		if (!sure) {
 			return;
@@ -105,7 +90,7 @@
 		busy = item.id;
 		try {
 			await api.noCounterpart(item.id);
-			toast('info', 'Recorded; the term is omitted rather than blocking.');
+			toast('info', 'Recorded. That word will be left out instead of holding things up.');
 			await refetch();
 		} finally {
 			busy = null;
@@ -164,72 +149,6 @@
 					</div>
 				</div>
 			{/each}
-		{/if}
-	</Panel>
-
-	<Panel
-		title="Import drain"
-		description="The share of canonical terms each import raised a new question for."
-	>
-		{#if runs.length === 0}
-			<p class="quiet">
-				No import has recorded a drain report yet. Each run records one, and the ledger keeps 30
-				days of them.
-			</p>
-		{:else}
-			<p class="s">
-				{#if gate.fall === null}
-					{runs.length} of 10 migrations recorded; the gate compares the first against the tenth.
-				{:else}
-					First {formatShare(gate.first?.share ?? null)} → tenth
-					{formatShare(gate.tenth?.share ?? null)}: a fall of {formatShare(gate.fall)}.
-				{/if}
-			</p>
-
-			<div class="drain-wrap">
-				<table>
-					<thead>
-						<tr>
-							<th class="num">#</th>
-							<th>Direction</th>
-							<th class="num">Rows</th>
-							<th class="num">Terms seen</th>
-							<th class="num">Unmapped</th>
-							<th class="num">Covered</th>
-							<th class="num">New</th>
-							<th class="num">Already open</th>
-							<th class="num">Share</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each runs as run, index (run.seq)}
-							<tr class={index === 0 || index === 9 ? 'gate-row' : ''}>
-								<td class="num">{index + 1}</td>
-								<td>{run.source} → {run.target}</td>
-								<td class="num">{run.rows}</td>
-								<td class="num">{run.terms_seen}</td>
-								<td class="num {run.terms_unmapped > 0 ? 'flag' : ''}">{run.terms_unmapped}</td>
-								<td class="num">{run.terms_covered}</td>
-								<td class="num">{run.items_new}</td>
-								<td class="num">{run.items_already_open}</td>
-								<td class="num">{formatShare(run.share)}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-
-			<p class="foot-note">
-				Unmapped terms never became canonical, so they are outside the share: a share that falls
-				while that column rises is an ingest gap rather than a converging crosswalk.
-			</p>
-		{/if}
-
-		{#if truncated}
-			<Banner tone="warn">
-				The ledger was pruned past the start of this stream, so runs older than the 30-day window
-				are not shown and the first row above may not be the first migration.
-			</Banner>
 		{/if}
 	</Panel>
 </div>

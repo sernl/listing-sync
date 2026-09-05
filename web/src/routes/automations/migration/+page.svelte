@@ -191,8 +191,8 @@
 			{#if connectionsUnread}
 				<Panel title="Bring a shop across">
 					<p class="quiet">
-						Your marketplaces could not be read, so this page cannot say whether you have a
-						shop to bring across. Nothing has been started.
+						Your marketplaces could not be read, so we cannot tell whether you have a shop to
+						bring across; nothing has been started.
 					</p>
 				</Panel>
 			{:else if from === null}
@@ -243,11 +243,11 @@
 							{/snippet}
 						</Banner>
 					{:else if !declared}
-						<Banner tone="warn" title="Declare authorship first">
+						<Banner tone="warn" title="Declare the copyright holder first">
 							{AUTHORSHIP_FIRST}
 							{#snippet action()}
 								<Button href={AUTHORSHIP_HREF} tier="primary" small>
-									Declare authorship for TPT
+									Declare copyright for TPT
 								</Button>
 							{/snippet}
 						</Banner>
@@ -279,12 +279,12 @@
 
 			<Panel
 				title="Your migrations"
-				description="Every shop you have brought across, newest first. A migration that is still waiting for your device has no run of its own yet, so this is where it lives."
+				description="Every shop you have brought across, newest first."
 			>
 				{#if requestsUnread}
 					<p class="quiet">
 						Your migrations could not be read, so this page cannot list them. Any migration
-						you have already started is still running; nothing here has changed it.
+						already running is unaffected.
 					</p>
 				{:else if !requestsLoaded}
 					<p class="quiet">Loading…</p>

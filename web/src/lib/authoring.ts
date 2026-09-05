@@ -85,8 +85,19 @@ const MEASURE: Record<LengthUnit, (text: string) => number> = {
 	GraphemeClusters: (text) => [...text].length
 };
 
+/** The length of a value in the unit a cap declares, in code units where the
+ *  unit is one this client does not know.
+ *
+ *  The fallback is not defensive habit. `unit` arrives from the wire and this
+ *  index has no guard, so a unit added to `LengthUnit` and served before this
+ *  client is rebuilt throws inside a render — and a throw during render blanks
+ *  the whole page, taking the form down over a character counter. The count is
+ *  advisory and the cap it feeds is disclosed rather than enforced, so a count
+ *  measured in the wrong unit is a far smaller wrong than a page that stops
+ *  drawing. UTF-16 code units because that is what every measured cap in the
+ *  registry counts in today. */
 export function measure(text: string, unit: LengthUnit): number {
-	return MEASURE[unit](text);
+	return (MEASURE[unit] ?? MEASURE.Utf16CodeUnits)(text);
 }
 
 // ---------------------------------------------------------------- the payload
@@ -135,7 +146,13 @@ export function licenceOptions(
 	view: VocabularyView | undefined,
 	branch: PricingBranch
 ): readonly NativeValueView[] {
-	const gate = view?.authoring.licence;
+	// Nullish rather than `=== undefined`, and the difference is not
+	// hypothetical: the server omits the key entirely — `licence` carries
+	// `skip_serializing_if = "Option::is_none"` — but a JSON source that writes
+	// `"licence": null` instead passes an `=== undefined` guard and then throws
+	// on `gate.native` one line later. Absent and null mean the same thing here
+	// and are read the same way.
+	const gate = view?.authoring.licence ?? undefined;
 	if (view === undefined || gate === undefined) {
 		return [];
 	}
@@ -145,19 +162,6 @@ export function licenceOptions(
 }
 
 // --------------------------------------------------------------- the subjects
-
-/** The chosen subject ids with one term added or removed.
- *
- * The seller's own order is kept rather than sorted: `subjects` reaches the
- * wire as a list, and reordering it on every tick would send something other
- * than what was done. Ticking a term already held is a no-op, so a repeated
- * change event cannot write it twice. */
-export function toggleSubject(chosen: readonly string[], term: string, on: boolean): string[] {
-	if (!on) {
-		return chosen.filter((held) => held !== term);
-	}
-	return chosen.includes(term) ? [...chosen] : [...chosen, term];
-}
 
 // ------------------------------------------------------------ platform fields
 
@@ -240,66 +244,21 @@ export function axisControls(view: VocabularyView): AxisControl[] {
 
 // ------------------------------------------------------------------ the draft
 
-/** What the seller has typed, before it becomes a request body.
+/** What a stated price needs from whatever composed it.
  *
- * `licence` is one value for the whole product rather than one per platform:
- * the three Tes inventories serve the identical refdata set, and a licence
- * that differed between them would be the same grant issued twice. */
-export interface Draft {
-	title: string;
-	body: string;
-	bodyFormat: CopyFormat;
+ *  Narrower than any one draft type, for the reason the licence helpers are:
+ *  the form that asked this question through the generic `Draft` has gone, and
+ *  a parameter typed to a whole draft is unreachable from the edit seed that
+ *  still asks it. */
+export interface StatedPrice {
 	branch: PricingBranch;
 	amount: string;
 	currency: string;
-	payload: FileHandle[];
-	cover: FileHandle | null;
-	previews: FileHandle[];
-	inventories: InventoryId[];
-	licence: string | null;
-	/** Canonical term ids, which is what the create body's `subjects` takes.
-	 *  Ours rather than any one marketplace's, so it is answered once for the
-	 *  whole product. */
-	subjects: string[];
-	/** Native ids chosen per inventory, keyed by the native's own name. */
-	axes: Record<string, string[]>;
-}
-
-/** The key one platform's answer to one axis is held under. */
-export function axisKey(inventory: InventoryId, native: string): string {
-	return `${inventory}:${native}`;
-}
-
-export function emptyDraft(): Draft {
-	return {
-		title: '',
-		body: '',
-		bodyFormat: 'Markdown',
-		branch: 'free',
-		amount: '',
-		currency: 'Gbp',
-		payload: [],
-		cover: null,
-		previews: [],
-		inventories: [],
-		licence: null,
-		subjects: [],
-		axes: {}
-	};
-}
-
-/** A refusal the seller can act on. `blocking` refusals mirror something the
- *  server will refuse; the rest are what a platform will do to the value
- *  quietly, which is worth saying before it happens rather than after. */
-export interface Refusal {
-	field: 'title' | 'description' | 'price' | 'files' | 'platforms' | 'licence';
-	message: string;
-	blocking: boolean;
 }
 
 /** The price a draft states, or `null` where it states none this client will
  *  send. */
-export function priceOf(draft: Draft): PriceIntent | null {
+export function priceOf(draft: StatedPrice): PriceIntent | null {
 	if (draft.branch === 'free') {
 		return 'Free';
 	}
@@ -310,149 +269,35 @@ export function priceOf(draft: Draft): PriceIntent | null {
 	return { Paid: { minor_units: minorUnits, currency: draft.currency } };
 }
 
-function capRefusal(
-	spec: CanonicalFieldView | undefined,
-	text: string,
-	field: 'title' | 'description',
-	platform: string
-): Refusal | null {
-	if (spec?.cap === undefined) {
-		return null;
-	}
-	const used = measure(text, spec.cap.unit);
-	if (used <= spec.cap.limit) {
-		return null;
-	}
-	return {
-		field,
-		message: `${platform} caps the ${field} at ${spec.cap.limit} and will shorten it to fit; this one is ${used}.`,
-		blocking: false
-	};
-}
-
-function floorRefusal(authoring: AuthoringView, price: PriceIntent | null, platform: string) {
-	const floor = authoring.price_floor_minor_units;
-	if (floor === undefined || price === null || price === 'Free') {
-		return null;
-	}
-	if (price.Paid.minor_units >= floor) {
-		return null;
-	}
-	return {
-		field: 'price' as const,
-		message: `${platform} refuses a price below ${floor} minor units when the listing is written.`,
-		blocking: false
-	};
-}
-
-/** Whether this product answers every field a selected platform declares
- *  required.
+/** What answering the licence question needs to know about a draft, whichever
+ *  form composed it.
  *
- * Requiredness is reported as the registry has it and never invented: the Tes
- * licence is the only field declared required anywhere, because it is the
- * only refusal anyone has measured. A required field this form has not been
- * taught reads as unanswered rather than as silently satisfied, which is what
- * the server does too. */
-export function unansweredRequired(
-	draft: Draft,
+ *  Narrower than [`Draft`] deliberately. The create form on the TPT base holds
+ *  a different draft shape and asks the identical question, and a function
+ *  typed to the wider one is unreachable from there without a second copy of
+ *  it — which is how the TPT form came to send no licence at all while this
+ *  file held a tested answer. Typing the parameter as the narrower shape is
+ *  what stops the next form doing the same. */
+export interface LicenceIntent {
+	licence: string | null;
+	inventories: readonly InventoryId[];
+	branch: PricingBranch;
+}
+
+/** Which of these marketplaces gate a licence on a create, in the order given.
+ *  Empty where none does, which is what decides whether a form asks at all. */
+export function licenceGated(
+	inventories: readonly InventoryId[],
 	vocabularies: ReadonlyMap<InventoryId, VocabularyView>
-): { inventory: InventoryId; native: string }[] {
-	const unmet: { inventory: InventoryId; native: string }[] = [];
-	for (const inventory of draft.inventories) {
-		const view = vocabularies.get(inventory);
-		if (view === undefined) {
-			continue;
-		}
-		for (const native of view.natives) {
-			if (!native.required) {
-				continue;
-			}
-			const axis = view.axes.find((binding) => binding.native === native.name);
-			const answered =
-				axis?.axis === 'licence' ? draft.licence !== null && draft.licence.length > 0 : false;
-			if (!answered) {
-				unmet.push({ inventory, native: native.name });
-			}
-		}
-	}
-	return unmet;
+): InventoryId[] {
+	// `!= null` rather than `!== undefined`, for the same reason as
+	// [`licenceOptions`]: a written-out `"licence": null` is not a gate, and
+	// reading it as one would ask a seller for a licence the marketplace has no
+	// field for and then refuse the create until they chose one.
+	return inventories.filter(
+		(inventory) => vocabularies.get(inventory)?.authoring.licence != null
+	);
 }
-
-/** Everything the seller should see before submitting, in the order the form
- *  reads.
- *
- * The blocking entries mirror what `POST /v1/products` refuses, so the seller
- * sees them without a round trip; the server's refusals stay the authority
- * and surface on their own if one is hit anyway. */
-export function refusalsOf(
-	draft: Draft,
-	vocabularies: ReadonlyMap<InventoryId, VocabularyView>
-): Refusal[] {
-	const found: Refusal[] = [];
-	if (draft.title.trim().length === 0) {
-		found.push({ field: 'title', message: 'A product needs a title.', blocking: true });
-	}
-	if (draft.payload.length === 0) {
-		found.push({
-			field: 'files',
-			message: 'A product needs at least one payload file; upload the bytes first.',
-			blocking: true
-		});
-	}
-	const price = priceOf(draft);
-	if (price === null) {
-		found.push({
-			field: 'price',
-			message: 'A paid price is a positive amount, written in the currency’s own units.',
-			blocking: true
-		});
-	}
-	if (draft.inventories.length === 0) {
-		found.push({
-			field: 'platforms',
-			message: 'Choose at least one marketplace to create this draft on.',
-			blocking: true
-		});
-	}
-	for (const { inventory, native } of unansweredRequired(draft, vocabularies)) {
-		found.push({
-			field: native === 'licence' ? 'licence' : 'platforms',
-			message: `${platformTitle(inventory)} requires ${native}, and this product does not carry one.`,
-			blocking: true
-		});
-	}
-	for (const inventory of draft.inventories) {
-		const view = vocabularies.get(inventory);
-		if (view === undefined) {
-			continue;
-		}
-		const platform = platformTitle(inventory);
-		const refusal = payloadRefusal(view.authoring.payload_files, draft.payload.length);
-		if (refusal !== null) {
-			found.push({ field: 'files', message: `${platform} ${refusal}.`, blocking: true });
-		}
-		const spec = (field: string) => view.canonical.find((entry) => entry.field === field);
-		const title = capRefusal(spec('title'), draft.title, 'title', platform);
-		if (title !== null) {
-			found.push(title);
-		}
-		const body = capRefusal(spec('description'), draft.body, 'description', platform);
-		if (body !== null) {
-			found.push(body);
-		}
-		const floor = floorRefusal(view.authoring, price, platform);
-		if (floor !== null) {
-			found.push(floor);
-		}
-	}
-	return found;
-}
-
-export function submittable(refusals: readonly Refusal[]): boolean {
-	return !refusals.some((refusal) => refusal.blocking);
-}
-
-// ------------------------------------------------------------- the request
 
 /** The licence answers a create carries.
  *
@@ -462,15 +307,14 @@ export function submittable(refusals: readonly Refusal[]): boolean {
  * mapping. The product's own rights declaration is written alongside, because
  * that is the field the product view reads back and the edit form writes. */
 export function licenceElections(
-	draft: Draft,
+	draft: LicenceIntent,
 	vocabularies: ReadonlyMap<InventoryId, VocabularyView>
 ): ElectionInput[] {
 	if (draft.licence === null || draft.licence.length === 0) {
 		return [];
 	}
 	const answer = { segments: [draft.licence], native_id: draft.licence };
-	return draft.inventories
-		.filter((inventory) => vocabularies.get(inventory)?.authoring.licence !== undefined)
+	return licenceGated(draft.inventories, vocabularies)
 		.map((inventory) => ({
 			inventory,
 			axis: 'licence' as TermKind,
@@ -484,106 +328,17 @@ export function licenceElections(
  *  licence field. The three Tes inventories serve the identical refdata set,
  *  so which of them names the vocabulary does not change the grant. */
 export function rightsOf(
-	draft: Draft,
+	draft: LicenceIntent,
 	vocabularies: ReadonlyMap<InventoryId, VocabularyView>
 ): RightsInput | null {
 	if (draft.licence === null || draft.licence.length === 0) {
 		return null;
 	}
-	const holder = draft.inventories.find(
-		(inventory) => vocabularies.get(inventory)?.authoring.licence !== undefined
-	);
+	const [holder] = licenceGated(draft.inventories, vocabularies);
 	return holder === undefined
 		? null
 		: { inventory: holder, segments: [draft.licence], native_id: draft.licence };
 }
-
-/** The grade declaration, read off whichever selected platform binds the
- *  phase axis to a captured closed vocabulary. Every other axis answer travels
- *  as an election, because the create body carries no field for it. */
-export function gradesOf(
-	draft: Draft,
-	vocabularies: ReadonlyMap<InventoryId, VocabularyView>
-): PathInput[] {
-	const paths: PathInput[] = [];
-	for (const inventory of draft.inventories) {
-		const view = vocabularies.get(inventory);
-		if (view === undefined) {
-			continue;
-		}
-		for (const control of axisControls(view)) {
-			if (control.axis !== 'phase') {
-				continue;
-			}
-			for (const value of draft.axes[axisKey(inventory, control.native)] ?? []) {
-				paths.push({ inventory, kind: 'phase', segments: [value], native_id: value });
-			}
-		}
-	}
-	return paths;
-}
-
-/** Every writable non-phase, non-licence axis answer, as an already-answered
- *  election.
- *
- * `elect_one` generalises to nothing and the server refuses a trigger key on
- * it, so the answer is recorded against this product alone. An axis the
- * projection never raises a question about leaves its answer unused rather
- * than wrong. */
-export function axisElections(
-	draft: Draft,
-	vocabularies: ReadonlyMap<InventoryId, VocabularyView>
-): ElectionInput[] {
-	const elections: ElectionInput[] = [];
-	for (const inventory of draft.inventories) {
-		const view = vocabularies.get(inventory);
-		if (view === undefined) {
-			continue;
-		}
-		for (const control of axisControls(view)) {
-			if (control.axis === 'phase' || control.unwritableReason !== null) {
-				continue;
-			}
-			const chosen = draft.axes[axisKey(inventory, control.native)] ?? [];
-			if (chosen.length === 0) {
-				continue;
-			}
-			elections.push({
-				inventory,
-				axis: control.axis,
-				trigger: 'elect_one',
-				answers: chosen.map((value) => ({ segments: [value], native_id: value }))
-			});
-		}
-	}
-	return elections;
-}
-
-export function createBodyOf(
-	draft: Draft,
-	vocabularies: ReadonlyMap<InventoryId, VocabularyView>
-): CreateProductBody | null {
-	const price = priceOf(draft);
-	if (price === null) {
-		return null;
-	}
-	const rights = rightsOf(draft, vocabularies);
-	return {
-		title: draft.title.trim(),
-		body: draft.body,
-		body_format: draft.bodyFormat,
-		price,
-		payload: draft.payload,
-		cover: draft.cover,
-		previews: draft.previews,
-		subjects: draft.subjects,
-		grades: gradesOf(draft, vocabularies),
-		rights,
-		inventories: draft.inventories,
-		elections: [...licenceElections(draft, vocabularies), ...axisElections(draft, vocabularies)]
-	};
-}
-
 
 // ---------------------------------------------------------------- the edit
 
@@ -642,7 +397,7 @@ export function editSeedOf(product: ProductView): EditSeed {
  * the edit carries a stated grant or leaves the stored one alone — because the
  * wire has no way to say "unstated". */
 export function patchBodyOf(seed: EditSeed, licenceVocabulary: InventoryId | null) {
-	const price = priceOf({ ...emptyDraft(), ...seed });
+	const price = priceOf(seed);
 	if (price === null) {
 		return null;
 	}
@@ -697,6 +452,83 @@ export function quotaSentence(detail: unknown): string | null {
 		return `Your plan carries up to ${limit} listings and ${used} are in the catalogue.`;
 	}
 	return null;
+}
+
+/** Every field this marketplace declares required, by its own name.
+ *
+ *  Read off the served vocabulary rather than listed here, so a field the
+ *  registry adds is reported without this file being taught it. The TPT create
+ *  form carries no rights declaration and no elections, so on that form every
+ *  one of these is unanswered and the marketplace cannot be chosen there — which
+ *  is a thing to say beside the tick box rather than after the submit. */
+export function requiredFields(view: VocabularyView): string[] {
+	return view.natives.filter((native) => native.required).map((native) => native.name);
+}
+
+/** The words a seller reads for a marketplace's own field.
+ *
+ *  The server's own label wherever it sent one — `required_fields_answered`
+ *  carries `native.label`, the words the platform heads the control with — so
+ *  the sentence has one source rather than a second copy here that nothing
+ *  keeps in step. The wire name stands in for itself otherwise, which is what
+ *  the server does with an uncaptured label too. */
+export function fieldWords(native: string, label?: string): string {
+	const word = label ?? native;
+	return `a ${word.toLowerCase()}`;
+}
+
+/** One marketplace and one field it asked for and did not get. */
+export interface MissingField {
+	inventory: InventoryId;
+	field: string;
+	/** The platform's own words for the field, where the server sent them. */
+	label?: string;
+}
+
+/** The `required_field_missing` refusal's detail, read back as the pairs the
+ *  server put in it.
+ *
+ *  `required_fields_answered` in `crates/tam-api/src/catalogue.rs` composes
+ *  `detail.missing` as `{inventory, field}` entries precisely so a client can
+ *  name both, and the client threw them away: the seller read "a selected
+ *  platform requires a field this product does not carry" and could not tell
+ *  which platform or which field. Returns an empty list for a shape this
+ *  client does not recognise, so the caller falls back to the server's own
+ *  sentence rather than rendering a half-read one. */
+export function missingFields(detail: unknown): MissingField[] {
+	if (!isRecord(detail) || !Array.isArray(detail.missing)) {
+		return [];
+	}
+	return detail.missing.flatMap((entry) => {
+		if (!isRecord(entry)) {
+			return [];
+		}
+		const { inventory, field, label } = entry;
+		if (typeof inventory !== 'string' || typeof field !== 'string') {
+			return [];
+		}
+		return [
+			{
+				inventory: inventory as InventoryId,
+				field,
+				...(typeof label === 'string' ? { label } : {})
+			}
+		];
+	});
+}
+
+/** That refusal as one sentence naming every marketplace and every field, or
+ *  `null` where the detail carried none. */
+export function requiredFieldSentence(detail: unknown): string | null {
+	const missing = missingFields(detail);
+	if (missing.length === 0) {
+		return null;
+	}
+	const asked = missing.map(
+		({ inventory, field, label }) => `${platformTitle(inventory)} needs ${fieldWords(field, label)}`
+	);
+	const named = asked.length === 1 ? asked[0] : `${asked.slice(0, -1).join(', ')} and ${asked.at(-1)}`;
+	return `${named}, and this listing does not carry one yet.`;
 }
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;

@@ -5,6 +5,7 @@
 	let {
 		open = $bindable(false),
 		label,
+		align = 'end',
 		trigger,
 		children
 	}: {
@@ -12,6 +13,14 @@
 		/** Names the menu for a screen reader, since the trigger is often a
 		 *  glyph with no text of its own. */
 		label: string;
+		/** Which edge of the trigger the panel hangs from.
+		 *
+		 *  `end` is right-anchored and is what every menu near the right of a
+		 *  page needs to stay on screen; a trigger near the left edge of its
+		 *  column needs `start`, or the panel opens leftward out of the column
+		 *  and its first word is cut off. CSS cannot measure which case it is
+		 *  in, so the caller names it. */
+		align?: 'start' | 'end';
 		trigger: Snippet;
 		children: Snippet;
 	} = $props();
@@ -41,6 +50,8 @@
 <span class="menu-anchor" bind:this={anchor}>
 	{@render trigger()}
 	{#if open}
-		<div class="menu" role="menu" aria-label={label}>{@render children()}</div>
+		<div class="menu" class:menu-start={align === 'start'} role="menu" aria-label={label}>
+			{@render children()}
+		</div>
 	{/if}
 </span>

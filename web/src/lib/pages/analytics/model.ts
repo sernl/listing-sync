@@ -53,8 +53,8 @@ export interface Scope {
 }
 
 export const SCOPES: readonly Scope[] = [
-	{ id: 'all', label: 'All', hint: 'Every marketplace you have mapped a resource onto.' },
-	{ id: 'tes', label: 'TES', hint: 'Your listings on Tes.com, across all three sites.' },
+	{ id: 'all', label: 'All', hint: 'Every marketplace your resources are set up for.' },
+	{ id: 'tes', label: 'TES', hint: 'Your listings on TES, across all three sites.' },
 	{ id: 'tpt', label: 'TPT', hint: 'Your listings on Teachers Pay Teachers.' }
 ];
 
@@ -320,7 +320,7 @@ export function standingBars(standing: Standing): Bar[] {
 	const named = [
 		{
 			label: 'Live',
-			title: 'Bound to a listing the marketplace was last recorded as showing.',
+			title: 'The marketplace was last recorded showing this listing.',
 			value: standing.live
 		},
 		{
@@ -330,7 +330,7 @@ export function standingBars(standing: Standing): Bar[] {
 		},
 		{
 			label: 'Not sent yet',
-			title: 'Mapped to a marketplace, with nothing created there yet.',
+			title: 'Set up for a marketplace, with nothing created there yet.',
 			value: standing.unsent
 		},
 		{
@@ -472,10 +472,10 @@ export function tileViews(input: TileInputs): TileView[] {
 		label: 'Live listings',
 		value: input.catalogue === 'read' ? input.format(input.standing.live) : DASH,
 		figure: input.catalogue === 'read',
-		tag: 'from your catalogue',
+		tag: 'from your Resources',
 		sub:
 			input.catalogue === 'failed'
-				? 'your catalogue could not be read'
+				? 'your Resources could not be read'
 				: input.catalogue === 'pending'
 					? 'counting…'
 					: `of ${input.standing.listings} tracked`,
@@ -581,8 +581,8 @@ export function chartView(input: {
 			description: saidWhenRead(
 				input.summary,
 				capped
-					? `The ${input.limit} listings carrying the most ${metric}, longest bar first.`
-					: `Your listings carrying any ${metric}, longest bar first.`
+					? `The ${input.limit} listings with the most ${metric}, longest bar first.`
+					: `Your listings with any ${metric}, longest bar first.`
 			),
 			bars,
 			counted: false,
@@ -594,7 +594,7 @@ export function chartView(input: {
 		title: 'Where your listings stand',
 		description: saidWhenRead(
 			input.catalogue,
-			`Counted from your own catalogue, because ${silent} publishes no statistics of its own.`
+			`Counted from your own Resources, because ${silent} publishes no figures.`
 		),
 		bars: standingBars(input.standing),
 		counted: true,
@@ -619,14 +619,14 @@ export function tableView(scope: ScopeId, read: ReadState): PanelText {
 		// did, and it is the panel's whole content.
 		return {
 			title: 'Top resources',
-			description: `Nothing here is ranked: ${silentIn(scope).join(' and ')} reports no figures to rank it by.`
+			description: `Nothing here is ranked, because ${silentIn(scope).join(' and ')} reports no figures.`
 		};
 	}
 	return {
 		title: 'Top resources',
 		description: saidWhenRead(
 			read,
-			`Your listings, best first by ${CHART_HEADING.toLowerCase()}. Each row states the age of its own oldest figure.`
+			`Your listings, best first by ${CHART_HEADING.toLowerCase()}, each with the age of its oldest figure.`
 		)
 	};
 }

@@ -27,6 +27,7 @@ import type {
 	NonDelegableReason,
 	PayloadFileRule,
 	FormGroup,
+	SlugPrompt,
 	StandardsState,
 	TermKind
 } from '$lib/generated/vocab';
@@ -110,9 +111,15 @@ function patch<T>(path: string, body: unknown): Promise<T> {
 
 // ------------------------------------------------------------------ shapes
 
+/** Who the session speaks for. It carries the slug and the prompt that slug
+ *  calls for because the console's gate is answered here: `+layout.ts` calls
+ *  `/v1/whoami` before anything renders, so a seller who has claimed no slug
+ *  meets the claim screen rather than a console they would be sent away from. */
 export interface Whoami {
 	org: string;
 	user: string;
+	slug: string | null;
+	slug_prompt: SlugPrompt;
 }
 
 /** The organisation's own settings, as `/v1/org` serves and stores them. The
@@ -122,6 +129,21 @@ export interface Whoami {
 export interface OrgView {
 	id: string;
 	name: string;
+	/** The unique, URL-safe handle the seller claimed, or `null` while they have
+	 *  claimed none. Distinct from `name`, which is what they want printed. */
+	slug: string | null;
+	slug_prompt: SlugPrompt;
+}
+
+/** A verdict on one slug, not an organisation, which is why it names no
+ *  identifier. `slug` is the normalised form, so the screen can show the seller
+ *  what they would actually get.
+ *
+ *  Advisory. The write's 409 stays authoritative, because check-then-write is a
+ *  race only the server's unique index settles. */
+export interface SlugAvailability {
+	slug: string;
+	available: boolean;
 }
 
 /** One marketplace session a device holds, as the device last reported it.
@@ -159,6 +181,10 @@ export interface ProductHead {
 	id: string;
 	title: string;
 	price: unknown;
+	/** Where this resource's cover is fetched from, absent where it has none.
+	 *  The server names the URL rather than the client composing it, so the
+	 *  route is written down in one place. */
+	cover?: string | null;
 	created_at: number;
 	updated_at: number;
 }
@@ -533,6 +559,10 @@ export interface SignupsView {
 export interface OrgSummaryView {
 	org: string;
 	name: string;
+	/** The handle the tenant claimed, or `null` while they have claimed none.
+	 *  What lets an operator find a tenant from a slug quoted in a support
+	 *  email, which the provisional `org-{uuid}` name never allowed. */
+	slug: string | null;
 	created_at: number;
 	products: number;
 	mappings: number;
@@ -589,6 +619,24 @@ export interface SyncHealthView {
 	ambiguous: number;
 	skipped: number;
 	outcome_blocked: number;
+}
+
+/** One import-drain measurement as the operator route serves it: which tenant
+ *  wrote it, where in that tenant's ledger it sits, and the measurement itself
+ *  verbatim.
+ *
+ *  `payload` is `unknown` because it is `jsonb` at rest and the route passes it
+ *  through unparsed; `$lib/drain` narrows it and drops a row that is not a
+ *  measurement, so one malformed historical row cannot empty the page. */
+export interface ImportDrainRowView {
+	org: string;
+	org_name: string;
+	org_seq: number;
+	payload: unknown;
+}
+
+export interface ImportDrainView {
+	rows: ImportDrainRowView[];
 }
 
 export interface FailedWriteView {
@@ -650,6 +698,10 @@ export interface FileHandle {
 	hash: string;
 	kind: FileKind;
 	byte_len: number;
+	/** What the seller called the file they chose. The upload reads a raw body
+	 *  and a raw body carries no filename, so this is the client's word,
+	 *  carried back beside the handle rather than returned by the upload. */
+	name?: string;
 }
 
 /** What one upload landed, plus this tenant's storage headroom, which the
@@ -805,6 +857,50 @@ export interface FileView {
 	kind: FileKind;
 	byte_len: number;
 	scan: string;
+	/** What the seller called this file, where a name was recorded. Absent for
+	 *  a file stored before names existed and for a generated cover, and the
+	 *  console renders the absence rather than substituting the kind. */
+	name?: string;
+}
+
+/** What one file change did, and where it lands.
+ *
+ *  `reaches` names the marketplaces the change reaches on the next send, not
+ *  the ones it has already reached: nothing on this path contacts a
+ *  marketplace, so the copy already on one stands until that send. */
+export interface AddedFileView {
+	product: string;
+	file: FileView;
+	reaches: InventoryId[];
+}
+
+/** A replacement is a new row with a new identifier, so `removed` names the
+ *  one that stopped being this resource's rather than leaving a client to
+ *  assume its id survived. */
+export interface ReplacedFileView {
+	product: string;
+	removed: string;
+	file: FileView;
+	/** The thumbnail this replacement redrew, absent where it did not. The
+	 *  server renders it from the replacement's own bytes and reports what it
+	 *  drew; a page that assumed would tell a seller their thumbnail changed
+	 *  when it had not. */
+	cover?: FileView;
+	reaches: InventoryId[];
+}
+
+export interface RemovedFileView {
+	product: string;
+	file: string;
+	/** What became of the thumbnail: left alone, redrawn from the file that
+	 *  became the first one, or retired because nothing is left to draw one
+	 *  from. Three states rather than an optional file, because the last is not
+	 *  the absence of the second. */
+	thumbnail:
+		| { state: 'untouched' }
+		| { state: 'redrawn'; file: FileView }
+		| { state: 'retired' };
+	reaches: InventoryId[];
 }
 
 export interface PathView {
@@ -1042,6 +1138,13 @@ export interface FormVocabularyView {
 /** The draft as the form holds it, sent to the server for the verdict. */
 export interface DraftInput {
 	name?: string;
+	/** Whether this draft is bound for a marketplace (D32). A resource kept on
+	 *  Teachouse may carry no file; a marketplace listing may not, so the
+	 *  payload rule is decided by the destination and the model cannot know it.
+	 *  Optional and defaulting to false on the server, which is what lets a
+	 *  saved template — a partial draft nobody has chosen a destination for —
+	 *  round-trip without being held to a marketplace's rules. */
+	for_marketplace?: boolean;
 	payload_hash?: string | null;
 	preview_hash?: string | null;
 	video_preview_hash?: string | null;
@@ -1211,7 +1314,20 @@ export const api = {
 	logout: () => request<void>('/v1/session', { method: 'DELETE' }),
 
 	org: () => request<OrgView>('/v1/org'),
-	renameOrg: (name: string) => patch<OrgView>('/v1/org', { name }),
+
+	/** The rename and the claim are one route: a claim is the first slug write
+	 *  and a second is a rename. At least one field must be present; a body
+	 *  naming neither is refused 422 rather than treated as a no-op. The answer
+	 *  is the stored row, because a body naming one field leaves the other
+	 *  alone and only the stored row states both. */
+	updateOrg: (change: { name?: string; slug?: string }) => patch<OrgView>('/v1/org', change),
+
+	/** Whether a slug is free, as the claim screen asks while the seller types.
+	 *  Session-gated and bounded per session, because the verdict is otherwise a
+	 *  directory of every tenant's slug read one guess at a time. A malformed or
+	 *  reserved slug answers 422 rather than `available: false`. */
+	slugAvailability: (slug: string) =>
+		request<SlugAvailability>(`/v1/org/slug/${encodeURIComponent(slug)}`),
 
 	/** One keyset page of the catalogue, optionally narrowed to the items
 	 *  carrying one label. The label narrows the query rather than the page, so
@@ -1299,6 +1415,22 @@ export const api = {
 		post<CreatedProductView>('/v1/products', body),
 	patchProduct: (id: string, body: PatchProductBody) =>
 		patch<PatchedProductView>(`/v1/products/${id}`, body),
+	/** Add one file to a resource that already exists, naming a handle
+	 *  `POST /v1/uploads` returned. A catalogue write and nothing else. */
+	addProductFile: (product: string, role: FileRole, handle: FileHandle) =>
+		post<AddedFileView>(`/v1/products/${product}/files`, { role, handle }),
+	/** Swap one file's bytes. One argument and deliberately no others: the
+	 *  replacement keeps the role of the file it replaces, and the thumbnail
+	 *  the server may redraw is rendered there from these bytes rather than
+	 *  named here, so there is no handle a client could point at a file of its
+	 *  choosing. `ReplacedFileView.cover` reports what it drew. */
+	replaceProductFile: (product: string, file: string, handle: FileHandle) =>
+		put<ReplacedFileView>(`/v1/products/${product}/files/${file}`, { handle }),
+	/** Retire one file. Refused with `payload_missing` where it is the only
+	 *  payload file the resource has: a resource keeps at least one. */
+	removeProductFile: (product: string, file: string) =>
+		request<RemovedFileView>(`/v1/products/${product}/files/${file}`, { method: 'DELETE' }),
+
 	/** The body is mandatory in practice even though the server defaults it:
 	 *  a delete that removes nothing remotely has to say so, and `leave_live`
 	 *  is the only way to say it. */
@@ -1400,6 +1532,7 @@ export const api = {
 	adminOrg: (org: string) => request<OrgDetailView>(`/v1/admin/orgs/${org}`),
 	adminSyncHealth: () => request<SyncHealthView>('/v1/admin/sync-health'),
 	adminFailedWrites: () => request<FailedWritesView>('/v1/admin/failed-writes'),
+	adminImportDrain: () => request<ImportDrainView>('/v1/admin/import-drain'),
 	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations')
 };
 

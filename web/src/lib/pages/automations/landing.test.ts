@@ -23,9 +23,12 @@ describe('the landing cards', () => {
 		expect(sync?.href).toBe('/sync');
 	});
 
+	// A floor rather than a ceiling, and a low one: the card has to say what the
+	// automation does for the seller instead of repeating its own title, and the
+	// founder's plain-language rule caps how long it may take to say it.
 	it('says what each automation does for the seller rather than naming a feature', () => {
 		for (const card of cards(facts())) {
-			expect(card.what.length).toBeGreaterThan(120);
+			expect(card.what.length).toBeGreaterThan(60);
 		}
 	});
 });
@@ -47,7 +50,7 @@ describe('the migration card', () => {
 
 	it('names the declaration once there is a shop to move', () => {
 		expect(migrationState(facts({ connections: [connection('Tes')] })).label).toBe(
-			'Authorship needed'
+			'Copyright needed'
 		);
 	});
 

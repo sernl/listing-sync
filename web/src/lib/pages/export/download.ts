@@ -49,7 +49,7 @@ export const FILENAME_PATTERN = 'teachouse-resources-<date>.csv';
  * finds nothing knows the next thing to try without having to be told a
  * failure this page cannot detect. */
 export const HANDOFF_ADVICE =
-	'Check your downloads. If nothing arrived, run the export in your browser.';
+	'Check your downloads folder. If nothing arrived, try the export in your browser.';
 
 /** The name the server gave this document, read out of `Content-Disposition`.
  *
@@ -90,7 +90,7 @@ export const REFUSED_WITHOUT_REASON =
 	'The export was refused and no reason came back. Try again in a moment.';
 
 /** The one refusal whose remedy this page can offer a way to. */
-export const SESSION_ENDED = 'Your session has ended. Sign in again, then export.';
+export const SESSION_ENDED = 'Your sign-in has ended. Sign in again, then export.';
 
 /** Why no file arrived, and whether the page can offer the way out.
  *
@@ -149,7 +149,7 @@ export function failureMessage(caught: unknown): string {
  * host that accepts the click and quietly drops the file, which is not
  * observable; see [`saveDocument`]. */
 export const HANDOFF_FAILED =
-	'The spreadsheet was built, but this window would not take it. Try the export in your browser.';
+	'The spreadsheet was built, but this window could not save it. Try the export in your browser.';
 
 /** Ask for the document and hand it to the host, reporting where that left the
  *  page.

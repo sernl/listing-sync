@@ -137,7 +137,7 @@
 		<div>
 			<h1>Marketplaces</h1>
 			<p>
-				Every marketplace you sell on, where its login lives, and whether it can be written to
+				Every marketplace you sell on, where its login is kept, and whether it can be used
 				right now.
 			</p>
 		</div>
@@ -157,8 +157,8 @@
 
 	{#if undeclared}
 		<Banner tone="warn" title="TPT has no copyright declaration" action={toCopyright}>
-			TPT asks every listing to name who holds the copyright. Until you declare it, anything
-			sent there fails, and it is not retried.
+			TPT needs every listing to name who holds the copyright. Until you declare it, anything
+			sent to TPT fails and is not tried again.
 		</Banner>
 	{/if}
 
@@ -222,8 +222,7 @@
 		<div class="mp-sect">
 			<h2>Browser extension</h2>
 			<p>
-				An extension would be a second way to connect: a marketplace worked from your browser
-				instead of the desktop app.
+				An extension would let you connect from your browser instead of the desktop app.
 			</p>
 			<p>Neither is available yet, and the desktop app does everything an extension would.</p>
 		</div>

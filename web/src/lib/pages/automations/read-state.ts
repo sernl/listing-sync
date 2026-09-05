@@ -52,9 +52,8 @@ export function panelCopy<Row>(state: ReadState<Row>, what: string): PanelCopy |
 			return {
 				title: 'Your marketplaces could not be read',
 				body:
-					'This page cannot say which marketplaces you have connected, so it is not showing ' +
-					'settings for any of them. Nothing has been changed, and your connections are ' +
-					'unaffected.'
+					'This page cannot say which marketplaces you have connected, so it is showing ' +
+					'no settings. Nothing has been changed.'
 			};
 		case 'empty':
 			return {

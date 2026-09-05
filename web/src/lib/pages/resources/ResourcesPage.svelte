@@ -65,10 +65,10 @@
 	const queryClient = useQueryClient();
 
 	// The two filters the server answers ride the URL: the Labels page links
-	// straight to `/inventory?label=<name>`, and the shell's own search box
-	// writes `q` here, so both have to be readable from the address rather than
-	// held in this component. The rest of the filter card narrows rows this page
-	// already holds and stays local.
+	// straight to `/inventory?label=<name>`, and a narrowed board is a place
+	// worth bookmarking, so both have to be readable from the address rather
+	// than held in this component. The rest of the filter card narrows rows this
+	// page already holds and stays local.
 	const chosenLabels = $derived(labelsFromUrl(page.url.searchParams));
 	// One cache entry per selection rather than per label, because the answer is
 	// the union of several reads and not any one of them.
@@ -150,9 +150,9 @@
 	let selected = $state<Set<string>>(new Set());
 	let removing = $state<InventoryRow | null>(null);
 
-	// The URL carries the search, because the shell's own box writes it there
-	// and the two must not disagree. The field below is seeded from it and
-	// writes it back as it is typed in.
+	// The URL carries the search, so a narrowed board can be linked to and
+	// returned to. The field below is seeded from the address and writes it back
+	// as it is typed in, and the two must not disagree.
 	const query = $derived(normaliseQuery(page.url.searchParams.get('q')));
 	let box = $state(normaliseQuery(page.url.searchParams.get('q')));
 	$effect(() => {
@@ -188,7 +188,7 @@
 		catalogue.isPending || mappings.isPending || connections.isPending || halts.isPending
 	);
 	const unread = $derived([
-		catalogue.isError ? 'your catalogue' : null,
+		catalogue.isError ? 'your Resources' : null,
 		mappings.isError ? 'which marketplaces carry each resource' : null,
 		connections.isError ? 'which marketplaces you are signed in to' : null,
 		halts.isError ? 'whether sending is paused anywhere' : null
@@ -548,7 +548,7 @@
 				Viewing {rows.length}
 				{rows.length === 1 ? 'resource' : 'resources'}
 			{:else if reading}
-				Reading your catalogue
+				Reading your Resources
 			{:else}
 				Nothing counted
 			{/if}
@@ -576,7 +576,7 @@
 				checked={allShownSelected}
 				onchange={toggleAllShown}
 			/>
-			<Menu bind:open={scopeMenu} label="Selection scope">
+			<Menu bind:open={scopeMenu} label="Selection scope" align="start">
 				{#snippet trigger()}
 					<Button
 						tier="quiet"
@@ -634,7 +634,7 @@
 	{:else if allRows.length === 0 && !anythingSet}
 		<Placeholder
 			icon="layout-list"
-			headline="Nothing in your catalogue yet."
+			headline="Nothing in your Resources yet."
 			body="An import brings an existing shop across as drafts you review; creating one starts from a blank form."
 		>
 			{#snippet actions()}
@@ -647,7 +647,7 @@
 		<Placeholder
 			icon="search"
 			headline="Nothing matches these filters."
-			body="Your catalogue is not empty; these filters are what is hiding it."
+			body="Your Resources are not empty; these filters are what is hiding them."
 		>
 			{#snippet actions()}
 				<Button tier="quiet" onclick={clearFilters}>Clear filters</Button>
@@ -660,6 +660,7 @@
 					href={`/inventory/${row.product.id}`}
 					title={row.product.title}
 					meta={metaLine(row.product, row, now)}
+					cover={row.product.cover ?? null}
 					selectable={mode !== null}
 					bind:selected={
 						() => selected.has(row.product.id), (value) => setSelected(row.product.id, value)

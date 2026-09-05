@@ -179,7 +179,7 @@
 {#if creating}
 	<Panel
 		title={editing === null ? 'New template' : 'Change this template'}
-		description="Everything you fill in here is what a new resource starts out with. Leave the rest empty and the create form asks for it as it does today."
+		description="Everything you fill in here is what a new resource starts out with; leave the rest empty to be asked as usual."
 	>
 		<div class="tpl-grid">
 			<Field label="Name" id="{base}-name" required hint="What you will pick it by.">
@@ -220,7 +220,7 @@
 				<Field
 					label="Price"
 					id="{base}-price"
-					hint="Dollars and cents, like 4.50. Leave it empty to be asked each time."
+					hint="Dollars and cents, like 4.50 — leave it empty to be asked each time."
 				>
 					<input
 						id="{base}-price"

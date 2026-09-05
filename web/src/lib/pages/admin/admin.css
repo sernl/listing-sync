@@ -65,6 +65,23 @@
 	z-index: 1;
 }
 
+/* The two cell modifiers the import-drain table carries. The gate row is the
+   first and the tenth migration of one tenant's series, which is the pair the
+   kill gate compares; the flag marks a run that saw a term the crosswalk had
+   no match for, which is the column that falsifies a falling share. */
+
+.op-table .op-gate-row td {
+	font-weight: 600;
+}
+
+.op-table td.op-flag {
+	color: var(--warn);
+}
+
+.op-unreadable {
+	color: var(--warn);
+}
+
 /* A cell of two lines: a name over an identifier, each clipped rather than
    allowed to widen the table, with the whole value in its `title`. */
 .op-cell .t {
@@ -102,7 +119,7 @@
 	font: inherit;
 	font-size: 13px;
 	color: var(--text);
-	min-height: 36px;
+	min-height: var(--control-h);
 }
 
 /* --- the account search --------------------------------------------------- */
@@ -118,7 +135,7 @@
 .op-search input[type='search'] {
 	flex: 1;
 	min-width: 200px;
-	height: 40px;
+	min-height: var(--control-h);
 	border: 1px solid var(--line);
 	background: var(--card);
 	border-radius: var(--r-pill);

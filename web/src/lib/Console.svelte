@@ -7,9 +7,9 @@
 	import { api } from '$lib/api';
 	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
+	import { renderFailureReport } from '$lib/render-failure';
 	import Icon from '$lib/Icon.svelte';
 	import ImpersonationBanner from '$lib/ImpersonationBanner.svelte';
-	import { normaliseQuery } from '$lib/listings-view';
 	import {
 		ADMIN_SECTION,
 		CREATE_TAB,
@@ -19,10 +19,11 @@
 		breadcrumbFor,
 		currentDestination,
 		initialsOf,
-		searchHref,
 		sectionFor
 	} from '$lib/nav';
 	import { queryKeys } from '$lib/query';
+	import SearchPalette from '$lib/SearchPalette.svelte';
+	import { opensPalette } from '$lib/search-palette';
 
 	let { children, onLogout }: { children: Snippet; onLogout: () => void } = $props();
 
@@ -82,6 +83,14 @@
 		}
 	}
 
+	/** Records a page that failed to draw, so a blank region leaves a trace.
+	 *
+	 *  `console.error` because this console has no diagnostics channel of its
+	 *  own yet; when one exists, this is the single place that changes. */
+	function reportDrawFailure(error: unknown) {
+		console.error(renderFailureReport(error, page.url.pathname));
+	}
+
 	const pathname = $derived(page.url.pathname);
 	const crumb = $derived(breadcrumbFor(pathname));
 	const orgName = $derived(organisation.data?.name);
@@ -121,41 +130,16 @@
 		bad: 'bad'
 	};
 
-	let query = $state('');
-	let searchBox = $state<HTMLInputElement | null>(null);
-	let seededFor = '';
-
-	// The URL carries the filter, so the box is seeded from it when the page
-	// changes and left alone while it is being typed in: on the inventory board
-	// every keystroke rewrites the URL, and re-reading it here would fight the
-	// caret.
-	$effect(() => {
-		const path = page.url.pathname;
-		if (path !== seededFor) {
-			seededFor = path;
-			query = normaliseQuery(page.url.searchParams.get('q'));
-		}
-	});
-
-	// On the inventory board the box filters as it is typed in, by rewriting
-	// the query the table reads; anywhere else it waits for a submit, which is
-	// the navigation.
-	function typed() {
-		if (pathname === '/inventory') {
-			void goto(searchHref(query), { replaceState: true, keepFocus: true, noScroll: true });
-		}
-	}
-
-	function submitSearch(event: SubmitEvent) {
-		event.preventDefault();
-		void goto(searchHref(query), { keepFocus: pathname === '/inventory' });
-	}
+	// The palette is the console's search now: it floats over whichever page
+	// the seller is on and opens the resource itself, rather than sending them
+	// to the board filtered down to it. The board keeps its own search field
+	// for narrowing what it is already showing.
+	let searching = $state(false);
 
 	function shortcut(event: KeyboardEvent) {
-		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+		if (opensPalette(event)) {
 			event.preventDefault();
-			searchBox?.focus();
-			searchBox?.select();
+			searching = true;
 		}
 	}
 </script>
@@ -262,20 +246,11 @@
 				{/each}
 			</span>
 			<span class="grow"></span>
-			<form class="search" role="search" onsubmit={submitSearch}>
+			<button class="search search-open" type="button" onclick={() => (searching = true)}>
 				<Icon name="search" size={15} />
-				<label class="sr-only" for="console-search">Search resources</label>
-				<input
-					id="console-search"
-					name="q"
-					type="search"
-					placeholder="Search resources…"
-					bind:this={searchBox}
-					bind:value={query}
-					oninput={typed}
-				/>
+				<span class="search-said">Search resources…</span>
 				<kbd>ctrl K</kbd>
-			</form>
+			</button>
 			<a class="cta" href={CREATE_TAB.href}>{CREATE_TAB.label}</a>
 			<a class="account" href="/settings">
 				<span class="avatar" aria-hidden="true">{initials}</span>
@@ -289,12 +264,41 @@
 							Loading…
 						{/if}
 					</span>
-					<span class="plan">{page.url.host}</span>
+					<!-- The name the seller chose, in place of the host they are on:
+					     the host told them nothing they decided. Rendered only once
+					     the organisation has been read, because "no name yet" before
+					     then is a claim about a row nobody has looked at. A newly
+					     provisioned organisation never reaches this bar -- the claim
+					     screen stands before it -- so the absent case here is only an
+					     organisation that predates the slug, which the banner is
+					     already asking about. -->
+					<span class="plan">
+						{#if organisation.data}{organisation.data.slug ?? 'No name yet'}{/if}
+					</span>
 				</span>
 			</a>
 		</div>
 
-		{@render children()}
+		<!-- A page that throws while drawing takes only its own region with it.
+		     Without this the error escapes to the root and Svelte tears the whole
+		     tree down, so the seller is left looking at nothing at all and has no
+		     sentence to report; the shell around this boundary keeps drawing, so
+		     the navigation still works and the failure is visibly local.
+
+		     The failed arm is plain elements on the shell's own classes rather
+		     than the components the rest of the console is built from. It renders
+		     at the moment something has already gone wrong, and a component that
+		     threw in here would escape to the root exactly as the page did. -->
+		<svelte:boundary onerror={(error) => reportDrawFailure(error)}>
+			{@render children()}
+
+			{#snippet failed()}
+				<div class="page">
+					<p>This page could not be drawn. Reload to try again.</p>
+					<button class="btn" type="button" onclick={() => location.reload()}>Reload</button>
+				</div>
+			{/snippet}
+		</svelte:boundary>
 	</main>
 
 	<nav class="tabbar" aria-label="Sections">
@@ -316,4 +320,6 @@
 			{/if}
 		{/each}
 	</nav>
+
+	<SearchPalette bind:open={searching} />
 </div>

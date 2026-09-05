@@ -120,7 +120,7 @@
 		{/if}
 	</Panel>
 
-	<Panel title="Plans" description="What each tier allows. Every figure is per organisation.">
+	<Panel title="Plans" description="What each plan allows. Every figure is per organisation.">
 		<div class="acct-cadence">
 			<Toggle bind:checked={yearly} label="Pay yearly" />
 			{#if monthsFree !== null}
@@ -191,14 +191,13 @@
 				</Button>
 			</div>
 			<p class="foot-note">
-				This deployment sells one price, so the button opens checkout for that price rather than
-				for a tier above. The tiers are what each plan will allow.
+				We sell one price today, so this button opens checkout for that price.
 			</p>
 		{/if}
 
 		<p class="foot-note">
-			Nothing in the console meters these figures today: they are what each tier will allow, and
-			every tenant is served exactly as before until billing opens.
+			Nothing is limited by these figures yet — they are what each plan will allow when billing
+			opens.
 		</p>
 	</Panel>
 </div>

@@ -595,12 +595,12 @@ export const AUTHORSHIP_HREF = '/marketplaces';
  *  `docs/notes/design/migration-file-routing.md`.
  *
  * Precise about which bytes, because the honest claim is narrower than "we
- * keep nothing": the cover image travels inside the page and is stored, and
- * only the listing's own file never reaches us. A broader promise would be a
- * nicer sentence and a false one. */
+ * keep nothing": the thumbnail — the file the wire calls the `cover` role —
+ * travels inside the page and is stored, and only the listing's own file never
+ * reaches us. A broader promise would be a nicer sentence and a false one. */
 export const FILES_STAY_ON_YOUR_COMPUTER =
 	'Your listing files are read on your own computer and never reach our servers. ' +
-	'Only what describes each listing — its details and its cover image — is sent here.';
+	'Only what describes each listing — its details and its thumbnail — is sent here.';
 
 /** Whether this request is the kind this screen was written for.
  *

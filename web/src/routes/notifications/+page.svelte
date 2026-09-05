@@ -8,6 +8,6 @@
 	<Placeholder
 		icon="bell"
 		headline="Notifications are not built yet"
-		body="Sync outcomes, attention items and product news will arrive here in one feed."
+		body="Sync results and news will arrive here in one place."
 	/>
 </div>

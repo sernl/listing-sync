@@ -76,4 +76,13 @@
 	/* the two fixed measures the shell's grid is built from */
 	--rail-w: 56px;
 	--nav-w: 216px;
+
+	/* One height for every full-size control, and one for the small tier.
+	   Without it each control kind takes the height of its own intrinsic line
+	   box — a select's is 3px shorter than a text input's in Firefox — so a
+	   select and the input beside it end at different pixels. Both are a floor
+	   rather than a fixed height, so a control whose content wraps still
+	   grows. */
+	--control-h: 38px;
+	--control-h-sm: 30px;
 }

@@ -214,3 +214,31 @@
 	color: var(--muted);
 	margin-top: 2px;
 }
+
+/* The organisation panel's two forms: the display name we print, and the name
+   the seller is known by. The rule separates them without a heading, because
+   the panel's own description already says which is which. */
+.acct-rule {
+	border: 0;
+	border-top: 1px solid var(--line);
+	margin: 1.25rem 0;
+}
+
+.acct-slug-preview {
+	display: flex;
+	align-items: baseline;
+	gap: 0.15rem;
+	margin: -0.25rem 0 0;
+	font-size: 0.8rem;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+.acct-slug-preview .acct-slug-host {
+	opacity: 0.75;
+}
+
+.acct-slug-preview .acct-slug-said {
+	font-weight: 600;
+	color: var(--ink);
+}

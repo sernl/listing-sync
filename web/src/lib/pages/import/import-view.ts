@@ -67,7 +67,7 @@ const ACRONYM: Record<Marketplace, string> = {
 const UNREADABLE: Record<Marketplace, string | null> = {
 	Tes: null,
 	Tpt: 'Nothing here reads a TPT shop yet. TPT is where a shop brought across arrives.',
-	Etsy: 'Etsy has no adapter, so nothing can read a shop on it.'
+	Etsy: 'Etsy is not built yet, so nothing here can read a shop on it.'
 };
 
 /** The site a Tes card starts on.
@@ -217,17 +217,16 @@ export const HANDOFF_LABEL = 'Continue on Marketplace Migration';
  * yet. Saying the coming feature outright is what keeps the page honest about
  * why it is a description and not an action. */
 export const IMPORT_IS_A_MIGRATION =
-	'Importing runs as a migration today: your shop is read on your own device and every ' +
-	'listing it finds is drafted on TPT for you to review. Bringing a shop into your ' +
-	'catalogue without drafting it anywhere is a coming feature.';
+	'Today an import runs as a migration: every listing found is drafted on TPT for you to ' +
+	'review. Importing without drafting anywhere is a coming feature.';
 
 /** What the card says while this console could not read the connections list.
  *
  * Says that we do not know, never that the marketplace is disconnected. */
 export function connectionUnknown(card: ImportCard): string {
 	return (
-		`Your marketplaces could not be read, so this page cannot say whether ${card.name} is ` +
-		'connected. Nothing about your connection has changed; reload to try again.'
+		`Your marketplaces could not be read, so we cannot say whether ${card.name} is ` +
+		'connected. Nothing has changed — reload to try again.'
 	);
 }
 
@@ -249,13 +248,13 @@ export function standingBadge(card: ImportCard): { tone: PillTone; label: string
 
 /** What the card says while the seller holds no connection for it. */
 export function notConnected(card: ImportCard): string {
-	return `${card.name} is not connected. Connect it on your own machine before importing.`;
+	return `${card.name} is not connected. Connect it on Marketplaces first.`;
 }
 
 /** The permanent line under the site choice, which says where the work runs
  *  and therefore when it starts. */
 export function deviceLine(card: ImportCard): string {
-	return `${card.name} runs on your own device, so the import starts when that machine next checks in.`;
+	return `${card.name} runs on your own device, so the import starts the next time that device checks in.`;
 }
 
 /** What an import is, said before anything is chosen.
@@ -265,8 +264,8 @@ export function deviceLine(card: ImportCard): string {
  * is `FILES_STAY_ON_YOUR_COMPUTER`'s sentence, and stating it twice on one
  * screen makes a seller read the second as a correction of the first. */
 export const WHAT_AN_IMPORT_IS =
-	'An import brings a marketplace’s resources into your catalogue as records: ' +
-	'each listing’s details, and where its file sits on your own computer.';
+	'An import copies a marketplace’s listings into your Resources: the details, ' +
+	'and where each file sits on your own computer.';
 
 /** Where a connection is made, which is the marketplaces screen. */
 export const CONNECT_HREF = '/marketplaces';
@@ -340,12 +339,12 @@ export const NO_IMPORT_YET = 'No import has run yet.';
  *  shop across. Told the second when the first is true, they start the import
  *  again. */
 export const IMPORTS_UNREAD =
-	'Your imports could not be read, so this page cannot list them. Any import already under ' +
-	'way is still running; nothing here has changed it.';
+	'Your imports could not be read, so this page cannot list them. Any import already ' +
+	'running is unaffected.';
 
 /** A marketplace list that could not be read is not a seller with no
  *  marketplace, so the page says which of the two it is looking at rather than
  *  letting an outage read as "you have no shop". */
 export const CONNECTIONS_UNREAD =
-	'Your marketplaces could not be read, so this page cannot say which shops you can bring ' +
-	'across. Nothing has been started.';
+	'Your marketplaces could not be read, so we cannot list the shops you can bring ' +
+	'across; nothing has been started.';

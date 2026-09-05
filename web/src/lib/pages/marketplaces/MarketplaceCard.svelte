@@ -51,24 +51,25 @@
 		{#if home}
 			<a
 				class="mp-mark"
+				class:mp-square={mark.kind === 'image' && mark.shape === 'icon'}
 				href={home}
 				target="_blank"
 				rel="noopener noreferrer"
 				aria-hidden="true"
 				tabindex="-1"
 			>
-				{#if mark.kind === 'image'}
-					<img src={mark.src} alt="" loading="lazy" />
-				{:else}
+				{#if mark.kind === 'wordmark'}
 					<span class="word" style="font-size: {wordmarkSize(mark.text)}px">{mark.text}</span>
+				{:else}
+					<img src={mark.src} alt="" loading="lazy" />
 				{/if}
 			</a>
 		{:else}
-			<span class="mp-mark">
-				{#if mark.kind === 'image'}
-					<img src={mark.src} alt="" loading="lazy" />
-				{:else}
+			<span class="mp-mark" class:mp-square={mark.kind === 'image' && mark.shape === 'icon'}>
+				{#if mark.kind === 'wordmark'}
 					<span class="word" style="font-size: {wordmarkSize(mark.text)}px">{mark.text}</span>
+				{:else}
+					<img src={mark.src} alt="" loading="lazy" />
 				{/if}
 			</span>
 		{/if}

@@ -1,13 +1,20 @@
 <script lang="ts">
 	import { createQueries, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
 		api,
 		type CheckView,
 		type UploadedView,
 		type VocabularyView
 	} from '$lib/api';
-	import { payloadRefusal } from '$lib/authoring';
+	import {
+		fieldWords,
+		licenceGated,
+		licenceOptions,
+		payloadRefusal,
+		requiredFields
+	} from '$lib/authoring';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
@@ -22,6 +29,7 @@
 	import TabBar from '$lib/TabBar.svelte';
 	import UploadField from '$lib/UploadField.svelte';
 	import { queryKeys } from '$lib/query';
+	import { refreshAfterCreate } from './after-create';
 	import { createRefusal } from './refusal';
 	import './resources.css';
 	import { toast } from '$lib/toast';
@@ -31,14 +39,21 @@
 		canonicalValue,
 		capOf,
 		createBodyOf,
+		createdToast,
 		diverges,
 		divergentOn,
 		draftInputOf,
+		emptySlots,
 		emptyTptDraft,
 		labelOf,
+		needsFileBeforeMarketplace,
 		projectionOf,
 		refusalsOf,
+		shouldLandOnCreated,
+		slotsSettling,
 		submittable,
+		thumbnailHandles,
+		thumbnailRefusal,
 		standardsHelp,
 		suggestedAdditionalLicence,
 		withOverride,
@@ -46,6 +61,7 @@
 		OVERRIDABLE,
 		UNCOLLECTED_FIELDS,
 		type Refusal,
+		type ThumbnailSlot,
 		type TptDraft
 	} from '$lib/tpt-form';
 	import { loadCore } from '$lib/core';
@@ -89,6 +105,81 @@
 	let serverCheck = $state<CheckView | null>(null);
 	let serverRefusal = $state<string | null>(null);
 	let tab = $state<string>('canonical');
+	// Opened by the act of choosing a marketplace with no file, and by pressing
+	// Create in that state. Not by an effect over the condition: an effect would
+	// reopen it under a seller who had read it and closed it.
+	let fileFirst = $state(false);
+	let fileFirstDialog = $state<HTMLDialogElement | null>(null);
+	// The four TPT slots, each holding the seller's own bytes as the browser can
+	// draw them and, once the upload answers, the handle the create carries.
+	let slots = $state<ThumbnailSlot[]>(emptySlots());
+
+	/** One slot's chosen file: drawn at once from the browser's own object URL,
+	 *  then uploaded, and only a slot the upload answered for reaches the wire.
+	 *
+	 *  The picture appears before the upload finishes on purpose — it is the
+	 *  seller's own file and the browser can already draw it — and the slot says
+	 *  "uploading" until the handle lands, so nothing claims to be saved that is
+	 *  not yet. `POST /{version}/uploads` takes one file and answers with its own
+	 *  handle, so which slot a file belongs to is decided by which request was
+	 *  made rather than by anything the wire carries. */
+	async function takeThumbnail(index: number, file: File) {
+		// Refused before a byte is sent where the browser can already tell. The
+		// slot's `accept` is a picker hint and does not survive a drag-and-drop.
+		const unusable =
+			form === null
+				? null
+				: thumbnailRefusal(file.type, file.size, form.limits.thumbnail.max_size_bytes);
+		if (unusable !== null) {
+			slots[index] = { local: null, handle: null, sending: false, refusal: unusable };
+			return;
+		}
+		const previous = slots[index].local;
+		if (previous !== null) {
+			URL.revokeObjectURL(previous);
+		}
+		const local = URL.createObjectURL(file);
+		slots[index] = { local, handle: null, sending: true, refusal: null };
+		try {
+			// Kept whole: a thumbnail is one image and exploding it would answer
+			// with a list this slot has no way to name.
+			const landed = await api.upload(file, 'keep_whole');
+			const handle = landed.payload[0] ?? null;
+			slots[index] = {
+				local,
+				handle,
+				sending: false,
+				refusal: handle === null ? 'That file was stored with no handle to attach.' : null
+			};
+		} catch (failure) {
+			slots[index] = {
+				local,
+				handle: null,
+				sending: false,
+				refusal: createRefusal(failure)
+			};
+		}
+		draft = { ...draft, thumbnails: thumbnailHandles(slots) };
+	}
+
+	function clearThumbnail(index: number) {
+		const held = slots[index].local;
+		if (held !== null) {
+			URL.revokeObjectURL(held);
+		}
+		slots[index] = { local: null, handle: null, sending: false, refusal: null };
+		draft = { ...draft, thumbnails: thumbnailHandles(slots) };
+	}
+
+	// Guarded on the element's own state, as the console's other dialogs are:
+	// `showModal` on a dialog that is already modal throws.
+	$effect(() => {
+		if (fileFirst && fileFirstDialog !== null && !fileFirstDialog.open) {
+			fileFirstDialog.showModal();
+		} else if (!fileFirst) {
+			fileFirstDialog?.close();
+		}
+	});
 
 	const form = $derived(vocabulary.data ?? null);
 	const known = $derived(perPlatform.known);
@@ -128,7 +219,7 @@
 		// Read so this recomputes when the rules land; `refusalsOf` asks `core()`
 		// for them and `core()` cannot say when it changed.
 		void rulesReady;
-		return rulesFailed ? [RULES_UNREAD] : refusalsOf(draft, form);
+		return rulesFailed ? [RULES_UNREAD] : refusalsOf(draft, form, known);
 	});
 	// Same reason as `refusals`: `advisoriesOf` reads the same non-reactive
 	// `core()`, so without this it stays empty until a field is touched.
@@ -136,7 +227,9 @@
 		void rulesReady;
 		return advisoriesOf(draft, form);
 	});
-	const canCreate = $derived(submittable(refusals) && form !== null && !creating);
+	const canCreate = $derived(
+		submittable(refusals) && form !== null && !creating && !slotsSettling(slots)
+	);
 
 	/** Why Create cannot run, which the button tier requires of any disabled
 	 *  control: the refusals themselves are listed above it, so this names the
@@ -144,6 +237,9 @@
 	const blocking = $derived.by(() => {
 		if (creating) {
 			return 'The draft is being created.';
+		}
+		if (slotsSettling(slots)) {
+			return 'A thumbnail is still uploading.';
 		}
 		if (rulesFailed) {
 			return 'The form’s own rules could not be loaded, so nothing can be created.';
@@ -185,6 +281,7 @@
 
 	function takeUpload(result: UploadedView | null) {
 		uploaded = result;
+		serverRefusal = null;
 		draft = {
 			...draft,
 			payload: result?.payload ?? [],
@@ -200,21 +297,49 @@
 				? [...draft.inventories, inventory]
 				: draft.inventories.filter((held) => held !== inventory)
 		};
+		if (needsFileBeforeMarketplace(draft)) {
+			fileFirst = true;
+		}
 	}
 
-	/** Why this platform cannot carry this product at all, or `null`.
+	/** Why this marketplace cannot carry this listing at all, or `null`.
 	 *
-	 *  A TPT create takes exactly one file, so a multi-file product is TES-only
-	 *  and the tick box says so rather than letting a seller choose a platform
-	 *  whose write is already refused. */
+	 *  Two reasons, and both are said beside the tick box rather than after the
+	 *  submit, because a seller who reads them there never reaches the refusal.
+	 *
+	 *  A TPT create takes exactly one file, so a multi-file listing is Tes-only.
+	 *  And a marketplace declaring a required field this form has no control for
+	 *  cannot be created here at all, because `required_fields_answered` on the
+	 *  server refuses a create that does not answer one. The licence is not that
+	 *  case any more — the form asks for it below and the create carries it — so
+	 *  it is excluded by name rather than by the list happening to be empty: a
+	 *  field the registry adds tomorrow must still stop the tick rather than
+	 *  reach the seller as a refusal after the submit. */
 	function unselectable(inventory: InventoryId): string | null {
 		const view = known.get(inventory);
-		if (view === undefined || draft.payload.length === 0) {
+		if (view === undefined) {
+			return null;
+		}
+		const unanswerable = requiredFields(view).filter((field) => field !== 'licence');
+		if (unanswerable.length > 0) {
+			const words = unanswerable.map((field) => fieldWords(field)).join(' and ');
+			return `${platformTitle(inventory)} needs ${words}, which this form does not ask for yet.`;
+		}
+		if (draft.payload.length === 0) {
 			return null;
 		}
 		const refusal = payloadRefusal(view.authoring.payload_files, draft.payload.length);
-		return refusal === null ? null : `This platform ${refusal}.`;
+		return refusal === null ? null : `${platformTitle(inventory)} ${refusal}.`;
 	}
+
+	/** The marketplaces this listing reaches that gate a licence, and the values
+	 *  they offer under the pricing branch this listing is on. The Tes gate
+	 *  refuses a Creative Commons licence with a price and refuses `TES-PAID`
+	 *  without one, so ticking Free changes the list rather than only the price. */
+	const licensing = $derived(licenceGated(draft.inventories, known));
+	const licences = $derived(
+		licenceOptions(known.get(licensing[0] ?? 'Tpt'), draft.free ? 'free' : 'paid')
+	);
 
 	// Selecting a platform, then uploading a file it cannot carry, would leave
 	// it ticked and refused. Dropping it here keeps the rail and the refusals
@@ -240,12 +365,22 @@
 
 	async function create(event: SubmitEvent) {
 		event.preventDefault();
-		const body = createBodyOf(draft);
+		// Said as a dialog rather than as one more line in the list at the foot,
+		// because it is the one refusal that is about an action the seller just
+		// took rather than about a field they have not reached yet.
+		if (needsFileBeforeMarketplace(draft)) {
+			fileFirst = true;
+			return;
+		}
+		const body = createBodyOf(draft, known);
 		if (body === null || !canCreate) {
 			return;
 		}
 		creating = true;
 		serverRefusal = null;
+		// Where the seller was when they pressed Create, so a create that
+		// outlives their presence on this page does not drag them back to it.
+		const submittedFrom = page.url.pathname;
 		try {
 			// The server decides. The inline messages are a mirror so a seller
 			// reads one as they type; this is what the model actually refuses,
@@ -255,15 +390,11 @@
 				return;
 			}
 			const created = await api.createProduct(body);
-			await queryClient.invalidateQueries({ queryKey: queryKeys.products });
-			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
-			toast(
-				'info',
-				created.mappings.length === 1
-					? 'Draft created on one marketplace. Publish when you are ready.'
-					: `Draft created on ${created.mappings.length} marketplaces. Publish when you are ready.`
-			);
-			await goto(`/inventory/${created.product}`);
+			await refreshAfterCreate(queryClient);
+			toast('info', createdToast(created.mappings.length));
+			if (shouldLandOnCreated(submittedFrom, page.url.pathname)) {
+				await goto(`/inventory/${created.product}`);
+			}
 		} catch (failure) {
 			serverRefusal = createRefusal(failure);
 		} finally {
@@ -283,7 +414,7 @@
 	<PageHead
 		icon="circle-plus"
 		title="New resource"
-		description="Author the resource once, on the same fields TPT asks for, and choose which marketplaces carry it."
+		description="Fill this in once. Keep it here as a draft, or choose the marketplaces that should carry it."
 	>
 		{#snippet aside()}
 			<Button href="/inventory">Cancel</Button>
@@ -343,9 +474,39 @@
 					<fieldset class="res-choices res-stack">
 						<legend>Thumbnails</legend>
 						<p class="res-note">
-							The images that front the listing. The four slots appear only under "Upload
-							thumbnails now", exactly as they do on TPT.
+							The pictures buyers see first. The four slots appear only under "Upload thumbnails
+							now", exactly as they do on TPT.
 						</p>
+
+						<!-- What the seller can actually be shown, and nothing else. The
+						     picture is their own file, drawn by the browser from the file
+						     they chose, so it is the thing itself rather than a stand-in.
+						     The cover is made on our server when the file is uploaded and
+						     no route serves its bytes back to a browser, so it is described
+						     rather than mocked up: a box captioned "thumbnail" showing
+						     something else is the defect this note exists to avoid. -->
+						<div class="res-thumb">
+							{#if uploaded !== null}
+								<!-- The cover the server drew from the file, fetched by its own
+								     handle. Not the local file: for a PDF or a ZIP the browser
+								     can draw nothing, and for an image the cover is still a
+								     re-render at the listing's own size, so showing the chosen
+								     bytes here would show something other than what buyers get. -->
+								<img
+									class="res-thumb-img"
+									src={`/v1/uploads/${uploaded.cover.hash}`}
+									alt="What buyers see at the top of this listing"
+								/>
+								<p class="res-note">
+									Made from your file when you uploaded it. This is the thumbnail buyers see first.
+								</p>
+							{:else}
+								<div class="res-thumb-none">
+									<span class="res-thumb-mark">Nothing yet</span>
+								</div>
+								<p class="res-note">Upload a file and the thumbnail appears here.</p>
+							{/if}
+						</div>
 						<div class="res-choices">
 							{#each form.thumbnail_modes as mode (mode.id)}
 								<label>
@@ -361,20 +522,47 @@
 						</div>
 						{#if draft.thumbnailMode === '2'}
 							<div class="res-slots">
-								{#each [0, 1, 2, 3] as slot (slot)}
+								{#each slots as slot, index (index)}
 									<div class="res-slot">
-										<b>{slot === 0 ? 'Main Cover' : 'Thumbnail (Optional)'}</b>
-										<span class="res-note">Select file or drag and drop</span>
-										<span class="res-note">
-											Up to {gigabytes(form.limits.thumbnail.max_size_bytes)}
-										</span>
+										<b>{index === 0 ? 'Main Cover' : 'Thumbnail (Optional)'}</b>
+										{#if slot.local !== null}
+											<img class="res-slot-img" src={slot.local} alt="" />
+											{#if slot.sending}
+												<span class="res-note">Uploading…</span>
+											{:else if slot.handle !== null}
+												<StatusPill tone="ok" label="stored" />
+											{/if}
+											<button type="button" class="res-slot-drop" onclick={() => clearThumbnail(index)}>
+												Remove
+											</button>
+										{:else}
+											<label class="res-slot-pick">
+												<span class="res-note">Choose a picture</span>
+												<span class="res-note">
+													Up to {gigabytes(form.limits.thumbnail.max_size_bytes)}
+												</span>
+												<input
+													type="file"
+													accept="image/*"
+													onchange={(event) => {
+														const chosen = event.currentTarget.files?.[0];
+														if (chosen) {
+															void takeThumbnail(index, chosen);
+														}
+														event.currentTarget.value = '';
+													}}
+												/>
+											</label>
+										{/if}
+										{#if slot.refusal !== null}
+											<span class="res-pick-why bad">{slot.refusal}</span>
+										{/if}
 									</div>
 								{/each}
 							</div>
 							<p class="res-foot">
-								The four slots are rendered here so the layout matches TPT's. Attaching bytes to
-								them needs a per-slot upload the byte endpoint does not offer yet, so nothing is
-								collected and nothing is claimed.
+								These four slots match TPT's own layout. Each picture is saved as you choose it,
+								and only the ones marked stored travel with the listing.
 							</p>
 						{/if}
 					</fieldset>
@@ -399,8 +587,7 @@
 					></textarea>
 				</Field>
 				<p class="res-foot">
-					Written as Markdown. TPT's wire is HTML and renders this into it; every Tes site carries
-					the format you wrote in.
+					Write it as plain text. Every marketplace gets it in the form you wrote it in.
 				</p>
 			</FormSection>
 
@@ -686,8 +873,8 @@
 				<div class="res-group res-rail">
 					<span class="res-group-label" id="rail-label">Marketplaces</span>
 					<span class="res-note">
-						The marketplaces this draft is created on. You can add another from the resource
-						itself afterwards.
+						Where this listing goes. Choose none to keep it here as a draft and decide later; you
+						can add a marketplace from the resource itself at any time.
 					</span>
 					<div class="res-picks" role="group" aria-labelledby="rail-label">
 						{#each AUTHORABLE_PLATFORMS as inventory (inventory)}
@@ -703,13 +890,44 @@
 								{#if refusal !== null}
 									<span class="res-pick-why bad">{refusal}</span>
 								{:else if known.get(inventory)?.authoring.payload_files === 'exactly_one'}
-									<span class="res-pick-why">Takes exactly one file.</span>
+									<span class="res-pick-why">Takes one file.</span>
 								{:else}
-									<span class="res-pick-why">Carries every payload file this product holds.</span>
+									<span class="res-pick-why">Takes every file you upload.</span>
 								{/if}
 							</label>
 						{/each}
 					</div>
+
+					<!-- Only where a chosen marketplace gates one, because a licence is
+					     a grant the seller issues and asking for one nothing will carry
+					     invites an answer with no meaning. Nothing is pre-selected: the
+					     grant is theirs, which is the same reason the copyright
+					     attestation above arrives blank. -->
+					{#if licensing.length > 0}
+						<Field
+							label="Licence"
+							id="draft-licence"
+							required
+							hint="{licensing.map(platformTitle).join(' and ')} will not list this without one. It is never chosen for you: the grant is yours to make."
+						>
+							<select
+								id="draft-licence"
+								value={draft.licence ?? ''}
+								onchange={(event) =>
+									set('licence', event.currentTarget.value === '' ? null : event.currentTarget.value)}
+							>
+								<option value="">Choose a licence</option>
+								{#each licences as option (option.id)}
+									<option value={option.id}>{option.label}</option>
+								{/each}
+							</select>
+						</Field>
+						<p class="res-foot">
+							{draft.free
+								? 'These are the licences a free listing may carry.'
+								: 'These are the licences a paid listing may carry. Ticking Free Resource offers a different set.'}
+						</p>
+					{/if}
 				</div>
 			</FormSection>
 		{:else}
@@ -825,6 +1043,12 @@
 		{/if}
 
 		<Panel title="Create the draft" description="Nothing is sent to a marketplace yet.">
+			{#if draft.inventories.length === 0}
+				<p class="res-note">
+					This will be saved here as a draft. Nobody else sees it, and no file is needed until you
+					send it to a marketplace.
+				</p>
+			{/if}
 
 			{#if refusals.length > 0}
 				<ul class="res-refusals">
@@ -848,11 +1072,12 @@
 				<Banner tone="bad">{serverRefusal}</Banner>
 			{/if}
 
-			<p class="res-foot">
-				Every group above is stored when the draft is created. One thing is not collected:
-				{UNCOLLECTED_FIELDS.join('; ')}. It is stated here rather than implied, so nothing reads as
-				saved that was not.
-			</p>
+			{#if UNCOLLECTED_FIELDS.length > 0}
+				<p class="res-foot">
+					Everything above is saved when you create the draft, apart from
+					{UNCOLLECTED_FIELDS.join('; ')}. It is said here so nothing reads as saved that was not.
+				</p>
+			{/if}
 
 			<div class="res-acts">
 				<Button tier="primary" type="submit" disabled={!canCreate} reason={blocking}>
@@ -861,8 +1086,10 @@
 				<Button href="/inventory">Cancel</Button>
 				<span class="res-note">
 					{draft.payload.length}
-					{draft.payload.length === 1 ? 'file' : 'files'} · {draft.inventories.length}
-					{draft.inventories.length === 1 ? 'marketplace' : 'marketplaces'}
+					{draft.payload.length === 1 ? 'file' : 'files'} ·
+					{draft.inventories.length === 0
+						? 'kept here'
+						: `${draft.inventories.length} ${draft.inventories.length === 1 ? 'marketplace' : 'marketplaces'}`}
 					{#if divergentOn(draft, 'name').length + divergentOn(draft, 'description').length + divergentOn(draft, 'price').length > 0}
 						· some marketplace values differ
 					{/if}
@@ -870,4 +1097,34 @@
 			</div>
 		</Panel>
 	</form>
+
+	<!-- Centred, and a modal rather than a banner, because it answers an action
+	     the seller has just taken and a banner further down the page is exactly
+	     what they would not see. `showModal` centres it; the page's own dialog
+	     rules do the rest. -->
+	<dialog
+		class="res-warn"
+		bind:this={fileFirstDialog}
+		aria-labelledby="file-first-title"
+		onclose={() => (fileFirst = false)}
+	>
+		<div class="dialog-body">
+			<h2 id="file-first-title">Add your file first</h2>
+			<p>
+				A marketplace cannot list something buyers cannot download. Upload the file, and then this
+				listing can be drafted or made live on
+				{draft.inventories.length === 1
+					? platformTitle(draft.inventories[0])
+					: 'the marketplaces you chose'}.
+			</p>
+			<p class="res-note">
+				Until then it is saved here as a draft, and nothing is sent anywhere.
+			</p>
+			<div class="actions">
+				<button class="btn cta" type="button" onclick={() => (fileFirst = false)}>
+					Upload the file
+				</button>
+			</div>
+		</div>
+	</dialog>
 </div>

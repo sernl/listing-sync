@@ -6,17 +6,26 @@ import {
 	capOf,
 	counterOf,
 	createBodyOf,
+	createdToast,
 	diverges,
 	divergentOn,
 	draftInputOf,
+	emptySlots,
 	emptyTptDraft,
 	gradeColumns,
 	labelOf,
+	licenceIntentOf,
 	minorUnitsOf,
+	needsFileBeforeMarketplace,
 	OVERRIDABLE,
 	projectionOf,
 	standardsLoss,
 	refusalsOf,
+	shouldLandOnCreated,
+	slotsSettling,
+	thumbnailHandles,
+	thumbnailRefusal,
+	unlicensed,
 	standardsHelp,
 	refusalsIn,
 	searchFacets,
@@ -270,6 +279,39 @@ describe('the refusals', () => {
 		};
 		expect(refusalsIn(refusalsOf(deferred, VOCABULARY), 'files')).toHaveLength(1);
 	});
+
+	it('lets a finished resource name no marketplace at all', () => {
+		const kept = { ...complete(), inventories: [] };
+		expect(refusalsOf(kept, VOCABULARY)).toEqual([]);
+		expect(submittable(refusalsOf(kept, VOCABULARY))).toBe(true);
+	});
+
+	it('refuses a marketplace chosen before the file it would carry', () => {
+		const early = { ...complete(), payload: [] };
+		expect(refusalsIn(refusalsOf(early, VOCABULARY), 'product_status')[0].message).toBe(
+			'Add your file before sending this to a marketplace.'
+		);
+	});
+});
+
+describe('the warning that a marketplace needs a file first', () => {
+	// The condition the dialog opens on, held here rather than in the markup:
+	// a rule reachable only by rendering the page is a rule nothing cheap can
+	// check, which is what `sweep-triage.md` asks of a substitution like this.
+
+	it('opens once a marketplace is chosen and no file is uploaded', () => {
+		expect(needsFileBeforeMarketplace({ ...complete(), payload: [] })).toBe(true);
+	});
+
+	it('stays shut for a draft kept here, which is the case it must not block', () => {
+		expect(needsFileBeforeMarketplace({ ...complete(), payload: [], inventories: [] })).toBe(
+			false
+		);
+	});
+
+	it('stays shut once the file is uploaded', () => {
+		expect(needsFileBeforeMarketplace(complete())).toBe(false);
+	});
 });
 
 describe('the additional-licence pre-fill', () => {
@@ -403,9 +445,12 @@ describe('the request bodies', () => {
 		expect(base.bundle_discount_minor_units).toBeNull();
 	});
 
-	it('sends nothing where the price or the payload is missing', () => {
-		expect(createBodyOf({ ...complete(), payload: [] })).toBeNull();
+	it('sends nothing where the price is one this client will not send', () => {
+		// The payload is no longer part of this: a resource kept here carries no
+		// file and is composed all the same (D32). Only an unsendable price
+		// stops a body being built.
 		expect(createBodyOf({ ...complete(), free: false, price: '' })).toBeNull();
+		expect(createBodyOf({ ...complete(), payload: [] })).not.toBeNull();
 	});
 });
 
@@ -680,5 +725,222 @@ describe('the standards heading', () => {
 
 	it('falls back to the digit above the words it spells', () => {
 		expect(standardsHelp(12)).toBe('Optional. 12 frameworks, each searched on its own.');
+	});
+});
+
+/** A marketplace that gates a licence, as `GET /v1/vocabulary/{inventory}`
+ *  serves one. Transcribed from `crates/tam-domain/src/registry/tes.rs`, where
+ *  `licence` is the one field declared required anywhere in the registry. */
+function tesGating(): VocabularyView {
+	return {
+		inventory: 'TesGb',
+		marketplace: 'Tes',
+		canonical: [],
+		natives: [
+			{
+				name: 'licence',
+				direction: 'both',
+				required: true,
+				vocabulary: 'closed',
+				values: [
+					{ id: 'CC-BY', label: 'Creative Commons Attribution' },
+					{ id: 'TES-PAID', label: 'Tes paid licence' }
+				],
+				delegation: { kind: 'never', reason: 'legal_content' }
+			}
+		],
+		axes: [],
+		absent_axes: [],
+		authoring: {
+			payload_files: 'every_payload_file',
+			body_wire: 'carries_declared_format',
+			body_formats: ['Html'],
+			licence: { native: 'licence', free: ['CC-BY'], paid: ['TES-PAID'] }
+		}
+	} as VocabularyView;
+}
+
+const GATING = new Map([['TesGb' as const, tesGating()]]);
+
+describe('the licence a marketplace gates', () => {
+	// The defect this pins: `createBodyOf` sent `elections: []` and no `rights`,
+	// so `required_fields_answered` on the server refused every Tes create and
+	// no Tes listing could be made from this form at all.
+
+	it('carries the seller’s licence as a rights grant and an election', () => {
+		const listing = {
+			...complete(),
+			inventories: ['TesGb' as const],
+			free: true,
+			licence: 'CC-BY'
+		};
+		const body = createBodyOf(listing, GATING);
+		expect(body?.rights).toEqual({
+			inventory: 'TesGb',
+			segments: ['CC-BY'],
+			native_id: 'CC-BY'
+		});
+		expect(body?.elections).toEqual([
+			{
+				inventory: 'TesGb',
+				axis: 'licence',
+				trigger: 'supply',
+				trigger_key: 'free',
+				answers: [{ segments: ['CC-BY'], native_id: 'CC-BY' }]
+			}
+		]);
+	});
+
+	it('sends the paid branch’s key when the listing carries a price', () => {
+		const paid = {
+			...complete(),
+			inventories: ['TesGb' as const],
+			free: false,
+			price: '4.50',
+			taxCode: '1',
+			licence: 'TES-PAID'
+		};
+		expect(licenceIntentOf(paid).branch).toBe('paid');
+		expect(createBodyOf(paid, GATING)?.elections?.[0].trigger_key).toBe('paid');
+	});
+
+	it('refuses a gating marketplace with no licence chosen, naming it', () => {
+		const bare = { ...complete(), inventories: ['TesGb' as const], free: true, licence: null };
+		expect(unlicensed(bare, GATING)).toEqual(['TesGb']);
+		const said = refusalsIn(refusalsOf(bare, VOCABULARY, GATING), 'product_status');
+		expect(said).toHaveLength(1);
+		expect(said[0].message).toContain('Choose a licence');
+	});
+
+	it('asks for no licence where no chosen marketplace gates one', () => {
+		const tpt = { ...complete(), inventories: ['Tpt' as const], free: true, licence: null };
+		expect(unlicensed(tpt, GATING)).toEqual([]);
+		expect(refusalsOf(tpt, VOCABULARY, GATING)).toEqual([]);
+	});
+
+	it('composes neither shape for a listing that names no marketplace', () => {
+		const kept = { ...complete(), inventories: [], free: true, licence: null };
+		const body = createBodyOf(kept, GATING);
+		expect(body?.rights).toBeNull();
+		expect(body?.elections).toEqual([]);
+	});
+});
+
+describe('the four thumbnail slots', () => {
+	// They collected nothing until now, and the page said so. What changed is
+	// the reading of `POST /{version}/uploads`: it takes one file and answers
+	// with that file's own handle, so a slot is named by which request the
+	// client made rather than by anything the wire carries.
+
+	function handle(mark: string) {
+		return { hash: mark.repeat(64), kind: 'image' as const, byte_len: 2048 };
+	}
+
+	it('starts with four empty slots', () => {
+		expect(emptySlots()).toHaveLength(4);
+		expect(thumbnailHandles(emptySlots())).toEqual([]);
+	});
+
+	it('carries only the slots the upload answered for, in slot order', () => {
+		const slots = emptySlots();
+		slots[0] = { local: 'blob:a', handle: handle('a'), sending: false, refusal: null };
+		// Chosen and drawn, but still in flight: the picture is on the page and
+		// the handle is not, and only the handle may reach the wire.
+		slots[1] = { local: 'blob:b', handle: null, sending: true, refusal: null };
+		slots[2] = { local: 'blob:c', handle: handle('c'), sending: false, refusal: null };
+		expect(thumbnailHandles(slots).map((file) => file.hash[0])).toEqual(['a', 'c']);
+	});
+
+	it('holds the create back while any slot is still being sent', () => {
+		const slots = emptySlots();
+		expect(slotsSettling(slots)).toBe(false);
+		slots[2] = { local: 'blob:c', handle: null, sending: true, refusal: null };
+		expect(slotsSettling(slots)).toBe(true);
+	});
+
+	it('sends the handles it holds in the sidecar block', () => {
+		const listing = { ...complete(), thumbnailMode: '2', thumbnails: [handle('a'), handle('c')] };
+		expect(tptBaseOf(listing).thumbnail_hashes).toEqual([
+			'a'.repeat(64),
+			'c'.repeat(64)
+		]);
+	});
+});
+
+describe('what the seller is told once the draft exists', () => {
+	// Found live: an empty mapping list fell through to the plural arm, so a
+	// resource kept here was announced as "Draft created on 0 marketplaces.
+	// Publish when you are ready." — a wrong count, and an instruction to
+	// publish something deliberately going nowhere.
+
+	it('says the draft is kept here when no marketplace was chosen', () => {
+		expect(createdToast(0)).toBe('Draft saved here. Choose marketplaces when you are ready.');
+		expect(createdToast(0)).not.toContain('0 marketplaces');
+		expect(createdToast(0)).not.toContain('Publish');
+	});
+
+	it('counts one marketplace as a word and several as a figure', () => {
+		expect(createdToast(1)).toContain('one marketplace');
+		expect(createdToast(3)).toContain('3 marketplaces');
+	});
+});
+
+describe('a resource kept here with no file', () => {
+	// D32 on the client: the body is composed, because the server now accepts
+	// it. Before this the form declined to build one at all, so the founder's
+	// case could not have been sent even once the server allowed it.
+
+	it('composes a create body with no file and no marketplace', () => {
+		const kept = { ...complete(), payload: [], inventories: [], free: true };
+		const body = createBodyOf(kept);
+		expect(body).not.toBeNull();
+		expect(body?.payload).toEqual([]);
+		expect(body?.inventories).toEqual([]);
+	});
+
+	it('is submittable, so the seller can actually keep it', () => {
+		const kept = { ...complete(), payload: [], inventories: [], free: true };
+		expect(refusalsOf(kept, VOCABULARY)).toEqual([]);
+	});
+
+	it('still refuses to compose a price this client will not send', () => {
+		const unsendable = { ...complete(), payload: [], inventories: [], free: false, price: 'free' };
+		expect(createBodyOf(unsendable)).toBeNull();
+	});
+});
+
+describe('where the seller lands after a create', () => {
+	// A create takes seconds against a real server. `goto` after the response
+	// yanked a seller who had already moved on back onto a detail page they had
+	// not asked for, six times in six.
+
+	it('lands on the new resource when the seller is still on the form', () => {
+		expect(shouldLandOnCreated('/inventory/new', '/inventory/new')).toBe(true);
+	});
+
+	it('leaves the seller where they went when they navigated away mid-create', () => {
+		expect(shouldLandOnCreated('/inventory/new', '/analytics')).toBe(false);
+		expect(shouldLandOnCreated('/inventory/new', '/inventory')).toBe(false);
+	});
+});
+
+describe('what a slot will not take as a thumbnail', () => {
+	const cap = 4 * 1024 * 1024;
+
+	it('accepts a picture inside the limit', () => {
+		expect(thumbnailRefusal('image/png', 2048, cap)).toBeNull();
+		expect(thumbnailRefusal('image/jpeg', cap, cap)).toBeNull();
+	});
+
+	it('refuses anything that is not a picture, however it arrived', () => {
+		// `accept="image/*"` is a picker hint and does not survive a drop.
+		expect(thumbnailRefusal('application/pdf', 2048, cap)).toMatch(/have to be pictures/);
+		expect(thumbnailRefusal('', 2048, cap)).toMatch(/have to be pictures/);
+	});
+
+	it('refuses a picture over the limit and states both figures', () => {
+		const said = thumbnailRefusal('image/png', 12 * 1024 * 1024, cap);
+		expect(said).toContain('12 MB');
+		expect(said).toContain('4 MB');
 	});
 });

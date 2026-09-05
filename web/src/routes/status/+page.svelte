@@ -4,6 +4,7 @@
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
+	import { platformTitle } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { statusLine } from '$lib/pages/account/status-line';
@@ -51,14 +52,17 @@
 			<Placeholder
 				icon="activity"
 				headline="No marketplace is configured yet"
-				body="Each inventory the engine works against appears here with its own state."
+				body="Each marketplace we work with appears here with its own state."
 			/>
 		{:else}
 			{#each inventories as entry (entry.inventory)}
+				{@const line = statusLine(entry, now)}
 				<div class="acct-state-row">
 					<span class="who">
-						<span class="t">{entry.inventory}</span>
-						<span class="why">{statusLine(entry, now)}</span>
+						<span class="t">{platformTitle(entry.inventory)}</span>
+						{#if line !== ''}
+							<span class="why">{line}</span>
+						{/if}
 					</span>
 					<StatusPill
 						tone={entry.halted ? 'bad' : 'ok'}

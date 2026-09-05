@@ -190,15 +190,15 @@
 			</select>
 		</Field>
 		<p class="an-why">
-			There is no date range here: a capture keeps one figure per listing, its newest, so there
-			is no history to narrow. {#if labels.isError}Your labels could not be read, so the filter
+			There is no date range, because we keep only the newest figure for each listing.
+			{#if labels.isError}Your labels could not be read, so the filter
 				is unavailable.{/if}
 		</p>
 	</div>
 
 	<Banner tone="info">
-		Only TPT reports figures today. TES publishes no statistics of its own, so its panel counts
-		your own catalogue instead.
+		Only TPT reports figures today; TES publishes none, so its panel counts your own Resources
+		instead.
 	</Banner>
 
 	<div class="an-tiles">
@@ -219,7 +219,7 @@
 		<Panel title={chart.title} description={chart.description}>
 			{#if chart.counted}
 				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">Your catalogue could not be read.</p>
+					<p class="an-quiet">Your Resources could not be read.</p>
 				{:else if catalogueRead === 'pending'}
 					<p class="an-quiet">Counting…</p>
 				{:else}
@@ -238,7 +238,7 @@
 				<Placeholder
 					icon="chart-line"
 					headline="No figures captured yet"
-					body="Your device sends them after its next check-in."
+					body="Your device sends them the next time it checks in."
 				/>
 			{:else}
 				<MetricBars
@@ -255,7 +255,7 @@
 				title="TES (Tes.com) portfolio"
 				description={standingsDescription(
 					catalogueRead,
-					'Tes publishes no statistics of its own, so this is counted from your own catalogue instead.'
+					'TES publishes no figures, so this is counted from your own Resources.'
 				)}
 			>
 				{#snippet more()}
@@ -264,7 +264,7 @@
 					{/if}
 				{/snippet}
 				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">Your catalogue could not be read.</p>
+					<p class="an-quiet">Your Resources could not be read.</p>
 				{:else if catalogueRead === 'pending'}
 					<p class="an-quiet">Counting…</p>
 				{:else}
@@ -283,9 +283,8 @@
 						{/each}
 					</div>
 					<p class="an-note">
-						Each listing reads as it was last recorded here, not as a live check of Tes. The
-						price is your catalogue's own: a mapping that converts or overrides it can put a
-						different figure on the listing itself.
+						Each listing shows what we last recorded, not a live check of TES. The price is
+						the one in your Resources; TES may show a different one.
 					</p>
 				{/if}
 			</Panel>
@@ -294,7 +293,7 @@
 				title="Where your listings stand"
 				description={standingsDescription(
 					catalogueRead,
-					'Counted from your own catalogue, not reported by a marketplace.'
+					'Counted from your own Resources, not reported by a marketplace.'
 				)}
 			>
 				{#snippet more()}
@@ -303,14 +302,14 @@
 					{/if}
 				{/snippet}
 				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">Your catalogue could not be read.</p>
+					<p class="an-quiet">Your Resources could not be read.</p>
 				{:else if catalogueRead === 'pending'}
 					<p class="an-quiet">Counting…</p>
 				{:else}
 					<div class="an-standings">
 						<div
 							class="an-standing"
-							title="Bound to a listing the marketplace was last recorded as showing."
+							title="The marketplace was last recorded showing this listing."
 						>
 							<div class="an-n">{standing.live}</div>
 							<div class="an-l">Live</div>
@@ -324,7 +323,7 @@
 						</div>
 						<div
 							class="an-standing"
-							title="Mapped to a marketplace, with nothing created there yet."
+							title="Set up for a marketplace, with nothing created there yet."
 						>
 							<div class="an-n">{standing.unsent}</div>
 							<div class="an-l">Not sent yet</div>
@@ -338,8 +337,7 @@
 						</div>
 					</div>
 					<p class="an-note">
-						Each listing reads as it was last recorded here, not as a live check of the
-						marketplace.
+						Each listing shows what we last recorded, not a live check of the marketplace.
 					</p>
 				{/if}
 			</Panel>
@@ -351,7 +349,7 @@
 			<Placeholder
 				icon="chart-line"
 				headline="{silent} reports no figures"
-				body="There is nothing to rank here. What the panels above show for {silent} is counted from your own catalogue instead."
+				body="There is nothing to rank here — the panels above count your own Resources instead."
 			/>
 		{:else if figuresRead === 'failed'}
 			<p class="an-quiet">The analytics could not be read.</p>
@@ -361,7 +359,7 @@
 			<Placeholder
 				icon="chart-line"
 				headline="No figures captured yet"
-				body="Your device sends them after its next check-in."
+				body="Your device sends them the next time it checks in."
 			/>
 		{:else}
 			<div class="an-table-wrap">
@@ -383,7 +381,7 @@
 									{#if row.title === undefined}
 										<span
 											class="an-id"
-											title={`Mapping ${row.mapping}. Its product is not in the catalogue read, so only its identifier is known here.`}
+											title={`The resource for this listing was not in what we read, so only its reference is shown.`}
 										>
 											{row.mapping}
 										</span>

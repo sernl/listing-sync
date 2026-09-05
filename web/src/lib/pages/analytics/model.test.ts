@@ -414,7 +414,7 @@ describe('the figure tiles', () => {
 		const drawn = tiles({});
 		expect(drawn.slice(0, 3).every((tile) => tile.counted)).toBe(false);
 		expect(drawn[3].counted).toBe(true);
-		expect(drawn[3].tag).toBe('from your catalogue');
+		expect(drawn[3].tag).toBe('from your Resources');
 	});
 
 	it('never writes a nil where a marketplace reported nothing', () => {
@@ -501,7 +501,7 @@ describe('the figure tiles', () => {
 		expect(tiles({ catalogue: 'failed', standing })[3]).toMatchObject({
 			value: '—',
 			figure: false,
-			sub: 'your catalogue could not be read'
+			sub: 'your Resources could not be read'
 		});
 		expect(tiles({ catalogue: 'read', standing })[3]).toMatchObject({
 			value: '4',

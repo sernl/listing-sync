@@ -1,0 +1,287 @@
+// The Ctrl-K palette's own logic: which key does what, and what the popup has
+// to say for each answer a search can have. Pure, so it tests without a
+// browser, and separate from the component for the reason the shared-sheet
+// sweep gives: a substitution written in a template is reachable only by
+// rendering the page, and this one has to distinguish a catalogue that failed
+// to read from one that holds nothing matching.
+
+import type { MappingHead, ProductHead } from '$lib/api';
+import { INVENTORY_ORDER, formatPrice, matchesQuery } from '$lib/listings-view';
+import { SHORT_NAME } from '$lib/platforms';
+import { standingOf } from '$lib/tes-portfolio';
+
+/** How many matches the popup shows at once.
+ *
+ * A palette is read at a glance rather than scrolled, and eight is what fits
+ * above the fold on the phone sheet. Where more match, the popup says so and
+ * offers the board, rather than silently ending the list. */
+export const RESULTS_SHOWN_MAX = 8;
+
+export interface PaletteResult {
+	id: string;
+	title: string;
+	/** The one secondary line: what it costs, and which marketplaces show it. */
+	meta: string;
+	href: string;
+}
+
+/**
+ * What the popup is saying right now.
+ *
+ * Five answers rather than a list and a boolean, because a catalogue that was
+ * never read and a catalogue holding nothing matching are different facts and
+ * a seller acts differently on each. `reading` is the third answer the sweep
+ * note asks for: not "no matches", which would be a claim this client cannot
+ * support until the read lands.
+ */
+export type PaletteView =
+	/** Open, nothing typed. */
+	| { kind: 'blank' }
+	/** Typed, and the catalogue is not here yet. */
+	| { kind: 'reading' }
+	/** Typed, and there is no catalogue to search: nothing was ever read. */
+	| { kind: 'failed' }
+	| { kind: 'none'; query: string; stale: boolean }
+	| {
+			kind: 'results';
+			rows: PaletteResult[];
+			/** How many matched in total, which is a fact only because this
+			 *  client holds the whole catalogue to count. A source serving one
+			 *  page at a time answers null, and the popup then says nothing
+			 *  about a total rather than reporting the page's own length as one. */
+			total: number | null;
+			stale: boolean;
+	  };
+
+export interface PaletteInput {
+	query: string;
+	/** The catalogue, or null where it has not been read yet. */
+	catalogue: readonly ProductHead[] | null;
+	/** Every mapping, or null where they have not been read. A resource is
+	 *  still named without them; only its meta line is poorer. */
+	mappings: readonly MappingHead[] | null;
+	/** Whether the newest catalogue read failed. Read together with
+	 *  `catalogue`, because the two co-occur: a failed background refetch
+	 *  leaves the previously read rows in place, and those rows are still
+	 *  searchable. */
+	failed: boolean;
+}
+
+/** Which marketplaces are showing each resource, shortest name each, in the
+ *  chip strip's own order.
+ *
+ *  Only a live listing counts as showing. A draft or an unsent mapping is a
+ *  resource the marketplace is not displaying, and naming it here would tell a
+ *  seller their resource is on sale where it is not. */
+export function showingByProduct(mappings: readonly MappingHead[]): Map<string, string[]> {
+	const live = new Map<string, Set<string>>();
+	for (const mapping of mappings) {
+		if (standingOf(mapping) !== 'live') {
+			continue;
+		}
+		const carried = live.get(mapping.product) ?? new Set<string>();
+		carried.add(mapping.inventory);
+		live.set(mapping.product, carried);
+	}
+	const named = new Map<string, string[]>();
+	for (const [product, inventories] of live) {
+		named.set(
+			product,
+			INVENTORY_ORDER.filter((inventory) => inventories.has(inventory)).map(
+				(inventory) => SHORT_NAME[inventory]
+			)
+		);
+	}
+	return named;
+}
+
+/** A resource's secondary line.
+ *
+ * Two facts, both of them the board's own: what it costs and who is showing
+ * it. A resource no marketplace shows says nothing rather than "nowhere",
+ * matching `metaLine`; that also means an unread mapping list reads the same
+ * as a resource on no marketplace, which is sound here only because neither
+ * says anything a seller could act on. A count would not be. */
+function metaOf(product: ProductHead, showing: readonly string[]): string {
+	const parts = [formatPrice(product.price)];
+	if (showing.length > 0) {
+		parts.push(showing.join(', '));
+	}
+	return parts.join(' · ');
+}
+
+/** Where a result opens. The resource's own page, which is the whole point of
+ *  the palette: the founder's item asks for the resource rather than for the
+ *  board filtered down to it. */
+export function resultHref(id: string): string {
+	return `/inventory/${id}`;
+}
+
+/**
+ * The matches, best first.
+ *
+ * Two rules, because a palette that answers in catalogue order puts the oldest
+ * resource at the top and the seller's own word for the thing they are looking
+ * for is usually how its title starts. Titles beginning with the query lead;
+ * within each group the most recently updated leads, which is the board's own
+ * default order.
+ */
+export function rankMatches(
+	catalogue: readonly ProductHead[],
+	query: string
+): readonly ProductHead[] {
+	const needle = query.trim().toLowerCase();
+	const matched = catalogue.filter((product) => matchesQuery(product.title, needle));
+	const leads = (product: ProductHead) => product.title.toLowerCase().startsWith(needle);
+	return [...matched].sort((left, right) => {
+		const byLead = Number(leads(right)) - Number(leads(left));
+		return byLead === 0 ? right.updated_at - left.updated_at : byLead;
+	});
+}
+
+/**
+ * What the popup shows, for every state its two reads can be in.
+ *
+ * Whether there is anything to search is asked before whether the last read
+ * failed, and the order is the whole of the distinction: a read that failed
+ * having never landed leaves nothing to answer with, while one that failed
+ * refreshing rows already held leaves those rows perfectly searchable. Refusing
+ * to search a catalogue sitting in memory is a worse answer than the "no
+ * matches" this popup is careful not to fabricate, so the failure becomes a
+ * staleness note carried beside the rows rather than a refusal in place of
+ * them.
+ */
+export function paletteView(input: PaletteInput): PaletteView {
+	const query = input.query.trim();
+	if (query.length === 0) {
+		return { kind: 'blank' };
+	}
+	if (input.catalogue === null) {
+		return input.failed ? { kind: 'failed' } : { kind: 'reading' };
+	}
+	// How this branch is reached, recorded because the ordinary path to it is
+	// closed: both reads are `staleTime: Infinity`, so opening the palette a
+	// second time refetches nothing and cannot fail. What remains is an
+	// invalidation followed by a failing read -- the board mutates a resource,
+	// invalidates `queryKeys.catalogue`, and the refetch that starts does not
+	// land. The rows already held stay in the cache alongside the error, which
+	// is what `stale` is reporting. It is not a dead branch, and a later reader
+	// who concludes it is would be removing the only handling of that case.
+	const stale = input.failed;
+	const ordered = rankMatches(input.catalogue, query);
+	if (ordered.length === 0) {
+		return { kind: 'none', query, stale };
+	}
+	const showing =
+		input.mappings === null ? new Map<string, string[]>() : showingByProduct(input.mappings);
+	return {
+		kind: 'results',
+		rows: ordered.slice(0, RESULTS_SHOWN_MAX).map((product) => ({
+			id: product.id,
+			title: product.title,
+			meta: metaOf(product, showing.get(product.id) ?? []),
+			href: resultHref(product.id)
+		})),
+		total: ordered.length,
+		stale
+	};
+}
+
+/** Whether the rows on show were read before a failure and may be behind the
+ *  catalogue. Its own function because two of the five answers can carry it and
+ *  the template would otherwise ask twice. */
+export function isStale(view: PaletteView): boolean {
+	return (view.kind === 'results' || view.kind === 'none') && view.stale;
+}
+
+/** How many of a view's results a key can move through. Zero for every state
+ *  that shows none, so the arrows and Enter are inert there by construction
+ *  rather than by a guard each caller remembers. */
+export function resultCount(view: PaletteView): number {
+	return view.kind === 'results' ? view.rows.length : 0;
+}
+
+export interface PaletteKeyPress {
+	key: string;
+	/** How many results the popup is showing. */
+	count: number;
+	/** Which of them is highlighted. */
+	highlighted: number;
+	/** Whether an input method is mid-composition. Required rather than
+	 *  optional so a later call site cannot forget it and still compile. */
+	isComposing: boolean;
+}
+
+/**
+ * What a key does to an open palette.
+ *
+ * A returned action rather than a mutation, so the rules are testable without
+ * a component and the component only reports what happened -- the shape
+ * `menu-dismissal` already uses for why a menu closes.
+ */
+export type PaletteAction =
+	| { kind: 'move'; to: number }
+	| { kind: 'open'; index: number }
+	| { kind: 'close' }
+	| { kind: 'ignore' };
+
+export function keyAction(press: PaletteKeyPress): PaletteAction {
+	const { key, count, highlighted } = press;
+	// A key pressed mid-composition belongs to the input method, whatever it
+	// is. Composing with a Japanese or Chinese keyboard, the arrows walk the
+	// candidate list and Enter commits the candidate; taking either would move
+	// the highlight under the seller and open a resource they never chose.
+	// Escape is in here too: mid-composition it cancels the composition, and
+	// closing the palette on it would throw away what they were typing.
+	if (press.isComposing) {
+		return { kind: 'ignore' };
+	}
+	if (key === 'Escape') {
+		// Closing does not depend on there being results: Escape is the seller's
+		// way out of a popup that answered nothing, which is when they most want
+		// it.
+		return { kind: 'close' };
+	}
+	if (count <= 0) {
+		return { kind: 'ignore' };
+	}
+	const at = clampHighlight(highlighted, count);
+	switch (key) {
+		case 'ArrowDown':
+			return { kind: 'move', to: (at + 1) % count };
+		case 'ArrowUp':
+			return { kind: 'move', to: (at - 1 + count) % count };
+		case 'Enter':
+			return { kind: 'open', index: at };
+		// Home and End are deliberately absent, and belong to the caret: this
+		// is an editable combobox, where the ARIA pattern binds those two to
+		// the list only in the select-only variant. Taking them would leave a
+		// seller unable to reach the start of a typo they can see.
+		default:
+			return { kind: 'ignore' };
+	}
+}
+
+/** The highlight held inside a list that has just changed length.
+ *
+ * The results are re-read on every keystroke, so an index taken against the
+ * previous answer can point past the current one; opening whatever that index
+ * lands on would open a resource the seller never saw highlighted. */
+export function clampHighlight(highlighted: number, count: number): number {
+	if (count <= 0) {
+		return 0;
+	}
+	if (!Number.isFinite(highlighted) || highlighted < 0) {
+		return 0;
+	}
+	return Math.min(Math.floor(highlighted), count - 1);
+}
+
+/** Whether this key press is the one that opens the palette. */
+export function opensPalette(press: {
+	key: string;
+	ctrlKey: boolean;
+	metaKey: boolean;
+}): boolean {
+	return (press.ctrlKey || press.metaKey) && press.key.toLowerCase() === 'k';
+}

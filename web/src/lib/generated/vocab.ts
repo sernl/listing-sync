@@ -39,6 +39,7 @@ export type APIErrorCode =
   | "listing_url_unusable"
   | "mapping_not_bindable"
   | "listing_already_claimed"
+  | "org_slug_taken"
   | "internal";
 
 export type APIErrorKind =
@@ -46,6 +47,11 @@ export type APIErrorKind =
   | "unauthenticated"
   | "not_found"
   | "internal";
+
+export type SlugPrompt =
+  | "settled"
+  | "claim"
+  | "banner";
 
 export type InventoryId =
   | "TesGb"
