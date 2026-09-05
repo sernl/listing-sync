@@ -3,6 +3,7 @@ import type { MappingHead, ProductHead } from '$lib/api';
 import {
 	RESULTS_SHOWN_MAX,
 	clampHighlight,
+	coverToDraw,
 	isStale,
 	keyAction,
 	opensPalette,
@@ -235,6 +236,48 @@ describe('what the popup says', () => {
 		expect(view.rows.map((row) => row.id)).toEqual(['a', 'c']);
 	});
 
+	// The cover is the server's URL verbatim. Composing it here would be a
+	// second place the route is written down, and it would get the version
+	// wrong the first time one changed.
+	it('carries the cover URL the list view named, unchanged', () => {
+		const view = paletteView({
+			query: 'poetry',
+			catalogue: [
+				product({
+					id: 'b',
+					title: 'Poetry unit',
+					cover: '/v1/products/b/cover'
+				})
+			],
+			mappings: [],
+			failed: false
+		});
+		expect(view.kind).toBe('results');
+		if (view.kind !== 'results') {
+			return;
+		}
+		expect(view.rows[0].cover).toBe('/v1/products/b/cover');
+	});
+
+	// Absent and null are one answer: neither has bytes behind it, so the row
+	// draws its placeholder rather than requesting a cover that is not there.
+	it('answers null for a resource with no cover, however the field is absent', () => {
+		const view = paletteView({
+			query: 'poetry',
+			catalogue: [
+				product({ id: 'missing', title: 'Poetry unit' }),
+				product({ id: 'nulled', title: 'Poetry seminar', cover: null })
+			],
+			mappings: [],
+			failed: false
+		});
+		expect(view.kind).toBe('results');
+		if (view.kind !== 'results') {
+			return;
+		}
+		expect(view.rows.map((row) => row.cover)).toEqual([null, null]);
+	});
+
 	it('opens a result at the resource, not at the board filtered to it', () => {
 		expect(resultHref('abc-123')).toBe('/inventory/abc-123');
 	});
@@ -287,6 +330,30 @@ describe('what the popup says', () => {
 	});
 });
 
+describe('the cover a row actually draws', () => {
+	it('draws the cover while nothing has failed', () => {
+		expect(coverToDraw('/v1/products/a/cover', new Set())).toBe('/v1/products/a/cover');
+	});
+
+	// The fallback: a deleted or unreachable cover draws the same placeholder
+	// the absent case draws, rather than the browser's broken-image glyph.
+	it('draws nothing for a cover that failed to load', () => {
+		expect(coverToDraw('/v1/products/a/cover', new Set(['/v1/products/a/cover']))).toBeNull();
+	});
+
+	// Keyed by URL rather than by row, so a row that gains a new cover is tried
+	// afresh instead of being punished for the URL that failed.
+	it('tries a different URL on a row whose earlier cover failed', () => {
+		const failed = new Set(['/v1/products/a/cover']);
+		expect(coverToDraw('/v1/products/a/cover-2', failed)).toBe('/v1/products/a/cover-2');
+	});
+
+	it('leaves a resource with no cover alone', () => {
+		expect(coverToDraw(null, new Set())).toBeNull();
+		expect(coverToDraw(null, new Set(['/v1/products/a/cover']))).toBeNull();
+	});
+});
+
 describe('the order matches come back in', () => {
 	it('leads with titles that begin with the query', () => {
 		expect(rankMatches(CATALOGUE, 'fractions').map((row) => row.id)).toEqual(['a', 'c']);
@@ -317,7 +384,7 @@ describe('how many results a key can move through', () => {
 		expect(
 			resultCount({
 				kind: 'results',
-				rows: [{ id: 'a', title: 'A', meta: '', href: '/inventory/a' }],
+				rows: [{ id: 'a', title: 'A', meta: '', href: '/inventory/a', cover: null }],
 				total: 1,
 				stale: false
 			})

@@ -647,9 +647,8 @@ dialog.pal-box[open] {
 
 .pal-hit {
 	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	align-items: flex-start;
+	align-items: center;
+	gap: 10px;
 	text-align: left;
 	width: 100%;
 	padding: 8px 10px;
@@ -659,6 +658,39 @@ dialog.pal-box[open] {
 	color: inherit;
 	font: inherit;
 	cursor: pointer;
+}
+
+/* `min-width: 0` is what lets the title ellipsis: a flex item's floor is its
+   content, so without it a long title pushes the row wider than the popup
+   instead of being cut. */
+.pal-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+/* 32px rather than the board's 68px box: a palette row is about 44px tall, and
+   the board's thumbnail would set the row height instead of sitting inside it.
+   `object-fit: cover` because the route serves whatever the ingest generated
+   and there is no resizing parameter, so a cover that is not square is cropped
+   rather than squashed. The ground shows while the bytes are in flight, which
+   is why it is on the image and not only on the placeholder. */
+.pal-thumb {
+	width: 32px;
+	height: 32px;
+	flex: none;
+	border-radius: 6px;
+	object-fit: cover;
+	background: var(--hover);
+}
+
+/* A grid rather than centred text: Tailwind's preflight sets `svg { display:
+   block }`, so a bare glyph in a text box ignores the alignment. */
+.pal-thumb-none {
+	display: grid;
+	place-items: center;
+	color: var(--faint);
 }
 
 /* One highlight for the keyboard and the pointer alike: the arrows and a hover

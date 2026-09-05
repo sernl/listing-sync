@@ -7,6 +7,7 @@
 	import { queryKeys } from '$lib/query';
 	import {
 		clampHighlight,
+		coverToDraw,
 		isStale,
 		keyAction,
 		paletteView,
@@ -40,6 +41,17 @@
 		enabled: open,
 		staleTime: Infinity
 	}));
+
+	// Which cover URLs failed to load. A set rather than one string, because
+	// this component draws every row rather than one, and reassigned rather
+	// than mutated so the rows re-derive.
+	let failedCovers = $state<ReadonlySet<string>>(new Set());
+
+	function coverFailed(url: string) {
+		if (!failedCovers.has(url)) {
+			failedCovers = new Set(failedCovers).add(url);
+		}
+	}
 
 	let query = $state('');
 	let highlighted = $state(0);
@@ -190,6 +202,7 @@
 	{#if count > 0}
 		<div class="pal-list" id="palette-results" role="listbox" aria-label="Matching resources">
 			{#each rows as row, index (row.id)}
+				{@const cover = coverToDraw(row.cover, failedCovers)}
 				<button
 					class="pal-hit"
 					class:pal-on={index === active}
@@ -201,8 +214,30 @@
 					onmouseenter={() => (highlighted = index)}
 					onclick={() => openResult(index)}
 				>
-					<span class="pal-title">{row.title}</span>
-					<span class="pal-meta">{row.meta}</span>
+					{#if cover !== null}
+						<!-- Decorative: the title beside it names the resource, and a
+						     screen reader reading the cover twice is worse than not
+						     reading it. Eagerly loaded on purpose -- a palette shows
+						     eight rows at most and they belong on the first frame.
+						     A cover that fails to load falls back to the placeholder
+						     below rather than leaving a broken-image glyph in the box. -->
+						<img
+							class="pal-thumb"
+							src={cover}
+							alt=""
+							width="32"
+							height="32"
+							onerror={() => coverFailed(cover)}
+						/>
+					{:else}
+						<span class="pal-thumb pal-thumb-none" aria-hidden="true">
+							<Icon name="image" size={15} />
+						</span>
+					{/if}
+					<span class="pal-text">
+						<span class="pal-title">{row.title}</span>
+						<span class="pal-meta">{row.meta}</span>
+					</span>
 				</button>
 			{/each}
 		</div>

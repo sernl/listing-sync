@@ -23,6 +23,15 @@ export interface PaletteResult {
 	/** The one secondary line: what it costs, and which marketplaces show it. */
 	meta: string;
 	href: string;
+	/** Where this resource's cover is fetched from, or null where it has none.
+	 *
+	 *  Read straight off the list view and never composed here: the server
+	 *  names the URL under the version the request came in on, so a client that
+	 *  built the path would be a second place the route is written down and
+	 *  would get the version wrong the first time one changed. Null rather than
+	 *  optional so the row always has the field and the absent case is a value
+	 *  a test can pass rather than a property it can forget. */
+	cover: string | null;
 }
 
 /**
@@ -110,6 +119,25 @@ function metaOf(product: ProductHead, showing: readonly string[]): string {
 	return parts.join(' · ');
 }
 
+/**
+ * The cover a row should actually draw.
+ *
+ * A URL that failed to load is not drawn again, so a deleted or unreachable
+ * cover falls back to the same placeholder the absent case draws rather than
+ * leaving the browser's broken-image glyph in a 32px box.
+ *
+ * The failure is remembered by URL rather than by row, which is `RowCard`'s
+ * rule generalised from one row to a list of them: that component holds a
+ * single `failed` string because it draws a single cover, and a palette
+ * recomputes its rows on every keystroke, so a row index means nothing across
+ * two answers while a URL that 404s stays gone. Keying by URL also means a row
+ * whose cover changes is tried afresh instead of being punished for the old
+ * one.
+ */
+export function coverToDraw(cover: string | null, failed: ReadonlySet<string>): string | null {
+	return cover !== null && !failed.has(cover) ? cover : null;
+}
+
 /** Where a result opens. The resource's own page, which is the whole point of
  *  the palette: the founder's item asks for the resource rather than for the
  *  board filtered down to it. */
@@ -180,7 +208,11 @@ export function paletteView(input: PaletteInput): PaletteView {
 			id: product.id,
 			title: product.title,
 			meta: metaOf(product, showing.get(product.id) ?? []),
-			href: resultHref(product.id)
+			href: resultHref(product.id),
+			// Absent and null are one answer here: both mean there are no bytes
+			// behind a request, so the row draws its placeholder rather than
+			// asking for a cover that is not there.
+			cover: product.cover ?? null
 		})),
 		total: ordered.length,
 		stale
