@@ -331,6 +331,93 @@ async fn a_listed_connection_carries_its_transport_badge_and_revoking_it_is_term
     );
 }
 
+/// The seller's own disconnect over the wire: the count says a row moved, a
+/// second press moves nothing, and the row reads `unlinked` rather than
+/// `revoked`.
+///
+/// The last assertion is the point of the test. `unlinked` and `revoked` are
+/// both "disconnected" to the seller and both stop every lease, so a handler
+/// wired to the wrong repository method would answer identically here and
+/// differ only in whether the marketplace ever comes back — a difference no
+/// response body carries. Reading the state back is the only place the wire
+/// can see it.
+///
+/// It deliberately does not assert that a check-in lifts the row again. That
+/// is the beat route's, and restating the guard's SQL by hand here would stay
+/// green if the real statement were tightened;
+/// `an_unlinked_connection_reconnects_and_a_revoked_one_never_does` in
+/// tam-storage drives the real heartbeat.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn disconnecting_a_connection_unlinks_it_rather_than_revoking_it(pool: PgPool) {
+    provision(&pool).await;
+    let connection = Uuid([0x34; 16]);
+    let mut tx = pool.begin().await.expect("tx begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    sqlx::query(
+        "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+         VALUES ($1, $2, 'tpt', 'linked', now(), now())",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(connection.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the connection inserts");
+    tx.commit().await.expect("the connection commits");
+
+    let path = format!("/v1/connections/{}/disconnect", connection.to_hyphenated());
+    let (status, body) = call(pool.clone(), Config::default(), Method::POST, &path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let done: RevokedView = parse(&body);
+    assert_eq!(done.connections, 1, "the row moved, so the count is one");
+
+    let (status, body) = call(
+        pool.clone(),
+        Config::default(),
+        Method::GET,
+        "/v1/connections",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ConnectionsView = parse(&body);
+    assert_eq!(
+        view.connections[0].state.as_str(),
+        "unlinked",
+        "the seller's disconnect is the reversible write, never the terminal one"
+    );
+
+    let (status, body) = call(pool.clone(), Config::default(), Method::POST, &path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let again: RevokedView = parse(&body);
+    assert_eq!(again.connections, 0, "a second disconnect moves no row");
+
+    // A connection this tenant does not have. The pin means the statement
+    // cannot see it, and the answer must be a count of zero rather than a
+    // not-found that would confirm the id exists somewhere.
+    let stranger = format!(
+        "/v1/connections/{}/disconnect",
+        Uuid([0x99; 16]).to_hyphenated()
+    );
+    let (status, body) = call(
+        pool.clone(),
+        Config::default(),
+        Method::POST,
+        &stranger,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let none: RevokedView = parse(&body);
+    assert_eq!(
+        none.connections, 0,
+        "another tenant's connection answers zero, not a not-found"
+    );
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_drain_workflow_runs_entirely_through_the_api(pool: PgPool) {
     provision(&pool).await;

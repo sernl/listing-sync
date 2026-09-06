@@ -19,7 +19,7 @@ No marketplace capability is added: every page renders a verb the backend alread
 The palette is Kauri: ground `#F7F2E9`, primary `#6B4423`, accent `#C2543A`, additive `#3E5A8C`.
 The house-and-book mark is the product icon everywhere.
 Main navigation is three sections — Crosslist, Automations, Marketplaces — drawn with Lucide icons, and the Lucide dependency is approved.
-Crosslist carries six pages: Resources at the route `/inventory`, Labels, Import, Analytics, Template Manager and Export.
+Crosslist carries six pages: Resources at the route `/resources`, Labels, Import, Analytics, Template Manager and Export.
 Marketplace Sharing means publishing one resource to every connected marketplace in one scheduled action, and it ships disabled with a stated reason until the app can run it.
 Template Manager covers both senses: marketplace mapping templates and new-resource templates.
 Export is a CSV of the catalogue carrying each marketplace's status, price and link, and it never moves a file.

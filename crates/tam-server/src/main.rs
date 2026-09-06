@@ -834,11 +834,18 @@ async fn nothing_here() -> axum::http::StatusCode {
 ///
 /// Every host admitted is admitted by directive with its reason, in this one
 /// place, so an addition is a decision rather than an accretion:
-/// `fonts.googleapis.com` serves the stylesheet and `fonts.gstatic.com` the
-/// font files; `challenges.cloudflare.com` is Turnstile, which needs both a
-/// script and a frame; `cdn.paddle.com` is the checkout script.
-/// `wasm-unsafe-eval` is the console's WebAssembly, which Chromium engines
-/// refuse without it.
+/// `challenges.cloudflare.com` is Turnstile, which needs both a script and a
+/// frame; `cdn.paddle.com` is the checkout script. `wasm-unsafe-eval` is the
+/// console's WebAssembly, which Chromium engines refuse without it.
+///
+/// It named Google's two font hosts until the console's faces moved into
+/// `web/static/fonts`, declared by `@font-face` in `web/src/app.css`. The
+/// desktop and Android builds show this console under a policy that admits no
+/// third-party origin at all, so those hosts were never reachable there and
+/// the app rendered fallback type; self-hosting is what repaired that, and it
+/// leaves these two grants naming hosts nothing asks for. A dead grant on the
+/// public origin is a grant nobody is checking, which is the reason
+/// `landing_policy` gives for dropping the same pair.
 ///
 /// `frame-src` names `'self'` beside Turnstile because a directive that is
 /// present does not fall back to `default-src`: naming only the one host would
@@ -861,8 +868,8 @@ fn console_policy(shell: &str) -> String {
     format!(
         "default-src 'self'; connect-src 'self'; {script}; \
          img-src 'self' data: blob:; \
-         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-         font-src 'self' data: https://fonts.gstatic.com; \
+         style-src 'self' 'unsafe-inline'; \
+         font-src 'self' data:; \
          frame-src 'self' https://challenges.cloudflare.com"
     )
 }
@@ -936,8 +943,6 @@ mod tests {
     fn every_third_party_host_is_admitted_by_directive() {
         let policy = super::console_policy("<html></html>");
         for (directive, host) in [
-            ("style-src", "https://fonts.googleapis.com"),
-            ("font-src", "https://fonts.gstatic.com"),
             ("script-src", "https://challenges.cloudflare.com"),
             ("frame-src", "https://challenges.cloudflare.com"),
             ("script-src", "https://cdn.paddle.com"),
@@ -953,9 +958,27 @@ mod tests {
         }
     }
 
+    /// Type is served from this origin, so no directive names a font host.
+    ///
+    /// The pair this replaces was reachable in a browser and never in the app,
+    /// whose own policy admits no third-party origin, so the console rendered
+    /// two different sets of faces depending on where it was opened. The faces
+    /// now live in `web/static/fonts`; asserting their absence here is what
+    /// stops a future edit from restoring the grant and, with it, the split.
+    #[test]
+    fn no_directive_names_a_font_host() {
+        let policy = super::console_policy("<html></html>");
+        for host in ["fonts.googleapis.com", "fonts.gstatic.com"] {
+            assert!(
+                !policy.contains(host),
+                "{host} is not needed and not admitted: {policy}"
+            );
+        }
+    }
+
     /// `connect-src` names no host.
     ///
-    /// Narrowed from the whole policy, which now names four hosts on purpose.
+    /// Narrowed from the whole policy, which now names two hosts on purpose.
     /// This directive is the one that must stay relative: the console is served
     /// from the origin it calls, so naming it here would be a second thing to
     /// edit at cutover and a stale value would break every request rather than
@@ -1016,7 +1039,7 @@ mod composition {
     /// Hostile on purpose: a fixture that merely omitted those names would let
     /// every reservation below pass without being enforced, which is how the
     /// rule went unenforced while a design note said it held.
-    const GREEDY_LANDING: [(&str, &str); 6] = [
+    const GREEDY_LANDING: [(&str, &str); 7] = [
         (
             "index.html",
             "<!doctype html><title>the public page</title>",
@@ -1031,6 +1054,13 @@ mod composition {
             "<!doctype html><title>NOT the console</title>",
         ),
         ("_app/immutable/start.js", "// NOT the console bundle"),
+        // The likeliest one to be written for real rather than to be hostile:
+        // a teaching-resources marketing site has an obvious use for the word,
+        // and the catalogue board answers under it.
+        (
+            "resources/index.html",
+            "<!doctype html><title>NOT the console</title>",
+        ),
         ("v1/nothing", "NOT the api"),
     ];
 
@@ -1190,13 +1220,24 @@ mod composition {
             "the console parses this"
         );
 
-        let console = get("/inventory").await;
-        assert_eq!(console.status, StatusCode::OK, "an unknown path is the SPA");
-        assert!(
-            console.body.contains("__sveltekit"),
-            "the console's shell answers its own deep routes: {}",
-            console.body
-        );
+        // Two paths rather than one, because they reach the shell by different
+        // routes: `/resources` is a reserved console namespace and never
+        // consults the landing build at all, while `/labels` is claimed by
+        // nothing and arrives here as the fallback. One probe covering only the
+        // reserved name would leave the fallback itself unasserted.
+        for path in ["/resources", "/labels"] {
+            let console = get(path).await;
+            assert_eq!(
+                console.status,
+                StatusCode::OK,
+                "{path} is answered by the SPA"
+            );
+            assert!(
+                console.body.contains("__sveltekit"),
+                "the console's shell answers its own deep routes: {}",
+                console.body
+            );
+        }
     }
 
     /// The landing page carries the landing policy and not the console's.
@@ -1233,7 +1274,7 @@ mod composition {
             "a content-addressed asset is held for a year"
         );
 
-        let console = get("/inventory").await;
+        let console = get("/resources").await;
         assert!(
             console
                 .header(header::CONTENT_SECURITY_POLICY)
@@ -1283,12 +1324,18 @@ mod composition {
 
     /// The reserved namespaces hold against a landing build that claims them.
     ///
-    /// The fixture really does contain `app/index.html`, `_app/immutable/…` and
-    /// `v1/nothing`, so each of these passes only because `route` refuses them
-    /// before the landing probe.
+    /// The fixture really does contain `app/index.html`, `_app/immutable/…`,
+    /// `resources/index.html` and `v1/nothing`, so each of these passes only
+    /// because `route` refuses them before the landing probe.
     #[tokio::test]
     async fn the_reserved_namespaces_hold_against_a_hostile_landing_build() {
-        for path in ["/app", "/app/settings", "/_app/immutable/start.js"] {
+        for path in [
+            "/app",
+            "/app/settings",
+            "/_app/immutable/start.js",
+            "/resources",
+            "/resources/9f2c8a11-0000-4000-8000-000000000000",
+        ] {
             let answer = get(path).await;
             assert!(
                 answer.body.contains("__sveltekit"),

@@ -1,0 +1,50 @@
+---
+import { marks } from '../marketplaces.js';
+import { availability } from '../site.js';
+
+/* The band under the hero: every marketplace the console's catalogue tiles,
+   drawn as its own mark where we hold one and as its initial where we do not.
+   Greyscale at rest because twenty brand palettes at full strength fight the
+   page and each other; the file itself is the owner's published bytes
+   unaltered, and a CSS filter changes the drawing rather than the file.
+
+   The caption is not decoration. Every other sentence on this site speaks of
+   marketplaces without naming one, so this is where a reader learns which of
+   these actually connect, and it carries `availability` itself rather than a
+   second wording of it. The disclaimer under it is the footer's, which is what
+   makes a band of marks on a marketing page defensible at all. */
+---
+
+<div class="band-wrap">
+	<ul class="band">
+		{
+			marks.map((mark) => (
+				<li>
+					<a class:list={['mark', { glyph: !mark.file }]} href={mark.home} rel="nofollow noopener">
+						{
+							mark.file ? (
+								<img
+									src={`/marks/${mark.file}`}
+									alt={mark.name}
+									class:list={[mark.shape]}
+									loading="lazy"
+									decoding="async"
+								/>
+							) : (
+								<>
+									<span class="initial" aria-hidden="true">{mark.name.slice(0, 1)}</span>
+									<span class="name">{mark.name}</span>
+								</>
+							)
+						}
+					</a>
+				</li>
+			))
+		}
+	</ul>
+	<p class="band-note">
+		{availability} The others shown here are places teachers told us they sell, and none of them
+		is connected yet. Marketplace names and logos belong to their own companies. Teachouse is an
+		independent tool, is not affiliated with any of them, and none of them endorses it.
+	</p>
+</div>

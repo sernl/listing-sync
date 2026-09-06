@@ -375,6 +375,42 @@ pub async fn first_run(
     check_in(state, plane).await
 }
 
+/// One check-in, registering this device first if the server does not know it.
+///
+/// The registry refuses to create a device from a heartbeat, so an id the
+/// server has never seen answers [`ControlPlaneError::Unregistered`] and every
+/// later check-in answers the same until something registers. Nothing did:
+/// [`first_run`] is reached only from the `device_check_in` command, so a
+/// device whose console never called it never appeared in the seller's list at
+/// all. This is the repair, and it is on the scheduled path rather than in the
+/// console because the console is the half that can be absent.
+///
+/// Only [`ControlPlaneError::Unregistered`], and only from the check-in. A
+/// refusal is an outage and re-registering through one would read a bad
+/// gateway as a lost registration; the same variant off the ledger and payload
+/// transports means a missing job or a missing payload and never reaches here.
+///
+/// At most one registration and one retry per cycle, so a server that answers
+/// not-found to both costs two requests a tick rather than a loop. Registering
+/// cannot restore a revoked device: `revoked_at` is its own column and the
+/// upsert does not touch it, and a revoked device is a row that exists, so it
+/// answers a heartbeat rather than a not-found and never reaches this arm.
+async fn check_in_or_register(
+    state: &DesktopState,
+    plane: &dyn ControlPlane,
+) -> Result<CheckIn, CheckInError> {
+    match check_in(state, plane).await {
+        Err(CheckInError::Plane(ControlPlaneError::Unregistered)) => {
+            plane
+                .register(state.device(), HostFacts::here())
+                .await
+                .map_err(CheckInError::from)?;
+            check_in(state, plane).await
+        }
+        other => other,
+    }
+}
+
 /// One scheduled cycle: check in, then pull whatever work the gate still
 /// allows.
 ///
@@ -392,7 +428,7 @@ pub async fn cycle<W: WorkSource + ?Sized>(
     source: &W,
     now: Timestamp,
 ) -> TickReport {
-    check_in(state, plane).await.ok();
+    check_in_or_register(state, plane).await.ok();
     let gate = state.gate().await;
     let report = scheduler
         .tick(
@@ -718,6 +754,243 @@ mod tests {
         first_run(&state, &plane).await.expect("first run lands");
         assert_eq!(plane.registrations.load(Ordering::SeqCst), 1);
         assert_eq!(plane.beats.load(Ordering::SeqCst), 1);
+    }
+
+    /// A registry with no row for this device until something registers one,
+    /// which is what every device in this repository has faced since the
+    /// registry landed: `POST /v1/devices` had one caller and nothing called
+    /// it.
+    struct Registry {
+        registered: core::sync::atomic::AtomicBool,
+        registrations: AtomicUsize,
+        beats: AtomicUsize,
+    }
+
+    impl Registry {
+        fn empty() -> Self {
+            Self {
+                registered: core::sync::atomic::AtomicBool::new(false),
+                registrations: AtomicUsize::new(0),
+                beats: AtomicUsize::new(0),
+            }
+        }
+
+        fn holding_this_device() -> Self {
+            let registry = Self::empty();
+            registry.registered.store(true, Ordering::SeqCst);
+            registry
+        }
+    }
+
+    impl ControlPlane for Registry {
+        fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::TesGb)))
+        }
+
+        fn register<'a>(
+            &'a self,
+            _device: &'a DeviceIdentity,
+            _facts: HostFacts,
+        ) -> PlaneFuture<'a, ()> {
+            self.registrations.fetch_add(1, Ordering::SeqCst);
+            self.registered.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn heartbeat<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _sessions: &'a [SessionReport],
+        ) -> PlaneFuture<'a, CheckIn> {
+            self.beats.fetch_add(1, Ordering::SeqCst);
+            let known = self.registered.load(Ordering::SeqCst);
+            Box::pin(async move {
+                if known {
+                    Ok(CheckIn {
+                        revoked: false,
+                        entitlement: None,
+                    })
+                } else {
+                    Err(ControlPlaneError::Unregistered)
+                }
+            })
+        }
+    }
+
+    /// A server that is there and unhappy: every call refused, which is what an
+    /// outage or a bad gateway looks like from here.
+    struct Unreachable {
+        registrations: AtomicUsize,
+    }
+
+    impl ControlPlane for Unreachable {
+        fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
+                "502".to_owned(),
+            ))))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
+                "502".to_owned(),
+            ))))
+        }
+
+        fn register<'a>(
+            &'a self,
+            _device: &'a DeviceIdentity,
+            _facts: HostFacts,
+        ) -> PlaneFuture<'a, ()> {
+            self.registrations.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn heartbeat<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _sessions: &'a [SessionReport],
+        ) -> PlaneFuture<'a, CheckIn> {
+            Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
+                "502".to_owned(),
+            ))))
+        }
+    }
+
+    /// The scheduler and work source a cycle needs, with nothing to pull.
+    fn idle_cycle_parts() -> (crate::scheduler::Scheduler, crate::scheduler::NoWork) {
+        (
+            crate::scheduler::Scheduler::new(
+                core::time::Duration::from_mins(1),
+                vec![Marketplace::Tpt],
+            ),
+            crate::scheduler::NoWork,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_cycle_registers_the_device_the_server_does_not_know_and_checks_in_again() {
+        let state = state_with(Arc::new(MemorySessionStore::new()));
+        let plane = Registry::empty();
+        let (scheduler, source) = idle_cycle_parts();
+
+        super::cycle(
+            &state,
+            &plane,
+            &scheduler,
+            &source,
+            Timestamp(1_756_000_000_000),
+        )
+        .await;
+
+        assert_eq!(
+            plane.registrations.load(Ordering::SeqCst),
+            1,
+            "an unknown device registers itself, which is the only way a machine \
+             ever reaches the seller's list"
+        );
+        assert_eq!(
+            plane.beats.load(Ordering::SeqCst),
+            2,
+            "one check-in that learned it was unknown, and one that landed after \
+             registering; a registration with no second check-in would leave the \
+             device with no entitlement until the next tick"
+        );
+        assert!(
+            state.signed_in(),
+            "the retried check-in is what the state records, not the refusal that preceded it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cycle_against_a_registry_that_knows_this_device_registers_nothing() {
+        let state = state_with(Arc::new(MemorySessionStore::new()));
+        let plane = Registry::holding_this_device();
+        let (scheduler, source) = idle_cycle_parts();
+
+        super::cycle(
+            &state,
+            &plane,
+            &scheduler,
+            &source,
+            Timestamp(1_756_000_000_000),
+        )
+        .await;
+
+        assert_eq!(
+            plane.registrations.load(Ordering::SeqCst),
+            0,
+            "the ordinary tick costs one request, not two"
+        );
+        assert_eq!(plane.beats.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_check_in_is_an_outage_and_never_a_lost_registration() {
+        let state = state_with(Arc::new(MemorySessionStore::new()));
+        let plane = Unreachable {
+            registrations: AtomicUsize::new(0),
+        };
+        let (scheduler, source) = idle_cycle_parts();
+
+        super::cycle(
+            &state,
+            &plane,
+            &scheduler,
+            &source,
+            Timestamp(1_756_000_000_000),
+        )
+        .await;
+
+        assert_eq!(
+            plane.registrations.load(Ordering::SeqCst),
+            0,
+            "a device that re-registered through every outage would rewrite its own \
+             registry row on a schedule for no reason"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revoked_device_is_a_row_that_exists_so_the_self_heal_never_sees_it() {
+        let store = Arc::new(MemorySessionStore::new());
+        store
+            .put(&a_record(Marketplace::Tpt, None))
+            .await
+            .expect("tpt stores");
+        let state = state_with(Arc::clone(&store));
+        let plane = Fake::new(true);
+        let (scheduler, source) = idle_cycle_parts();
+
+        super::cycle(
+            &state,
+            &plane,
+            &scheduler,
+            &source,
+            Timestamp(1_756_000_000_000),
+        )
+        .await;
+
+        assert_eq!(
+            plane.registrations.load(Ordering::SeqCst),
+            0,
+            "a re-registration here would hand a signed-out device a fresh row and \
+             undo the sign-out the seller performed"
+        );
+        assert!(state.revoked());
+        assert_eq!(
+            store.get(Marketplace::Tpt).await.expect("the store reads"),
+            None,
+            "and the wipe still ran"
+        );
     }
 
     #[tokio::test]

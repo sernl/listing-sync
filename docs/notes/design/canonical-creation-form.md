@@ -5,11 +5,11 @@ The implementation design for Phase 5 of the re-baselined plan (`docs/notes/desi
 ## What this phase actually is
 
 Phase 5 is a completion and verification pass, not a greenfield build, and an implementer who treats it as the latter will rewrite working code.
-The nine-section form exists at `web/src/routes/inventory/new/+page.svelte` (770 lines), its pure client model at `web/src/lib/tpt-form.ts` (667 lines), the canonical product at `crates/tam-domain/src/product/` (1712 lines across six files), the three authoring endpoints at `crates/tam-api/src/product/`, and the sidecar at `crates/tam-storage/migrations/0040_product_tpt_base.sql`.
+The nine-section form exists at `web/src/routes/resources/new/+page.svelte` (770 lines), its pure client model at `web/src/lib/tpt-form.ts` (667 lines), the canonical product at `crates/tam-domain/src/product/` (1712 lines across six files), the three authoring endpoints at `crates/tam-api/src/product/`, and the sidecar at `crates/tam-storage/migrations/0040_product_tpt_base.sql`.
 `docs/notes/design/creation-flow.md` is the design that produced them and remains accurate on the model, the API and the storage.
 
 Three of its statements have since been overtaken and an implementer reading it first will be misled on each.
-It names the route `web/src/routes/listings/new/+page.svelte`, which is now a one-line redirect stub; the live route is `web/src/routes/inventory/new/+page.svelte` and `web/src/routes/listings/+page.ts:7-9` performs the 308.
+It names the route `web/src/routes/listings/new/+page.svelte`, which is now a one-line redirect stub; the live route is `web/src/routes/resources/new/+page.svelte` and `web/src/routes/listings/+page.ts:7-9` performs the 308.
 It states that no projection exists, but `web/src/lib/tpt-form.ts:466-491` now calls a WASM core through `web/src/lib/core/index.ts`, which returns per-field declared losses and an `undecided_axes` list (`web/src/lib/core/core.test.ts`).
 It describes the Vendoo rename as pending, and the routes, the navigation entries (`web/src/lib/nav.ts:31-34`) and the redirect table (`web/src/lib/nav.ts:163`) have all landed.
 
@@ -119,7 +119,7 @@ Linking to a control that silently does nothing is worse than not linking to it,
 
 The totality rule is that every marketplace-required field is either canonical or has a stated default, and no third case is permitted.
 `TptBaseProduct::check` returns every refusal and every advisory in one pass rather than stopping at the first, so a seller who left three controls wrong reads three messages (`crates/tam-domain/src/product/validation.rs:86-146`).
-The client mirrors the rules inline through the same compiled core so a message appears as the seller types, and `POST /{version}/authoring/check` is the authority, which is why a drifted client still gets the same answer (`web/src/routes/inventory/new/+page.svelte:159-166`).
+The client mirrors the rules inline through the same compiled core so a message appears as the seller types, and `POST /{version}/authoring/check` is the authority, which is why a drifted client still gets the same answer (`web/src/routes/resources/new/+page.svelte:159-166`).
 
 Three fields are required by TPT and deliberately have no default, and the reason is the same in each case: a default would make our statement out of the seller's.
 The tax code is a tax determination the seller is contractually answerable for.
@@ -140,14 +140,14 @@ The new localisation boolean travels inside `tpt_base` alongside the thumbnail d
 The create validates the assembled draft through the same verdict function `POST /{version}/authoring/check` answers with, so the endpoint that reports a refusal and the endpoint that acts on one cannot disagree.
 A create carrying no attestation is refused by name rather than writing a product nobody attested to.
 
-The engine job downstream is untouched: the create already produces one mapping per selected inventory and the console navigates to the product (`web/src/routes/inventory/new/+page.svelte:167-176`).
+The engine job downstream is untouched: the create already produces one mapping per selected inventory and the console navigates to the product (`web/src/routes/resources/new/+page.svelte:167-176`).
 
 ## Console naming
 
 The Vendoo cross-reference rename map (`docs/research/rethink/vendoo-console-cross-reference.md:200-230`) is substantially applied: the routes, the navigation labels and the redirect stubs have all landed.
 Four residues remain and only the first is on this form.
 
-The page title reads "New listing" at `web/src/routes/inventory/new/+page.svelte:212` and the rename map says the seller-facing noun is item, so it becomes "New item"; the description one line below already says item, which is what makes the title read as an oversight rather than a choice.
+The page title reads "New listing" at `web/src/routes/resources/new/+page.svelte:212` and the rename map says the seller-facing noun is item, so it becomes "New item"; the description one line below already says item, which is what makes the title read as an oversight rather than a choice.
 Elsewhere in that file the word resource survives only inside TPT's own control label "Free Resource" and its tooltip (`:361`, `:365`, `:427-428`), and those must stay verbatim, because a control quoted from TPT that we have renamed is a control the seller cannot find on TPT.
 The stub at `web/src/routes/listings/new/+page.svelte` already says "new item form", so the vocabulary is settled and only the heading disagrees with it.
 
@@ -156,7 +156,7 @@ The stub at `web/src/routes/listings/new/+page.svelte` already says "new item fo
 Four steps, each landable on its own, each with the verification that would fail it if it were wrong.
 
 Step one, the naming residue, owned by the console alone.
-Change the page title at `web/src/routes/inventory/new/+page.svelte:212` to "New item" and leave every "Free Resource" string untouched.
+Change the page title at `web/src/routes/resources/new/+page.svelte:212` to "New item" and leave every "Free Resource" string untouched.
 Verification is `just web-check`, which runs svelte-check and vitest; it fails on a broken template and the existing form tests fail if a quoted TPT label was renamed with it.
 
 Step two, the canonical field, owned by `crates/tam-domain` and `crates/tam-storage`.
@@ -195,7 +195,7 @@ The code is right and the comment is stale by one.
 
 Written as the phase was built, one entry per step, so the record is what happened rather than what was planned.
 
-Step one changed the page title at `web/src/routes/inventory/new/+page.svelte` from "New listing" to "New item" and left every quoted TPT string untouched, which `just web-check` confirmed at 1195 files with no errors, 425 vitest cases and a clean build.
+Step one changed the page title at `web/src/routes/resources/new/+page.svelte` from "New listing" to "New item" and left every quoted TPT string untouched, which `just web-check` confirmed at 1195 files with no errors, 425 vitest cases and a clean build.
 
 Steps two and three landed as one commit, because the field and the control are the same thing and a commit holding only half of it would carry a column nothing writes.
 `CategoryGroup` gained `appropriate_for_country: bool`; migration 0049 added the matching column as `boolean NOT NULL DEFAULT false`, with no CHECK, because a boolean column already holds exactly the control's two members and TPT marks the control optional.

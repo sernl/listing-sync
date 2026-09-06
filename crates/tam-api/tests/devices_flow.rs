@@ -31,6 +31,9 @@ const LAPTOP: &str = "11112222333344445555666677778888";
 /// being more than one: the link is existential over devices, and the
 /// declaration outlives any of them.
 const DESKTOP: &str = "99998888777766665555444433332222";
+/// The seller's phone, for the one fact that is about a machine which is not a
+/// computer.
+const PHONE: &str = "44443333222211110000ffffeeeedddd";
 const NOW: Timestamp = Timestamp(1_756_000_000_000);
 
 /// Three fixed instants, one per call that needs to be distinguishable from
@@ -428,6 +431,59 @@ async fn a_device_registers_checks_in_and_appears_in_its_own_tenants_listing(poo
     );
 }
 
+/// A phone registers under the operating system Android reports, and is a
+/// machine in the seller's list like any other.
+///
+/// The two-branch rule is enforced against the marketplace a device reports a
+/// session for, never against the operating system it runs on. Registration
+/// therefore takes `os` as free text, and a list of the operating systems a
+/// computer reports would lock the phone client out of the registry it exists
+/// to appear in.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_phone_registers_under_the_operating_system_android_reports(pool: PgPool) {
+    provision(&pool).await;
+
+    let registered = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: "/v1/devices",
+            token: &TOKEN_A,
+            body: Some(serde_json::json!({
+                "id": PHONE,
+                "name": "Google Pixel 8",
+                "os": "android",
+                "arch": "aarch64",
+                "app_version": "0.1.0",
+            })),
+            wall: t0,
+        },
+    )
+    .await;
+    assert_eq!(
+        registered.status,
+        StatusCode::OK,
+        "`std::env::consts::OS` is `android` on a phone build: {}",
+        String::from_utf8_lossy(&registered.body)
+    );
+    let view: DeviceView = registered.json();
+    assert_eq!(
+        (view.os.as_str(), view.name.as_str()),
+        ("android", "Google Pixel 8"),
+        "the registry keeps what the phone said about itself"
+    );
+
+    let listed = devices(&pool, &TOKEN_A).await;
+    assert_eq!(
+        listed
+            .iter()
+            .map(|device| (device.id.as_str(), device.os.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(PHONE, "android")],
+        "and the phone is listed as one of the seller's machines"
+    );
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn signing_a_device_out_reaches_it_on_its_next_check_in(pool: PgPool) {
     provision(&pool).await;
@@ -472,6 +528,43 @@ async fn signing_a_device_out_reaches_it_on_its_next_check_in(pool: PgPool) {
         "the check-in after the sign-out is the evidence the device complied"
     );
     assert_eq!(listed[0].sessions[0].status, "wiped");
+}
+
+/// A signed-out device that registers again is still signed out.
+///
+/// Registration is an upsert and `revoked_at` is deliberately not among the
+/// columns it overwrites, so a device cannot lift its own sign-out by
+/// restarting. The client re-registers on its own now, whenever a check-in
+/// finds the server does not know it, which makes this the ordinary path
+/// rather than a rare one.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn registering_again_does_not_undo_a_sign_out(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "founder-pc").await;
+
+    let revoked = revoke(&pool, &TOKEN_A, LAPTOP, t1).await;
+    assert_eq!(revoked.status, StatusCode::OK);
+    assert_eq!(revoked.json::<DeviceView>().revoked_at, Some(t1()));
+
+    let again = register(&pool, &TOKEN_A, LAPTOP, "studio-pc").await;
+    assert_eq!(again.status, StatusCode::OK);
+    let view: DeviceView = again.json();
+    assert_eq!(
+        view.name, "studio-pc",
+        "the second registration was applied rather than ignored, so what it left \
+         standing below is the upsert's doing"
+    );
+    assert_eq!(
+        view.revoked_at,
+        Some(t1()),
+        "a registration that cleared the mark would let any device undo its own sign-out"
+    );
+
+    assert_eq!(
+        devices(&pool, &TOKEN_A).await[0].revoked_at,
+        Some(t1()),
+        "and the seller's list still shows it signed out"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

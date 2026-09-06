@@ -273,13 +273,64 @@
 
               # The namespaces `route` reserves ahead of the landing probe. A
               # build that emitted one of these would have the console's home,
-              # its whole client bundle or the download surface; the reservation
-              # turns that into a 404 rather than a marketing page, and either
-              # way the build must not carry them.
-              for reserved in app _app downloads; do
+              # its whole client bundle, a seller's catalogue or the download
+              # surface; the reservation turns that into a 404 rather than a
+              # marketing page, and either way the build must not carry them.
+              #
+              # `resources` is the one a marketing site would take without
+              # meaning to: a teaching-resources site has an obvious use for the
+              # word, and the catalogue board answers under it.
+              for reserved in app _app resources downloads; do
                 if [ -e "$landing/$reserved" ]; then
                   echo "the landing build carries $reserved, which tam-server reserves" >&2
                   exit 1
+                fi
+              done
+
+              # Both tiers self-host their faces, and neither build fingerprints
+              # the files, so the name in the sheet is the name in the artefact
+              # and a face whose file never shipped renders the fallback stack
+              # on every page it reaches. The lists are read off the sheets
+              # rather than restated here, so a face added to either one is
+              # asserted the day it is added.
+              console_fonts=$(grep -o "url('/fonts/[^']*')" ${./web/src/app.css} \
+                | sed "s|.*/fonts/||; s|')$||" | sort -u)
+              landing_fonts=$(grep -o "url('/fonts/[^']*')" ${./apps/landing/src/styles/site.css} \
+                | sed "s|.*/fonts/||; s|')$||" | sort -u)
+
+              # A sheet whose faces moved off /fonts/ would leave both loops
+              # below with nothing to say, and this check would pass by
+              # asserting nothing at all.
+              test -n "$console_fonts"
+              test -n "$landing_fonts"
+
+              for font in $console_fonts; do
+                if ! test -f "$console/fonts/$font"; then
+                  echo "the console build carries no fonts/$font, which web/src/app.css asks for" >&2
+                  exit 1
+                fi
+              done
+
+              for font in $landing_fonts; do
+                if ! test -f "$landing/fonts/$font"; then
+                  echo "the landing build carries no fonts/$font, which apps/landing/src/styles/site.css asks for" >&2
+                  exit 1
+                fi
+              done
+
+              # `crates/tam-server/src/serving.rs` probes the landing build
+              # before the console's own static directory, so a name both
+              # builds carry is answered from the landing copy whichever tier
+              # asked for it. Two different files under one name is then a
+              # console page rendering the landing's face, silently and only in
+              # a deployment that serves both.
+              for font in $(printf '%s\n' $console_fonts $landing_fonts | sort -u); do
+                if test -f "$console/fonts/$font" && test -f "$landing/fonts/$font"; then
+                  if ! cmp -s "$console/fonts/$font" "$landing/fonts/$font"; then
+                    echo "fonts/$font differs between the console and landing builds," >&2
+                    echo "and tam-server answers both tiers with the landing copy" >&2
+                    exit 1
+                  fi
                 fi
               done
 

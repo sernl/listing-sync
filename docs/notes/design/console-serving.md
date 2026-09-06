@@ -8,9 +8,10 @@
 
 One origin answers four surfaces, and the order it tries them in is fixed: the API's own routes, then the landing build, then `/downloads`, then the console.
 The API is first by construction — `tam_api::router` matches its routes before anything reaches a fallback — so no directory placed behind it can shadow `/healthz` or a path under a version this build serves.
-Three namespaces are then reserved ahead of everything below: `app` and `_app` are the console's home and its client bundle, and `downloads` is the tier under it.
+Four namespaces are then reserved ahead of everything below: `app` and `_app` are the console's home and its client bundle, `resources` is the catalogue board, and `downloads` is the tier under it.
 Reservation rather than ordering, because the hazard is a landing build quietly taking one of them: a page at `app/` would answer the console's home with a marketing page under the marketing policy, and anything at `_app/` would break the console at every route.
-All three are reserved whether or not the tier behind them is configured, so a deployment serving no downloads cannot let a landing build take `/downloads/` and then have enabling the tier shadow a live page.
+`resources` is the one a marketing site would take by accident rather than by collision, since a teaching-resources site has an obvious use for the word, and the seller asking for their catalogue would get that page with nothing anywhere saying so.
+All four are reserved whether or not the tier behind them is configured, so a deployment serving no downloads cannot let a landing build take `/downloads/` and then have enabling the tier shadow a live page.
 The landing page answers only the paths it actually holds a file for: `/` through its `index.html`, `/pricing`, `/privacy` and `/terms` through theirs, and every hashed asset under `_astro/` by its exact name.
 The console is last and unchanged: it answers everything else, serving its asset tree where the tree has the file and its single-page shell where it does not.
 `crates/tam-server/src/serving.rs` writes that order down as one pure function, `route`, which takes a request path, a way to ask whether the landing build holds a file, and whether downloads are configured, so the rule is tested without a listener, a directory or a socket.
@@ -34,7 +35,7 @@ The static decision is layered outside the console's policy layer, and that plac
 
 ## `/app`, and what the desktop client has to do about it
 
-The console's home moved to `/app` and its deep routes did not move, so `/inventory`, `/labels` and `/sync` are still where they were.
+The console's home moved to `/app` and its deep routes did not move with it, so `/labels` and `/sync` are still where they were.
 That is the whole of what the server needs to know about the move, because the shell answers any path no other tier claims, so `/app` and everything below it resolve exactly as an unknown console route always did.
 The consequence for the desktop client is that its window must navigate to `/app` rather than to `/`, and until a release does that the landing page itself is what sends the app on.
 `--landing-dir` and `--downloads-dir` are both optional and, absent, the server behaves exactly as it did before either flag existed.

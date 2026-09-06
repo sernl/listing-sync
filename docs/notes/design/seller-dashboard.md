@@ -28,7 +28,7 @@ That is the argument for stating the device-driven reality on the dashboard rath
 
 `/` is the workspace overview: the figures the catalogue supports, the attention list, the recent strip, and a band saying whether the seller's own machine is on and which marketplaces need a sign-in there.
 
-`/inventory` is the board, and it is the centre of the product.
+`/resources` is the board, and it is the centre of the product.
 One row per item, carrying its title, price, the per-marketplace chip strip, its captured views and sales, and when it was last touched.
 Search over the title, filter by marketplace, by standing and by label, and five bulk verbs over the selected rows.
 Four of the five run: cross-list, mark-as-listed, labels, and delete.
@@ -37,7 +37,7 @@ The label filter narrows the catalogue's own page query rather than the rows alr
 Bulk delete asks which way the listings already on a marketplace should go and defaults to neither, because removing everywhere fires one write per listing from one click and leaving them standing abandons listings nothing here tracks; that is the seller's decision at the moment they take it, not one the console makes for them.
 There is no bulk delist-and-relist under any name, and a test refuses one.
 
-`/inventory/{id}` is one item: its canonical fields, one row per marketplace with that marketplace's standing and the action it admits, the runs this listing has started, and the destructive actions behind their own dialogs.
+`/resources/{id}` is one item: its canonical fields, one row per marketplace with that marketplace's standing and the action it admits, the runs this listing has started, and the destructive actions behind their own dialogs.
 The run timeline is not rebuilt here; a run links to `/sync/{job}`, which already renders items, gates and per-item events off the ledger.
 
 `/marketplaces` is one row per marketplace, carrying the branch its automation runs on, the sign-in or connection standing that branch decides, the machine holding a device-branch login, and the machines list itself below the rows.

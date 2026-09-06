@@ -540,3 +540,64 @@ One consequence is carried forward rather than solved.
 It is deliberately not added here for two reasons: the state is believed unreachable, since both deferred triggers re-query `product_file` at commit and a single transaction that inserts a mapping and deletes the last payload is visible to both, so at least one raises; and the reachability argument is reasoned rather than demonstrated, because the existing race test covers two concurrent transactions rather than one transaction doing both writes.
 What would close it is a repository-level test of that interleaving and the mapping count threaded into the read, and neither is large.
 Until then a corrupted product reads back as a resource with no file, which is the wrong sentence for a state that should be impossible.
+
+## Browser and platform tiles carry a mark of our own, not the vendor's, 2026-09-06
+
+The three download tiles draw a neutral glyph from the Lucide set — `monitor`, `smartphone` and `laptop` — and the two browser tiles keep the name set in our own typeface.
+No store badge and no browser vendor's logo appears anywhere on the page, `web/static/` gains no file, and the disclaimer beneath the grid is unchanged.
+
+This is a new decision rather than an application of "Marketplace names and logos, shown under a disclaimer, 2026-09-05".
+That entry is about marketplaces in its own words, and Google, Apple, Microsoft and Mozilla are not marketplaces; extending it to them would have been a decision taken by reading rather than by deciding.
+
+The founder asked for store badges on the Windows, Android and Apple tiles.
+All three badge programmes license the badge for one purpose, to link to an app's listing on that store, and none of the three tiles links to one: Windows and Android offer a file the release manifest names and a seller installs by hand, and Apple offers nothing at all because no macOS build is published.
+A badge over a sideloaded file is outside the licence that grants it and states something untrue to the reader, which is a worse thing than the guideline risk the founder knowingly accepted for the marketplace logos, where the mark identifies its owner correctly.
+The alternative rejected is the badge itself; the alternative not available is the bare store icon, which none of the three licenses for third-party use.
+
+The founder also asked for the Chrome and Firefox logos, and the reason neither appears is availability rather than judgement.
+Both vendors gate their brand files behind a partner portal, so neither the file nor the licence terms governing it could be read, and a mark whose terms cannot be recorded cannot be landed under the provenance rule this page's marks are held to.
+Google's Chrome assets and their published terms sit behind a partner login, and the second address on record for them is a 404; Mozilla's brand portal serves a JavaScript application with no asset address in its markup, so the Firefox logo is reachable only by driving that application in a browser.
+Mozilla's trademark policy does expressly permit nominative use without prior permission, which makes Firefox the one mark here whose owner publishes an allowance, but that is a fact about permission rather than availability.
+So both browser tiles keep the name set in our own typeface, which is what they already drew.
+A glyph was the alternative and is not taken.
+Lucide carries no brand marks at all, so the nearest it offers is a generic browser drawing, and a circular one resembles Chrome's own logo more closely than the word "Chrome" does — which would make a mark adopted to avoid using a logo the closer imitation of it.
+The download tiles are not in that position: a monitor, a phone and a laptop resemble no store badge, which is why the glyph is right there and wrong here.
+
+The rule is enforced rather than remembered.
+`PLATFORM_MARK` is typed as a `Mark`, so the badge lands as a change to one table on the day a store listing exists, and `downloads.test.ts` fails on a change from a glyph to an image, which is the point at which somebody has to have read the badge licence.
+The guard requiring every image mark to be served from `/marketplaces/` on our own origin is untouched, because no second directory was needed; relaxing it was the cost the vendor-logo route would have carried, and it is not paid.
+
+What is deliberately not claimed: nothing here says the badges may never be used.
+It says they may not be used while there is no listing to link to.
+The evidence, the addresses checked and the dates are in `../notes/design/marketplace-logo-sources.md` under "Browser and platform marks, sought and not taken".
+
+## Marketplace marks on the public site, and copy that names no marketplace, 2026-09-06
+
+The marketing site at `apps/landing/` shows a band of marketplace marks under its hero, and its selling copy names no marketplace at all.
+One sentence still does, `availability` in `apps/landing/src/site.js`, and it is the only one: "TPT and TES connections work today, with more marketplaces coming."
+
+This reverses two written decisions rather than applying one.
+`../notes/design/landing-page.md` recorded, under "Open items", that "No marketplace logo appears on the site, and none should be added", on the ground that a logo on a marketing page reads as an endorsement and the footer's independence line does the work a logo would undo; and, under "Copy decisions", that TPT and TES were the only marketplaces named and that Etsy belonged in a "coming" line at most.
+Both reasons stand as written and neither was weakened by anything found since.
+The founder reversed them knowing that, which is the same shape as the architecture reversal of 2026-09-03 and is recorded here as deliberate rather than as an oversight.
+
+It is also not an application of "Marketplace names and logos, shown under a disclaimer, 2026-09-05".
+That decision was taken for the Marketplaces page, which sits behind a login and is seen by sellers who have already signed up.
+A marketing page is the surface a rights holder actually looks at, so the exposure is wider than the decision covered and needed deciding again.
+
+Etsy, Shopify and Boom Learning are on the band without their logos.
+Each draws its initial and its name instead, at the same weight as every mark beside it.
+Etsy's trademark policy forbids use of its logo without permission and Shopify's requires written authorisation, both quoted in `../notes/design/marketplace-logo-sources.md`; Boom Learning's guidelines make a permission statement mandatory wherever its mark appears, and printing one we do not hold would be a false statement rather than the guideline risk the founder accepted for the rest.
+No Etsy or Shopify file is copied into the landing build at all, so the exclusion is a fact about the shipped bytes and not only about the markup.
+Each becomes a real mark on the day permission is reported, and approaching Etsy and Shopify is the founder's stated next step.
+
+Two mitigations carry the decision, and both are the console's arrangement moved onto a public page.
+A caption under the band carries the availability sentence itself, then says the others are places teachers told us they sell and none of them is connected yet, then the footer's independence line; without it, twenty-one marks over copy that names no marketplace would read as twenty-one supported marketplaces, which is a claim no measurement supports.
+Every mark links to that marketplace's own front page, as every console tile does, so a reader can always reach the owner rather than only see their mark.
+
+The copy rule is enforced rather than remembered.
+`just landing-copy-gate`, run by `just landing-check`, reads the built HTML, strikes out `alt` text and the availability sentence read from `site.js`, and fails the build on any remaining occurrence of "TPT" or "TES".
+It greps the built output rather than the sources so that an accurate comment explaining why prices are quoted in USD is not a failure while a sentence a reader sees is.
+
+What is deliberately not claimed: nothing here says the marks may stay if an owner objects.
+It says the founder accepted a known risk on a wider surface than before, having read the same policies, and that the two owners who require written permission are excluded from the band until they give it.

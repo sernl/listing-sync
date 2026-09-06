@@ -23,7 +23,7 @@ export const tiers = [
 	},
 	{
 		name: 'Solo',
-		persona: 'For a seller with one shop and a second one to fill.',
+		persona: 'For a seller with one shop and another to fill.',
 		monthly: '$12',
 		cadence: 'or $120 a year — two months free',
 		bridge: 'Everything in Free, plus:',
@@ -39,7 +39,7 @@ export const tiers = [
 	},
 	{
 		name: 'Studio',
-		persona: 'For a seller keeping a few hundred resources current on both marketplaces.',
+		persona: 'For a seller keeping a few hundred resources current across their shops.',
 		monthly: '$24',
 		cadence: 'or $240 a year — two months free',
 		bridge: 'Everything in Solo, plus:',
@@ -75,7 +75,7 @@ export const tiers = [
 export const topTier = {
 	name: 'Publisher, in full',
 	lead: 'Unlimited resources, hourly, on three devices.',
-	body: 'A catalogue with no cap on it, reconciled every hour, on up to three computers, with 500 resources migrated a year included. The sync timer for TPT and TES runs on your own machine rather than on ours, which is why an hourly schedule is priced at all rather than rationed.',
+	body: 'A catalogue with no cap on it, reconciled every hour, on up to three computers, with 500 resources migrated a year included. The sync timer runs on your own machine rather than on ours wherever the marketplace publishes no interface, which is why an hourly schedule is priced at all rather than rationed.',
 	price: '$48 a month, or $480 a year'
 };
 

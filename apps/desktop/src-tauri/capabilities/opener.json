@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "opener",
+  "description": "Handing one marketplace URL to the browser the seller already uses, and nothing else. Its own file rather than a line in default.json because it needs a remote block and that file deliberately carries none: adding one there would extend core:event, core:window, os:allow-hostname and allow-retry-console to the control plane's origin as a side effect of this change. The url must equal the one console.json names and control_plane::DEFAULT_BASE_URL, for the reason console.json states; web/src/lib/desktop.test.ts asserts the two capability files agree. Granted locally as well, because `local` defaults to true and the development override serves the console from the vite origin, where the window is local content. No platforms list, unlike updater.json: the plugin declares an Android implementation and Android is the platform this is most needed on, where the webview has no second window and a marketplace link replaces the console itself. allow-open-url rather than opener:default, which also carries open-path and reveal-item-in-dir — a filesystem surface, and one this grants to a remote origin. The scope is not decoration on that permission but the half that makes it work: allow-open-url arrives with an empty allow list, and tauri-plugin-opener 2.5.5 answers is_url_allowed with `self.allowed.iter().any(..)` (src/scope.rs), so the bare permission refuses every url. https only, which is narrower than the plugin's own allow-default-urls set: it leaves out mailto:, tel: and plaintext http:, and every link this console opens — a marketplace listing url and a catalogue homepage — is https. The founder authorised `opener:allow-open-url`; the scope narrower than upstream's default was measured and accepted on 2026-09-06, so widening it back to opener:default or to allow-default-urls is a new decision rather than a fix. The window is main, so the marketplace login webviews keep having no grant to anything, which is the fence default.json describes.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "https://teachouse.stowiq.io"
+    ]
+  },
+  "permissions": [
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://*"
+        }
+      ]
+    }
+  ]
+}

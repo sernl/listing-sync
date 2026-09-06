@@ -85,7 +85,7 @@ The vocabulary generator emits two new unions into `web/src/lib/generated/vocab.
 
 ## 4. The form
 
-`web/src/routes/inventory/new/+page.svelte` renders the nine sections through `FormSection.svelte`, which carries the heading, the helper text and that section's own refusals.
+`web/src/routes/resources/new/+page.svelte` renders the nine sections through `FormSection.svelte`, which carries the heading, the helper text and that section's own refusals.
 `web/src/routes/listings/new/+page.svelte` is a redirect stub and `web/src/routes/listings/+page.ts` performs the 308, so the route this note first named is no longer the live one.
 
 Control by control, matching TPT and improving only where the improvement costs no structure.

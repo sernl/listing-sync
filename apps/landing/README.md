@@ -14,7 +14,8 @@ The server computes the landing page's Content-Security-Policy from the files it
 
 The only script on the site is `public/app-redirect.js`, loaded from our own origin on every page: the desktop app opens this origin too, and `window.__TAURI__` is the one signal available before the console loads, so it sends that window to `/app`.
 Nothing else on the site comes from anywhere but this origin: Fraunces and Instrument Sans are served from `public/fonts/` rather than from Google's CDN, so the page makes no third-party request at all.
-The site must keep working under the policy `landing_policy` in `crates/tam-server/src/serving.rs` builds — `default-src 'self'`, `style-src` adding `'unsafe-inline'` and `fonts.googleapis.com`, `font-src` adding `fonts.gstatic.com`, `img-src` adding `data:`, `frame-ancestors 'none'` — which is why there is no inline event handler on any page.
+The site must keep working under the policy `landing_policy` in `crates/tam-server/src/serving.rs` builds — `default-src 'self'`, `script-src 'self'` plus a `sha256-` token per inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'` — which is why there is no inline event handler and no inline `<style>` on any page.
+The policy admits no third-party origin at all: `style-src` carried `'unsafe-inline'` and `fonts.googleapis.com`, and `font-src` carried `fonts.gstatic.com`, until the console's fonts were bundled and those origins were dropped, so a stylesheet or a font fetched from anywhere but this origin is now refused rather than merely unnecessary.
 
 Every call to action goes to `/login`, and both `/` and `/pricing` carry the same price list because both read `src/pricing.js`.
 Every price on the site is in that one file, in USD, as approved on 2026-09-05.

@@ -42,6 +42,12 @@ It is the same three components the home page renders, so the two pages cannot d
 
 ## Copy decisions
 
+Amended 2026-09-06, by founder reversal: the site's selling copy names no marketplace at all, and the marks of every marketplace the console catalogues appear under the hero.
+Both paragraphs below are what the site was until then, and are kept because they record the reasoning the reversal was taken against rather than in ignorance of.
+What replaced the first is one sentence: `availability` in `src/site.js` reads "TPT and TES connections work today, with more marketplaces coming.", it is the only sentence on the site that names a marketplace, and `just landing-copy-gate` fails the build if a second one appears.
+Every other sentence speaks of the marketplaces a seller sells in, without naming one and without implying a count, so the copy stays true as marketplaces are added rather than needing a rewrite per marketplace.
+What replaced the second is the band under the hero, described under "The marketplace band" below.
+
 TPT and TES are written in capitals throughout, and the two marketplaces are the only ones named.
 Etsy is not on the site: it is a later branch under D1, and the research advice was that it belongs in a "coming" line at most, never in a feature block or a tier's marketplace list.
 
@@ -62,9 +68,30 @@ The claim that a change edits the listing already there rather than deleting and
 The migration answer promises only what the founder approved: a fixed band price quoted before work starts, and 30 days of Studio to review the mappings.
 The re-runs-of-failed-items promise the research proposed is not on the page, because it was not among the terms the founder approved.
 
-The site says that TPT and TES work needs a small app, installed once.
+The site says that the work for a marketplace publishing no interface needs a small app, installed once.
 It is said in "How it works" rather than buried, because a seller who learns it after signing up learns it as a surprise, and because the device story is not credible without it.
 The download link is driven from one value that is null today, so the sentence stands and the link reads "Download link to come" rather than pointing at nothing.
+
+## The marketplace band
+
+A row of marks sits under the hero's buttons, one per marketplace the console's `web/src/lib/pages/marketplaces/catalogue.ts` tiles, in that file's order.
+`src/marketplaces.js` is a transcription of it rather than an import, and `public/marks/` holds copies of the files rather than links, for the reason `public/favicon.svg` is a copy of the console's mark: the two trees build separately, so a path resolved by the console's `ServeDir` fallthrough under `tam-server` would 404 under `just landing-dev`, and the dev render would disagree with the production one on exactly the thing this band adds.
+
+The directory is `marks/` rather than `marketplaces/`, which is what the same files are called under `web/static/`.
+This build is answered ahead of the console and the server matches files rather than directories, so a landing directory sharing a name with a console route is harmless only while this build holds no page at that path.
+A later `marketplaces.astro` would then answer `/marketplaces` with a marketing page and take a seller's Marketplaces screen away, with nothing failing to say so.
+The rule this site works under is that no top-level entry it writes may match a console route, and the routes are the `href` values in `web/src/lib/nav.ts`.
+
+Three of the twenty-one draw a jade initial and their name rather than a logo.
+Etsy and Shopify both require written permission for logo use, and the founder's 2026-09-05 decision to show every marketplace's mark was taken for the Marketplaces page behind a login rather than for a public marketing page, which is the surface a rights holder actually sees; Boom Learning's guidelines make a permission statement mandatory wherever its mark appears and we have none to make.
+Each becomes a real mark on the day permission is reported, and no file for Etsy or Shopify is copied into this build until then.
+
+The marks are greyscale at rest and colour on hover, because twenty brand palettes at full strength fight the page and each other.
+The file is the owner's published bytes unaltered and a CSS filter changes the drawing rather than the file, but a rights holder could read it as alteration, so it is written down here rather than left as a styling detail.
+Each mark links to that marketplace's own front page, as every console tile does.
+
+The caption under the band carries `availability` itself rather than a second wording of it, then says that the others are places teachers told us they sell and none of them is connected yet, then the footer's independence line.
+That caption is the only thing standing between a band of twenty-one marks over marketplace-agnostic copy and a claim of twenty-one supported marketplaces, which is a claim no measurement supports and which the standing rule against unmeasured numbers forbids.
 
 ## Pricing and migrations
 
@@ -99,14 +126,16 @@ The login path is `/login` rather than an origin, because the console is served 
 The desktop app opens this origin too and has no use for a marketing page, and `window.__TAURI__` is the one signal available before the console loads, so the script sends that window to `/app`.
 It is an external file rather than an inline block so that the policy needs no hash for it.
 
-`apps/landing/src/styles/site.css` carries palette one, "Kauri", from the console design spec, under the same token names and values the console uses in `web/src/lib/styles/tokens.css`, so the two surfaces read as one product.
-`--accent-deep` and `--hover` had each drifted by a shade and were realigned to the console's `#a8442c` and `#f1e9db` on 2026-09-05; `--muted-strong` is this site's own, and the contrast item below says why.
+`apps/landing/src/styles/site.css` carries "Pounamu", from the console design spec, under the same token names and values the console uses in `web/src/lib/styles/tokens.css`, so the two surfaces read as one product.
+It replaced "Kauri" on 2026-09-06, and the realignment that change carried is recorded rather than the drift it fixed: `--accent-deep`, `--hover`, `--muted`, `--ok` and `--warn` had each drifted by a shade under Kauri and all five now take the console's value, `#0f6b54`, `#eef1ee`, `#5a6560`, `#1f6a45` and `#7a5410`.
+`--muted-strong` is gone with the same change, because it existed only to carry text on `--rail` where `--muted` failed AA at 4.24, and `--muted` measures 5.17 there under Pounamu.
+Nothing keeps the two sheets in step by hand any longer: `web/src/lib/styles/tokens.test.ts` fails the web lane if a token both sheets declare stops agreeing, and the one deliberate difference, `--r-card`, is named there with its reason.
 The shape language is heyretro's: fully round buttons and badges, 2rem section cards, one very diffuse shadow with a hairline inset ring instead of a border, and headings semibold with tightened tracking and a balanced wrap.
 The component classes are this site's own, because the console's are dashboard furniture.
 
 The two fonts are self-hosted rather than fetched from Google's CDN, which is what the console does.
 The latin subsets and both SIL Open Font License texts are in `apps/landing/public/fonts/`, with a note recording where each file came from and how to refresh it.
-The page therefore makes no third-party request at all, and the server's policy permits `fonts.gstatic.com` without the site needing it.
+The page therefore makes no third-party request at all, and the server's policy no longer permits one: `style-src` and `font-src` are both `'self'` since the console's fonts were bundled and the Google origins were dropped, so self-hosting is now what the policy requires rather than a precaution ahead of it.
 
 The favicon is `apps/landing/public/favicon.svg`, a copy of the product mark at `web/static/email/teachouse-mark.svg`.
 It is a copy rather than a reference because the two trees build separately; if the mark changes, this copy changes with it.
@@ -147,7 +176,8 @@ A path whose first segment parses as an API version goes to the API.
 A path the landing build holds a file for is answered from memory, resolving a directory route through its own `index.html`, which is what makes `/pricing`, `/privacy` and `/terms` work without the Astro build emitting extensionless files.
 Everything else is the console's, including `/app` and every route below it, and including `/login`, which is where both of the landing page's buttons go.
 
-The landing page's Content-Security-Policy is computed by `landing_policy` from the files just read rather than written down twice: `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for each inline script found in the build, `style-src` adding `'unsafe-inline'` and `https://fonts.googleapis.com`, `font-src` adding `https://fonts.gstatic.com`, `img-src` adding `data:`, `connect-src 'self'` and `frame-ancestors 'none'`.
+The landing page's Content-Security-Policy is computed by `landing_policy` from the files just read rather than written down twice: `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for each inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'` and `frame-ancestors 'none'`.
+It admitted `'unsafe-inline'` and `https://fonts.googleapis.com` on `style-src` and `https://fonts.gstatic.com` on `font-src` until the console's fonts were bundled and those origins were dropped; every origin the policy names is now this one.
 The site carries no inline script, so no hash is emitted today.
 
 The `site` value in `apps/landing/astro.config.mjs` is `https://teachouse.stowiq.io`, the host actually serving the build, and it is what the canonical link and the Open Graph URL are built from.
@@ -182,17 +212,21 @@ A toggle becomes reasonable if the site ever takes a second script for another r
 
 No marketplace logo appears on the site, and none should be added.
 A logo on a marketing page reads as an endorsement, our own footer says we have none, and the trade-name line beside it is doing the work a logo would undo.
+Reversed 2026-09-06 by founder decision: the band described under "The marketplace band" ships, with the disclaimer caption and the per-mark link to the owner as the mitigation, which is the console's arrangement moved onto a public page.
+The reasoning above is not weakened by anything found since, so what remains open is the exposure rather than the decision: twenty-one marks on a marketing page is the most trademark-exposed surface on the site, and approaching Etsy and Shopify sits at the top of the founder's list.
 
 Body text set in `--muted` does not clear the WCAG AA contrast minimum for normal text.
 Corrected 2026-09-05: an earlier version of this paragraph said `--muted` was 3.90:1 on `--card` and 3.65:1 on `--ground` and therefore failed, and both figures were wrong.
-Measured under WCAG 2.x relative luminance, `#7c6b5b` is 5.03:1 on `#fffdf9` and 4.58:1 on `#f7f2e9`, so every place `--muted` sits on a card or on the ground passes AA for normal text.
+Measured under WCAG 2.x relative luminance, Kauri's `#7c6b5b` was 5.03:1 on `#fffdf9` and 4.58:1 on `#f7f2e9`, so every place `--muted` sat on a card or on the ground passed AA for normal text; under Pounamu the same three tokens are `#5a6560`, `#fdfdfc` and `#f6f4f1`, measuring 5.95:1 and 5.52:1.
 The arithmetic was checked against the two published reference pairs, `#767676` on white at 4.54:1 and `#595959` on white at 7.00:1, and reproduces both exactly.
 
-Two combinations did fail, and the wrong paragraph above hid them; both are fixed.
-`--muted` on `--rail` is 4.24:1, which is the Publisher panel's lead line and body copy, the largest block of selling copy in the pricing section and present on both pages; `--muted-strong` (`#6b5b4c`, 5.41:1 on `--rail`) now carries that text, and it is the one token on this site that the console does not have.
-`--warn` on `--warn-soft` is 3.37:1, which was the "Draft placeholder" chip on both legal pages, the one element there whose whole job is to be noticed; it now takes the same `color-mix(in srgb, var(--warn) 78%, var(--ink))` that `.notice` beside it already used, measuring 4.63:1.
-Both fixes are inside this stylesheet, so neither disturbs a token the console shares.
+Two combinations did fail, and the wrong paragraph above hid them; both were fixed, and both fixes were then retired by the palette change.
+`--muted` on `--rail` was 4.24:1, which is the Publisher panel's lead line and body copy, the largest block of selling copy in the pricing section and present on both pages; `--muted-strong` was added to carry that text and is gone as of 2026-09-06, because `--muted` measures 5.17:1 on `--rail` under Pounamu and a token whose only reason was a failure that no longer happens is a second source of truth for nothing.
+`--warn` on `--warn-soft` was 3.37:1, which was the "Draft placeholder" chip on both legal pages, the one element there whose whole job is to be noticed; it took a `color-mix` toward the ink to reach 4.63:1, and takes the plain `--warn` again as of 2026-09-06, which measures 5.86:1 on `--warn-soft`.
 The `--faint` token is gone from this stylesheet: at 2.28:1 it was carrying the disclaimer lines, and a disclosure nobody can read is not a disclosure.
+
+Neither of those failures could recur unnoticed now.
+`web/src/lib/styles/tokens.test.ts` measures every ink against every ground either sheet paints, and fails the web lane below 4.5:1, so the hand measurement that found these two is no longer the thing standing between the site and an unreadable line.
 
 There is no type-check step, only the build.
 `astro check` would require `@astrojs/check` and `typescript` as dependencies, and the standing instruction is to report a dependency beyond the framework itself rather than add it; the build already fails on a template or import error, and the site has no application logic for a type checker to find a fault in.

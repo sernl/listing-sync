@@ -26,26 +26,38 @@
 }
 
 :root {
-	/* Palette one, "Kauri", from the console design spec: a bleached-floorboard
-	   ground, rimu heartwood, one pohutukawa flower. Every token below carries
-	   the console's value under the console's name, except `--muted-strong`,
-	   which is this site's own. */
-	--ground: #f7f2e9;
-	--card: #fffdf9;
-	--rail: #f2e9da;
-	--ink: #241a12;
-	--muted: #7c6b5b;
-	/* --muted measures 4.24:1 on --rail and fails AA; this is for text there. */
-	--muted-strong: #6b5b4c;
-	--line: #e4d8c4;
-	--primary: #6b4423;
-	--accent: #c2543a;
-	--accent-deep: #a8442c;
-	--accent-soft: #f7e7e1;
-	--ok: #3e7a4e;
-	--warn: #b0761a;
-	--warn-soft: #f8efda;
-	--hover: #f1e9db;
+	/* "Pounamu", from the console design spec: New Zealand forest and the
+	   greenstone taken from its rivers. Every token below carries the console's
+	   value from `web/src/lib/styles/tokens.css` under the console's name,
+	   except `--rail`, `--lift`, `--ring`, `--gutter` and `--measure`, which are
+	   this site's own. A value that differs from the console's is drift, not a
+	   decision: `--accent-deep`, `--hover`, `--muted`, `--ok` and `--warn` had
+	   each drifted under the previous palette and were realigned here. */
+
+	/* Light, as the console declares itself: this palette is the only one the
+	   site has, so a browser told nothing paints its own form controls and
+	   scrollbars dark for a visitor whose system is dark. A dark theme is a
+	   later founder decision. */
+	color-scheme: light;
+
+	--ground: #f6f4f1;
+	--card: #fdfdfc;
+	--rail: #eaeeeb;
+	--ink: #17231c;
+	--muted: #5a6560;
+	--line: #dde3df;
+	--primary: #1f4a38;
+	--accent: #127761;
+	--accent-deep: #0f6b54;
+	--accent-soft: #e3f2ec;
+	--ok: #1f6a45;
+	--warn: #7a5410;
+	--warn-soft: #f6eedc;
+	--hover: #eef1ee;
+	/* The hero's wash, and the ink a filled control carries. */
+	--tint: #efebf7;
+	--tint-edge: #f3f4f7;
+	--on-fill: #ffffff;
 	--serif: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
 	--sans: 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
 	--gutter: 24px;
@@ -188,6 +200,19 @@ a {
 	color: var(--ink);
 }
 
+/* `.site-nav a` out-specifies `.cta` and `.btn`, so without these the two
+   buttons in the header take the nav's link colour: `--muted` on `--accent`
+   measures 1.11:1, which is a filled button whose label cannot be read. It is
+   the ink alone that has to be restated; every other declaration on those
+   classes applies. */
+.site-nav a.cta {
+	color: var(--on-fill);
+}
+
+.site-nav a.btn {
+	color: var(--ink);
+}
+
 /* Buttons, matching the console's .cta and .btn */
 
 .cta,
@@ -208,7 +233,7 @@ a {
 
 .cta {
 	background: var(--accent);
-	color: #fff;
+	color: var(--on-fill);
 	border-color: var(--accent);
 }
 
@@ -264,8 +289,16 @@ main {
 
 /* Hero */
 
+/* The hero is the one full-bleed band on the site: a violet wash, which is the
+   family `--additive` belongs to and so the one part of the page that is
+   neither forest nor jade and competes with neither. Painted on the section
+   rather than on a child, so the colour runs the full width of the window
+   while the column inside keeps `--measure`. */
 .hero {
-	padding: 88px 0 64px;
+	padding: 88px 0 56px;
+	background: linear-gradient(160deg, var(--tint), var(--tint-edge));
+	border-bottom: 1px solid var(--line);
+	text-align: center;
 }
 
 .hero h1 {
@@ -275,7 +308,7 @@ main {
 	line-height: 1.08;
 	letter-spacing: -0.025em;
 	text-wrap: balance;
-	margin: 0 0 18px;
+	margin: 0 auto 18px;
 	max-width: 20ch;
 }
 
@@ -283,7 +316,11 @@ main {
 	font-size: 18px;
 	color: var(--muted);
 	max-width: 58ch;
-	margin: 0 0 26px;
+	margin: 0 auto 26px;
+}
+
+.hero .actions {
+	justify-content: center;
 }
 
 .actions {
@@ -370,14 +407,13 @@ main {
 	padding: 4px 10px;
 	white-space: nowrap;
 	background: var(--warn-soft);
-	/* Bare --warn measures 3.37:1 here; this is the mix .notice already uses. */
-	color: color-mix(in srgb, var(--warn) 78%, var(--ink));
+	color: var(--warn);
 }
 
 .notice {
 	border: 1px solid color-mix(in srgb, var(--warn) 34%, var(--line));
 	background: var(--warn-soft);
-	color: color-mix(in srgb, var(--warn) 78%, var(--ink));
+	color: var(--warn);
 	border-radius: 10px;
 	padding: 12px 16px;
 	font-size: 14px;
@@ -574,7 +610,7 @@ main {
 	top: -11px;
 	left: 24px;
 	background: var(--accent);
-	color: #fff;
+	color: var(--on-fill);
 	font-size: 11px;
 	font-weight: 600;
 	letter-spacing: 0.06em;
@@ -689,7 +725,7 @@ main {
 
 .wide-panel .persona,
 .wide-body p {
-	color: var(--muted-strong);
+	color: var(--muted);
 }
 
 .wide-act {
@@ -741,6 +777,122 @@ main {
 
 .rules li {
 	margin-bottom: 8px;
+}
+
+/* --- the marketplace band under the hero ---------------------------------- */
+
+.band-wrap {
+	margin-top: 34px;
+}
+
+.band {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 8px;
+}
+
+.mark {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 44px;
+	padding: 0 15px;
+	border-radius: var(--r-pill);
+	background: var(--card);
+	box-shadow: var(--ring);
+	text-decoration: none;
+}
+
+/* Greyscale at rest, colour on hover: twenty brand palettes at full strength
+   fight the page and each other. The file is the owner's published bytes
+   unaltered; this changes the drawing, not the file. */
+.mark img {
+	height: 24px;
+	width: auto;
+	max-width: 86px;
+	object-fit: contain;
+	filter: grayscale(1);
+	opacity: 0.74;
+	transition:
+		filter 140ms ease,
+		opacity 140ms ease;
+}
+
+.mark img.icon {
+	height: 26px;
+}
+
+.mark:hover img,
+.mark:focus-visible img {
+	filter: none;
+	opacity: 1;
+}
+
+.mark.glyph {
+	gap: 8px;
+}
+
+/* The three marks we may not draw sit at the same weight as the rest at rest
+   and take the same colour on hover. Left in jade over a soft ground they were
+   the most saturated things in a band whose every other member is greyscale,
+   so the marketplaces we cannot show read as the featured ones. */
+.mark .initial {
+	display: grid;
+	place-items: center;
+	width: 25px;
+	height: 25px;
+	border-radius: 8px;
+	background: var(--rail);
+	color: var(--muted);
+	font: 600 14px var(--serif);
+	flex: none;
+	transition:
+		background 140ms ease,
+		color 140ms ease;
+}
+
+.mark:hover .initial,
+.mark:focus-visible .initial {
+	background: var(--accent-soft);
+	color: var(--accent-deep);
+}
+
+.mark .name {
+	font-size: 13.5px;
+	font-weight: 600;
+	color: var(--muted);
+}
+
+.band-note {
+	max-width: 82ch;
+	margin: 18px auto 0;
+	font-size: 12.5px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+
+@media (max-width: 620px) {
+	.mark {
+		height: 38px;
+		padding: 0 12px;
+	}
+
+	.mark img {
+		height: 20px;
+		max-width: 78px;
+	}
+
+	.mark img.icon {
+		height: 22px;
+	}
+
+	.band {
+		gap: 6px;
+	}
 }
 
 @media (max-width: 1060px) {

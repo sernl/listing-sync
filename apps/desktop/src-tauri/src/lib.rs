@@ -24,10 +24,11 @@
 // therefore crate-level, and `cfg_attr(mobile, ...)` keeps it off the desktop
 // build, where the macro expands to nothing and there would be nothing to
 // expect. clippy.toml is unchanged, this fails the build the day Tauri stops
-// needing the wrapper, and the residual is stated rather than hidden: the only
-// Android-only source in this crate is `session/android_key.rs`, which the
-// host lane does not lint, so a disallowed call added there would not be
-// caught. Everything else is shared code the host lane checks.
+// needing the wrapper, and the residual is stated rather than hidden: the
+// Android-only sources in this crate are `session/android_key.rs` and
+// `android_name.rs`, which the host lane does not lint, so a disallowed call
+// added to either would not be caught. Everything else is shared code the
+// host lane checks.
 #![cfg_attr(
     mobile,
     expect(
@@ -37,6 +38,8 @@
     )
 )]
 
+#[cfg(target_os = "android")]
+pub mod android_name;
 pub mod commands;
 pub mod connect;
 pub mod console_session;
@@ -62,7 +65,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
 
-use crate::control_plane::{base_url, HttpControlPlane};
+use crate::control_plane::{base_url, install_crypto_provider, HttpControlPlane};
 use crate::device::DeviceIdentity;
 use crate::heartbeat::cycle;
 use crate::run::wall_now;
@@ -70,6 +73,8 @@ use crate::scheduler::Scheduler;
 // The credential store this platform actually has. `keyring` covers Windows,
 // macOS and Linux; on Android it has no backend at all, so the jar is sealed
 // into a file instead, under a key the Android Keystore holds.
+#[cfg(target_os = "android")]
+use crate::android_name::DeviceNameSource;
 #[cfg(target_os = "android")]
 use crate::session::encrypted::{DeviceKeySource, EncryptedSessionStore};
 #[cfg(not(target_os = "android"))]
@@ -94,6 +99,11 @@ use crate::work::{DeviceWork, LiveMarketplaces};
 )]
 pub fn run() {
     startup::catch_panics();
+    // Here rather than in `setup`, because the first reqwest client in this
+    // process is Tauri's and not ours: a development build for a phone builds
+    // one while preparing the window, which Tauri does before it calls
+    // `setup`. Its own documentation states why that is fatal without this.
+    install_crypto_provider();
     // What replaces the timer on a phone. The activity is resumed whenever the
     // seller brings the application forward, and that is the only moment a
     // device which was signed out elsewhere can learn it, because D3 leaves it
@@ -106,7 +116,9 @@ pub fn run() {
     // closure outlives this function.
     #[cfg(mobile)]
     let on_start = Arc::clone(&resumed);
-    let builder = tauri::Builder::default().plugin(tauri_plugin_os::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_opener::init());
     // `tauri-plugin-updater` declares `platforms.support.android.level = "none"`
     // in its own manifest, so a phone updates through the store it was
     // installed from and never through us. Registering it there anyway would
@@ -119,7 +131,7 @@ pub fn run() {
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             let device: DeviceIdentity =
-                device::load_or_create(&data_dir, &tauri_plugin_os::hostname())?;
+                device::load_or_create(&data_dir, &this_machines_name(app))?;
 
             // The session is resolved per request from the console's own
             // window, not captured here: the application starts before the
@@ -279,6 +291,29 @@ pub fn run() {
     });
 }
 
+/// What this machine is called in the seller's list.
+///
+/// The hostname everywhere but Android, where it is a loopback name no seller
+/// would recognise and the phone's own model is read instead. D14 says the
+/// device is "labelled with the hostname"; on a phone that decision's intent —
+/// a name the seller can pick their machine out by — is served by the model
+/// and defeated by the hostname.
+///
+/// The label is refreshed from this source on every launch while the id is
+/// not, so a phone whose name could not be read once is renamed on the launch
+/// after and does not become a second machine.
+#[cfg(target_os = "android")]
+fn this_machines_name(app: &tauri::App) -> String {
+    app.state::<Arc<dyn DeviceNameSource>>()
+        .label()
+        .unwrap_or_else(|| device::ANDROID_FALLBACK_LABEL.to_owned())
+}
+
+#[cfg(not(target_os = "android"))]
+fn this_machines_name(_app: &tauri::App) -> String {
+    tauri_plugin_os::hostname()
+}
+
 /// Registers the Kotlin class that holds the session-sealing secret, and
 /// files the resulting handle in managed state where `setup` picks it up.
 ///
@@ -295,8 +330,14 @@ fn session_key_bridge<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
                 session::android_key::PLUGIN_IDENTIFIER,
                 session::android_key::PLUGIN_CLASS,
             )?;
+            // One Kotlin class answers both commands, so one handle serves
+            // both bindings and the second is a clone rather than a second
+            // registration.
+            let names: Arc<dyn DeviceNameSource> =
+                Arc::new(android_name::PhoneName::new(handle.clone()));
             let keys: Arc<dyn DeviceKeySource> =
                 Arc::new(session::android_key::KeystoreKey::new(handle));
+            app.manage(names);
             app.manage(keys);
             Ok(())
         })

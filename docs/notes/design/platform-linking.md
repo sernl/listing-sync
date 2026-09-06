@@ -141,3 +141,29 @@ No password reset, no second-factor enrolment, and no account administration per
    Recommended: yes — the one-account-one-seller line is currently unenforced for Tes, and this is the smallest change that enforces it.
 6. Does the first seller-facing link ship as the attended flow only, with hand-held onboarding as the gap-filler, and no paste box at any point?
    Recommended: yes.
+
+## Amended 2026-09-06: sections 1 to 3 describe a path that no longer exists
+
+Sections 1 to 3 above design a server-side sign-in: a form on the connections page taking the marketplace email and password, a broker that signs in on our own servers, and an attended browser as the fallback for a challenge.
+Decision D1 reversed that, and the deletion of the session broker carried the whole mechanism away with it — the credential vault, the gateway, the `tam_broker` role and `link-from-jar` alike.
+Nothing in those three sections is implementable today and none of it should be read as a plan.
+
+What replaced it is on the seller's own machine and is already built.
+`apps/desktop/src-tauri/src/connect.rs` holds a `LoginTarget` per no-API marketplace and makes the two-branch rule unrepresentable: there is no way to obtain one for a marketplace with an official API, so no code path in that crate can capture a session for one.
+`connect_marketplace` in `apps/desktop/src-tauri/src/commands.rs` opens the marketplace's own login page in a window the application owns, polls the cookie jar from Rust because `document.cookie` cannot see the HttpOnly session cookie, files the jar in the platform keychain, and checks in before it reports success so a device already signed out cannot keep what it just captured.
+`forget_session` beside it is the device-local disconnect and the only way a captured jar leaves the keychain.
+The connection row follows from the check-in rather than from any link route: `derive_link` in `crates/tam-storage/src/device.rs` lifts a connection to `linked` while any live device reports a connected session for that marketplace.
+
+Section 8's founder questions are answered by that architecture rather than by a ruling.
+Q1, Q3, Q4 and Q6 all ask how we sign in from our servers, and we do not: the seller signs in on their own device, in the marketplace's own page, so a captcha is theirs to clear as it would be in any browser and no automated login is attempted anywhere.
+Q2 is moot because no password reaches us.
+Q5 stands as a Tes exclusivity question and is unaffected.
+
+The seller-facing halves landed on 2026-09-06.
+The console calls `connect_marketplace` and `forget_session` through `web/src/lib/desktop.ts`, and `web/src/lib/pages/marketplaces/view.ts` decides between offering the act and naming where it can be performed.
+Disconnecting writes `unlinked` rather than `revoked`, through `ConnectionRepo::unlink` and `POST /{version}/connections/{connection}/disconnect`, because `derive_link` lifts a connection out of `unlinked` and not out of `revoked`: the seller's disconnect is reversible by the same Connect button, and `revoke` remains the terminal operator and security path.
+
+`session_status` is deliberately not wired into the console, though the command exists and is granted.
+It answers only about the machine the console happens to be running on, and every screen here renders from the server's device registry and connection list instead — the copy that covers a seller's other machines, that a browser can read at all, and that the disconnect route operates on.
+Reading it would add a second answer to a question those two already answer, which is the failure `web/src/lib/connection-standing.ts` exists to prevent.
+The connect flow does not need it either: `connect_marketplace` checks in before it returns, so the connection row is already correct when the console refetches.

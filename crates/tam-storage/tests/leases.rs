@@ -17,11 +17,11 @@ use tam_marketplace::{
 };
 use tam_storage::{
     revive_by_gap, revive_on, settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict,
-    BudgetGrant, Charged, ClaimPolicy, ConnectionAudit, DeviceClaim, DeviceRef, HaltCause,
-    HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LandingEffect, LeaseRepo, LeasedItem, MappingRepo,
-    NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo, RateBudgetRepo,
-    StorageError, WriteAttemptRepo, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN,
-    REAUTH_REQUIRED,
+    BudgetGrant, Charged, ClaimPolicy, ConnectionAudit, ConnectionRepo, DeviceClaim, DeviceRef,
+    HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LandingEffect, LeaseRepo, LeasedItem,
+    MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo,
+    RateBudgetRepo, StorageError, WriteAttemptRepo, AWAITING_MARKETPLACE_ANSWER,
+    AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -4547,5 +4547,49 @@ async fn a_sourced_cover_does_not_gate_a_blob_backed_payload(app: PgPool) {
     assert!(
         matches!(served, DeviceClaim::Leased(_)),
         "an item whose payload is blob-backed decodes on an old client whatever its cover is"
+    );
+}
+
+/// The seller's disconnect stops scheduled work, on the branch that carries
+/// it: nothing leases to their device once the connection is `unlinked`.
+///
+/// Proved through the claim rather than by reading the row, because the
+/// disconnect writes no job state at all — it relies entirely on the scan's
+/// own `c.state = 'linked'` predicate, three files away from the write. The
+/// positive claim first is what makes it severe: without it the assertion
+/// would pass on a fixture that could never have leased anything.
+#[sqlx::test(migrations = "./migrations")]
+async fn nothing_leases_to_a_device_once_the_seller_disconnects(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC0, true).await;
+    enqueue_one(&engine, &tenant, 0x13, 0x23).await;
+
+    let leased = claim(&app, tenant.org, "w1", 60)
+        .await
+        .expect("a linked tenant leases");
+    LeaseRepo::new(engine.clone())
+        .release(&leased.lease_ref())
+        .await
+        .expect("the item returns to the queue");
+
+    let connection = connection_of(&engine, tenant.org).await;
+    assert!(
+        ConnectionRepo::new(app.clone())
+            .unlink(
+                tenant.org,
+                connection,
+                Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            )
+            .await
+            .expect("the disconnect runs"),
+        "the fixture connection is linked, so the disconnect moves it"
+    );
+
+    assert!(
+        claim(&app, tenant.org, "w1", 60).await.is_none(),
+        "a disconnected marketplace leases nothing, with no job write anywhere"
     );
 }

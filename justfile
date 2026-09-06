@@ -350,10 +350,39 @@ web-dev: web-wasm
 # for performance and search, and the marketing page is the one surface where
 # that matters (D28).
 #
-# The landing lane: lockfile install, then the static build
+# The landing lane: lockfile install, the static build, then the copy gate
 landing-check:
     cd apps/landing && npm ci --no-audit --no-fund
     cd apps/landing && npm run build
+    just landing-copy-gate
+
+# One sentence on this site names a marketplace, and it is `availability` in
+# `apps/landing/src/site.js`. Everything else speaks of the marketplaces a
+# seller sells in without naming one or implying a count, which is what lets
+# the copy stay true as marketplaces are added.
+#
+# The gate reads the built HTML rather than the sources, so a comment
+# explaining why prices are in USD is not a failure and a sentence a reader
+# actually sees is. Two things are struck out before the search: `alt` text,
+# which must name the marketplace whose mark it describes, and `availability`
+# itself, read from `site.js` so this recipe holds no second copy of it.
+landing-copy-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd apps/landing
+    sentence=$(node -e 'import("./src/site.js").then((m) => process.stdout.write(m.availability))')
+    grep -q "$sentence" dist/index.html \
+        || { echo "landing: the availability sentence is not on the home page"; exit 1; }
+    stray=$(grep -rh '' dist --include='*.html' \
+        | sed 's/alt="[^"]*"//g' \
+        | sed "s/$sentence//g" \
+        | grep -oE '.{0,60}\b(TPT|TES)\b.{0,60}' || true)
+    if [ -n "$stray" ]; then
+        echo "landing: a marketplace is named outside the availability sentence:"
+        echo "$stray"
+        exit 1
+    fi
+    echo "landing: one sentence names a marketplace, and it is the availability sentence"
 
 # The landing-page dev server
 landing-dev:

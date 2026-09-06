@@ -65,6 +65,25 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
+     * What this phone calls itself, for the row it takes in the seller's
+     * machine list.
+     *
+     * `Build.MANUFACTURER` and `Build.MODEL` need no Android permission and no
+     * further plugin, which is why they are read here rather than
+     * `Settings.Global.DEVICE_NAME` or the Bluetooth adapter name. Both are
+     * Java fields and therefore nullable from Kotlin's side; an empty string
+     * is what the Rust formatter takes as "the phone said nothing".
+     */
+    @Command
+    fun deviceName(invoke: Invoke) {
+        invoke.resolve(
+            JSObject()
+                .put("manufacturer", Build.MANUFACTURER ?: "")
+                .put("model", Build.MODEL ?: ""),
+        )
+    }
+
+    /**
      * Destroys the key and the wrapped secret.
      *
      * Deleting the Keystore entry is what makes this a wipe rather than a

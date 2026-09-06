@@ -7,11 +7,12 @@
 //! landing build holds a file, in; one of four answers, out. Everything that
 //! reads a directory or writes a header is below it.
 //!
-//! Two namespaces are reserved ahead of the landing probe rather than left to
-//! it. `app` and `_app` are the console's home and its client bundle, and
-//! `downloads` is the tier below; a landing build that emitted a page at any of
-//! them would otherwise take it, and the console's home or the whole download
-//! surface would be unreachable in every browser with nothing logged.
+//! Four namespaces are reserved ahead of the landing probe rather than left to
+//! it. `app` and `_app` are the console's home and its client bundle,
+//! `resources` is the catalogue board, and `downloads` is the tier below; a
+//! landing build that emitted a page at any of them would otherwise take it,
+//! and the console's home, a seller's catalogue or the whole download surface
+//! would be unreachable in every browser with nothing logged.
 //!
 //! The landing build is read into memory once at start-up, the way the console
 //! shell already is, so a request never joins a client-supplied string to a
@@ -36,14 +37,20 @@ use axum::response::IntoResponse as _;
 /// without it the refusal would describe the path rather than its size.
 const LANDING_BYTES_MAX: u64 = 64 * 1024 * 1024;
 
-/// The console's home and the console's client bundle, reserved as first
-/// segments so no landing build can take either.
+/// The console's home, the console's client bundle and the catalogue board,
+/// reserved as first segments so no landing build can take any of them.
 ///
 /// `console-serving.md` used to state this as a rule the landing build had to
 /// keep; a rule nothing enforces is a sentence. The cost of the rule breaking
 /// is the console's home page answering with a marketing page under the
 /// marketing policy, or every SvelteKit chunk 404ing into the shell.
-const CONSOLE_NAMESPACES: [&str; 2] = ["app", "_app"];
+///
+/// `resources` is here because the word is one a marketing site reaches for --
+/// a teaching-resources site with a `resources.astro` is an ordinary thing to
+/// build -- and the catalogue board answers there. Without the reservation the
+/// landing probe runs first, so the day that page exists a signed-in seller
+/// asking for their catalogue gets it silently.
+const CONSOLE_NAMESPACES: [&str; 3] = ["app", "_app", "resources"];
 
 /// The first segment the downloads tier answers under.
 const DOWNLOADS_NAMESPACE: &str = "downloads";
@@ -659,7 +666,7 @@ mod tests {
             "/app",
             "/app/",
             "/app/settings",
-            "/inventory",
+            "/resources",
             "/labels",
             "/sync",
             "/_app/immutable/entry/start.js",
@@ -672,14 +679,16 @@ mod tests {
         }
     }
 
-    /// The console's home and its client bundle are reserved, against a landing
-    /// build that claims every name there is.
+    /// The console's home, its client bundle and the catalogue board are
+    /// reserved, against a landing build that claims every name there is.
     ///
     /// This is the assertion the previous version of this file did not have:
     /// `the_console_keeps_its_own_paths` runs through a hand-written fixture,
     /// so it would have passed unchanged the day somebody added
     /// `apps/landing/src/pages/app.astro` and made the console's home answer
-    /// with a marketing page.
+    /// with a marketing page. `resources.astro` is the likelier one to be
+    /// written, because a teaching-resources site has an obvious use for the
+    /// word and the catalogue board answers under it.
     #[test]
     fn the_console_namespaces_are_reserved_against_any_landing_build() {
         for path in [
@@ -688,6 +697,10 @@ mod tests {
             "/app/settings",
             "/_app",
             "/_app/immutable/entry/start.js",
+            "/resources",
+            "/resources/",
+            "/resources/new",
+            "/resources/9f2c8a11-0000-4000-8000-000000000000",
         ] {
             assert_eq!(
                 greedy(path),

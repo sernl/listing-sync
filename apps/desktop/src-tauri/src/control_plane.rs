@@ -230,15 +230,25 @@ fn bundled_roots() -> rustls::ClientConfig {
 ///
 /// Not optional and not defensive: with reqwest's `rustls-no-provider`
 /// feature, `Client::build()` panics outright when no default provider is
-/// installed. The only thing that installs one in this binary today is
-/// tauri-plugin-updater, and it does so lazily inside its own update check
-/// (2.11.0, `src/updater.rs:492`), so a check-in that ran before the first
-/// update check would panic. This is the same guard and the same provider,
-/// performed where this client needs it.
+/// installed (reqwest 0.13.4, `src/async_impl/client.rs:719` falls back to
+/// `:2482`, which is a bare `panic!`). Nothing else in this binary installs
+/// one first: tauri-plugin-updater does it lazily inside its own update check
+/// (2.11.0, `src/updater.rs:492`) and is not compiled for Android at all.
+///
+/// The footgun is that this crate does not build the first client in the
+/// process. On a development build for a phone, Tauri's own dev-server proxy
+/// builds one while preparing the webview (2.11.5, `src/protocol/tauri.rs:41`,
+/// under `cfg(all(dev, mobile))`), Tauri creates that window before it calls
+/// `setup` (`src/app.rs:2525` then `:2530`), and it `unwrap`s the build
+/// (`src/protocol/tauri.rs:79`).
+/// Tauri's own guard for this cannot fire here, being gated on both an https
+/// development url and its `rustls-tls` feature (`src/protocol/tauri.rs:42`).
+/// That is why [`run`](crate::run) calls this before `tauri::Builder` and not
+/// only from the constructor below.
 ///
 /// A losing race is success: `install_default` fails only because another
 /// component installed one first, which is the outcome this wants.
-fn install_crypto_provider() {
+pub(crate) fn install_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         rustls::crypto::ring::default_provider()
             .install_default()
@@ -577,8 +587,9 @@ impl ControlPlane for HttpControlPlane {
 #[cfg(test)]
 mod tests {
     use super::{
-        base_url, heartbeat_path, BytesFuture, BytesReply, HttpControlPlane, HttpTransport, Reply,
-        Transport, TransportFuture, DEFAULT_BASE_URL, REGISTER_PATH,
+        base_url, heartbeat_path, install_crypto_provider, BytesFuture, BytesReply,
+        HttpControlPlane, HttpTransport, Reply, Transport, TransportFuture, DEFAULT_BASE_URL,
+        REGISTER_PATH,
     };
     use crate::console_session::{NoSession, SessionFuture, SessionSource, SessionUnreadable};
     use crate::device::{DeviceId, DeviceIdentity};
@@ -1257,6 +1268,31 @@ mod tests {
         assert!(
             format!("{transport:?}").contains("https://app.example.test\""),
             "the trailing slash is trimmed once, at construction"
+        );
+    }
+
+    /// Beside the test above, not instead of it: that one covers the transport
+    /// constructor, and this one covers the call `run` makes before any
+    /// transport exists, which is what keeps Tauri's own client from panicking.
+    #[test]
+    fn the_installed_provider_is_the_one_reqwest_looks_for() {
+        install_crypto_provider();
+        assert!(
+            rustls::crypto::CryptoProvider::get_default().is_some(),
+            "reqwest reads the process default; with none, building a client is a panic \
+             rather than an error"
+        );
+        // Timeout-less and otherwise unconfigured on purpose: this is the shape
+        // Tauri's own dev-server proxy builds (2.11.5,
+        // `src/protocol/tauri.rs:40`), and it is that client, not one of ours,
+        // that aborted the Android start-up. Built and dropped; it issues no
+        // request. Passing also pins the version coupling `bundled_roots`
+        // names: our `rustls` and reqwest's have to be one package for this
+        // install to be the one reqwest finds.
+        drop(
+            reqwest::Client::builder()
+                .build()
+                .expect("the client builds"),
         );
     }
 }

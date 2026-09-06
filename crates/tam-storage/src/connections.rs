@@ -145,6 +145,59 @@ impl ConnectionRepo {
         tx.commit().await?;
         Ok(moved)
     }
+
+    /// Marks one connection unlinked at the seller's own request, answering
+    /// whether a row moved.
+    ///
+    /// The reversible half of the pair. `revoke` above is terminal by
+    /// construction, because `derive_link` will not lift a connection out of
+    /// `revoked`; `unlinked` is one of the three states it does lift, so a
+    /// seller who disconnects and connects again takes the same path they took
+    /// the first time and nothing has to undo this write.
+    ///
+    /// Both terminal states are excluded from the guard rather than only
+    /// `unlinked`. Writing `unlinked` over a `revoked` row would hand back the
+    /// reconnect that revocation exists to withhold, so a disconnect finds
+    /// nothing to move there and says so.
+    ///
+    /// Every lease stops without anything else being written: both branches of
+    /// the claim scan require `c.state = 'linked'`, so the next claim passes
+    /// this marketplace over. An item already leased runs to its lease expiry,
+    /// which is the same posture device revocation takes.
+    pub async fn unlink(
+        &self,
+        org: OrgId,
+        connection: ConnectionId,
+        stamp: Stamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let moved = sqlx::query_scalar!(
+            "UPDATE connection SET state = 'unlinked', updated_at = now() \
+             WHERE org_id = $1 AND id = $2 AND state NOT IN ('unlinked', 'revoked') \
+             RETURNING id",
+            uuid_to_db(org.0),
+            uuid_to_db(connection.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+        if moved {
+            record_connection_event(
+                &mut tx,
+                &ConnectionEventRecord {
+                    org,
+                    connection,
+                    event: ConnectionEvent::Unlinked,
+                    detail: Some("seller-requested"),
+                    stamp,
+                },
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(moved)
+    }
 }
 
 /// One lifecycle event, as the writer states it.

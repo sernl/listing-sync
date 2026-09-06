@@ -48,7 +48,9 @@ use tam_domain::product::ProductName;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::product::{record_of, verdict, DraftHead, TptBaseInput};
 use crate::quota::{quota_for, QuotaKind};
-use crate::resources::{file_view, kind_from_str, kind_str, FileView, MappingHeadView};
+use crate::resources::{
+    file_view, kind_from_str, kind_str, tpt_base_input, FileView, MappingHeadView,
+};
 use crate::{AppState, OrgContext};
 
 /// The intent version the item idempotency key is derived under, matching
@@ -1156,6 +1158,101 @@ fn uncaptured_edits(mappings: &[MappingRecord]) -> Vec<(InventoryId, &'static st
         .collect()
 }
 
+/// The product this edit will leave behind, as the sidecar's rules read it.
+///
+/// Every field is the body's where the body carries one and the stored
+/// product's where it does not, which is what `PATCH`'s own contract — an
+/// absent field is left as stored — means for a rule that has to see the whole
+/// product. `for_marketplace` and `payload_hash` come from the catalogue
+/// rather than from the request, because neither is a thing an edit sends and
+/// both are what D32 turns on.
+fn edited_head(
+    stored: &CanonicalProduct,
+    body: &PatchProductBody,
+    price: Option<PriceIntent>,
+    mappings: &[MappingRecord],
+) -> DraftHead {
+    let effective = price.unwrap_or(stored.price);
+    DraftHead {
+        name: body.title.clone().unwrap_or_else(|| stored.title.0.clone()),
+        description: body
+            .body
+            .clone()
+            .unwrap_or_else(|| stored.body.body.clone()),
+        free: matches!(effective, PriceIntent::Free),
+        price_minor_units: match effective {
+            PriceIntent::Free => None,
+            PriceIntent::Paid(money) => Some(money.minor_units()),
+        },
+        payload_hash: stored
+            .payload_files()
+            .next()
+            .map(|file| hash_hex(file.bytes.digest())),
+        grades: match &body.grades {
+            Some(paths) => paths.iter().map(grade_slug_of).collect(),
+            None => stored.grades.raw.iter().map(stored_grade_slug).collect(),
+        },
+        for_marketplace: !mappings.is_empty(),
+    }
+}
+
+/// Whether this edit changes anything the sidecar's rules read.
+///
+/// The rules turn on the title, the description, the price and the grades,
+/// every one of which lives on the product rather than in the block, so the
+/// re-check depends on what the edit changes and not on whether it happened to
+/// carry a block as well.
+fn touches_rules(body: &PatchProductBody) -> bool {
+    body.title.is_some() || body.body.is_some() || body.price.is_some() || body.grades.is_some()
+}
+
+/// The create's own rules, answered against the sidecar already stored.
+///
+/// A product with no sidecar row was authored through a path that never filled
+/// this form, and the create leaves such a product alone rather than refusing
+/// it for controls it never had; so does this.
+async fn refuse_stored_unsubmittable(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+    head: DraftHead,
+) -> Result<(), APIError> {
+    let Some(stored) = TptBaseRepo::new(state.pool.clone())
+        .get(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    else {
+        return Ok(());
+    };
+    refuse_unsubmittable(&tpt_base_input(&stored).into_draft(head))
+}
+
+fn grade_slug_of(path: &PathInput) -> String {
+    path.native_id
+        .clone()
+        .or_else(|| path.segments.first().cloned())
+        .unwrap_or_default()
+}
+
+fn stored_grade_slug(path: &VocabularyPath) -> String {
+    path.native_id
+        .clone()
+        .or_else(|| path.segments.first().cloned())
+        .unwrap_or_default()
+}
+
+/// A digest as the wire spells it. The inverse of [`parse_hash`], which is why
+/// it lives beside it rather than being reached for from storage, where the
+/// same function is crate-private.
+pub(crate) fn hash_hex(hash: ContentHash) -> String {
+    use core::fmt::Write as _;
+    let mut hex = String::with_capacity(64);
+    for byte in hash.0 {
+        let _unused: core::fmt::Result = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
 pub(crate) async fn patch_product(
     State(state): State<AppState>,
     context: OrgContext,
@@ -1236,6 +1333,52 @@ pub(crate) async fn patch_product(
         .map(checked_title)
         .transpose()?
         .map(|name| Title(name.as_str().to_owned()));
+    let products = ProductRepo::new(state.pool.clone());
+    // The sidecar's rules are answered against what the product will be once
+    // this edit lands: the fields the body carries, and the stored ones where
+    // it carries none. Read before the update, because the update is what
+    // makes the stored copy the new one.
+    //
+    // The stub this replaces held `payload_hash: None` and
+    // `for_marketplace: false`, which made every marketplace-facing rule
+    // vacuous on this route and left the browser as the last word on them: an
+    // edit could write a sidecar a create would have refused. Q2.
+    let stored = products
+        .get(context.org, product)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such product"))?
+        .product;
+    let record = match body.tpt_base.clone() {
+        // A sidecar the edit does not send is a sidecar the edit does not
+        // change, but the fields the rules read live on the product and this
+        // edit is changing those. So the check runs against the stored block
+        // rather than being skipped for want of one in this request: without
+        // it a `price` alone reached the row unchecked, and a TPT-mapped
+        // product stored free could be made paid with no tax code, the exact
+        // pair the create refuses.
+        None => {
+            if touches_rules(&body) {
+                refuse_stored_unsubmittable(
+                    &state,
+                    context.org,
+                    product,
+                    edited_head(&stored, &body, price, &mappings),
+                )
+                .await?;
+            }
+            None
+        }
+        Some(base) => {
+            let draft = base.into_draft(edited_head(&stored, &body, price, &mappings));
+            // Refused before anything is written, as the create refuses it, so
+            // a rejected edit leaves the product as it stood rather than
+            // half-applied.
+            refuse_unsubmittable(&draft)?;
+            Some(record_of(&draft)?)
+        }
+    };
+
     let edit = ProductEdit {
         title,
         body: body.body.as_ref().map(|text| ListingCopy {
@@ -1247,7 +1390,7 @@ pub(crate) async fn patch_product(
         grades,
         rights,
     };
-    let touched = ProductRepo::new(state.pool.clone())
+    let touched = products
         .update(context.org, product, &edit, now)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
@@ -1258,27 +1401,7 @@ pub(crate) async fn patch_product(
     // The sidecar is replaced whole where the edit carries one. It is written
     // after the product update rather than before, so an edit refused as a
     // missing product leaves no orphaned row behind.
-    if let Some(base) = body.tpt_base.clone() {
-        let record = record_of(&base.into_draft(DraftHead {
-            // The edit carries only what it changes, so the parts the model
-            // validates against — the title, the price, the payload — are not
-            // all present. The sidecar's own shapes are still refused by
-            // `record_of`; the whole-product rules were answered at create and
-            // are re-answered by the form before it sends this.
-            name: body.title.clone().unwrap_or_default(),
-            description: body.body.clone().unwrap_or_default(),
-            free: matches!(price, Some(PriceIntent::Free) | None),
-            price_minor_units: match price {
-                Some(PriceIntent::Paid(money)) => Some(money.minor_units()),
-                Some(PriceIntent::Free) | None => None,
-            },
-            payload_hash: None,
-            grades: vec![],
-            // False for the same reason `payload_hash` is None: an edit carries
-            // neither, and holding it to the marketplace rule would refuse
-            // every edit of a listing that has a file, for not resending it.
-            for_marketplace: false,
-        }))?;
+    if let Some(record) = record {
         TptBaseRepo::new(state.pool.clone())
             .upsert(context.org, product, &record, now)
             .await

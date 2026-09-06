@@ -155,6 +155,42 @@ async fn call(state: AppState, token: &SessionToken, call: Call<'_>) -> (StatusC
     (status, bytes)
 }
 
+/// A `GET` that also names the answered content type, which is the whole of
+/// what the image routes decide.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn get_typed(
+    state: AppState,
+    token: &SessionToken,
+    path: &str,
+) -> (StatusCode, Option<String>, Vec<u8>) {
+    let mut request = Request::builder().method(Method::GET).uri(path).header(
+        header::COOKIE,
+        format!("{SESSION_COOKIE}={}", token.to_hex()),
+    );
+    request = request.header(header::ACCEPT, "*/*");
+    let response = router(state)
+        .oneshot(request.body(Body::empty()).expect("the request builds"))
+        .await
+        .expect("the router serves");
+    let status = response.status();
+    let kind = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes()
+        .to_vec();
+    (status, kind, bytes)
+}
+
 async fn get(state: AppState, token: &SessionToken, path: &str) -> (StatusCode, Vec<u8>) {
     call(
         state,
@@ -2589,6 +2625,79 @@ async fn an_uploaded_image_reads_by_handle_inside_its_own_tenant_only(pool: PgPo
     );
 }
 
+/// A thumbnail the seller uploaded as a JPEG reads back as a JPEG.
+///
+/// The route served PNG alone, which was correct while its only caller was the
+/// create form's cover — a generated PNG in every case this system writes.
+/// It stopped being correct when the edit form began seeding its four
+/// thumbnail slots from stored digests: the create form accepts a JPEG, a PNG
+/// or a GIF, so three of the four it accepts could not be drawn back and the
+/// slot fell to a caption. The type is still read off the bytes, and everything
+/// outside the four is still refused.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_jpeg_thumbnail_reads_back_under_its_own_type(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("jpeg-handle");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, tiny_jpeg(), "?archive=keep_whole").await;
+
+    let handle = format!("/v1/uploads/{}", uploaded.payload[0].hash);
+    let (status, kind, bytes) = get_typed(state.clone(), &TOKEN_A, &handle).await;
+    assert_eq!(status, StatusCode::OK, "the uploader reads their own JPEG");
+    assert_eq!(
+        kind.as_deref(),
+        Some("image/jpeg"),
+        "under its own type rather than under the one the route used to assert"
+    );
+    assert!(
+        bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "and the bytes are the JPEG that went in, not a re-encode"
+    );
+
+    // The cover the ingest drew from it is a PNG, so the same route answers two
+    // types for one upload; that is the whole of what widening it means.
+    let cover = format!("/v1/uploads/{}", uploaded.cover.hash);
+    let (status, kind, _) = get_typed(state.clone(), &TOKEN_A, &cover).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kind.as_deref(), Some("image/png"));
+
+    // And a payload that is not an image is refused as it always was, which is
+    // what stops a handle streaming a seller's worksheet through an image
+    // route.
+    let worksheet = upload(state.clone(), &TOKEN_A, pdf("not a picture"), "").await;
+    let refused = format!("/v1/uploads/{}", worksheet.payload[0].hash);
+    let (status, kind, _) = get_typed(state, &TOKEN_A, &refused).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_ne!(
+        kind.as_deref(),
+        Some("application/pdf"),
+        "the refusal is an error document rather than the file under another name"
+    );
+}
+
+/// An 8x8 JPEG, small enough to read and real enough to survive the ingest,
+/// which decodes an image payload to draw its cover.
+///
+/// Base64 rather than three hundred hex bytes, and generated once with
+/// `magick -size 8x8 xc:'#2080C0' -quality 60 tiny.jpg`.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn tiny_jpeg() -> Vec<u8> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(TINY_JPEG_BASE64)
+        .expect("the fixture decodes")
+}
+
+const TINY_JPEG_BASE64: &str = "\
+/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwz\
+Oko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09P\
+T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAIAAgDASIAAhEBAxEB/8QA\
+FQABAQAAAAAAAAAAAAAAAAAAAAT/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAA\
+AAAABf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AIgDYF//2Q==";
+
 /// The 32 bytes a lowercase-hex handle names.
 fn content_hash(hex: &str) -> ContentHash {
     let mut bytes = [0u8; 32];
@@ -2907,5 +3016,441 @@ async fn a_listed_resource_still_keeps_its_last_file(pool: PgPool) {
     assert!(
         after.iter().any(|file| file.id.to_hyphenated() == only),
         "and the refusal left the file where it was"
+    );
+}
+
+// ------------------------------------------------- the sidecar, read back
+
+/// The sidecar a create wrote comes back on the product read, field for field.
+///
+/// Before this the sidecar was write-only from the client's side: `TptBaseRepo::get`
+/// was reachable from no route, so an edit form could send seventeen fields
+/// and pre-fill none of them. Every field is asserted rather than a sample,
+/// because the point of the view is that it is the exact shape the input
+/// deserialises from — a field dropped on the way out is a field an edit
+/// silently clears.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_product_read_carries_the_sidecar_a_create_wrote(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("sidecar-read");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("read"), "").await;
+
+    let mut body = create_body(&uploaded, "Fractions on a number line", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    body["tpt_base"] = tpt_base();
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let created: CreatedProductView = parse(&created);
+
+    let (status, read) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", created.product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&read);
+    let base = view
+        .tpt_base
+        .expect("the create wrote a sidecar, so the read carries one");
+    assert_eq!(base.subject_areas, ["math"]);
+    assert_eq!(base.tags, ["centers"]);
+    assert_eq!(base.formats, ["easel"]);
+    assert_eq!(base.custom_categories, ["Autumn unit"]);
+    assert_eq!(base.tax_code_id, Some(2));
+    assert_eq!(base.additional_licence_minor_units, Some(405));
+    assert_eq!(base.teaching_duration_id, Some(6));
+    assert_eq!(base.pages_or_slides, Some(12));
+    assert_eq!(
+        base.answer_key_id,
+        Some(4),
+        "the wire id rather than the menu position, in both directions"
+    );
+    assert_eq!(base.copyright_declaration_id, Some(1));
+    assert_eq!(base.status_user, 0);
+    assert_eq!(
+        base.thumbnail_mode, 1,
+        "the default the create did not state"
+    );
+    assert!(base.thumbnail_hashes.is_empty());
+    assert_eq!(base.bundle_discount_minor_units, None);
+    assert_eq!(base.video_preview_hash, None);
+    assert_eq!(
+        base.appropriate_for_country, None,
+        "unanswered stays unanswered rather than reading back as an unticked box"
+    );
+    assert!(base.standards.is_empty());
+
+    // The file's own digest travels too, which is what lets an edit form seed
+    // a draft that is genuinely this product rather than one whose files it
+    // can count and not name.
+    let payload = view
+        .files
+        .iter()
+        .find(|file| file.role == "payload")
+        .expect("the create carried a file");
+    assert_eq!(payload.hash, uploaded.payload[0].hash);
+}
+
+/// A product created without the block reads back with no sidecar at all.
+///
+/// `None` and a row of nulls are different answers, and the edit form reads
+/// them differently: the first leaves the copyright attestation and the tax
+/// code unstated, which is what D7 requires.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_product_with_no_sidecar_reads_back_without_one(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("sidecar-absent");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("plain"), "").await;
+
+    let (status, created) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &create_body(&uploaded, "Imported elsewhere", &["TesGb"]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let created: CreatedProductView = parse(&created);
+
+    let (status, read) = get(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}", created.product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&read);
+    assert!(
+        view.tpt_base.is_none(),
+        "the outer join answers absent rather than a row of defaults"
+    );
+}
+
+/// The sidecar is replaced whole rather than merged, so a field the seller
+/// cleared reads back cleared.
+///
+/// The route's contract for the block is replace-whole precisely so that
+/// clearing a control is expressible; a merge would make an unticked box
+/// indistinguishable from a form that did not render one.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_edit_clears_a_sidecar_field_rather_than_merging_it(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("sidecar-clear");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("clear"), "").await;
+
+    let mut body = create_body(&uploaded, "Fractions on a number line", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    body["tpt_base"] = tpt_base();
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let created: CreatedProductView = parse(&created);
+    let path = format!("/v1/products/{}", created.product.0.to_hyphenated());
+
+    let mut edited = tpt_base();
+    edited["pages_or_slides"] = serde_json::Value::Null;
+    edited["custom_categories"] = serde_json::json!([]);
+    edited["formats"] = serde_json::json!([]);
+    let (status, patched) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({ "tpt_base": edited }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&patched)
+    );
+
+    let (status, read) = get(state.clone(), &TOKEN_A, &path).await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&read);
+    let base = view.tpt_base.expect("the edit kept a sidecar row");
+    assert_eq!(base.pages_or_slides, None, "the cleared field is cleared");
+    assert!(
+        base.custom_categories.is_empty(),
+        "and the emptied shelf is empty"
+    );
+    assert!(base.formats.is_empty(), "and the emptied picker is empty");
+    assert_eq!(
+        base.subject_areas,
+        ["math"],
+        "while what the edit restated survives"
+    );
+
+    // Clearing a picker the model requires is refused rather than merged away.
+    // That is the same rule the create is held to, and it is the visible face
+    // of the stub this route no longer carries: before, an edit could empty a
+    // required control and the row would take it.
+    let mut emptied = tpt_base();
+    emptied["tags"] = serde_json::json!([]);
+    let (status, refused) = json_call(
+        state,
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({ "tpt_base": emptied }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let refused = String::from_utf8_lossy(&refused);
+    assert!(
+        refused.contains("Tag"),
+        "the refusal names the control the seller emptied: {refused}"
+    );
+}
+
+/// The marketplace rules are re-checked against the product's stored state,
+/// not against a stub that made them vacuous.
+///
+/// `patch_product` used to build its `DraftHead` with `payload_hash: None` and
+/// `for_marketplace: false` hard-coded, so every marketplace-facing rule was
+/// answered "no marketplace, no file" whatever the product actually was, and
+/// the browser was the last word on them: an edit could write a sidecar a
+/// create would have refused. The stub is replaced by a read of the product
+/// and its mappings, and this is what fails if it comes back.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_edit_is_held_to_the_rules_the_create_was_held_to(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("patch-rules");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("rules"), "").await;
+
+    let mut body = create_body(&uploaded, "Fractions on a number line", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    body["tpt_base"] = tpt_base();
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let created: CreatedProductView = parse(&created);
+    let path = format!("/v1/products/{}", created.product.0.to_hyphenated());
+
+    // A priced edit with no tax code: exactly what the create refuses, on a
+    // product whose stored price the edit is changing.
+    let mut untaxed = tpt_base();
+    untaxed["tax_code_id"] = serde_json::Value::Null;
+    let (status, refused) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({
+            "price": { "Paid": { "minor_units": 450, "currency": "Usd" } },
+            "tpt_base": untaxed,
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a priced listing with no tax code is refused on the edit as on the create"
+    );
+    let refused = String::from_utf8_lossy(&refused);
+    assert!(
+        refused.contains("ax"),
+        "the refusal names the control: {refused}"
+    );
+
+    // And the refusal wrote nothing: the title the edit carried is not stored.
+    let (status, read) = get(state.clone(), &TOKEN_A, &path).await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&read);
+    assert_eq!(
+        view.title, "Fractions on a number line",
+        "a refused edit leaves the product as it stood rather than half-applied"
+    );
+
+    // The same edit with the designation the seller owes is accepted, which is
+    // what proves the refusal above is the rule rather than a route that
+    // refuses every priced edit.
+    let (status, patched) = json_call(
+        state,
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({
+            "price": { "Paid": { "minor_units": 450, "currency": "Usd" } },
+            "tpt_base": tpt_base(),
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&patched)
+    );
+}
+
+/// The same rules, on an edit that sends no sidecar of its own.
+///
+/// The re-check used to live inside the `tpt_base` arm alone, so whether a
+/// marketplace rule was enforced turned on whether the request happened to
+/// carry a block rather than on what the request changed: a `price` on its own
+/// reached the row unchecked, and a TPT-mapped product stored free became paid
+/// with no tax code, which is the pair the sibling test above proves is
+/// refused when the block is present.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_edit_that_sends_no_sidecar_is_held_to_the_same_rules(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("patch-rules-absent");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("absent"), "").await;
+
+    // Free, so the create is held to no price rule, and stored with no tax
+    // code, so the designation the seller owes is genuinely unstated.
+    let mut untaxed = tpt_base();
+    untaxed["tax_code_id"] = serde_json::Value::Null;
+    let mut body = create_body(&uploaded, "Fractions on a number line", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    body["tpt_base"] = untaxed;
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let created: CreatedProductView = parse(&created);
+    let path = format!("/v1/products/{}", created.product.0.to_hyphenated());
+
+    let (status, refused) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({
+            "price": { "Paid": { "minor_units": 500, "currency": "Usd" } },
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a price alone still makes a paid listing with no tax code: {}",
+        String::from_utf8_lossy(&refused)
+    );
+    let error: APIError = parse(&refused);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::RequiredFieldMissing),
+        "refused under the same code the block-carrying edit is refused under"
+    );
+    let refused = String::from_utf8_lossy(&refused);
+    assert!(
+        refused.contains("ax"),
+        "and the refusal names the control: {refused}"
+    );
+
+    // And nothing was written: the price the refused edit carried is not
+    // stored, so the product is still the free one the create left.
+    let (status, read) = get(state.clone(), &TOKEN_A, &path).await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&read);
+    assert_eq!(
+        view.price,
+        PriceIntent::Free,
+        "a refused edit leaves the product as it stood rather than half-applied"
+    );
+
+    // A field no rule reads is not held to one, so the re-check refuses what
+    // breaks a rule rather than every edit that omits the block.
+    let (status, patched) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({ "subjects": [] }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&patched)
+    );
+
+    // Nor is a field the rules do read, where the product it leaves behind
+    // still satisfies them.
+    let (status, patched) = json_call(
+        state,
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({ "title": "Fractions on a number line, revised" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&patched)
+    );
+}
+
+/// One tenant's sidecar is not readable from another's session, which the
+/// product read already guaranteed and the new field must not widen.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn another_tenants_sidecar_is_not_reachable(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("sidecar-tenant");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("tenant"), "").await;
+
+    let mut body = create_body(&uploaded, "Org A's own", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    body["tpt_base"] = tpt_base();
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let created: CreatedProductView = parse(&created);
+
+    let (status, _) = get(
+        state,
+        &TOKEN_B,
+        &format!("/v1/products/{}", created.product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the product answers as absent, so its sidecar is not a second way in"
     );
 }

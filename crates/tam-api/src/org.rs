@@ -69,7 +69,7 @@ pub const SLUG_MAX_CHARS: usize = 32;
 /// so a route added tomorrow fails a test rather than waiting for someone to
 /// notice. That check is what makes the sentence above true rather than
 /// aspirational.
-pub const RESERVED_SLUGS: [&str; 51] = [
+pub const RESERVED_SLUGS: [&str; 52] = [
     "abuse",
     "account",
     "admin",
@@ -87,6 +87,7 @@ pub const RESERVED_SLUGS: [&str; 51] = [
     "downloads",
     "email",
     "export",
+    "fonts",
     "guides",
     "help",
     "import",

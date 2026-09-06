@@ -40,6 +40,7 @@ use tam_types::{
 use crate::catalogue::parse_hash;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::jobs::{decode_cursor, encode_cursor};
+use crate::product::{StandardInput, TptBaseInput};
 use crate::{AppState, OrgContext};
 
 fn storage_fault(state: &AppState, error: &tam_storage::StorageError) -> APIError {
@@ -234,6 +235,40 @@ fn cover_url(version: &str, product: ProductId) -> String {
 /// The eight bytes every PNG begins with.
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
+/// The type these bytes are, or `None` for bytes this route will not serve.
+///
+/// Four formats, and each is decided from the bytes rather than from anything
+/// a client said: the seller's own thumbnails arrive through `POST /uploads`
+/// as whatever their machine produced, and the create form already tells them
+/// a JPEG, a PNG or a GIF is acceptable. Serving PNG alone made an edit form
+/// unable to draw back three of the four it accepts.
+///
+/// Deliberately narrow. SVG is absent and stays absent: it is a document that
+/// executes script in the browser, so serving one from a seller's own upload
+/// under this organisation's origin would be a stored-XSS surface rather than
+/// a picture. Anything not listed here is refused rather than served under a
+/// type nobody has to believe.
+fn image_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&PNG_SIGNATURE) {
+        return Some("image/png");
+    }
+    // SOI plus the first marker's own leading byte. Every JPEG variant this
+    // reads — JFIF, Exif, raw — begins the same three bytes.
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    // A RIFF container whose form type is WEBP. Both halves are checked
+    // because RIFF also carries WAV and AVI, and a WAV served as an image is
+    // the mislabelling this function exists to prevent.
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    None
+}
+
 /// The headers an image answer carries, or the refusal for bytes that are not
 /// one.
 ///
@@ -245,16 +280,16 @@ const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 fn image_answer(
     bytes: Vec<u8>,
 ) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
-    if !bytes.starts_with(&PNG_SIGNATURE) {
+    let Some(kind) = image_type(&bytes) else {
         return Err(APIError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             APIErrorEntry::new("these bytes are not an image, and this route serves images only")
                 .kind(APIErrorKind::Validation),
         ));
-    }
+    };
     Ok((
         [
-            (header::CONTENT_TYPE, "image/png"),
+            (header::CONTENT_TYPE, kind),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             // A cover is derived from bytes that are already sealed and never
             // rewritten in place, so it is safe to hold; private because it is
@@ -277,10 +312,11 @@ fn image_answer(
 /// reads, so a handle resolves only inside the tenant that sealed those bytes
 /// and another tenant's handle answers exactly as one that does not exist.
 ///
-/// Images only, decided from the bytes. A handle names a payload as readily as
-/// a cover, and a seller's PDF is not something an image route should stream
-/// even back to its owner, so anything that is not a PNG is refused by name
-/// rather than served under a type it does not have.
+/// Images only, decided from the bytes by [`image_type`]. A handle names a
+/// payload as readily as a thumbnail, and a seller's PDF is not something an
+/// image route should stream even back to its owner, so anything that is not
+/// one of the four formats is refused by name rather than served under a type
+/// it does not have.
 pub(crate) async fn uploaded_image(
     State(state): State<AppState>,
     context: OrgContext,
@@ -327,7 +363,8 @@ pub(crate) async fn uploaded_image(
 /// The type is read off the bytes rather than asserted. Every cover this
 /// system stores is a generated PNG — `tam_pipeline::render` encodes one on
 /// ingest and the import stores one — so the check passes in every case we
-/// write, and anything else is served under a type nobody has to believe.
+/// write, and anything outside [`image_type`]'s four is refused rather than
+/// served under a type nobody has to believe.
 pub(crate) async fn product_cover(
     State(state): State<AppState>,
     context: OrgContext,
@@ -391,8 +428,143 @@ pub struct ProductView {
     /// Carried for the same reason `body_format` is: the edit path writes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rights: Option<PathView>,
+    /// The TPT-base sidecar, or `None` for a product that has no row.
+    ///
+    /// Carried on this read rather than served from a second endpoint: the
+    /// edit form needs the product and the sidecar together to render one set
+    /// of fields, and a second round trip would buy nothing. Absent is the
+    /// honest answer for a product authored before the table existed or
+    /// imported from a marketplace, which the repository already distinguishes
+    /// from a row of nulls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tpt_base: Option<TptBaseView>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// The sidecar as the edit form reads it back.
+///
+/// Serialises to exactly the shape [`tam_authoring::TptBaseInput`]
+/// deserialises from, so the seed and the request body speak one vocabulary
+/// and a round trip through the form is checkable rather than assumed. Every
+/// field is the wire's own name; nothing here is presentation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TptBaseView {
+    pub thumbnail_mode: u8,
+    pub thumbnail_hashes: Vec<String>,
+    pub video_preview_hash: Option<String>,
+    pub additional_licence_minor_units: Option<i64>,
+    pub bundle_discount_minor_units: Option<i64>,
+    pub tax_code_id: Option<u8>,
+    pub subject_areas: Vec<String>,
+    pub tags: Vec<String>,
+    pub formats: Vec<String>,
+    pub custom_categories: Vec<String>,
+    /// Three-state, as the column is: `None` states nothing about the control
+    /// rather than answering it unticked.
+    pub appropriate_for_country: Option<bool>,
+    pub standards: Vec<StandardView>,
+    pub teaching_duration_id: Option<u8>,
+    pub pages_or_slides: Option<u32>,
+    pub answer_key_id: Option<u8>,
+    pub copyright_declaration_id: Option<u8>,
+    pub status_user: u8,
+}
+
+/// One alignment, named as the input names it: the framework by TPT's own
+/// jurisdiction id rather than by the domain's enum, because that is the
+/// number the create body carries and the one a round trip has to preserve.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StandardView {
+    pub framework: u32,
+    pub code: String,
+    pub tpt_node_id: Option<u64>,
+}
+
+fn tpt_base_view(record: &tam_storage::TptBaseRecord) -> TptBaseView {
+    TptBaseView {
+        thumbnail_mode: record.thumbnail_mode.wire_id(),
+        thumbnail_hashes: record
+            .thumbnails
+            .iter()
+            .map(|handle| handle.as_str().to_owned())
+            .collect(),
+        video_preview_hash: record
+            .video_preview
+            .as_ref()
+            .map(|handle| handle.as_str().to_owned()),
+        additional_licence_minor_units: record.additional_licence_minor_units,
+        bundle_discount_minor_units: record.bundle_discount_minor_units,
+        tax_code_id: record.tax_code.map(tam_domain::product::TaxCode::wire_id),
+        subject_areas: facet_strings(&record.categories.subject_areas),
+        tags: facet_strings(&record.categories.tags),
+        formats: facet_strings(&record.categories.formats),
+        custom_categories: record.categories.custom_categories.clone(),
+        appropriate_for_country: record.categories.appropriate_for_country,
+        standards: record
+            .standards
+            .iter()
+            .map(|alignment| StandardView {
+                framework: alignment.framework.jurisdiction_id(),
+                code: alignment.code.clone(),
+                tpt_node_id: alignment.tpt_node_id,
+            })
+            .collect(),
+        teaching_duration_id: record
+            .details
+            .teaching_duration
+            .map(tam_domain::product::TeachingDuration::wire_id),
+        pages_or_slides: record.details.pages_or_slides,
+        answer_key_id: record
+            .details
+            .answer_key
+            .map(tam_domain::product::AnswerKey::wire_id),
+        copyright_declaration_id: record
+            .copyright
+            .map(tam_domain::product::CopyrightDeclaration::wire_id),
+        status_user: record.status.wire_id(),
+    }
+}
+
+/// The stored sidecar as the input a create or an edit would have sent.
+///
+/// So that a rule needing a whole draft can read one for a product whose edit
+/// carries no block of its own. Built from [`tpt_base_view`] rather than from
+/// the record a second time, because a second decoding of the same wire ids is
+/// a second thing to drift from the row.
+pub(crate) fn tpt_base_input(record: &tam_storage::TptBaseRecord) -> TptBaseInput {
+    let view = tpt_base_view(record);
+    TptBaseInput {
+        thumbnail_mode: Some(view.thumbnail_mode),
+        thumbnail_hashes: view.thumbnail_hashes,
+        video_preview_hash: view.video_preview_hash,
+        additional_licence_minor_units: view.additional_licence_minor_units,
+        bundle_discount_minor_units: view.bundle_discount_minor_units,
+        tax_code_id: view.tax_code_id,
+        subject_areas: view.subject_areas,
+        tags: view.tags,
+        formats: view.formats,
+        custom_categories: view.custom_categories,
+        appropriate_for_country: view.appropriate_for_country,
+        standards: view
+            .standards
+            .into_iter()
+            .map(|standard| StandardInput {
+                framework: standard.framework,
+                code: standard.code,
+                tpt_node_id: standard.tpt_node_id,
+            })
+            .collect(),
+        teaching_duration_id: view.teaching_duration_id,
+        pages_or_slides: view.pages_or_slides,
+        answer_key_id: view.answer_key_id,
+        copyright_declaration_id: view.copyright_declaration_id,
+        status_user: Some(view.status_user),
+    }
+}
+
+fn facet_strings(slugs: &[tam_domain::product::FacetSlug]) -> Vec<String> {
+    slugs.iter().map(|slug| slug.as_str().to_owned()).collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -401,6 +573,17 @@ pub struct FileView {
     pub role: String,
     pub kind: String,
     pub byte_len: u64,
+    /// The digest of these bytes, which is how every other surface names a
+    /// file: the create form holds one per upload and the sidecar stores one
+    /// per thumbnail.
+    ///
+    /// Carried so an edit form can seed a draft that is genuinely this
+    /// product. Without it the form has an id it cannot make a handle from,
+    /// and the model's whole-product check — which needs a payload to build a
+    /// product at all — goes silent on the one path where the seller is
+    /// changing the fields it governs. Whichever arm holds the bytes vouched
+    /// for it, which `scan_vouched_by` beside it already discloses.
+    pub hash: String,
     pub scan: String,
     /// Who vouched for `scan`.
     ///
@@ -438,6 +621,7 @@ pub(crate) fn file_view(file: &tam_types::ProductFile, name: Option<&str>) -> Fi
         role: role_str(file.role).to_owned(),
         kind: kind_str(file.kind).to_owned(),
         byte_len: file.bytes.byte_len(),
+        hash: crate::catalogue::hash_hex(file.bytes.digest()),
         scan: scan_str(file.bytes.scan()).to_owned(),
         scan_vouched_by: scan_vouched_by(&file.bytes).to_owned(),
         name: name.map(str::to_owned),
@@ -533,6 +717,10 @@ pub(crate) async fn product_view(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such product"))?;
+    let tpt_base = tam_storage::TptBaseRepo::new(state.pool.clone())
+        .get(context.org, product)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
     let file_names = record.file_names;
     let aggregate = record.product;
     let named = |file: &tam_types::ProductFile| {
@@ -569,6 +757,7 @@ pub(crate) async fn product_view(
         subjects: aggregate.subjects,
         grades,
         rights,
+        tpt_base: tpt_base.as_ref().map(tpt_base_view),
         created_at: record.created_at,
         updated_at: record.updated_at,
     }))
@@ -720,6 +909,45 @@ pub(crate) async fn revoke_connection(
         .map_err(|error| storage_fault(&state, &error))?;
     Ok(Json(RevokedView {
         connections: u32::from(revoked),
+        elapsed_ms: ((state.wall)().0 - now.0).max(0),
+    }))
+}
+
+/// Disconnects one connection at the seller's own request.
+///
+/// The seller's verb, and deliberately not `revoke`'s. This writes `unlinked`,
+/// which the device check-in lifts back to `linked`, so a seller who
+/// disconnects a marketplace and connects it again on their machine takes the
+/// same path they took the first time. `revoke` above stays terminal and stays
+/// the operator and security path.
+///
+/// The answer is `RevokedView` unchanged: one call, one row moved or none, and
+/// a second shape saying the same two numbers would be a second thing for the
+/// client to read.
+///
+/// A connection the tenant does not have answers `connections: 0` rather than
+/// a not-found, because the tenant pin means the statement cannot see another
+/// tenant's row and must not distinguish one from a row that is not there.
+pub(crate) async fn disconnect_connection(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, connection)): Path<(String, String)>,
+) -> Result<Json<RevokedView>, APIError> {
+    let connection = ConnectionId(parse_id(&connection)?);
+    let now = (state.wall)();
+    let unlinked = ConnectionRepo::new(state.pool.clone())
+        .unlink(
+            context.org,
+            connection,
+            Stamp {
+                at: now,
+                actor: Actor::Person(context.user),
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(RevokedView {
+        connections: u32::from(unlinked),
         elapsed_ms: ((state.wall)().0 - now.0).max(0),
     }))
 }
@@ -2589,6 +2817,56 @@ mod tests {
             licence.map(|item| (item.native.as_str(), item.delegation.kind)),
             Some(("licence", crate::vocabulary::DelegationKind::Never)),
             "the tick names what it does not cover, in the field's own wire name"
+        );
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::image_type;
+
+    /// Every format the two byte-serving routes will name, decided from the
+    /// bytes. A leading fragment is enough: the signature is what is read, and
+    /// a fixture that decoded would prove the decoder rather than this.
+    #[test]
+    fn each_served_format_is_named_from_its_own_signature() {
+        assert_eq!(image_type(b"\x89PNG\r\n\x1a\nrest"), Some("image/png"));
+        assert_eq!(
+            image_type(b"\xFF\xD8\xFF\xE0\x00\x10JFIF"),
+            Some("image/jpeg")
+        );
+        assert_eq!(image_type(b"GIF87a\x08\x00"), Some("image/gif"));
+        assert_eq!(image_type(b"GIF89a\x08\x00"), Some("image/gif"));
+        assert_eq!(
+            image_type(b"RIFF\x24\x00\x00\x00WEBPVP8 "),
+            Some("image/webp")
+        );
+    }
+
+    /// Anything else is refused rather than served under a type nobody has to
+    /// believe. The seller's own payload is the case that matters: a handle
+    /// names a PDF as readily as a thumbnail.
+    #[test]
+    fn everything_else_is_refused() {
+        assert_eq!(image_type(b"%PDF-1.7 a worksheet"), None);
+        assert_eq!(image_type(b"PK\x03\x04"), None);
+        assert_eq!(image_type(b""), None);
+        assert_eq!(
+            image_type(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"),
+            None,
+            "an SVG executes script in the browser, so it is a document rather than a picture"
+        );
+    }
+
+    /// A RIFF container that is not WEBP is not an image, and the form type is
+    /// what separates them: WAV and AVI carry the same first four bytes.
+    #[test]
+    fn a_riff_container_that_is_not_webp_is_refused() {
+        assert_eq!(image_type(b"RIFF\x24\x00\x00\x00WAVEfmt "), None);
+        assert_eq!(
+            image_type(b"RIFF\x24\x00"),
+            None,
+            "and a truncated one is refused rather than read past its end"
         );
     }
 }

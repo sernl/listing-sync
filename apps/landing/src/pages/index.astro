@@ -2,18 +2,19 @@
 import Base from '../layouts/Base.astro';
 import Faq from '../components/Faq.astro';
 import Migrations from '../components/Migrations.astro';
+import MarketplaceBand from '../components/MarketplaceBand.astro';
 import Pricing from '../components/Pricing.astro';
 import { availability, downloadUrl, loginUrl } from '../site.js';
 
-const title = 'Teachouse \u2014 sell the same resource on TPT and TES without listing it twice';
+const title = 'Teachouse \u2014 sell the same resource on every marketplace without listing it twice';
 const description =
-	'Teachouse keeps one copy of each teaching resource, maps it to what TPT and TES each ask for, and keeps both listings matching it on a schedule. Every marketplace request is sent from your own computer, under your own login.';
+	'Teachouse keeps one copy of each teaching resource, maps it to what each marketplace asks for, and keeps every listing matching it on a schedule. Marketplace requests are sent from your own computer, under your own login, wherever the marketplace publishes no interface for tools like this one.';
 
 const features = [
 	{
 		label: 'Cross-listing',
-		h: 'One catalogue, both marketplaces',
-		p: 'Write a resource once, or bring in what you already sell. Teachouse turns your subjects, year levels and licence wording into what TPT and TES each ask for, proposing a best fit and leaving you the decisions that are genuinely yours to make.'
+		h: 'One catalogue, every shop you sell in',
+		p: 'Write a resource once, or bring in what you already sell. Teachouse turns your subjects, year levels and licence wording into what each marketplace asks for, proposing a best fit and leaving you the decisions that are genuinely yours to make.'
 	},
 	{
 		label: 'Sync',
@@ -23,19 +24,19 @@ const features = [
 	{
 		label: 'Migrations',
 		h: 'Move a whole shop in one go',
-		p: 'Already selling everything on one marketplace? A migration puts that catalogue on the other one as a single piece of work, at a fixed price quoted before we start, with every mapping there for you to check afterwards.'
+		p: 'Already selling everything in one shop? A migration puts that catalogue in another one as a single piece of work, at a fixed price quoted before we start, with every mapping there for you to check afterwards.'
 	},
 	{
 		label: 'Where it runs',
 		h: 'The marketplace work runs on your computer',
-		p: 'TPT and TES publish no interface for tools like this one, so Teachouse sends every request to them from your own machine, in your own session. Your resource files never pass through us. This split is our design choice about where a request should come from. It is not required by any law, and we do not present it as one.'
+		p: 'Some marketplaces publish no interface for tools like this one. For those, Teachouse sends every request from your own machine, in your own session, and your resource files never pass through us. This split is our design choice about where a request should come from. It is not required by any law, and we do not present it as one.'
 	}
 ];
 
 const steps = [
 	{
 		h: 'Connect',
-		p: 'Install the app on the computer that will do the marketplace work, then sign in to TPT and TES yourself, in your own session. Nobody here ever sees a marketplace password.'
+		p: 'Install the app on the computer that will do the marketplace work, then sign in to each marketplace yourself, in your own session. Nobody here ever sees a marketplace password.'
 	},
 	{
 		h: 'Map',
@@ -51,24 +52,25 @@ const steps = [
 <Base title={title} description={description}>
 	<section class="hero">
 		<div class="wrap">
-			<p class="eyebrow">For TPT and TES sellers</p>
-			<h1>Sell the same resource on both marketplaces without listing it twice.</h1>
+			<p class="eyebrow">For teachers who sell what they make</p>
+			<h1>Sell the same resource everywhere without listing it twice.</h1>
 			<p class="sell">
-				Teachouse keeps one copy of each resource, maps it to what TPT and TES each ask for, and
-				keeps both listings matching it on a schedule. Every request to a marketplace is sent
-				from your own computer, under your own login.
+				Teachouse keeps one copy of each resource, maps it to what each marketplace asks for,
+				and keeps your listings matching it on a schedule. Every request to a marketplace is
+				sent from your own computer, under your own login.
 			</p>
 			<div class="actions">
 				<a class="cta large" href={loginUrl}>Start free</a>
 				<a class="btn large" href="#how">See how it works</a>
 			</div>
 			<p class="under">Your resource files never pass through us.</p>
+			<MarketplaceBand />
 		</div>
 	</section>
 
 	<section class="section" id="features">
 		<div class="wrap">
-			<h2>One catalogue. Both marketplaces. One place to change it.</h2>
+			<h2>One catalogue. Every shop. One place to change it.</h2>
 			<div class="grid-2">
 				{
 					features.map((feature) => (
@@ -99,7 +101,7 @@ const steps = [
 				}
 			</div>
 			<p class="aside">
-				One thing to know before you start: the TPT and TES work needs a small app, installed
+				One thing to know before you start: some marketplace work needs a small app, installed
 				once, because Teachouse is built to do that work on your own computer under your own
 				login. You manage everything else in a browser.{' '}
 				{
@@ -121,7 +123,7 @@ const steps = [
 
 	<section class="section closing">
 		<div class="wrap">
-			<h2>Put your catalogue on both marketplaces</h2>
+			<h2>Put your catalogue in every shop you sell in</h2>
 			<p class="lede">
 				Start on the free tier, connect one marketplace, and look at your own listings in
 				Teachouse before you decide anything.

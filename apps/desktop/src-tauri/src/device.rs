@@ -1,7 +1,9 @@
 //! Which machine this installation is.
 //!
 //! A random identifier written once into application data, labelled with the
-//! hostname. Deliberately not a hardware or machine UUID: decision D14 in
+//! hostname on a computer and with the phone's own model on Android, where the
+//! hostname is a loopback name no seller would recognise. Deliberately not a
+//! hardware or machine UUID: decision D14 in
 //! `docs/notes/design/vendoo-for-teachers-rethink.md` records that `machine-uid`
 //! covers neither Android nor iOS, and D2 puts both on the roadmap, so a
 //! self-generated id is the only one that survives the whole surface set.
@@ -79,15 +81,18 @@ fn identity_path(data_dir: &Path) -> PathBuf {
 
 /// Reads the device identity, generating and writing one on first run.
 ///
-/// The label is refreshed from the current hostname on every read while the id
-/// is not, because a renamed machine is the same device and a re-registered
-/// one would strand the entitlement token bound to the old id.
+/// The label is refreshed from the current source on every read while the id is
+/// not, because a renamed machine is the same device and a re-registered one
+/// would strand the entitlement token bound to the old id. That is also what
+/// lets the source itself improve: a phone already registered under a hostname
+/// takes its model on the next launch with no migration and without becoming a
+/// second machine.
 #[expect(
     clippy::disallowed_methods,
     reason = "the ban targets upload payloads, which are bounded but not small; this file is a \
-              UUID and a hostname that this process wrote itself"
+              UUID and a device label that this process wrote itself"
 )]
-pub fn load_or_create(data_dir: &Path, hostname: &str) -> Result<DeviceIdentity, DeviceError> {
+pub fn load_or_create(data_dir: &Path, label: &str) -> Result<DeviceIdentity, DeviceError> {
     let path = identity_path(data_dir);
     let existing = match fs::read_to_string(&path) {
         Ok(text) => Some(text),
@@ -100,7 +105,7 @@ pub fn load_or_create(data_dir: &Path, hostname: &str) -> Result<DeviceIdentity,
             serde_json::from_str(&text).map_err(|why| DeviceError::Codec(why.to_string()))?;
         let refreshed = DeviceIdentity {
             id: stored.id,
-            label: hostname.to_owned(),
+            label: label.to_owned(),
         };
         if refreshed.label != stored.label {
             write_identity(&path, &refreshed)?;
@@ -110,11 +115,74 @@ pub fn load_or_create(data_dir: &Path, hostname: &str) -> Result<DeviceIdentity,
 
     let fresh = DeviceIdentity {
         id: DeviceId::generate(),
-        label: hostname.to_owned(),
+        label: label.to_owned(),
     };
     fs::create_dir_all(data_dir).map_err(|why| DeviceError::Io(why.to_string()))?;
     write_identity(&path, &fresh)?;
     Ok(fresh)
+}
+
+/// What an Android build calls itself when the phone reports nothing to call
+/// it. Stated rather than left blank, because a nameless row in "Your
+/// machines" is one the seller cannot tell from any other.
+pub const ANDROID_FALLBACK_LABEL: &str = "Android phone";
+
+/// The name a phone goes by, built from what Android reports about itself.
+///
+/// `tauri_plugin_os::hostname` is `gethostname` (tauri-plugin-os 2.3.2,
+/// `src/lib.rs:96-99`), which on an Android application process answers a
+/// loopback name: a registered phone would appear in the seller's list as
+/// `localhost`. `Build.MANUFACTURER` and `Build.MODEL` are what is printed on
+/// the box, need no Android permission and no extra plugin, and are what the
+/// Kotlin bridge reads instead.
+///
+/// Most vendors already put their own name in the model — "Xiaomi Redmi Note
+/// 8" against a manufacturer of "Xiaomi" — so the prefix is dropped when it is
+/// already there and the label does not stutter. Several vendors report the
+/// manufacturer lowercase ("samsung"), which is Android's identifier for the
+/// maker rather than how the maker writes its own name, so a leading lowercase
+/// letter is capitalised and nothing else is touched: the label presents the
+/// name a seller recognises without inventing a spelling for "OnePlus" or
+/// "HUAWEI", and the model stays exactly as the phone reports it.
+#[must_use]
+pub fn android_label(manufacturer: &str, model: &str) -> String {
+    let manufacturer = as_the_maker_writes_it(manufacturer.trim());
+    let model = model.trim();
+    if model.is_empty() {
+        return if manufacturer.is_empty() {
+            ANDROID_FALLBACK_LABEL.to_owned()
+        } else {
+            manufacturer
+        };
+    }
+    if manufacturer.is_empty() || names_its_own_maker(model, &manufacturer) {
+        return model.to_owned();
+    }
+    format!("{manufacturer} {model}")
+}
+
+/// The manufacturer with a leading lowercase ASCII letter raised, which is the
+/// whole of the change: the rest of the string, and any name that does not
+/// open with such a letter, is left as reported.
+fn as_the_maker_writes_it(manufacturer: &str) -> String {
+    let mut characters = manufacturer.chars();
+    let Some(first) = characters.next() else {
+        return manufacturer.to_owned();
+    };
+    if first.is_ascii_lowercase() {
+        format!("{}{}", first.to_ascii_uppercase(), characters.as_str())
+    } else {
+        manufacturer.to_owned()
+    }
+}
+
+/// Whether the model already opens with the manufacturer's name, compared
+/// without case because the two fields are not spelled consistently even on
+/// one device ("samsung" against "Samsung Galaxy").
+fn names_its_own_maker(model: &str, manufacturer: &str) -> bool {
+    model
+        .get(..manufacturer.len())
+        .is_some_and(|opening| opening.eq_ignore_ascii_case(manufacturer))
 }
 
 fn write_identity(path: &Path, identity: &DeviceIdentity) -> Result<(), DeviceError> {
@@ -162,6 +230,79 @@ mod tests {
         assert_eq!(after.label, "studio-pc", "the label follows the hostname");
         let reread = load_or_create(&dir, "studio-pc").expect("the new label persisted");
         assert_eq!(reread.label, "studio-pc");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_phone_is_named_by_what_it_says_it_is_rather_than_by_its_hostname() {
+        use super::{android_label, ANDROID_FALLBACK_LABEL};
+
+        assert_eq!(
+            android_label("Google", "Pixel 8"),
+            "Google Pixel 8",
+            "a model that does not name its maker gets it prefixed"
+        );
+        assert_eq!(
+            android_label("samsung", "SM-G991B"),
+            "Samsung SM-G991B",
+            "the lowercase manufacturer Android reports is an identifier, and the seller's \
+             list shows the maker's name"
+        );
+        assert_eq!(
+            android_label("OnePlus", "CPH2451"),
+            "OnePlus CPH2451",
+            "a name already capitalised keeps every letter it came with"
+        );
+        assert_eq!(
+            android_label("HUAWEI", "ELS-NX9"),
+            "HUAWEI ELS-NX9",
+            "and a maker that shouts its own name is not tidied into one that does not"
+        );
+        assert_eq!(
+            android_label("Xiaomi", "Xiaomi Redmi Note 8"),
+            "Xiaomi Redmi Note 8",
+            "a model that already opens with its maker must not stutter"
+        );
+        assert_eq!(
+            android_label("samsung", "Samsung Galaxy A14"),
+            "Samsung Galaxy A14",
+            "and the two fields are not spelled alike even on one device"
+        );
+        assert_eq!(
+            android_label("  Google  ", "  Pixel 8  "),
+            "Google Pixel 8",
+            "whitespace off either field would otherwise reach the registry"
+        );
+        assert_eq!(android_label("Nothing", ""), "Nothing");
+        assert_eq!(
+            android_label("samsung", ""),
+            "Samsung",
+            "a phone that reports only its maker is labelled with that maker's name"
+        );
+        assert_eq!(android_label("", "Pixel 8"), "Pixel 8");
+        assert_eq!(
+            android_label("", ""),
+            ANDROID_FALLBACK_LABEL,
+            "a phone that says nothing about itself still gets a name a seller can read"
+        );
+    }
+
+    #[test]
+    fn a_phone_that_reports_a_new_name_keeps_its_identifier() {
+        let dir = scratch();
+        let before = super::load_or_create(&dir, &super::android_label("Google", "Pixel 8"))
+            .expect("a first run generates an identity");
+        let after = super::load_or_create(&dir, &super::android_label("Google", "Pixel 9"))
+            .expect("a replaced label still reads back");
+        assert_eq!(
+            before.id, after.id,
+            "a phone that became a second machine on a label change would strand \
+             the entitlement token bound to the first"
+        );
+        assert_eq!(
+            after.label, "Google Pixel 9",
+            "the label follows whatever source it was given, hostname or not"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE connection SET state = 'unlinked', updated_at = now() WHERE org_id = $1 AND id = $2 AND state NOT IN ('unlinked', 'revoked') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0d52183de2131c02eb6667800202d6b79a9f7f9bd5a68e71d4c2ad1cd8b1da5d"
+}

@@ -344,6 +344,13 @@ pub fn router(state: AppState) -> Router {
             "/{version}/connections/{connection}/revoke",
             post(resources::revoke_connection),
         )
+        // The seller's own disconnect, beside the operator's revoke and
+        // deliberately not the same write: this one is reversible, and the
+        // next check-in from a machine still holding the login lifts it back.
+        .route(
+            "/{version}/connections/{connection}/disconnect",
+            post(resources::disconnect_connection),
+        )
         // Beside the connections it is about: what a seller asks for when the
         // marketplace they sell on is not one of the three there is a
         // connection for.

@@ -30,6 +30,16 @@ tauri-build = { version = "2.6", features = [] }
 [dependencies]
 tauri               = { version = "2.11", features = [] }
 tauri-plugin-os     = "2.3"
+# Hands one marketplace URL to the browser the seller already uses. Without it
+# a link out of the console has a different wrong answer on each platform and a
+# right one on none: WebKitGTK connects nothing to wry's `create` signal so the
+# click is dead, WebView2 leaves `NewWindowRequested` unhandled and opens a
+# chromeless popup inside the application, and the Android webview has no
+# second window at all, so the marketplace page replaces the console. Taken on
+# every platform rather than under `cfg(desktop)`, unlike the updater beside
+# it: the plugin declares an Android implementation, and Android is where the
+# current behaviour is worst.
+tauri-plugin-opener = "2.5"
 
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
