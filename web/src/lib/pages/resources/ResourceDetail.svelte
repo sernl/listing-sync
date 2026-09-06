@@ -9,6 +9,7 @@
 		type VocabularyView
 	} from '$lib/api';
 	import { editBlockedBy } from '$lib/authoring';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import { DISCLAIMER } from '$lib/pages/marketplaces/catalogue';
 	import Banner from '$lib/Banner.svelte';
@@ -512,7 +513,7 @@
 				{#each runs as run (run.job)}
 					<a class="res-line" href={`/sync/${run.job}`}>
 						<span class="res-line-what">
-							<span class="res-line-t">{platformTitle(run.inventory)}</span>
+							<span class="res-line-t"><MarketplaceMark inventory={run.inventory} size={18} /></span>
 							<span class="res-line-id">{run.job.slice(0, 8)}…</span>
 						</span>
 						<span class="res-line-at">{run.state === null ? 'just started' : run.state}</span>

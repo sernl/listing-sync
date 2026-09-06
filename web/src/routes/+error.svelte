@@ -20,7 +20,7 @@
 		<h1>{missing ? 'That page is not here' : 'That page could not be opened'}</h1>
 		<p>
 			{#if missing}
-				The address does not match anything in the console. It may have been a typed slip, or a
+				The address does not match anything in Teachouse. It may have been a typed slip, or a
 				link to something that has since moved.
 			{:else}
 				Something went wrong while opening it. Opening it again usually clears it.

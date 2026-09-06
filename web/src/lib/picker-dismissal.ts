@@ -5,11 +5,12 @@
 // multi-select picker must not, because the seller is part-way through choosing
 // several. That one difference is why both files exist.
 //
-// Escape and a press outside keep what is ticked rather than reverting it,
-// which departs from the listbox convention where Escape cancels. Every tick
-// has already reached the draft through `onChange`, so there is no pending
-// buffer to revert to; reverting would mean inventing one, and a seller who
-// ticks four subjects and taps away to read the next field would lose all four.
+// Escape, a press outside and focus leaving keep what is ticked rather than
+// reverting it, which departs from the listbox convention where Escape
+// cancels. Every tick has already reached the draft through `onChange`, so
+// there is no pending buffer to revert to; reverting would mean inventing one,
+// and a seller who ticks four subjects and taps away to read the next field
+// would lose all four.
 
 export type PickerEvent =
 	| { kind: 'escape' }
@@ -22,7 +23,9 @@ export type PickerEvent =
 	/** The Done control was pressed. */
 	| { kind: 'done' }
 	/** One of the picker's options was ticked or unticked. */
-	| { kind: 'pick' };
+	| { kind: 'pick' }
+	/** Focus moved to something outside the picker, per `focusLeft`. */
+	| { kind: 'focusLeft' };
 
 /** Whether this event closes an open picker.
  *
@@ -41,6 +44,8 @@ export function closes(event: PickerEvent): boolean {
 			return false;
 		case 'press':
 			return !event.inside;
+		case 'focusLeft':
+			return true;
 	}
 }
 
@@ -62,6 +67,22 @@ export function pressedInside(target: EventTarget | null, box: PickerBox | null)
 		return false;
 	}
 	return box.contains(target as Node);
+}
+
+/** Whether focus has moved to a target outside the picker's own box.
+ *
+ * `target` is what is receiving focus, and null is not a departure: a press
+ * on the sheet's own padding, a tap on the scrim, the browser's own chrome and
+ * a window that lost focus all report null, and closing on any of them would
+ * shut the picker under the seller's finger or while they are in another app.
+ * A departure is a target the box does not contain, which on the phone is
+ * where Tab past Done lands: behind the scrim, with the sheet otherwise still
+ * up. */
+export function focusLeft(target: EventTarget | null, box: PickerBox | null): boolean {
+	if (box === null || target === null) {
+		return false;
+	}
+	return !box.contains(target as Node);
 }
 
 /** Whether focus goes back to the search box once the picker has closed.

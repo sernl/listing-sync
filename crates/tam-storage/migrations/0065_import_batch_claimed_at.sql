@@ -1,0 +1,18 @@
+-- When a commit last claimed a chunk of this batch's rows.
+--
+-- A commit is chunked and each chunk is one request the seller's console
+-- sends, so a batch whose console closed or whose server died mid-chunk is
+-- left `importing` with nothing driving it. That state tells the seller the
+-- batch is being created right now and refuses every bind, and it stays until
+-- the expiry sweep abandons it days later. This column is what lets the sweep
+-- tell a chunk in flight from a pass that died: a claim seconds old is a chunk
+-- at work, and one older than any chunk could run is a dead pass whose batch
+-- is either finished and never settled, or unfinished and waiting on nobody.
+--
+-- Null until the first claim. The sweep reads `created_at` in its place, so a
+-- pass that died between opening the commit and claiming its first page reads
+-- as stale from the upload rather than never.
+--
+-- Written here rather than in 0058 because that migration is applied and
+-- frozen. No constraint has to admit the column, so none is restated.
+ALTER TABLE import_batch ADD COLUMN claimed_at timestamptz;

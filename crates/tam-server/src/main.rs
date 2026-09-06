@@ -345,6 +345,11 @@ fn spawn_import_batch_sweep(batches: ImportBatchRepo, cancel: CancellationToken)
                     "tam-server: swept {} expired imports, releasing {} attached files",
                     report.abandoned, report.released
                 ),
+                Ok(report) if report.settled > 0 || report.reopened > 0 => eprintln!(
+                    "tam-server: settled {} finished imports a dead pass left importing and \
+                     returned {} unfinished ones to their sellers",
+                    report.settled, report.reopened
+                ),
                 Ok(_) => {}
                 Err(error) => eprintln!("tam-server: import sweep failed: {error}"),
             }
@@ -1022,6 +1027,14 @@ async fn nothing_here() -> axum::http::StatusCode {
 /// console and `/v1`, so naming it would be a second thing to edit at cutover
 /// buying no guarantee — and a stale host there would break every request
 /// rather than failing a build.
+///
+/// `worker-src` is named rather than left to fall back through `child-src` to
+/// `script-src`, and it is the one directive that admits `blob:`. The preview
+/// maker renders the seller's PDF with pdf.js, whose worker is a same-origin
+/// asset our build emits; when a browser cannot load that asset directly,
+/// pdf.js falls back to a worker built from a blob URL, and the fallback
+/// fails silently under a policy that admits only `'self'`. Nothing else on
+/// the console starts a worker.
 fn console_policy(shell: &str) -> String {
     let mut script = String::from("script-src 'self' 'wasm-unsafe-eval'");
     for hash in serving::inline_script_hashes(shell) {
@@ -1035,7 +1048,8 @@ fn console_policy(shell: &str) -> String {
          img-src 'self' data: blob:; \
          style-src 'self' 'unsafe-inline'; \
          font-src 'self' data:; \
-         frame-src 'self' https://challenges.cloudflare.com"
+         frame-src 'self' https://challenges.cloudflare.com; \
+         worker-src 'self' blob:"
     )
 }
 
@@ -1139,6 +1153,29 @@ mod tests {
                 "{host} is not needed and not admitted: {policy}"
             );
         }
+    }
+
+    /// The preview maker's worker is admitted, and `blob:` reaches no
+    /// directive that would let a script be built from one.
+    #[test]
+    fn the_worker_directive_admits_the_pdf_renderer_and_nothing_scriptable() {
+        let policy = super::console_policy("<html></html>");
+        let worker = policy
+            .split(';')
+            .find(|part| part.trim_start().starts_with("worker-src"))
+            .expect("worker-src is in the policy");
+        assert!(
+            worker.contains("'self'") && worker.contains("blob:"),
+            "pdf.js loads its worker from our own asset and falls back to a blob URL: {worker}"
+        );
+        let script = policy
+            .split(';')
+            .find(|part| part.trim_start().starts_with("script-src"))
+            .expect("script-src is in the policy");
+        assert!(
+            !script.contains("blob:"),
+            "a blob a page can build is not a script it can run: {script}"
+        );
     }
 
     /// `connect-src` names no host.

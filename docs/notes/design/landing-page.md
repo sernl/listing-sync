@@ -3,7 +3,7 @@
 The public site a teacher-seller reaches before signing up.
 
 - date: 2026-09-03
-- status: built and green under `just landing-check`, which runs inside `just pre-push`; rewritten 2026-09-05 to carry the founder's approved prices at `/` and at a new `/pricing`, and re-based on `tam-server` serving the build rather than on a static host of its own
+- status: built and green under `just landing-check`, which runs inside `just pre-push`; rewritten 2026-09-05 to carry the founder's approved prices at `/` and at a new `/pricing`, and re-based on `tam-server` serving the build rather than on a static host of its own; rebuilt 2026-09-11 to the founder's mockup, on the brand kit and the pricing recorded in `brand-kit-and-teacher-ui.md` and `decisions.md` under that date, which supersede the copy, tokens, pricing and the no-marketplace-names rule described below wherever the two disagree
 - placeholders: the legal text and the support address are what the founder must still replace, and the desktop download URL is still null
 - paths: `apps/landing/`, `nix/landing.nix`, and the `landing-check` and `landing-dev` recipes in the justfile
 

@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	closes,
 	doneLabel,
+	focusLeft,
 	pressedInside,
 	returnsFocus,
 	type PickerEvent
@@ -51,6 +52,10 @@ describe('what closes an open picker', () => {
 		// seller's first tick, and they are choosing up to six.
 		expect(closes({ kind: 'pick' })).toBe(false);
 	});
+
+	it('closes when focus leaves it', () => {
+		expect(closes({ kind: 'focusLeft' })).toBe(true);
+	});
 });
 
 describe('the reasons a picker can be given', () => {
@@ -58,11 +63,18 @@ describe('the reasons a picker can be given', () => {
 	// makes `closes` answer every member of the union, and nothing makes this
 	// file answer for one. A reason added upstream would otherwise arrive with
 	// no test saying what it does.
-	const ANSWERED: PickerEvent['kind'][] = ['escape', 'press', 'scrim', 'done', 'pick'];
+	const ANSWERED: PickerEvent['kind'][] = [
+		'escape',
+		'press',
+		'scrim',
+		'done',
+		'pick',
+		'focusLeft'
+	];
 
 	it('are all answered above', () => {
 		const source = readFileSync(new URL('picker-dismissal.ts', import.meta.url), 'utf8');
-		const declared = [...source.matchAll(/kind:\s*'([a-z]+)'/g)].map((match) => match[1]);
+		const declared = [...source.matchAll(/kind:\s*'([a-zA-Z]+)'/g)].map((match) => match[1]);
 		expect([...new Set(declared)].sort()).toEqual([...ANSWERED].sort());
 	});
 
@@ -119,6 +131,31 @@ describe('where a press landed', () => {
 	});
 });
 
+describe('where focus went', () => {
+	const option = {} as EventTarget;
+	const field = {} as EventTarget;
+	const box = { contains: (node: Node | null) => node === option };
+
+	it('has left when it landed outside the box, which is Tab past Done', () => {
+		expect(focusLeft(field, box)).toBe(true);
+	});
+
+	it('has not left when it landed on one of the picker’s own controls', () => {
+		expect(focusLeft(option, box)).toBe(false);
+	});
+
+	it('has not left when it landed nowhere', () => {
+		// A press on the sheet's own padding, a tap on the scrim and a window
+		// that lost focus all arrive as null, and each would otherwise shut
+		// the picker under the seller's finger or while they are elsewhere.
+		expect(focusLeft(null, box)).toBe(false);
+	});
+
+	it('has not left a picker with no element to leave', () => {
+		expect(focusLeft(field, null)).toBe(false);
+	});
+});
+
 describe('where focus goes when the picker closes', () => {
 	it('returns to the search box when it was inside the picker', () => {
 		expect(returnsFocus(true, false)).toBe(true);
@@ -162,6 +199,67 @@ describe('how the picker answers a press', () => {
 		expect(/class="fp-scrim"[^>]*onclick=/.test(picker())).toBe(true);
 		expect(/class="fp-scrim"[^>]*onpointerdown/.test(picker())).toBe(false);
 		expect(picker()).toContain("closes({ kind: 'scrim' })");
+	});
+});
+
+describe('how the picker answers focus leaving', () => {
+	// Read on the picker's own element, where every focus change inside it
+	// bubbles to, and answered with the departure rule rather than an inlined
+	// test of `relatedTarget`.
+	it('listens for focus leaving on its own element', () => {
+		expect(/class="field fp[^<]*onfocusout=/.test(picker())).toBe(true);
+	});
+
+	it('asks whether focus went outside its own box', () => {
+		expect(picker()).toContain('focusLeft(event.relatedTarget, anchor)');
+		expect(picker()).toContain("closes({ kind: 'focusLeft' })");
+	});
+
+	it('does not pull focus back from where it went', () => {
+		// The close after a departure says focus was not held: the default
+		// reads `activeElement`, and returning focus to the search box from
+		// the field the seller tabbed to is a focus trap.
+		const source = picker();
+		const at = source.indexOf("closes({ kind: 'focusLeft' })");
+		expect(at).toBeGreaterThan(-1);
+		expect(source.slice(at, at + 80)).toContain('void close(false)');
+	});
+});
+
+describe('what the sheet says it is', () => {
+	// A screen reader entering the sheet hears a dialog named for the picker;
+	// a tick changes Done's words under focus that is on the tick, which is
+	// announced only because the row holding Done is a live region; and the
+	// scrim dims the page without ever taking a Tab stop.
+	function sheet(): string {
+		const source = picker();
+		const at = source.indexOf('class="fp-sheet"');
+		if (at === -1) {
+			throw new Error('FacetPicker.svelte draws no sheet');
+		}
+		return source.slice(at, source.indexOf('>', at));
+	}
+
+	it('is a dialog', () => {
+		expect(sheet()).toContain('role="dialog"');
+	});
+
+	it("takes its name from the picker's label", () => {
+		expect(sheet()).toContain('aria-label={label}');
+	});
+
+	it('announces the Done count through a polite live region', () => {
+		const source = picker();
+		const acts = source.indexOf('class="fp-acts"');
+		expect(acts).toBeGreaterThan(-1);
+		expect(source.slice(acts, source.indexOf('>', acts))).toContain('aria-live="polite"');
+		const row = source.slice(acts, source.indexOf('</div>', acts));
+		expect(row).toContain('doneLabel(chosen.length)');
+	});
+
+	it('keeps the scrim inert to focus', () => {
+		expect(/class="fp-scrim"[^>]*aria-hidden="true"/.test(picker())).toBe(true);
+		expect(/class="fp-scrim"[^>]*(tabindex|role=)/.test(picker())).toBe(false);
 	});
 });
 

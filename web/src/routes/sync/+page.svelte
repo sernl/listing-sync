@@ -12,6 +12,8 @@
 	import Placeholder from '$lib/Placeholder.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
+	import { MARKETPLACE_WORD } from '$lib/platforms';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { columnCopy, panelCopy, readState } from '$lib/pages/automations/read-state';
 	import {
 		CADENCE_OPTIONS,
@@ -123,7 +125,7 @@
 					{#if copy.body}<p class="quiet">{copy.body}</p>{/if}
 				</Panel>
 			{:else if shown !== null}
-				<Panel title={shown.name} description={SETTINGS_ARE_A_PREVIEW}>
+				<Panel title={MARKETPLACE_WORD[shown.marketplace]} description={SETTINGS_ARE_A_PREVIEW}>
 					{#if scheduleShown}
 						<Banner
 							tone="info"
@@ -169,14 +171,14 @@
 
 			<Panel
 				title="Runs"
-				description="Queued and completed runs, with live progress while one is under way."
+				description="Every update we have sent, with live progress while one is running."
 			>
 				{#if !loaded}
 					<p class="quiet">Loading…</p>
 				{:else if jobsUnread && jobs.length === 0}
 					<p class="quiet">
-						Your runs could not be read, so this page cannot list them. Anything already
-						running is unaffected.
+						We could not read your runs, so this page cannot list them. Anything already
+						running carries on.
 					</p>
 				{:else if runs.length === 0}
 					<Placeholder icon="refresh-cw" headline="No sync has run yet" body={NO_RUN_YET} />
@@ -184,7 +186,7 @@
 					{#each runs as run (run.job)}
 						<a class="auto-row" href={run.href}>
 							<span class="who">
-								<span class="t">{run.title}</span>
+								<span class="t"><MarketplaceMark inventory={run.inventory} /></span>
 								<span class="meta">{run.meta}</span>
 							</span>
 							<span class="when">{new Date(run.at).toLocaleString()}</span>

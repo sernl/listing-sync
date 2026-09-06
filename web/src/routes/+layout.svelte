@@ -174,7 +174,7 @@
 	{#if data.session && verdict === 'claim-screen'}
 		<div class="auth">
 			<div class="wordmark">
-				<img class="leaf" src="/favicon.svg" alt="" width="28" height="28" /> Teachouse
+				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
 			</div>
 			<ClaimScreen onDone={claimed} />
 			<!-- A gate with no way out is a trap: this is the only screen a newly
@@ -192,7 +192,7 @@
 	{:else if signedOut === 'public'}
 		<div class="auth">
 			<div class="wordmark">
-				<img class="leaf" src="/favicon.svg" alt="" width="28" height="28" /> Teachouse
+				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
 			</div>
 			{@render children()}
 		</div>
@@ -203,7 +203,7 @@
 		     fire every query on it against a session that is not there. -->
 		<div class="auth">
 			<div class="wordmark">
-				<img class="leaf" src="/favicon.svg" alt="" width="28" height="28" /> Teachouse
+				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
 			</div>
 			<div class="auth-card">
 				<h1>Signing you in</h1>

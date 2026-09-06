@@ -118,7 +118,7 @@ export const LIVE: readonly LiveTile[] = [
 	{
 		marketplace: 'Tes',
 		name: 'TES',
-		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tes-mark.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tes-mark.svg' },
 		about:
 			'A British education company, best known for its teaching magazine, whose marketplace ' +
 			'is where many UK teachers buy and sell lesson resources.',
@@ -127,7 +127,7 @@ export const LIVE: readonly LiveTile[] = [
 	{
 		marketplace: 'Tpt',
 		name: 'TPT',
-		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tpt-mark.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tpt-mark.svg' },
 		about:
 			'A large American marketplace for teacher-made classroom resources, where most of the ' +
 			'buyers are teachers in the United States.',
@@ -148,7 +148,7 @@ export const PLANNED: readonly MarketplaceTile[] = [
 	{
 		slug: 'etsy',
 		name: 'Etsy',
-		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/etsy.png' },
+		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/etsy.svg' },
 		home: 'https://www.etsy.com/',
 		body: 'Etsy has an official API, so this one would run on our servers.',
 		about:
@@ -431,19 +431,22 @@ export const EXTENSIONS: readonly ProspectTile[] = [
  *  border and its 8px of padding on each side. */
 const TILE_INNER_PX = 78;
 
-/** How wide a Fraunces glyph runs against its own point size: an upper bound
+/** How wide a Poppins glyph runs against its own point size: an upper bound
  *  over the words this tile holds, not an average over them.
  *
- *  An average is what the tile had, and it clipped. Measured at 22px in the
- *  rendered page, `Boom` runs 0.700 of its point size per character, `Chrome`
- *  0.636 and `Firefox` 0.483, measured while Firefox still drew a wordmark — a
- *  spread wide enough that the mean sized
- *  `Chrome` to 84px across a 78px tile, and `overflow: hidden` took the rest
- *  silently. Only a bound at the widest word makes the function's own promise
- *  true, so 0.700 it is: a word of narrow letters is then set smaller than it
- *  strictly needs, which costs a few points of size and cannot cut a mark in
- *  half. */
-const GLYPH_WIDTH_RATIO = 0.7;
+ *  An average is what the tile had, and it clipped. Read off the font's own
+ *  advance widths in `static/fonts/poppins-600-latin.woff2`, `Boom` runs 0.742
+ *  of its point size per character, `Chrome™` 0.711 and `Firefox` 0.479 — a
+ *  spread wide enough that the mean overflows the tile, and `overflow: hidden`
+ *  takes the rest silently. Only a bound at the widest word makes the
+ *  function's own promise true, so 0.75 it is: a word of narrow letters is
+ *  then set smaller than it strictly needs, which costs a few points of size
+ *  and cannot cut a mark in half.
+ *
+ *  It was 0.700 against Fraunces until the brand kit of 2026-09-11 made
+ *  Poppins the display face. Poppins is the wider of the two, and at the old
+ *  bound `Chrome™` came out 1.6px past the tile. */
+const GLYPH_WIDTH_RATIO = 0.75;
 
 /**
  * What point size sets `text` across a logo tile without clipping it.
@@ -456,10 +459,10 @@ const GLYPH_WIDTH_RATIO = 0.7;
  * rather than letting it shrink to nothing, and the catalogue's own test says
  * none of the words we draw gets near it.
  *
- * The ceiling binds only at five characters or fewer, since 78 / (5 * 0.7) is
- * 22.3 and a sixth character puts the fitted size under the cap. Of the two
- * words this page draws, that is Boom alone: Boom sets at 22 and Chrome™, whose
- * trademark symbol is a seventh character, at 16. The two wordmark tiles
+ * The ceiling binds only at four characters or fewer, since 78 / (5 * 0.75) is
+ * 20.8 and a fifth character puts the fitted size under the cap. Of the two
+ * words this page draws, that is Boom alone: Boom sets at 22 and Chrome™,
+ * whose trademark symbol is a seventh character, at 15. The two wordmark tiles
  * therefore read at two sizes, not one, which is the price of a bound that no
  * word can overflow rather than an average that Chrome overflowed by six
  * pixels.

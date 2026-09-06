@@ -226,6 +226,7 @@ export type BlockedGate =
   | "reconciliation"
   | "election"
   | "currency_unknown"
+  | "currency_mismatch"
   | "cover_missing"
   | "scan_incomplete"
   | "awaiting_counterpart"
@@ -241,6 +242,7 @@ export const BLOCKED_GATES: readonly BlockedGate[] = [
   "reconciliation",
   "election",
   "currency_unknown",
+  "currency_mismatch",
   "cover_missing",
   "scan_incomplete",
   "awaiting_counterpart",

@@ -50,6 +50,14 @@ export const MARKETPLACE_NAME: Record<Marketplace, string> = {
 	Etsy: 'Etsy (Etsy.com)'
 };
 
+/** The one word a teacher calls this marketplace inside a sentence, where the
+ *  full name would read as a legal entity rather than as a place they sell. */
+export const MARKETPLACE_WORD: Record<Marketplace, string> = {
+	Tpt: 'TPT',
+	Tes: 'Tes',
+	Etsy: 'Etsy'
+};
+
 /** How this marketplace is titled, or its own identifier where the map has no
  *  name for it.
  *
@@ -99,10 +107,60 @@ export const AUTHORABLE_PLATFORMS: readonly InventoryId[] = INVENTORY_ORDER.filt
  * `platforms.test.ts` asserts these are the same three paths the catalogue
  * holds, so the two cannot drift apart unnoticed. */
 export const MARK_SRC: Record<Marketplace, string> = {
-	Tes: '/marketplaces/tes-mark.png',
-	Tpt: '/marketplaces/tpt-mark.png',
-	Etsy: '/marketplaces/etsy.png'
+	Tes: '/marketplaces/tes-mark.svg',
+	Tpt: '/marketplaces/tpt-mark.svg',
+	Etsy: '/marketplaces/etsy.svg'
 };
+
+/** One tile on the form's marketplace grid.
+ *
+ * Keyed by marketplace rather than by inventory, which is the founder's rule
+ * of 2026-09-11: Tes runs three regional catalogues and the form shows one
+ * Tes. Which of the three a listing reaches is the Tes panel's Curriculum
+ * question, so the tile carries the inventories it stands for and the form
+ * derives the request's list from the two answers together.
+ *
+ * `authorable` is false where no adapter exists, and the tile is still drawn:
+ * a marketplace the console cannot write to is a thing a seller should be able
+ * to see is coming rather than a gap they cannot ask about. */
+export interface MarketplaceTileEntry {
+	marketplace: Marketplace;
+	/** The full name, shown on hover and read out to a screen reader. */
+	name: string;
+	/** The inventories this one tile stands for, in offer order. */
+	inventories: readonly InventoryId[];
+	authorable: boolean;
+}
+
+/** The marketplaces the form offers, one tile each. */
+export const MARKETPLACE_TILES: readonly MarketplaceTileEntry[] = [
+	{
+		marketplace: 'Tpt',
+		name: MARKETPLACE_NAME.Tpt,
+		inventories: ['Tpt'],
+		authorable: AUTHORABLE.Tpt
+	},
+	{
+		marketplace: 'Tes',
+		name: MARKETPLACE_NAME.Tes,
+		inventories: ['TesGb', 'TesUs', 'TesNz'],
+		authorable: AUTHORABLE.TesGb
+	},
+	{
+		marketplace: 'Etsy',
+		name: MARKETPLACE_NAME.Etsy,
+		inventories: ['Etsy'],
+		authorable: AUTHORABLE.Etsy
+	}
+];
+
+/** Where on Tes a listing goes: the question Tes's own upload form asks, in
+ *  the words it asks it in, against the inventory each answer publishes to. */
+export const TES_CURRICULA: readonly { inventory: InventoryId; label: string }[] = [
+	{ inventory: 'TesGb', label: 'England' },
+	{ inventory: 'TesUs', label: 'United States' },
+	{ inventory: 'TesNz', label: 'New Zealand' }
+];
 
 /** The two letters that tell the three Tes sites apart beside a mark, and
  *  nothing where the mark already identifies the marketplace on its own.

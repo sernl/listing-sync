@@ -26,8 +26,12 @@ use tam_api::import_batch::{
     BatchStateView, ImportBatchDetailView, ImportsView, RowStateView, UploadedBatchView, Warning,
 };
 use tam_api::{router, APIError, AppState, BlobStore, Config, SESSION_COOKIE};
-use tam_storage::{LabelRepo, SessionRepo, SessionToken};
-use tam_types::{OrgId, Timestamp, UserId, Uuid};
+use tam_domain::{CanonicalProduct, DeclarationSource, GradeDeclaration, RightsDeclaration};
+use tam_storage::{LabelRepo, MappingRepo, ProductRepo, RowAddress, SessionRepo, SessionToken};
+use tam_types::{
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, ListingCopy, MappingId, OrgId,
+    PayloadSet, PriceIntent, ProductFile, ProductId, ScanOutcome, Timestamp, Title, UserId, Uuid,
+};
 use tower::ServiceExt;
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -1634,13 +1638,38 @@ async fn a_row_left_creating_is_finished_under_the_identifier_it_reserved(pool: 
     );
 }
 
-/// Puts one row back into the state a killed pass leaves it in, and the batch
-/// with it.
+/// Puts one Teachouse row back into the state a killed pass leaves it in, and
+/// the batch with it.
+async fn claim_by_hand(pool: &PgPool, batch: Uuid, ordinal: u32, product: uuid::Uuid) {
+    reserve_by_hand(
+        pool,
+        batch,
+        RowAddress {
+            sheet: "Teachouse",
+            ordinal,
+        },
+        ProductId(Uuid(*product.as_bytes())),
+        None,
+    )
+    .await;
+}
+
+/// Puts one row of any tab back into the state a killed pass leaves it in —
+/// `creating`, with the identifiers the claim reserved — and the batch with
+/// it. Written by statement rather than by the route, because the route never
+/// leaves this state on purpose.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn claim_by_hand(pool: &PgPool, batch: Uuid, ordinal: i32, product: uuid::Uuid) {
+async fn reserve_by_hand(
+    pool: &PgPool,
+    batch: Uuid,
+    at: RowAddress<'_>,
+    product: ProductId,
+    mapping: Option<MappingId>,
+) {
+    let ordinal = i32::try_from(at.ordinal).expect("a spreadsheet row number fits the column");
     let mut tx = pool.begin().await.expect("the transaction opens");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
         .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
@@ -1648,13 +1677,15 @@ async fn claim_by_hand(pool: &PgPool, batch: Uuid, ordinal: i32, product: uuid::
         .await
         .expect("the tenant pin sets");
     sqlx::query(
-        "UPDATE import_batch_row SET state = 'creating', product_id = $4 \
-          WHERE org_id = $1 AND batch_id = $2 AND ordinal = $3",
+        "UPDATE import_batch_row SET state = 'creating', product_id = $5, mapping_id = $6 \
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes(batch.0))
+    .bind(at.sheet)
     .bind(ordinal)
-    .bind(product)
+    .bind(uuid::Uuid::from_bytes(product.0 .0))
+    .bind(mapping.map(|id| uuid::Uuid::from_bytes(id.0 .0)))
     .execute(&mut *tx)
     .await
     .expect("the row is claimed by hand");
@@ -1665,6 +1696,247 @@ async fn claim_by_hand(pool: &PgPool, batch: Uuid, ordinal: i32, product: uuid::
         .await
         .expect("the batch is reopened by hand");
     tx.commit().await.expect("the surgery commits");
+}
+
+/// The product a create writes first, and nothing that trails it: the shape a
+/// pass killed straight after the product insert leaves behind. The bytes are
+/// the row's own, so the mapping the resume writes finds the payload the
+/// deferred trigger requires.
+fn half_created(product: ProductId, payload: &FileHandle, cover: &FileHandle) -> CanonicalProduct {
+    CanonicalProduct {
+        id: product,
+        org: ORG_A,
+        title: Title("Stranded".to_owned()),
+        body: ListingCopy {
+            body: "Left after the insert.".to_owned(),
+            format: CopyFormat::Markdown,
+        },
+        payload: Some(PayloadSet::new(
+            held_file(payload, FileRole::Payload, FileKind::Pdf),
+            vec![],
+        )),
+        cover: Some(held_file(cover, FileRole::Cover, FileKind::Image)),
+        previews: vec![],
+        subjects: vec![],
+        grades: GradeDeclaration {
+            source: DeclarationSource::Seller,
+            raw: vec![],
+            derived: None,
+        },
+        price: PriceIntent::Free,
+        rights: RightsDeclaration::Unstated,
+        native_residue: vec![],
+    }
+}
+
+fn held_file(handle: &FileHandle, role: FileRole, kind: FileKind) -> ProductFile {
+    ProductFile {
+        id: FileId(Uuid(*uuid::Uuid::new_v4().as_bytes())),
+        role,
+        kind,
+        bytes: FileBytes::Held {
+            hash: hash_of(&handle.hash),
+            byte_len: handle.byte_len,
+            scan: ScanOutcome::Pending,
+        },
+    }
+}
+
+/// The digest an upload handle carries, read back out of its hex.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn hash_of(hex: &str) -> ContentHash {
+    assert_eq!(
+        hex.len(),
+        64,
+        "the upload answers a 64-character hex digest"
+    );
+    let mut bytes = [0_u8; 32];
+    for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+        let pair = std::str::from_utf8(pair).expect("a hex digest is ASCII");
+        *byte = u8::from_str_radix(pair, 16).expect("a hex digest parses two characters at a time");
+    }
+    ContentHash(bytes)
+}
+
+/// How many rows one table holds against one product, read with the tenant
+/// pin set for the reason `counted` gives.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn per_product(pool: &PgPool, product: ProductId, table: &str) -> i64 {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin sets");
+    let held: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM {table} WHERE org_id = $1 AND product_id = $2"
+    ))
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(product.0 .0))
+    .fetch_one(&mut *tx)
+    .await
+    .expect("the count runs");
+    tx.commit().await.expect("the read commits");
+    held
+}
+
+/// A pass killed between the product insert and the writes that trail it —
+/// the mapping, the elections and the labels — is finished by the next chunk
+/// rather than settled with them missing.
+///
+/// The parts are performed separately here, by hand, and stopped after the
+/// product insert: the row's identifiers are reserved, its product is written
+/// under the reserved identifier with the bytes the row holds, and nothing
+/// else. A control row in the same sheet takes the whole road through the
+/// route, so the shape of a finished row is read off a real create rather than
+/// asserted from this test's idea of one, and the stranded row is held to it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_pass_killed_after_the_product_insert_is_completed_rather_than_settled_half_done(
+    pool: PgPool,
+) {
+    provision(&pool).await;
+    let root = store_root("resume-trailing");
+    let sealing = sealing(pool.clone(), &root);
+    let document = filled_sheet(
+        "TES GB",
+        &[
+            &[(Cell::Title, "Control"), (Cell::File, "one.pdf")],
+            &[(Cell::Title, "Stranded"), (Cell::File, "one.pdf")],
+        ],
+    );
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+        .await
+        .json();
+    assert_eq!(
+        uploaded.detail.batch.failed_count, 0,
+        "the fixture is about the resume, so the parse takes both rows: {:?}",
+        uploaded.detail.rows
+    );
+    let batch = uploaded.detail.batch.id;
+
+    let bytes = sealed(sealing.clone(), &TOKEN_A, "one").await;
+    let Some(payload) = bytes.payload.first() else {
+        panic!("a single pdf is its own payload file");
+    };
+    for ordinal in [4, 5] {
+        assert_eq!(
+            bind(
+                &pool,
+                &TOKEN_A,
+                &row_path(batch, "TES GB", ordinal),
+                payload,
+                &bytes.cover
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+    }
+
+    // The crash, by hand: the identifiers reserved, the product written under
+    // them, and nothing after it.
+    let product = ProductId(Uuid([0xC2; 16]));
+    let mapping = MappingId(Uuid([0xC3; 16]));
+    reserve_by_hand(
+        &pool,
+        batch,
+        RowAddress {
+            sheet: "TES GB",
+            ordinal: 5,
+        },
+        product,
+        Some(mapping),
+    )
+    .await;
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &half_created(product, payload, &bytes.cover), MADE)
+        .await
+        .expect("the stranded product inserts");
+    assert_eq!(
+        (
+            per_product(&pool, product, "mapping").await,
+            per_product(&pool, product, "election_item").await,
+            per_product(&pool, product, "product_label").await,
+        ),
+        (0, 0, 0),
+        "the crash left the product with none of the writes that trail it"
+    );
+
+    let answer = commit(sealing, &TOKEN_A, batch).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "the next chunk runs: {}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    let ack: CommitAck = answer.json();
+    assert_eq!(
+        (ack.applied, ack.skipped, ack.failed, ack.complete),
+        (1, 1, 0, true),
+        "the control row is created and the stranded one is completed rather than created again"
+    );
+    assert_eq!(ack.batch_state, BatchStateView::Imported);
+    assert_eq!(
+        products_held(&pool, ORG_A).await,
+        2,
+        "one product per row and no second one for the stranded row"
+    );
+
+    let rows = report(&pool, &TOKEN_A, batch).await.rows;
+    let Some(control) = rows
+        .iter()
+        .find(|row| row.ordinal == 4)
+        .and_then(|row| row.product)
+    else {
+        panic!("the control row names the product it became");
+    };
+    let Some(stranded) = rows.iter().find(|row| row.ordinal == 5) else {
+        panic!("the report holds the stranded row");
+    };
+    assert_eq!(
+        (stranded.state, stranded.product),
+        (RowStateView::Created, Some(product)),
+        "the stranded row settled as created, under the identifier reserved for it"
+    );
+
+    for table in ["mapping", "election_item", "product_label"] {
+        let expected = per_product(&pool, control, table).await;
+        assert!(
+            expected > 0,
+            "the control row's create wrote {table} rows, so the shape held against is real"
+        );
+        assert_eq!(
+            per_product(&pool, product, table).await,
+            expected,
+            "the stranded row's product holds the {table} rows a whole create writes"
+        );
+    }
+    let Some(bound) = MappingRepo::new(pool.clone())
+        .get(ORG_A, mapping)
+        .await
+        .expect("the mapping reads")
+    else {
+        panic!("the mapping was written under the identifier reserved for it, not a fresh one");
+    };
+    assert_eq!(bound.mapping.product, product);
+    let labels: Vec<String> = LabelRepo::new(pool.clone())
+        .for_product(ORG_A, product)
+        .await
+        .expect("the labels read")
+        .into_iter()
+        .map(|record| record.name)
+        .collect();
+    assert_eq!(
+        labels,
+        vec!["Autumn Term".to_owned(), "Year 5".to_owned()],
+        "and the sheet's labels are on it"
+    );
 }
 
 /// The fence over the commit, driven by the two sessions already provisioned.

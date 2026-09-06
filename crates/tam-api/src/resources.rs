@@ -277,7 +277,7 @@ fn image_type(bytes: &[u8]) -> Option<&'static str> {
 /// `nosniff` is the second half of that: naming the type is worth nothing if
 /// the browser is free to disagree with it, and these bytes are a seller's own
 /// upload rather than anything this server composed.
-fn image_answer(
+pub(crate) fn image_answer(
     bytes: Vec<u8>,
 ) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
     let Some(kind) = image_type(&bytes) else {

@@ -10,9 +10,9 @@
  * mark, so `file` is null far more often than it is missing. Google licenses
  * the Android robot under Creative Commons with an attribution line this row
  * carries; Microsoft requires an express licence for the Windows symbol, which
- * we have not applied for -- the request is drafted in
- * `docs/notes/design/marketplace-logo-sources.md` for the founder to send --
- * and permits the name in text meanwhile. The mark files are copies under
+ * the founder decided on 2026-09-07 not to apply for -- the drafted request
+ * stays unsent in `docs/notes/design/marketplace-logo-sources.md` -- and
+ * permits the name in text. The mark files are copies under
  * `public/vendors/` rather than links to the console's, for the reason
  * `public/marks/` holds copies.
  *

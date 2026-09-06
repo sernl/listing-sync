@@ -59,6 +59,11 @@ let
   provisionsCluster = cfg.database.provision == "cluster";
   provisionsTenancy = cfg.database.provision != "none";
 
+  # The completion mail is on exactly when a relay key is named; the binary
+  # takes its five mail values together or not at all, and the assertions
+  # below hold the rest of the set to this one switch.
+  mailEnabled = cfg.server.mail.resendApiKeyFile != null;
+
   serverArgs = [
     (dbUrl "tam_app")
     "${cfg.server.bindAddress}:${toString cfg.server.port}"
@@ -105,6 +110,18 @@ let
   ++ lib.optionals (cfg.server.paddleWebhookSecret != null) [
     "--paddle-webhook-secret"
     cfg.server.paddleWebhookSecret
+  ]
+  ++ lib.optionals mailEnabled [
+    "--resend-api-key-file"
+    cfg.server.mail.resendApiKeyFile
+    "--email-from"
+    cfg.server.mail.from
+    "--console-url"
+    cfg.server.mail.consoleUrl
+    "--auth-internal-url"
+    cfg.server.mail.authInternalUrl
+    "--auth-internal-secret-file"
+    cfg.server.mail.authInternalSecretFile
   ];
 
   # The protections every one of the three services takes. Two are stated per
@@ -152,10 +169,15 @@ let
   };
 
   # tam-server and tam-worker reach nothing off this machine: `tam-api` carries
-  # no HTTP client at all, tam-server's only outbound call is the key-set fetch
-  # aimed at loopback above, and tam-worker reaches no marketplace by decision
-  # D1. So the charter's egress constraint is achievable on both as an actual
-  # deny rather than an aspiration.
+  # no HTTP client at all, tam-server's outbound calls are the key-set fetch
+  # aimed at loopback above and the identity service's address route on the
+  # same loopback, and tam-worker reaches no marketplace by decision D1. So the
+  # charter's egress constraint is achievable on both as an actual deny rather
+  # than an aspiration. The one exception is stated where it is taken: with the
+  # completion mail configured, tam-server posts to the relay, which is off
+  # this machine and resolves to no address a filter could name, so that unit
+  # drops the filter and the constraint rests on the binary reaching nothing
+  # else — which is what `--resend-api-key-file`'s own header records.
   loopbackOnly = {
     IPAddressDeny = "any";
     IPAddressAllow = "localhost";
@@ -194,6 +216,7 @@ let
       repository=${lib.escapeShellArg cfg.downloads.repository}
       token_file=${lib.escapeShellArg downloadsTokenFile}
       channel=${lib.escapeShellArg cfg.downloads.updateUrl}
+      prerelease_ok=${lib.boolToString cfg.downloads.prerelease}
 
       # Inside the served directory so that a rename out of it is atomic, and
       # named with a leading dot because tam-server refuses every download name
@@ -305,17 +328,19 @@ let
                      --output "$work/releases.json" \
                      -- "https://api.github.com/repos/$repository/releases?per_page=20" || return 1
 
-          # By version rather than by publish date, and neither draft nor
-          # prerelease. A hotfix to an older line published after a newer
-          # release would otherwise regress the public download, and a
-          # prerelease cut for internal testing would become the public one
-          # within an interval. Twenty rather than five, so a run of
-          # prereleases cannot push every conforming tag off the page.
+          # By version rather than by publish date, never a draft, and a
+          # prerelease only where `downloads.prerelease` says so. A hotfix
+          # to an older line published after a newer release would otherwise
+          # regress the public download; the release workflow marks every
+          # channelled release a prerelease, so a refresh reading a channel
+          # has to accept them or it publishes no Android package at all.
+          # Twenty rather than five, so a run of prereleases cannot push
+          # every conforming tag off the page.
           local release
-          release="$(jq -c '
+          release="$(jq -c --argjson prerelease_ok "$prerelease_ok" '
               [ .[]
                 | select(.draft | not)
-                | select(.prerelease | not)
+                | select((.prerelease | not) or $prerelease_ok)
                 | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) ]
               | sort_by(.tag_name | ltrimstr("v") | split(".") | map(tonumber))
               | last // empty
@@ -676,6 +701,27 @@ in
         '';
       };
 
+      prerelease = lib.mkOption {
+        type = lib.types.bool;
+        default = lib.hasInfix "channel=" cfg.downloads.updateUrl;
+        defaultText = lib.literalExpression ''lib.hasInfix "channel=" config.services.teachouse.downloads.updateUrl'';
+        description = ''
+          Whether a release GitHub marks as a pre-release may be published.
+
+          The release workflow marks every release it publishes to a named
+          channel as a pre-release, so that a beta never presents itself as
+          the repository's latest release. A refresh whose `updateUrl` names
+          that channel serves exactly those releases on its Windows half, so
+          refusing them here left the Android half empty while the Windows
+          installer of the same release was published beside it. The default
+          therefore follows `updateUrl`: a channelled url accepts pre-releases
+          and an unchannelled one does not. While pre-releases are accepted,
+          nothing on the repository separates a beta from a package cut for
+          internal testing, so such a package must be a draft rather than a
+          pre-release.
+        '';
+      };
+
       githubReleaseTokenFile = lib.mkOption {
         # `str`, not `path`, and for the reason every other secret-file option
         # in this module is `str`: `path` accepts a nix path literal, and a path
@@ -819,6 +865,79 @@ in
           `--paddle-webhook-secret-path`.
         '';
       };
+
+      mail = {
+        resendApiKeyFile = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "/run/safix/teachouse-api/teachouse-resend-api-key";
+          description = ''
+            Path to a file holding the Resend API key the completion mail is
+            sent with, as a bare key on one line, readable by the
+            `teachouse-api` account. This is the switch: null, the default,
+            configures no mail at all and the outbox drainer logs each
+            completion and succeeds, which is what development and CI run.
+            Given, the other four mail values are passed with it — the
+            binary refuses four fifths of a mail path — so `from`,
+            `authInternalSecretFile` and `auth.internalSecretFile` are
+            asserted alongside it.
+
+            A path rather than a value, like every other secret this module
+            takes, because `/proc/<pid>/cmdline` is readable by every local
+            account. Configured, tam-server's address filter is lifted for
+            that unit alone: the relay is off this machine and resolves to no
+            address the filter could name, so the charter's egress constraint
+            then rests on the binary reaching nothing else.
+          '';
+        };
+        from = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = cfg.auth.emailFrom;
+          defaultText = lib.literalMD "`auth.emailFrom`";
+          example = "Teachouse <no-reply@teachouse.stowiq.io>";
+          description = ''
+            The sender the completion mail carries, which the Resend account
+            must own. Defaults to the identity service's own sender because
+            they are one product's mail from one verified domain; a
+            deployment that separates them states both.
+          '';
+        };
+        consoleUrl = lib.mkOption {
+          type = lib.types.str;
+          default = "https://${cfg.domain}";
+          defaultText = lib.literalMD "`https://\${domain}`";
+          description = ''
+            The console's public origin, which the mail's "Open the run"
+            button resolves against. Stated as its own value rather than
+            derived inside the binary from the issuer, because nothing holds
+            the two to one origin and a button that goes nowhere is worse than
+            a mail not sent; the default is the origin this module serves.
+          '';
+        };
+        authInternalUrl = lib.mkOption {
+          type = lib.types.str;
+          default = "http://127.0.0.1:${toString cfg.auth.port}";
+          defaultText = lib.literalMD "`http://127.0.0.1:\${auth.port}`";
+          description = ''
+            Where the identity service's internal address route is reached.
+            The loopback listener this module binds, by default, so the
+            seller's address never crosses the public edge; the shared secret
+            is the fence either way.
+          '';
+        };
+        authInternalSecretFile = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "/run/safix/teachouse-api/teachouse-internal-secret";
+          description = ''
+            Path to a file holding the shared secret the address route is
+            fenced by, as a bare value on one line, readable by the
+            `teachouse-api` account. The same value the identity service
+            reads through `auth.internalSecretFile`; the two files differ in
+            form and in owner, not in content.
+          '';
+        };
+      };
     };
 
     worker = {
@@ -862,6 +981,22 @@ in
         default = null;
         example = "Teachouse <no-reply@teachouse.stowiq.io>";
         description = "The From address verification and reset mail is sent from. Required by the service whenever a Resend key is set.";
+      };
+      internalSecretFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/run/safix/teachouse-auth/teachouse-auth-internal-env";
+        description = ''
+          A file in `KEY=value` form carrying `TAM_AUTH_INTERNAL_SECRET`, the
+          shared secret the identity service's internal address route is
+          fenced by, read as the unit's environment beside `environmentFiles`
+          and readable by the `teachouse-auth` account. Null, the default,
+          configures no secret and the route does not exist: the path answers
+          the 404 every unknown path does. Given, it must hold the value
+          `server.mail.authInternalSecretFile` holds for tam-server, and the
+          host's secrets tooling is what keeps the two files saying the same
+          thing.
+        '';
       };
       passkeyRpName = lib.mkOption {
         type = lib.types.str;
@@ -945,6 +1080,31 @@ in
       {
         assertion = cfg.auth.environmentFiles != [ ];
         message = "services.teachouse.auth.environmentFiles is empty, so BETTER_AUTH_SECRET is unset and tam-auth refuses to start.";
+      }
+      {
+        assertion = mailEnabled == (cfg.server.mail.authInternalSecretFile != null);
+        message = ''
+          services.teachouse.server.mail.resendApiKeyFile and
+          services.teachouse.server.mail.authInternalSecretFile are given
+          together or not at all: tam-server refuses a partial mail path.
+        '';
+      }
+      {
+        assertion = mailEnabled -> cfg.server.mail.from != null;
+        message = ''
+          services.teachouse.server.mail.resendApiKeyFile is set but no sender
+          is: set services.teachouse.server.mail.from, or auth.emailFrom which
+          it defaults to.
+        '';
+      }
+      {
+        assertion = mailEnabled -> cfg.auth.internalSecretFile != null;
+        message = ''
+          services.teachouse.server.mail is configured but
+          services.teachouse.auth.internalSecretFile is null, so the identity
+          service has no address route and every completion mail would be
+          dropped for want of an address.
+        '';
       }
       {
         assertion = cfg.backup.enable -> provisionsCluster;
@@ -1227,7 +1387,7 @@ in
         MemoryDenyWriteExecute = true;
       }
       // hardening
-      // loopbackOnly;
+      // lib.optionalAttrs (!mailEnabled) loopbackOnly;
     };
 
     systemd.services.tam-worker = lib.mkIf cfg.worker.enable {
@@ -1279,7 +1439,9 @@ in
       };
       serviceConfig = {
         ExecStart = lib.getExe cfg.authPackage;
-        EnvironmentFile = cfg.auth.environmentFiles;
+        EnvironmentFile =
+          cfg.auth.environmentFiles
+          ++ lib.optional (cfg.auth.internalSecretFile != null) cfg.auth.internalSecretFile;
         User = authUser;
         Group = group;
         Restart = "on-failure";

@@ -364,33 +364,113 @@ landing-check:
     cd apps/landing && npm run build
     just landing-copy-gate
 
-# One sentence on this site names a marketplace, and it is `availability` in
-# `apps/landing/src/site.js`. Everything else speaks of the marketplaces a
-# seller sells in without naming one or implying a count, which is what lets
-# the copy stay true as marketplaces are added.
+# Prose on this site names no marketplace. Two things do, and they are both
+# deliberate: `availability` in `apps/landing/src/site.js`, which is the one
+# sentence that says what connects today, and the bands the founder's mockup of
+# 2026-09-11 draws marks in -- the hero strip, the catalogue card, the challenge
+# illustration, the testimonials. Everything else speaks of the marketplaces a
+# seller sells in without naming one or implying a count, which is what lets the
+# copy stay true as marketplaces are added.
+#
+# So an element carrying `data-marketplace-band` is struck out whole, tag and
+# children together, before the search: the attribute is the author saying "the
+# mockup names marketplaces here", and it is visible in the markup where a
+# reviewer reads it. `alt` text is struck out too, because it must name the
+# marketplace whose mark it describes, and so is `availability`, read from
+# `site.js` so this recipe holds no second copy of it.
 #
 # The gate reads the built HTML rather than the sources, so a comment
 # explaining why prices are in USD is not a failure and a sentence a reader
-# actually sees is. Two things are struck out before the search: `alt` text,
-# which must name the marketplace whose mark it describes, and `availability`
-# itself, read from `site.js` so this recipe holds no second copy of it.
+# actually sees is.
 landing-copy-gate:
     #!/usr/bin/env bash
     set -euo pipefail
     cd apps/landing
-    sentence=$(node -e 'import("./src/site.js").then((m) => process.stdout.write(m.availability))')
-    grep -q "$sentence" dist/index.html \
-        || { echo "landing: the availability sentence is not on the home page"; exit 1; }
-    stray=$(grep -rh '' dist --include='*.html' \
-        | sed 's/alt="[^"]*"//g' \
-        | sed "s/$sentence//g" \
-        | grep -oE '.{0,60}\b(TPT|TES)\b.{0,60}' || true)
-    if [ -n "$stray" ]; then
-        echo "landing: a marketplace is named outside the availability sentence:"
-        echo "$stray"
-        exit 1
-    fi
-    echo "landing: one sentence names a marketplace, and it is the availability sentence"
+    node --input-type=module -e '
+    import { readdirSync, readFileSync } from "node:fs";
+    import { availability } from "./src/site.js";
+
+    const pages = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const at = dir + "/" + entry.name;
+        if (entry.isDirectory()) walk(at);
+        else if (at.endsWith(".html")) pages.push(at);
+      }
+    };
+    walk("dist");
+
+    // A walk that found nothing would otherwise pass by having nothing to say.
+    if (pages.length === 0) {
+      console.error("landing: no built pages under dist, so the gate is reading nothing");
+      process.exit(1);
+    }
+
+    if (!readFileSync("dist/index.html", "utf8").includes(availability)) {
+      console.error("landing: the availability sentence is not on the home page");
+      process.exit(1);
+    }
+
+    const boundary = (html, at) => !/[A-Za-z0-9-]/.test(html[at] ?? "");
+
+    // Every element carrying the attribute, removed with its children. The
+    // depth walk is over that element tag alone, so a band nested in another
+    // element of the same name is closed at the right `</tag>`.
+    const stripBands = (html) => {
+      let out = "";
+      let cursor = 0;
+      for (;;) {
+        const marker = html.indexOf("data-marketplace-band", cursor);
+        if (marker === -1) return out + html.slice(cursor);
+        const open = html.lastIndexOf("<", marker);
+        const tag = /^<([A-Za-z][^\s/>]*)/.exec(html.slice(open, marker))?.[1];
+        if (tag === undefined) {
+          console.error("landing: data-marketplace-band outside an element tag");
+          process.exit(1);
+        }
+        out += html.slice(cursor, open);
+        const tagEnd = html.indexOf(">", marker);
+        if (html[tagEnd - 1] === "/") {
+          cursor = tagEnd + 1;
+          continue;
+        }
+        let at = tagEnd + 1;
+        let depth = 1;
+        while (depth > 0) {
+          const nextOpen = html.indexOf("<" + tag, at);
+          const nextClose = html.indexOf("</" + tag, at);
+          if (nextClose === -1) {
+            console.error("landing: a data-marketplace-band element is never closed");
+            process.exit(1);
+          }
+          if (nextOpen !== -1 && nextOpen < nextClose && boundary(html, nextOpen + tag.length + 1)) {
+            depth += 1;
+            at = nextOpen + tag.length + 1;
+          } else {
+            depth -= 1;
+            at = html.indexOf(">", nextClose) + 1;
+          }
+        }
+        cursor = at;
+      }
+    };
+
+    const named = /.{0,60}\b(TPT|TES)\b.{0,60}/g;
+    const stray = [];
+    for (const page of pages) {
+      const prose = stripBands(readFileSync(page, "utf8"))
+        .replaceAll(/alt="[^"]*"/g, "")
+        .replaceAll(availability, "");
+      for (const hit of prose.matchAll(named)) stray.push(page + ": " + hit[0].trim());
+    }
+
+    if (stray.length > 0) {
+      console.error("landing: a marketplace is named outside the availability sentence and the mockup bands:");
+      for (const hit of stray) console.error("  " + hit);
+      process.exit(1);
+    }
+    console.log("landing: " + pages.length + " pages, no marketplace named outside the availability sentence and the marked bands");
+    '
 
 # One stylesheet draws this whole site, and on 2026-09-06 it declared `.band`
 # twice: the migration table's rule and, forty-two lines later, the marketplace

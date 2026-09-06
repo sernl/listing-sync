@@ -339,8 +339,7 @@
 		<div>
 			<h1>Marketplaces</h1>
 			<p>
-				Every marketplace you sell on, where its login is kept, and whether it can be used
-				right now.
+				Connect the places you sell. Your marketplace logins stay on your own computer.
 			</p>
 		</div>
 		<span class="act">
@@ -362,9 +361,9 @@
 	{/if}
 
 	{#if undeclared}
-		<Banner tone="warn" title="TPT has no copyright declaration" action={toCopyright}>
-			TPT needs every listing to name who holds the copyright. Until you declare it, anything
-			sent to TPT fails and is not tried again.
+		<Banner tone="warn" title="TPT needs to know who holds the copyright" action={toCopyright}>
+			Tell us who holds the copyright for your work. Until you do, nothing you send to TPT
+			will go live.
 		</Banner>
 	{/if}
 

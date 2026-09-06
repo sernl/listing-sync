@@ -39,6 +39,7 @@ use tam_types::{Marketplace, Timestamp, TransportClass};
 
 use crate::device::{DeviceId, DeviceIdentity};
 use crate::entitlement::{Entitlement, EntitlementGate, PUBLIC_KEY_BYTES};
+use crate::notify::CycleSummary;
 use crate::scheduler::{Readiness, Scheduler, TickReport, WorkSource};
 use crate::session::{SessionStore, StoreError};
 use crate::state::DesktopState;
@@ -425,6 +426,11 @@ async fn check_in_or_register(
 /// exists precisely so a device keeps working through one — while a revoked
 /// one stops it without a second decision, because the gate it just closed
 /// refuses every marketplace.
+///
+/// One notification per cycle that settled anything, and never one per item:
+/// the summary is taken over the whole report once it is recorded, so a
+/// fifty-item run raises one. A notification the platform would not show is
+/// logged and nothing more, because by then the work is done and recorded.
 pub async fn cycle<W: WorkSource + ?Sized>(
     state: &DesktopState,
     plane: &dyn ControlPlane,
@@ -451,6 +457,11 @@ pub async fn cycle<W: WorkSource + ?Sized>(
     // server is the record of what happened to an item.
     for (marketplace, event) in &report.events {
         state.record(*marketplace, now, event.clone()).await;
+    }
+    if let Some(summary) = CycleSummary::of(&report) {
+        if let Err(why) = state.notifier().notify(&summary).await {
+            eprintln!("the cycle's notification could not be raised: {why}");
+        }
     }
     report
 }
@@ -1331,6 +1342,135 @@ mod tests {
             state.gate().await,
             EntitlementGate::closed(),
             "the sign-out the seller performed wins over any grant riding in the same answer"
+        );
+    }
+
+    // ------------------------------------------------- the cycle's notification
+
+    /// A source that settles two items a pull, one well and one badly, so the
+    /// notice has two counts to name.
+    struct SettlingSource;
+
+    impl crate::scheduler::WorkSource for SettlingSource {
+        fn pull(&self, _marketplace: Marketplace) -> crate::scheduler::PullFuture<'_> {
+            use crate::state::WorkEvent;
+            use tam_domain::ItemOutcome;
+            Box::pin(async {
+                Ok(vec![
+                    WorkEvent::Started {
+                        item: "one".to_owned(),
+                    },
+                    WorkEvent::Settled {
+                        item: "one".to_owned(),
+                        outcome: ItemOutcome::Succeeded,
+                    },
+                    WorkEvent::Started {
+                        item: "two".to_owned(),
+                    },
+                    WorkEvent::Settled {
+                        item: "two".to_owned(),
+                        outcome: ItemOutcome::Failed,
+                    },
+                ])
+            })
+        }
+    }
+
+    /// A state whose gate the plane will open for TPT, holding a TPT session,
+    /// with a recorder where the plugin would be.
+    async fn notifying_state(
+        key: &TestKey,
+    ) -> (
+        DesktopState,
+        Fake,
+        Arc<crate::notify::testing::RecordingNotifier>,
+    ) {
+        let (state, plane) = granted(key, vec![Marketplace::Tpt]);
+        let recorder = Arc::new(crate::notify::testing::RecordingNotifier::new());
+        let state = state.with_notifier(recorder.clone());
+        state
+            .store()
+            .put(&a_record(Marketplace::Tpt, None))
+            .await
+            .expect("tpt stores");
+        (state, plane, recorder)
+    }
+
+    #[tokio::test]
+    async fn a_cycle_that_settled_anything_raises_one_notification_naming_the_counts() {
+        use crate::scheduler::Scheduler;
+        let key = test_key();
+        let (state, plane, recorder) = notifying_state(&key).await;
+        let scheduler = Scheduler::new(Scheduler::DEFAULT_CADENCE, vec![Marketplace::Tpt]);
+
+        let report = super::cycle(&state, &plane, &scheduler, &SettlingSource, at(NOW)).await;
+
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|(_, event)| matches!(event, crate::state::WorkEvent::Settled { .. }))
+                .count(),
+            2,
+            "the gate, the session and the entitlement are all open, so two items settled; \
+             without this the single notice below would prove nothing"
+        );
+        let notices = recorder.notices().await;
+        assert_eq!(
+            notices.len(),
+            1,
+            "two items settled and one notification was raised: per cycle, never per item"
+        );
+        assert_eq!(
+            notices[0].title, "Your TPT sync finished — 1 of 2 resources updated",
+            "the title names the marketplace and both figures, because one item failed"
+        );
+        assert_eq!(
+            notices[0].body, "1 succeeded, 1 failed",
+            "the body names each count under the console's own word for the outcome"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cycle_that_settled_nothing_raises_none() {
+        use crate::scheduler::Scheduler;
+        let key = test_key();
+        let (state, plane, recorder) = notifying_state(&key).await;
+        let scheduler = Scheduler::new(Scheduler::DEFAULT_CADENCE, vec![Marketplace::Tpt]);
+
+        super::cycle(
+            &state,
+            &plane,
+            &scheduler,
+            &crate::scheduler::NoWork,
+            at(NOW),
+        )
+        .await;
+
+        assert!(
+            state.signed_in() && state.gate().await.may_work(Marketplace::Tpt, at(NOW)),
+            "the cycle reached the work source and found nothing due, rather than being \
+             refused before it, which is what makes the silence below the summary's"
+        );
+        assert_eq!(
+            recorder.notices().await,
+            vec![],
+            "a cycle with nothing due says nothing"
+        );
+
+        super::cycle(
+            &state,
+            &Fake::new(true),
+            &scheduler,
+            &SettlingSource,
+            at(NOW),
+        )
+        .await;
+
+        assert_eq!(
+            recorder.notices().await,
+            vec![],
+            "a revoked device works nothing and therefore announces nothing"
         );
     }
 }

@@ -202,6 +202,34 @@ pub(crate) async fn connect_on_target<R: tauri::Runtime>(
     }
 }
 
+/// The marketplace's name as a seller writes it, for a window a seller reads.
+/// The `Debug` spelling is the Rust identifier and puts "Tpt" in a title bar.
+const fn display_name(marketplace: Marketplace) -> &'static str {
+    match marketplace {
+        Marketplace::Tes => "Tes",
+        Marketplace::Etsy => "Etsy",
+        Marketplace::Tpt => "TPT",
+    }
+}
+
+#[cfg(test)]
+mod display_name_tests {
+    use super::display_name;
+    use tam_types::Marketplace;
+
+    #[test]
+    fn display_name_titles_a_sign_in_window_the_way_a_seller_writes_it() {
+        let titles: Vec<String> = Marketplace::ALL
+            .iter()
+            .map(|&marketplace| format!("Sign in to {}", display_name(marketplace)))
+            .collect();
+        assert_eq!(
+            titles,
+            ["Sign in to Tes", "Sign in to Etsy", "Sign in to TPT"],
+        );
+    }
+}
+
 /// The computer's login: a window of its own, awaited by the caller.
 async fn in_a_second_window<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -221,7 +249,7 @@ async fn in_a_second_window<R: tauri::Runtime>(
     let origin =
         tauri::Url::parse(target.cookie_origin).map_err(|why| CommandError(why.to_string()))?;
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
-        .title(format!("Sign in to {marketplace:?}"))
+        .title(format!("Sign in to {}", display_name(marketplace)))
         .inner_size(1_040.0, 800.0)
         .build()?;
 

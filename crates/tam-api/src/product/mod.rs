@@ -31,8 +31,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_domain::product::{
     AnswerKey, CopyrightDeclaration, ListingStatus, SelectionCaps, StandardsFramework, TaxCode,
-    TeachingDuration, ThumbnailMode, ADDITIONAL_LICENCE_PERCENTAGE, COPYRIGHT_PREAMBLE,
-    FREE_RESOURCE_PAGE_GUIDANCE, TITLE_MAX_UTF16_UNITS,
+    TeachingDuration, ThumbnailMode, ADDITIONAL_LICENCE_PERCENTAGE, FREE_RESOURCE_PAGE_GUIDANCE,
+    TITLE_MAX_UTF16_UNITS,
 };
 use tam_taxonomy::TptForm;
 
@@ -148,6 +148,14 @@ pub struct FacetView {
     /// The slug, which is both the checkbox id's suffix and the wire value.
     pub slug: String,
     pub label: String,
+    /// What a British teacher calls this one, where the founder's declared
+    /// table of 2026-09-11 names a counterpart. Null on every facet that is
+    /// not a grade, and on the grades the table leaves unnamed, so a client
+    /// renders [`FacetView::label`] under either dialect rather than a guess.
+    /// Served as null rather than omitted, because the toggle reads every
+    /// facet and an absent key is a third state it would have to handle.
+    #[serde(default)]
+    pub british_label: Option<String>,
     /// The broader facet this one sits under, where the capture records one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
@@ -298,6 +306,13 @@ pub struct FrameworkView {
     pub button_label: String,
 }
 
+/// One column of the grade grid, headed in both dialects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GradeBandView {
+    pub american: String,
+    pub british: String,
+}
+
 /// Everything the nine-group form needs to render its controls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FormVocabularyView {
@@ -310,6 +325,10 @@ pub struct FormVocabularyView {
     /// to a client to guess: primary grades, middle grades, high-school
     /// grades, then the three non-grade bands.
     pub grade_columns: Vec<usize>,
+    /// The heading each of those columns carries, in the order they are laid
+    /// out and one entry per column, so the American/British toggle relabels
+    /// the headings from the same table it relabels the cells from.
+    pub grade_bands: Vec<GradeBandView>,
     pub subject_areas: Vec<FacetView>,
     pub tags: Vec<FacetView>,
     pub formats: Vec<FacetView>,
@@ -355,6 +374,9 @@ fn facets_of(capture: &Capture, form: &TptForm, category: &str) -> Vec<FacetView
         .map(|(slug, facet)| FacetView {
             slug: slug.clone(),
             label: facet.name.clone(),
+            // No facet outside the grade grid has a British name; the toggle
+            // relabels one grid and nothing else on the form.
+            british_label: None,
             parent: facet.parent_id.clone(),
             seller_writable: form.is_seller_writable(slug),
         })
@@ -382,6 +404,7 @@ fn grades_of(capture: &Capture, form: &TptForm) -> Vec<FacetView> {
                 FacetView {
                     slug: slug.clone(),
                     label: facet.name.clone(),
+                    british_label: tam_taxonomy::british_grade_label(slug).map(ToOwned::to_owned),
                     parent: facet.parent_id.clone(),
                     seller_writable: form.is_seller_writable(slug),
                 },
@@ -464,6 +487,89 @@ pub(crate) fn thumbnail_slot_bytes_max() -> Option<u64> {
     )
 }
 
+/// TPT's own measured ceiling on one preview file, in bytes.
+///
+/// Served to the console as `form.limits.preview.max_size_bytes` and read
+/// here by the create and by the file route, so the cap the seller is told
+/// about and the cap the server refuses on are one number from one capture.
+/// A preview is bytes a buyer is shown before they pay, and TPT takes 30 MiB
+/// of them; a larger one is stored happily here and refused by the
+/// marketplace later, which is a failure the seller cannot see coming.
+///
+/// `None` only where the compiled-in capture does not parse, as
+/// [`form_vocabulary`] is `None` for the same reason.
+pub(crate) fn preview_slot_bytes_max() -> Option<u64> {
+    Some(capture()?.constraints.upload_slots.preview.max_size_bytes)
+}
+
+// ------------------------------------------------- the words a teacher reads
+
+/// The labels this form shows, where TPT's own words are not the ones the
+/// founder wants a teacher to read.
+///
+/// Kept here rather than in `tam-domain` or in the capture, and that split is
+/// the point. The capture is a measurement of TPT's DOM and the domain quotes
+/// it verbatim, because a projection writes against those strings and an
+/// attestation abbreviated is a different attestation. What the console
+/// renders is a display concern, so it is a mapping keyed by the same member
+/// the wire id names, one layer above both. Nothing below this line can drift
+/// from TPT by being reworded here.
+///
+/// The wording rule, founder's, 2026-09-11: one short sentence that says what
+/// to do, and no sentence explaining why a rule exists unless the teacher has
+/// to act on it.
+const fn thumbnail_mode_label(mode: ThumbnailMode) -> &'static str {
+    match mode {
+        ThumbnailMode::AutoGenerate => "Make thumbnails from my file",
+        ThumbnailMode::UploadNow => "Upload thumbnails now",
+        ThumbnailMode::UploadLater => "Upload thumbnails later",
+    }
+}
+
+/// Live reads as what publishing does rather than as TPT's "Make Listing
+/// Active", because Teachouse sends to the marketplaces the teacher ticked
+/// and TPT's sentence names only one of them.
+const fn status_label(status: ListingStatus) -> &'static str {
+    match status {
+        ListingStatus::Draft => "Draft, visible only to you",
+        ListingStatus::Live => "Make listing active on my selected marketplaces",
+    }
+}
+
+/// The same two attestations in the teacher's own words.
+///
+/// Shorter than [`CopyrightDeclaration::statement`] and saying the same
+/// thing: the seller either wrote all of it, or used someone else's material
+/// and is allowed to. The verbatim DOM quote stays in the domain, which is
+/// what the TPT write posts against.
+const fn copyright_statement(declaration: CopyrightDeclaration) -> &'static str {
+    match declaration {
+        CopyrightDeclaration::OriginalWork => {
+            "This is my own original work and it does not use anyone else's copyrighted \
+             material."
+        }
+        CopyrightDeclaration::UsedCopyrightedMaterials => {
+            "It includes copyrighted or trademarked material that I have permission to use, \
+             or that I am otherwise allowed to use (for example, fair use)."
+        }
+    }
+}
+
+/// The preamble the two attestations sit under, in the founder's words.
+const COPYRIGHT_PREAMBLE_SHOWN: &str = "By uploading this, I confirm I have read and agree to \
+     the TPT terms of service, that it does not infringe anyone's copyright, trademark or \
+     other rights, and:";
+
+/// What the localisation checkbox reads while no seller's country is
+/// measured.
+///
+/// The founder wrote this sentence, example and all. The country it names is
+/// inside that example and is not a claim about the seller reading it, which
+/// is the distinction [`LocalisationView::label`] exists to keep: that field
+/// would name the seller's own country and stays absent until one is read.
+const LOCALISATION_GENERIC_LABEL: &str = "This resource fits the country my TPT account is \
+     tied to (for example, I live in New Zealand and this fits the New Zealand curriculum)";
+
 /// The whole payload, assembled from the capture.
 ///
 /// `None` only where the compiled-in capture does not parse, which is a
@@ -477,6 +583,13 @@ pub fn form_vocabulary() -> Option<FormVocabularyView> {
     Some(FormVocabularyView {
         grades: grades_of(capture, form),
         grade_columns: GRADE_COLUMN_SIZES.to_vec(),
+        grade_bands: tam_taxonomy::GRADE_BANDS
+            .into_iter()
+            .map(|(american, british)| GradeBandView {
+                american: american.to_owned(),
+                british: british.to_owned(),
+            })
+            .collect(),
         subject_areas: facets_of(capture, form, "PreK-12-Subject-Area"),
         // TPT's own label is "Tag (Theme, Audience, Language)", and the three
         // facet categories behind it are exactly those. They are one picker on
@@ -529,14 +642,14 @@ pub fn form_vocabulary() -> Option<FormVocabularyView> {
             .collect(),
         thumbnail_modes: ThumbnailMode::ALL
             .into_iter()
-            .map(|mode| OptionView::plain(mode.wire_id(), mode.label()))
+            .map(|mode| OptionView::plain(mode.wire_id(), thumbnail_mode_label(mode)))
             .collect(),
         copyright: CopyrightView {
-            preamble: COPYRIGHT_PREAMBLE.to_owned(),
+            preamble: COPYRIGHT_PREAMBLE_SHOWN.to_owned(),
             options: CopyrightDeclaration::ALL
                 .into_iter()
                 .map(|declaration| {
-                    OptionView::plain(declaration.wire_id(), declaration.statement())
+                    OptionView::plain(declaration.wire_id(), copyright_statement(declaration))
                 })
                 .collect(),
             preselect: false,
@@ -545,19 +658,11 @@ pub fn form_vocabulary() -> Option<FormVocabularyView> {
             // No caller can supply one yet, so serving a name here would be
             // inventing the seller's country rather than reading it.
             label: None,
-            generic_label: "Appropriate for your TPT account's country".to_owned(),
+            generic_label: LOCALISATION_GENERIC_LABEL.to_owned(),
         },
         statuses: ListingStatus::ALL
             .into_iter()
-            .map(|status| {
-                OptionView::plain(
-                    status.wire_id(),
-                    match status {
-                        ListingStatus::Draft => "Draft, visible only to you",
-                        ListingStatus::Live => "Make Listing Active",
-                    },
-                )
-            })
+            .map(|status| OptionView::plain(status.wire_id(), status_label(status)))
             .collect(),
         standards_frameworks: StandardsFramework::ALL
             .into_iter()
@@ -597,7 +702,7 @@ mod tests {
         capture, form, form_vocabulary, selection_caps, thumbnail_slot_bytes_max, GRADE_CATEGORY,
         GRADE_COLUMN_SIZES,
     };
-    use tam_domain::product::{AnswerKey, TaxCode};
+    use tam_domain::product::{AnswerKey, CopyrightDeclaration, TaxCode, ThumbnailMode};
 
     fn rendered() -> super::FormVocabularyView {
         form_vocabulary().expect("the committed capture parses and the form reads")
@@ -720,7 +825,8 @@ mod tests {
         );
     }
 
-    /// The one rule our form inverts.
+    /// The one rule our form inverts, and the words the founder replaced
+    /// TPT's with.
     #[test]
     fn the_copyright_group_is_served_with_nothing_preselected() {
         let view = rendered();
@@ -729,39 +835,149 @@ mod tests {
             "TPT pre-selects value 1 on a blank form; a default attestation would be ours \
              rather than the seller's"
         );
-        assert!(
-            view.copyright.options[0]
-                .label
-                .starts_with("I attest that this product"),
-            "both statements are quoted in full, because an abbreviated attestation is a \
-             different attestation"
+        assert_eq!(
+            view.copyright
+                .options
+                .iter()
+                .map(|option| (option.id.as_str(), option.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "1",
+                    "This is my own original work and it does not use anyone else's copyrighted \
+                     material."
+                ),
+                (
+                    "2",
+                    "It includes copyrighted or trademarked material that I have permission to \
+                     use, or that I am otherwise allowed to use (for example, fair use)."
+                ),
+            ],
+            "the teacher reads the founder's words against the same wire ids"
         );
-        assert!(view
-            .copyright
-            .preamble
-            .starts_with("Intellectual Property Rights:"));
+        assert_eq!(
+            view.copyright.preamble,
+            "By uploading this, I confirm I have read and agree to the TPT terms of service, \
+             that it does not infringe anyone's copyright, trademark or other rights, and:"
+        );
+        assert!(
+            CopyrightDeclaration::OriginalWork
+                .statement()
+                .starts_with("I attest that this product"),
+            "and the DOM's own quote is untouched in the domain, which is what the TPT write \
+             posts against"
+        );
     }
 
-    /// The one served string that would name a country, checked to name none.
-    ///
-    /// The capture was read from a New Zealand seller, so "New Zealand" is the
-    /// value a careless implementation reaches for. Nothing measures a
-    /// seller's country yet, and serving that name would put another
-    /// country's on their form.
+    /// The three lists whose served labels are the founder's rather than the
+    /// capture's, pinned by id so a reworded label cannot move a value.
     #[test]
-    fn the_localisation_label_names_no_country_until_one_is_measured() {
+    fn the_radio_and_switch_labels_are_the_words_the_founder_chose() {
+        let view = rendered();
+        assert_eq!(
+            view.thumbnail_modes
+                .iter()
+                .map(|option| (option.id.as_str(), option.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "Make thumbnails from my file"),
+                ("2", "Upload thumbnails now"),
+                ("3", "Upload thumbnails later"),
+            ]
+        );
+        assert_eq!(
+            view.statuses
+                .iter()
+                .map(|option| (option.id.as_str(), option.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("0", "Draft, visible only to you"),
+                ("1", "Make listing active on my selected marketplaces"),
+            ]
+        );
+        assert_eq!(
+            ThumbnailMode::AutoGenerate.label(),
+            "Auto generate thumbnails from the product file",
+            "the DOM's own words stay in the domain, where the projection reads them"
+        );
+    }
+
+    /// The one served string that names a country, and the one that must not.
+    ///
+    /// The capture was read from a New Zealand seller, and
+    /// [`LocalisationView::label`] would name *this* seller's country, so it
+    /// stays absent until one is measured. The generic label names New
+    /// Zealand only inside the founder's own worked example, which claims
+    /// nothing about who is reading it.
+    #[test]
+    fn the_localisation_label_names_no_seller_s_country_until_one_is_measured() {
         let view = rendered();
         assert_eq!(
             view.localisation.label, None,
             "no caller supplies a country, so there is none to name"
         );
+        assert_eq!(
+            view.localisation.generic_label,
+            "This resource fits the country my TPT account is tied to (for example, I live in \
+             New Zealand and this fits the New Zealand curriculum)"
+        );
+    }
+
+    /// The founder's declared table reaches the client beside the American
+    /// label, and the column headings come from the same table.
+    #[test]
+    fn every_grade_carries_the_british_label_the_declared_table_names() {
+        let view = rendered();
+        let labelled: Vec<(&str, Option<&str>)> = view
+            .grades
+            .iter()
+            .map(|grade| (grade.slug.as_str(), grade.british_label.as_deref()))
+            .collect();
         assert!(
-            !view.localisation.generic_label.is_empty(),
-            "the fallback is what renders while the label is absent, so a blank one              would leave the control unlabelled"
+            labelled.contains(&("kindergarten", Some("Year 1")))
+                && labelled.contains(&("12th-grade", Some("Year 13")))
+                && labelled.contains(&("elementary", Some("Primary School"))),
+            "{labelled:?}"
+        );
+        assert_eq!(
+            labelled
+                .iter()
+                .filter(|(_, british)| british.is_none())
+                .map(|(slug, _)| *slug)
+                .collect::<Vec<_>>(),
+            [
+                "preschool",
+                "higher-education",
+                "adult-education",
+                "not-grade-specific"
+            ],
+            "the four the table leaves unnamed carry no invented year"
         );
         assert!(
-            !view.localisation.generic_label.contains("New Zealand"),
-            "the country the capture was read from is not every seller's country"
+            view.subject_areas
+                .iter()
+                .all(|facet| facet.british_label.is_none()),
+            "the toggle relabels the grade grid and nothing else"
+        );
+    }
+
+    /// One heading per column, so the toggle can relabel the grid's headings
+    /// without a client holding a table of its own.
+    #[test]
+    fn the_grade_bands_are_one_per_column() {
+        let view = rendered();
+        assert_eq!(view.grade_bands.len(), view.grade_columns.len());
+        assert_eq!(
+            view.grade_bands
+                .iter()
+                .map(|band| (band.american.as_str(), band.british.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Elementary", "Primary School"),
+                ("Middle School", "Secondary School"),
+                ("High School", "College"),
+                ("Other", "Other"),
+            ]
         );
     }
 

@@ -179,7 +179,7 @@
 {#if creating}
 	<Panel
 		title={editing === null ? 'New template' : 'Change this template'}
-		description="Everything you fill in here is what a new resource starts out with; leave the rest empty to be asked as usual."
+		description="What you fill in here is what a new resource starts with. Leave the rest empty and we will ask as usual."
 	>
 		<div class="tpl-grid">
 			<Field label="Name" id="{base}-name" required hint="What you will pick it by.">
@@ -266,7 +266,7 @@
 {#if store.isPending}
 	<p class="tpl-none">Reading your templates…</p>
 {:else if store.isError}
-	<Banner tone="bad" title="Your templates could not be read">
+	<Banner tone="bad" title="We could not read your templates">
 		Nothing has been changed. Reload the page to try again.
 	</Banner>
 {:else if rows.length > 0}

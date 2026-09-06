@@ -12,6 +12,7 @@ import {
 	SEARCH_TAB,
 	SECTION_TABS,
 	SECTIONS,
+	accountTile,
 	breadcrumbFor,
 	currentDestination,
 	initialsOf,
@@ -31,12 +32,26 @@ const pagesOf = (id: string) =>
 	SECTIONS.find((section) => section.id === id)?.items.map((item) => item.href);
 
 describe('the navigation model', () => {
-	it('names the three sections the founder asked for, then Account', () => {
+	it('names the four sections the founder asked for, then Account', () => {
 		expect(SECTIONS.map((section) => section.label)).toEqual([
+			'Import',
 			'Crosslist',
 			'Automations',
 			'Marketplaces',
 			'Account'
+		]);
+	});
+
+	// The founder's own sentences, which the rail tooltip and the navigation
+	// card's lede both read. Pinned because they are the words shown, not
+	// decoration: a section that lost its hint would render a bare card.
+	it('says the founder sentence for every section', () => {
+		expect(SECTIONS.map((section) => [section.id, section.hint])).toEqual([
+			['import', 'Bring your current portfolio to Teachouse from anywhere it is housed.'],
+			['crosslist', 'Publish your resources to multiple marketplaces.'],
+			['automations', 'Edit tags, descriptions, titles and files across your listings.'],
+			['marketplaces', 'Connect the places you sell.'],
+			['account', 'Your settings, plan and notifications.']
 		]);
 	});
 
@@ -73,11 +88,20 @@ describe('the navigation model', () => {
 		expect(pagesOf('crosslist')).toEqual([
 			'/resources',
 			'/labels',
-			'/import',
 			'/analytics',
 			'/templates',
 			'/export'
 		]);
+	});
+
+	// Import left Crosslist for a section of its own on 2026-09-11, and the
+	// batch report is what makes it more than a rename: `/imports/<batch>` is
+	// not under `/import`, so the page claims it or the breadcrumb loses it.
+	it('gives Import its own section, holding the batch report too', () => {
+		expect(pagesOf('import')).toEqual(['/import']);
+		expect(pagesOf('crosslist')).not.toContain('/import');
+		expect(sectionFor('/imports/b-4')?.id).toBe('import');
+		expect(breadcrumbFor('/imports/b-4')).toBe('Import');
 	});
 
 	it('lists exactly the Automations pages, in order', () => {
@@ -130,8 +154,9 @@ describe('the section tabs', () => {
 		expect(SECTION_TABS.map((tab) => tab.label)).toEqual(SECTIONS.map((section) => section.label));
 	});
 
-	it('carries all four sections the rail names, in rail order', () => {
+	it('carries all five sections the rail names, in rail order', () => {
 		expect(SECTION_TABS.map((tab) => tab.href)).toEqual([
+			'/import',
 			'/resources',
 			'/automations',
 			'/marketplaces',
@@ -166,11 +191,12 @@ describe('the section tabs', () => {
 });
 
 describe('the phone bar', () => {
-	it('carries six items, with the create action in the middle and Account last', () => {
+	it('carries seven cells, with the create action third and Account last', () => {
 		expect(PHONE_BAR.map((tab) => tab.label)).toEqual([
+			'Import',
 			'Crosslist',
-			'Automations',
 			'New resource',
+			'Automations',
 			'Marketplaces',
 			'Search',
 			'Account'
@@ -555,5 +581,23 @@ describe('what a signed-out browser is shown', () => {
 			(item) => item.href
 		);
 		expect(overlap).toEqual(['/status']);
+	});
+});
+
+describe('the account tile', () => {
+	const SRC = '/v1/profile/avatar?v=3fa405a8';
+
+	it('draws the picture where one is set, whatever the organisation is called', () => {
+		expect(accountTile(SRC, 'Sunrise Teaching Co')).toEqual({ kind: 'picture', src: SRC });
+		expect(accountTile(SRC, undefined)).toEqual({ kind: 'picture', src: SRC });
+	});
+
+	it('falls back to the initials where there is no picture', () => {
+		expect(accountTile(null, 'Sunrise Teaching Co')).toEqual({ kind: 'initials', text: 'ST' });
+	});
+
+	it('is the section glyph while neither is known', () => {
+		expect(accountTile(null, undefined)).toEqual({ kind: 'glyph' });
+		expect(accountTile(null, '—')).toEqual({ kind: 'glyph' });
 	});
 });

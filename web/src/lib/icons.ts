@@ -15,6 +15,7 @@ import Bell from '@lucide/svelte/icons/bell';
 import BookOpen from '@lucide/svelte/icons/book-open';
 import Building2 from '@lucide/svelte/icons/building-2';
 import ChartLine from '@lucide/svelte/icons/chart-line';
+import Check from '@lucide/svelte/icons/check';
 import ChevronDown from '@lucide/svelte/icons/chevron-down';
 import CircleAlert from '@lucide/svelte/icons/circle-alert';
 import CircleCheck from '@lucide/svelte/icons/circle-check';
@@ -63,6 +64,7 @@ export const ICONS = {
 	'book-open': BookOpen,
 	'building-2': Building2,
 	'chart-line': ChartLine,
+	check: Check,
 	'chevron-down': ChevronDown,
 	'circle-alert': CircleAlert,
 	'circle-check': CircleCheck,

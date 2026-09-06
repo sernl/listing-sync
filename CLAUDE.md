@@ -13,6 +13,9 @@ sources are under `docs/design/`.
 - `docs/design/engineering-charter.md`, `operational-charter.md`,
   `enforcement-toolchain.md` — how the code is built and enforced.
 - `docs/design/milestones.md` — the plan and its kill gates.
+- `docs/notes/design/brand-kit-and-teacher-ui.md` — the brand kit (palette,
+  type, logo, marketplace tiles) and the teacher-facing wording rule every
+  surface follows since 2026-09-11.
 
 ## Non-negotiables
 

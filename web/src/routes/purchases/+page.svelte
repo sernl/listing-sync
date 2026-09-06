@@ -4,10 +4,10 @@
 </script>
 
 <div class="page">
-	<PageHead icon="shopping-bag" title="Purchases" description="Items you buy live here — the seller is also a buyer." />
+	<PageHead icon="shopping-bag" title="Purchases" description="Resources you have bought." />
 	<Placeholder
 		icon="shopping-bag"
 		headline="Purchases are not built yet"
-		body="It will hold the items you have bought, with their downloads and their updates. It lands with the buyer marketplace."
+		body="This is where the resources you buy will be, with their files and their updates."
 	/>
 </div>

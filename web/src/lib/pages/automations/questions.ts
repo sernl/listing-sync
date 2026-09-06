@@ -32,14 +32,14 @@ export function questionRows(items: readonly QueueItem[], now: number): Question
  *  one, because a queue that is draining and a queue that was never filled
  *  read the same from the open count alone. */
 export function tallyLine(open: number, resolved: number, noCounterpart: number): string {
-	return `${open} open · ${resolved} resolved · ${noCounterpart} with no counterpart`;
+	return `${open} to answer · ${resolved} answered · ${noCounterpart} left out`;
 }
 
-export const DRAINED_TITLE = 'The queue is drained';
+export const DRAINED_TITLE = 'Nothing to answer';
 
 export const DRAINED_BODY =
-	'A question appears only when a listing uses a word we have no match for, and each one ' +
-	'you answer stays answered.';
+	'A question appears when one of your resources uses a word we cannot match on a ' +
+	'marketplace. Your answers are kept.';
 
 export const TARGET_PLACEHOLDER = 'Where it belongs, e.g. Mathematics / Algebra';
 

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 95] = [
+pub const ROUTES: [Route; 100] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -138,6 +138,26 @@ pub const ROUTES: [Route; 95] = [
         method: "patch",
         path: "/{version}/notifications/preferences",
         summary: "Set whether the requesting user takes completion mail",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/profile",
+        summary: "The requesting user's own profile: which picture they set",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/profile/avatar",
+        summary: "The requesting user's own picture, as bytes",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/profile/avatar",
+        summary: "Set the requesting user's picture to an uploaded handle",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/profile/avatar",
+        summary: "Clear the requesting user's picture",
     },
     Route {
         method: "post",
@@ -483,6 +503,11 @@ pub const ROUTES: [Route; 95] = [
         method: "get",
         path: "/{version}/admin/import-drain",
         summary: "Operator: the import-drain measurement series per tenant",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/dead-letters",
+        summary: "Operator: outbox messages the drainer gave up on, counted by topic",
     },
     Route {
         method: "get",

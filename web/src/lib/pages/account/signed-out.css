@@ -1,4 +1,4 @@
-/* The signed-out screens, brought onto the Kauri shapes.
+/* The signed-out screens, on the founder's brand kit.
  *
  * A modifier beside `.auth-card` rather than a replacement for it: all four
  * screens — sign in, sign up, reset and reset confirm — carry both classes, so
@@ -14,11 +14,13 @@
 	max-width: 420px;
 }
 
-/* The display face at the card-heading step of the type ladder, which is what
-   separates a Teachouse screen from the system-font one it used to be. */
+/* Poppins at the card-heading step of the type ladder, in the kit's Indigo:
+   these four screens are the first Teachouse surface a teacher sees, and the
+   logo above the card sets the same two colours. `app.css` names the face for
+   every heading in the console; the size and the colour are this card's. */
 .auth-card.acct-signed-out h1 {
-	font-family: var(--display);
 	font-size: 24px;
+	color: var(--primary);
 	margin-bottom: 6px;
 }
 

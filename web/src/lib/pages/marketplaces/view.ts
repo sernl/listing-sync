@@ -519,8 +519,8 @@ export const TRANSPORT_BADGE: Record<TransportClass, string> = {
  */
 export function transportLine(transport: TransportClass, name: string): string {
 	return transport === 'SellerDevice'
-		? 'Runs on your own device.'
-		: `Runs on our servers, under a token ${name} issued us.`;
+		? 'Runs on your own computer.'
+		: `Runs on our servers, with the permission ${name} gave us.`;
 }
 
 /** What the page knows about one live marketplace right now.

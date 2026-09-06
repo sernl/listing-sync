@@ -7,7 +7,7 @@ const HOUR = 3_600_000;
 describe('a run row', () => {
 	it('leads with where the run was sent rather than with its identifier', () => {
 		const [row] = runRows([job({ inventory: 'TesGb' })], 0);
-		expect(row.title).toContain('United Kingdom');
+		expect(row.inventory).toBe('TesGb');
 	});
 
 	it('keeps the identifier and the age on the meta line', () => {

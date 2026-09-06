@@ -215,10 +215,6 @@ This key is as irreplaceable as the updater key and for a different reason: Play
 
 Then set the GitHub secrets the signing step reads, whose names Tauri's own CI example fixes: `ANDROID_KEY_ALIAS` (`upload`), `ANDROID_KEY_PASSWORD` (the contents of the password file), and `ANDROID_KEY_BASE64` (`base64 -i ~/.tauri/android/teachouse-upload.p12`).
 
-Supply a launcher icon before a public listing.
-`tauri android init` generated the Tauri placeholder `ic_launcher` set, the same placeholder the desktop bundle carries, and it is what a phone would show on its home screen today.
-The application's own name is already right — `Teachouse`, taken from `productName` — and only the artwork is missing.
-
 ## Amended 2026-09-06: the resume cadence, and a check-in the seller can press
 
 The scheduler section above describes what a phone was meant to do — the check-in on resume, and the work pull replaced by a command a console button calls.
@@ -302,6 +298,21 @@ Closing an open sheet or picker with back is a later refinement rather than part
 What has not been proved on a handset is the same thing this note has never been able to prove: that a real TPT or Tes sign-in completes in an Android WebView and that the captured session works from a mobile network.
 `docs/notes/runbooks/android-phone-check.md` is where that evidence belongs, and it is the founder's own account and their own phone.
 
+## Amended 2026-09-07: one notification per cycle
+
+The client takes `tauri-plugin-notification` 2.4.0 on every platform, registered in `lib.rs` beside the os and opener plugins, and raises one notification per cycle that settled anything, never one per item.
+The summary is taken over the tick's whole report after it is recorded, in `heartbeat::cycle`, and `notify.rs` holds the seam: a `Notifier` trait with one method over one summary value, implemented by the plugin and by a recorder in tests, as `SessionStore` and `ControlPlane` are.
+The notice uses the words of the server's completion mail, so a seller reading both reads one thing, with the counts under the console's own outcome words.
+No capability file changes and no npm package: the notification is raised from Rust, and Tauri's capabilities gate IPC commands rather than the Rust API.
+
+On Android the permission is requested at the first cycle that has something to say rather than at launch, so the prompt arrives with a reason attached, and it is requested once per process: a seller who dismissed it without answering is not asked again hourly, and a seller who refused is not asked at all.
+Either leaves the cycle exactly as it was, because the work is done and recorded before the notice is raised.
+The plugin's own Android manifest merges `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` and `WAKE_LOCK` into the build at Gradle's manifest merge, so `gen/android/app/src/main/AndroidManifest.xml` is unchanged and the three arrive with the dependency.
+
+Windows needs an installed build rather than a development run, and the plugin's own manifest is the source: `plugins/notification/Cargo.toml:23` in the local checkout of `tauri-apps/plugins-workspace` at `845d8989` records `windows = { level = "full", notes = "Only works for installed apps. Shows powershell name & icon in development." }`.
+The code behind it sets the AppUserModelID only when the executable's directory is not `target/debug` or `target/release` (`src/desktop.rs`, the `cfg(windows)` block in `show`), so a development run shows PowerShell's name and icon or nothing at all.
+Neither the phone nor an installed Windows build has raised one yet; `docs/notes/runbooks/android-phone-check.md` says what to look for on each.
+
 ## Sources
 
 `docs/notes/design/vendoo-for-teachers-rethink.md`, decisions D2, D3, D12, D14 and D29, and its §5.1 and §5.2 readings of mobile session capture and mobile scheduling.
@@ -311,3 +322,4 @@ What has not been proved on a handset is the same thing this note has never been
 The nixpkgs Android manual section and `pkgs/development/mobile/androidenv`, read at nixpkgs `56c02bc0`, the revision `flake.lock` pins, 2026-09-03.
 `wry` 0.55.1, `tauri` 2.11.5, `tauri-plugin-updater` 2.11.0 and `keyring` 3.6.3, read from the vendored crate sources, 2026-09-03.
 `tauri-plugin-stronghold` 2.3.2 and `BiometricPlugin.kt`, read from `~/ghq/github.com/tauri-apps/plugins-workspace`, 2026-09-03.
+`tauri-plugin-notification` 2.4.0, its `Cargo.toml`, `src/desktop.rs`, `src/mobile.rs` and `android/src/main/AndroidManifest.xml`, read from the same checkout at `845d8989`, 2026-09-07.

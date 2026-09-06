@@ -4,12 +4,12 @@
     "refusals": [
       {
         "group": "categories",
-        "message": "A category value cannot be blank."
+        "message": "Choose your categories again; one came through blank."
       },
       {
         "group": "categories",
         "control": "Subject Area",
-        "message": "Subject Area is required; choose at least one."
+        "message": "Choose at least one under Subject Area."
       }
     ],
     "advisories": []
@@ -24,7 +24,7 @@
     "refusals": [
       {
         "group": "copyright",
-        "message": "Choose one of the two copyright attestations. Nothing is pre-selected, because              the statement is yours to make."
+        "message": "Choose one of the two copyright statements."
       }
     ],
     "advisories": []
@@ -34,17 +34,17 @@
     "refusals": [
       {
         "group": "name",
-        "message": "A product needs a title."
+        "message": "Add a name for your resource."
       },
       {
         "group": "price",
         "control": "Price",
-        "message": "A paid listing needs a price, written in dollars and cents."
+        "message": "Add a price in dollars and cents."
       },
       {
         "group": "price",
         "control": "Tax Code",
-        "message": "Choose a tax code. TPT makes this your choice rather than ours."
+        "message": "Choose a tax code."
       }
     ],
     "advisories": []
@@ -55,7 +55,7 @@
     "advisories": [
       {
         "group": "price",
-        "message": "TPT advises that free resources be 10 pages or fewer, and this one                  states 24. It is guidance rather than a rule, so nothing is blocked."
+        "message": "Free resources do best at 10 pages or fewer, and this one has 24."
       }
     ]
   },
@@ -65,7 +65,7 @@
       {
         "group": "categories",
         "control": "Grade Level",
-        "message": "Grade Level takes up to 4, and 5 are chosen."
+        "message": "Choose up to 4 under Grade Level; you have 5."
       }
     ],
     "advisories": []
@@ -75,7 +75,7 @@
     "refusals": [
       {
         "group": "files",
-        "message": "That file is not one we hold; upload it again."
+        "message": "Upload that file again."
       }
     ],
     "advisories": []
@@ -85,7 +85,7 @@
     "refusals": [
       {
         "group": "name",
-        "message": "A product needs a title."
+        "message": "Add a name for your resource."
       }
     ],
     "advisories": []
@@ -96,7 +96,7 @@
       {
         "group": "files",
         "control": "Downloadable File",
-        "message": "Upload the file buyers download. A marketplace will not list this without one."
+        "message": "Upload the file buyers will download."
       }
     ],
     "advisories": []
@@ -117,7 +117,7 @@
       {
         "group": "price",
         "control": "Price",
-        "message": "A paid listing needs a price, written in dollars and cents."
+        "message": "Add a price in dollars and cents."
       }
     ],
     "advisories": []
@@ -128,7 +128,7 @@
       {
         "group": "price",
         "control": "Tax Code",
-        "message": "Choose a tax code. TPT makes this your choice rather than ours."
+        "message": "Choose a tax code."
       }
     ],
     "advisories": []
@@ -139,7 +139,7 @@
       {
         "group": "price",
         "control": "Price",
-        "message": "TPT refuses a price below $0.95."
+        "message": "Raise the price to at least $0.95."
       }
     ],
     "advisories": []
@@ -155,17 +155,28 @@
       {
         "group": "categories",
         "control": "Grade Level",
-        "message": "Grade Level is required; choose at least one."
+        "message": "Choose at least one under Grade Level."
       },
       {
         "group": "categories",
         "control": "Subject Area",
-        "message": "Subject Area is required; choose at least one."
+        "message": "Choose at least one under Subject Area."
       },
       {
         "group": "categories",
         "control": "Tag",
-        "message": "Tag is required; choose at least one."
+        "message": "Choose at least one under Tag."
+      }
+    ],
+    "advisories": []
+  },
+  "tax_code_out_of_range": {
+    "submittable": false,
+    "refusals": [
+      {
+        "group": "price",
+        "control": "Tax Code",
+        "message": "Choose a tax code from the list."
       }
     ],
     "advisories": []
@@ -175,7 +186,7 @@
     "refusals": [
       {
         "group": "files",
-        "message": "Thumbnails were attached under the option \"Auto generate thumbnails from the product file\", which shows no slots for them."
+        "message": "Choose \"Upload thumbnails now\", or remove the thumbnails."
       }
     ],
     "advisories": []

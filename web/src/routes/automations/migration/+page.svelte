@@ -32,6 +32,7 @@
 	} from '$lib/sync-request';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import {
 		ALREADY_RUNNING_TITLE,
 		NO_MIGRATION_YET,
@@ -198,8 +199,8 @@
 		<Banner tone="warn" title="No marketplace is connected" action={toDownloads}>
 			A migration reads a shop you already sell on, so there is nothing to move until one is
 			connected. Connect it in the Teachouse app on your computer: the app opens the
-			marketplace's own sign-in there and keeps the login on that machine, which is the only
-			place it is ever kept.
+			marketplace sign-in there and keeps your login on that machine, which is the only
+			place it is kept.
 		</Banner>
 	{/if}
 
@@ -211,8 +212,8 @@
 			{#if connectionsUnread}
 				<Panel title="Bring a shop across">
 					<p class="quiet">
-						Your marketplaces could not be read, so we cannot tell whether you have a shop to
-						bring across; nothing has been started.
+						We could not read your marketplaces, so we cannot tell whether you have a shop to
+						bring across. Nothing has started.
 					</p>
 				</Panel>
 			{:else if nothingConnected}
@@ -227,8 +228,8 @@
 				<Panel title="Bring a shop across">
 					<p class="quiet">
 						A migration reads the shop you already sell on, and the one it reads is TES, so
-						it needs TES connected. That happens in the Teachouse app on your computer, which
-						opens the marketplace's own sign-in and keeps the login on that machine.
+						it needs TES connected. That happens in the Teachouse app on your computer,
+						which opens the marketplace sign-in and keeps your login on that machine.
 					</p>
 					<div class="set-foot">
 						<Button href="/marketplaces" tier="outline">Connect on Marketplaces</Button>
@@ -324,7 +325,10 @@
 						<a class="auto-row" href={row.href}>
 							<StatusPill tone={row.tone} label={row.label} />
 							<span class="who">
-								<span class="t">{row.title}</span>
+								<span class="t">
+									<MarketplaceMark inventory={row.source} /> →
+									<MarketplaceMark inventory={row.target} />
+								</span>
 								<span class="meta">{row.meta}</span>
 							</span>
 						</a>

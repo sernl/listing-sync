@@ -1,142 +1,239 @@
 ---
 import Base from '../layouts/Base.astro';
 import Faq from '../components/Faq.astro';
-import Migrations from '../components/Migrations.astro';
 import MarketplaceBand from '../components/MarketplaceBand.astro';
 import PlatformRow from '../components/PlatformRow.astro';
 import Pricing from '../components/Pricing.astro';
-import { availability, downloadUrl, loginUrl } from '../site.js';
+import Testimonials from '../components/Testimonials.astro';
+import Tick from '../components/Tick.astro';
+import { downloadUrl } from '../site.js';
+import { founding } from '../pricing.js';
 
-const title = 'Teachouse \u2014 sell the same resource on every marketplace without listing it twice';
+const title = 'Teachouse \u2014 create once, sell everywhere';
 const description =
-	'Teachouse keeps one copy of each teaching resource, maps it to what each marketplace asks for, and keeps every listing matching it on a schedule. Marketplace requests are sent from your own computer, under your own login, wherever the marketplace publishes no interface for tools like this one.';
+	'Teachouse helps you cross-list and manage your teacher resources across multiple marketplaces, all from one place. Bring your catalogue in once, publish it everywhere you sell, and update it from one home.';
 
-const features = [
-	{
-		label: 'Cross-listing',
-		h: 'One catalogue, every shop you sell in',
-		p: 'Write a resource once, or bring in what you already sell. Teachouse turns your subjects, year levels and licence wording into what each marketplace asks for, proposing a best fit and leaving you the decisions that are genuinely yours to make.'
-	},
-	{
-		label: 'Sync',
-		h: 'Change it once, and it changes everywhere',
-		p: 'Move a price, fix a title, upload a new version. Teachouse works out what each marketplace needs, does it on the schedule you set, and reports each marketplace\u2019s result on its own rather than as one number.'
-	},
-	{
-		label: 'Migrations',
-		h: 'Move a whole shop in one go',
-		p: 'Already selling everything in one shop? A migration puts that catalogue in another one as a single piece of work, at a fixed price quoted before we start, with every mapping there for you to check afterwards.'
-	},
-	{
-		label: 'Where it runs',
-		h: 'The marketplace work runs on your computer',
-		p: 'Some marketplaces publish no interface for tools like this one. For those, Teachouse sends every request from your own machine, in your own session, and your resource files never pass through us. This split is our design choice about where a request should come from. It is not required by any law, and we do not present it as one.'
-	}
-];
+/* The catalogue card floating over the hero photo, and the rows inside it, are
+   the mockup's: they name marketplaces, so the card carries
+   `data-marketplace-band` for `just landing-copy-gate`. */
+const catalogue = ['TPT', 'Tes', 'Classful', 'Teach Simple', '+ more'];
 
 const steps = [
-	{
-		h: 'Connect',
-		p: 'Install the app on the computer that will do the marketplace work, then sign in to each marketplace yourself, in your own session. Nobody here ever sees a marketplace password.'
-	},
-	{
-		h: 'Map',
-		p: 'Bring your catalogue in, look over the field mappings once, and set the rules you want reused. Teachouse asks you rather than guessing when the answer is yours to give.'
-	},
-	{
-		h: 'Sync',
-		p: 'Pick a schedule and let it run. Every create, edit and publish is written down, so you can see what was sent and what came back for each listing.'
-	}
+	{ h: 'Import', p: 'Your catalogue' },
+	{ h: 'Distribute', p: 'To multiple marketplaces' },
+	{ h: 'Manage', p: 'Update and grow' }
 ];
 ---
 
 <Base title={title} description={description}>
 	<section class="hero">
-		<div class="wrap">
-			<p class="eyebrow">For teachers who sell what they make</p>
-			<h1>Sell the same resource everywhere without listing it twice.</h1>
-			<p class="sell">
-				Teachouse keeps one copy of each resource, maps it to what each marketplace asks for,
-				and keeps your listings matching it on a schedule. Every request to a marketplace is
-				sent from your own computer, under your own login.
-			</p>
-			<div class="actions">
-				<a class="cta large" href={loginUrl}>Start free</a>
-				<a class="btn large" href="#how">See how it works</a>
+		<div class="wrap hero-grid">
+			<div>
+				<p class="eyebrow">The home for teacher creators</p>
+				<h1>Create once.<br />Sell everywhere.</h1>
+				<p class="sell">
+					Teachouse helps you cross-list and manage your teacher resources across multiple
+					marketplaces &mdash; all from one place.
+				</p>
+				<div class="actions">
+					<a class="cta large" href="/pricing/#founding">Join the Founding 100</a>
+					<a class="btn large" href="#how">See how it works</a>
+				</div>
+				<p class="under">
+					Only {founding.places} Founding Member places. {founding.discountYearOne}% off Year 1,
+					plus your first {founding.freeImports} resources cross-listed free.
+				</p>
+				<MarketplaceBand />
 			</div>
-			<p class="under">Your resource files never pass through us.</p>
-			<MarketplaceBand />
+
+			{/* The photo sits in a rounded frame over two brand-kit shapes. The
+			    shapes are drawn rather than fetched, so the whole composition
+			    costs one image. */}
+			<div class="hero-art">
+				<svg class="blob blob-teal" viewBox="0 0 128 184" fill="none" aria-hidden="true">
+					<path
+						d="M64 2 126 54v116a12 12 0 0 1-12 12H14A12 12 0 0 1 2 170V54z"
+						fill="var(--accent)"
+						fill-opacity="0.28"
+					/>
+				</svg>
+				<svg class="blob blob-lav" viewBox="0 0 200 150" fill="none" aria-hidden="true">
+					<path
+						d="M8 8c34 0 52 26 74 56s52 44 110 46c-44 26-106 32-146 10C14 100 0 60 8 8z"
+						fill="var(--lavender)"
+						fill-opacity="0.75"
+					/>
+				</svg>
+				<svg class="sparks" viewBox="0 0 60 60" fill="none" stroke="var(--warn)" stroke-width="5" stroke-linecap="round" aria-hidden="true">
+					<path d="M6 40 22 22" />
+					<path d="M30 14v22" />
+					<path d="M48 12 40 34" />
+				</svg>
+
+				<div class="hero-frame">
+					<img
+						src="/images/hero-photo-placeholder.webp"
+						alt="A teacher working at her laptop"
+						width="165"
+						height="255"
+					/>
+				</div>
+
+				<div class="catalogue-card" data-marketplace-band>
+					<div class="head">
+						<img src="/brand/house.svg" alt="" width="24" height="24" />
+						<span>Your catalogue</span>
+					</div>
+					<ul>
+						{
+							catalogue.map((row) => (
+								<li>
+									<Tick />
+									{row}
+								</li>
+							))
+						}
+					</ul>
+				</div>
+
+				{/* The founder's handwritten line, set in whatever script face the
+				    reader's system has: a fourth web font for three words is not
+				    worth the bytes, and a cursive fallback is what the stack ends
+				    in. */}
+				<svg class="handwrite" viewBox="0 0 210 96" aria-hidden="true">
+					<g fill="var(--primary)" font-family="'Segoe Script', 'Bradley Hand', cursive" font-size="24">
+						<text x="8" y="28" transform="rotate(-4 8 28)">More reach.</text>
+						<text x="14" y="60" transform="rotate(-4 14 60)">More sales.</text>
+						<text x="20" y="92" transform="rotate(-4 20 92)">Less admin.</text>
+					</g>
+				</svg>
+			</div>
 		</div>
 	</section>
 
-	<section class="section" id="features">
-		<div class="wrap">
-			<h2>One catalogue. Every shop. One place to change it.</h2>
-			<div class="grid-2">
-				{
-					features.map((feature) => (
-						<div class="panel feature">
-							<h3>{feature.h}</h3>
-							<p>{feature.p}</p>
-							<span class="tag">{feature.label}</span>
-						</div>
-					))
-				}
+	<section class="section band-challenge" id="about">
+		<div class="wrap split">
+			<div class="copy">
+				<p class="eyebrow">The challenge</p>
+				<h2>You already did the hard part.</h2>
+				<p>You created the resource. The planning, the design, the previews, the polish &mdash; done.</p>
+				<p>
+					Then the second job begins. Uploading the same files again. Rewriting the description.
+					Re-entering the title. Redoing the keywords and tags. Reformatting everything for
+					another marketplace&rsquo;s requirements.
+				</p>
+				<p>Then keeping every version up to date, forever.</p>
+				<div class="quote">
+					<p>&ldquo;I already created the resource.</p>
+					<p>Why am I doing all this work again?&rdquo;</p>
+				</div>
+				<p class="closing-line">
+					You became a teacherpreneur to create &mdash; not to copy and paste listings all day.
+				</p>
 			</div>
+			<figure class="art" data-marketplace-band>
+				<img
+					src="/images/challenge-illustration-placeholder.webp"
+					alt="A teacher at her laptop, the same resource waiting to be listed again on TPT, Tes, Classful and Teach Simple"
+					width="640"
+					height="520"
+					loading="lazy"
+					decoding="async"
+				/>
+			</figure>
 		</div>
 	</section>
 
-	<section class="section" id="how">
-		<div class="wrap">
-			<h2>How it works</h2>
-			<p class="lede">Three steps. {availability}</p>
-			<div class="grid-3">
-				{
-					steps.map((step, index) => (
-						<div class="panel step">
-							<span class="n" aria-hidden="true">{index + 1}</span>
-							<h3>{step.h}</h3>
-							<p>{step.p}</p>
-						</div>
-					))
-				}
+	<section class="section band-solution" id="how">
+		<div class="wrap split">
+			<div class="copy">
+				<p class="eyebrow">The solution</p>
+				<h2>You don&rsquo;t need more resources. You need more from your resources.</h2>
+				<p>
+					Bring your existing catalogue into Teachouse, then cross-list, update and manage it
+					across multiple marketplaces &mdash; all from one home.
+				</p>
+				<div class="steps">
+					{
+						steps.map((step, index) => (
+							<>
+								{index > 0 && (
+									<svg class="step-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+										<path d="M4 12h15" />
+										<path d="M13 6l6 6-6 6" />
+									</svg>
+								)}
+								<div class="step">
+									<span class="glyph">
+										{index === 0 && (
+											<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+												<path d="M12 3v10" />
+												<path d="M8 9l4 4 4-4" />
+												<path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+											</svg>
+										)}
+										{index === 1 && (
+											<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+												<path d="M7 17h9a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 6.3 9.2A3.9 3.9 0 0 0 7 17z" />
+												<path d="M12 21v-7" />
+												<path d="M9.5 16.5 12 14l2.5 2.5" />
+											</svg>
+										)}
+										{index === 2 && (
+											<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+												<circle cx="12" cy="12" r="2.9" />
+												<path d="M10.4 3.4h3.2l.4 2 1.7 1 2-.7 1.6 2.8-1.6 1.4v2.2l1.6 1.4-1.6 2.8-2-.7-1.7 1-.4 2h-3.2l-.4-2-1.7-1-2 .7-1.6-2.8 1.6-1.4v-2.2L4.4 8.5 6 5.7l2 .7 1.7-1z" />
+											</svg>
+										)}
+									</span>
+									<h3>{step.h}</h3>
+									<p>{step.p}</p>
+								</div>
+							</>
+						))
+					}
+				</div>
+				<div class="actions">
+					<a class="cta" href="/pricing/#founding">Join the Founding 100</a>
+					{/* The mockup's second button reads "See how it works", which is
+					    this section; from here the useful next step is the price. */}
+					<a class="link" href="#pricing">See pricing</a>
+				</div>
+				<p class="aside">
+					Some of the work runs on your own computer, under your own login, so you install a
+					small app once. Everything else is in your browser.{' '}
+					{
+						downloadUrl ? (
+							<a class="link" href={downloadUrl}>
+								Download Teachouse
+							</a>
+						) : (
+							<span class="pending">Download link to come.</span>
+						)
+					}
+				</p>
+				{/* The row sits after the sentence rather than inside it: the aside is
+				    a paragraph, and a list nested in a `p` is closed by the parser
+				    before it is drawn. */}
+				<PlatformRow />
 			</div>
-			<p class="aside">
-				One thing to know before you start: some marketplace work needs a small app, installed
-				once, because Teachouse is built to do that work on your own computer under your own
-				login. You manage everything else in a browser.{' '}
-				{
-					downloadUrl ? (
-						<a class="link" href={downloadUrl}>
-							Download Teachouse
-						</a>
-					) : (
-						<span class="pending">Download link to come.</span>
-					)
-				}
-			</p>
-			{/* The row sits after the sentence rather than inside it: the aside is a
-			    paragraph, and a list nested in a `p` is closed by the parser before
-			    it is drawn. */}
-			<PlatformRow />
+			{/* The placeholder carries its own rounded frame, its shadow and the
+			    mint it sits on, because it is a crop of the mockup; it takes no
+			    frame of ours. It draws marketplace names, hence the band. */}
+			<figure class="art" data-marketplace-band>
+				<img
+					src="/images/solution-console-placeholder.webp"
+					alt="The Teachouse catalogue, with one resource being published to TPT, Tes, Classful and Teach Simple at once"
+					width="400"
+					height="230"
+					loading="lazy"
+					decoding="async"
+				/>
+			</figure>
 		</div>
 	</section>
 
 	<Pricing />
-	<Migrations />
+	<Testimonials />
 	<Faq />
-
-	<section class="section closing">
-		<div class="wrap">
-			<h2>Put your catalogue in every shop you sell in</h2>
-			<p class="lede">
-				Start on the free tier, connect one marketplace, and look at your own listings in
-				Teachouse before you decide anything.
-			</p>
-			<div class="actions">
-				<a class="cta large" href={loginUrl}>Start free</a>
-			</div>
-			<p class="under">One marketplace, 20 resources and manual sync, with no card.</p>
-		</div>
-	</section>
 </Base>

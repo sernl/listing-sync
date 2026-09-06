@@ -92,11 +92,11 @@
 		description="What you are on, what it costs, and when it renews."
 	/>
 
-	<Panel title="What is recorded" description="Read from the billing service, not from this page.">
+	<Panel title="Your plan" description="Read from the billing service, not from this page.">
 		{#if billing.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if billing.isError}
-			<p class="quiet">Your billing could not be read.</p>
+			<p class="quiet">We could not read your billing.</p>
 		{:else}
 			<p>{standing.headline}</p>
 			<p class="quiet">{standing.detail}</p>
@@ -120,7 +120,7 @@
 		{/if}
 	</Panel>
 
-	<Panel title="Plans" description="What each plan allows. Every figure is per organisation.">
+	<Panel title="Plans" description="What each plan lets you do. Every figure is per account.">
 		<div class="acct-cadence">
 			<Toggle bind:checked={yearly} label="Pay yearly" />
 			{#if monthsFree !== null}

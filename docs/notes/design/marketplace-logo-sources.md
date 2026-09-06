@@ -3,9 +3,10 @@
 Where every logo on the Marketplaces page came from, so a later reader can check a mark against its source rather than trusting the file.
 
 - date: 2026-09-05
-- status: twenty marks land and are shown, every one with a source row; two more were fetched and are deliberately not landed; amended 2026-09-06 twice, first when eighteen of these files were copied to the public marketing site and then when the founder reversed both exclusions that amendment carried — Etsy and Shopify joined the public band, and two vendor marks landed under their owners' published terms, which "Browser and platform marks" below records
+- status: twenty marks land and are shown, every one with a source row; two more were fetched and are deliberately not landed; amended 2026-09-06 twice, first when eighteen of these files were copied to the public marketing site and then when the founder reversed both exclusions that amendment carried — Etsy and Shopify joined the public band, and two vendor marks landed under their owners' published terms, which "Browser and platform marks" below records; amended 2026-09-07 when the founder decided not to send either permission request, which "The two requests the founder is asked to make" below records
 - decisions it implements: the founder's 2026-09-05 decision to show every marketplace's logo under a disclaimer, recorded in `docs/design/decisions.md`
 - research it rests on: `marketplace-catalogue-1.md` and `marketplace-catalogue-2.md` in this directory
+- amended 2026-09-11: the three authorable marks, `tes-mark`, `tpt-mark` and `etsy`, are now SVG files traced from the PNG files the rows below record (one potrace pass per colour, fills set to the source's own colours), because the form draws them as cached icon tiles; the PNG files are deleted from `web/static/marketplaces/` and `apps/landing/public/marks/`, the rows below stand as the record of where the drawings came from, and nothing new was fetched
 
 This note lives here rather than beside the images because `web/static/` is published unauthenticated by `tam-server`'s `ServeDir`.
 A file in that directory is a public document, and this one reasons about brand rules we knowingly accept some risk against, which is not something to serve at a URL.
@@ -259,10 +260,15 @@ It is `vendors/` rather than `platforms/` because `web/src/lib/platforms.ts` alr
 Neither is speculative: each is the owner's own published route to the permission, and each would land as a change to one table.
 Neither has been sent, and nothing has been requested from either owner, which is what the shipped comments now say.
 
+Amended 2026-09-07: the founder decided on 2026-09-07 not to send either request, and neither will be.
+Both letters stay below as drafted, each marked not sent by decision, so a later reader can see what was asked for and declined rather than only that nothing was sent.
+The Chrome tile keeps its `Google Chrome™` wordmark form and the Windows tiles keep a glyph of ours with the name in text, exactly as they stand; the decision is recorded in `../../design/decisions.md`.
+
 Each request is below as a covering note, saying where it goes and what it rests on, and then as a letter to send as it stands.
 The letters name the current public host, `teachouse.stowiq.io`; replace it with `teachouse.io` after the cutover recorded in `landing-page.md`.
 
 Request 1, to Google, for the Chrome product icon.
+Not sent, by the founder's decision of 2026-09-07.
 
 The covering note.
 The route is a form rather than an address: create a Partner Marketing Hub account at https://partnermarketinghub.withgoogle.com/ and open a request for approval to use the Chrome product icon.
@@ -292,6 +298,7 @@ The letter.
 > Teachouse
 
 Request 2, to Microsoft, for the Windows symbol.
+Not sent, by the founder's decision of 2026-09-07.
 
 The covering note.
 The address is trademarks@microsoft.com.

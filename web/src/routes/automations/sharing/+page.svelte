@@ -10,6 +10,7 @@
 	import Toggle from '$lib/Toggle.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
+	import { MARKETPLACE_WORD } from '$lib/platforms';
 	import { columnCopy, panelCopy, readState } from '$lib/pages/automations/read-state';
 	import {
 		DISABLED_REASON,
@@ -103,7 +104,7 @@
 					{#if copy.body}<p class="quiet">{copy.body}</p>{/if}
 				</Panel>
 			{:else if shown !== null}
-				<Panel title={shown.name} description={SETTINGS_ARE_A_PREVIEW}>
+				<Panel title={MARKETPLACE_WORD[shown.marketplace]} description={SETTINGS_ARE_A_PREVIEW}>
 					<div class="rule-row">
 						<span>Active rules (0)</span>
 						<span>None yet</span>

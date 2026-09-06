@@ -26,7 +26,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tam_marketplace::ImportedListing;
+use tam_marketplace::{ImportedListing, ListingState};
 use tam_types::{ContentHash, FileKind, Marketplace, ScanOutcome, Timestamp};
 use tokio::sync::Mutex;
 
@@ -42,7 +42,7 @@ pub use tam_engine_driver::import::{
 };
 
 use crate::entitlement::EntitlementGate;
-use crate::heartbeat::{ControlPlaneError, PlaneFuture};
+use crate::heartbeat::ControlPlaneError;
 use crate::ledger::LedgerTransport;
 
 /// The control-plane path one page of the catalogue is posted to.
@@ -78,6 +78,40 @@ pub const ENUMERATION_BUDGET: core::time::Duration = core::time::Duration::from_
 /// round trips.
 pub const PAGE_SIZE: usize = 25;
 
+/// Why the seller's catalogue, or one resource in it, could not be read.
+///
+/// Its own type rather than [`crate::heartbeat::ControlPlaneError`], whose
+/// sentences name the control plane: every failure here is on the marketplace
+/// side of this device, and the seller reads these words on the request page
+/// as the reason a listing did not cross.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceError {
+    /// This device could compose no request for the marketplace: it holds no
+    /// session for it, or the client over the one it holds could not be built.
+    NoClient(String),
+    /// The marketplace answered, and this is what it said.
+    Marketplace {
+        marketplace: Marketplace,
+        why: String,
+    },
+}
+
+impl core::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoClient(why) => f.write_str(why),
+            Self::Marketplace { marketplace, why } => write!(f, "{marketplace:?} answered: {why}"),
+        }
+    }
+}
+
+impl core::error::Error for SourceError {}
+
+/// One read of the seller's catalogue, boxed for the same reason
+/// [`crate::heartbeat::PlaneFuture`] is.
+pub type SourceFuture<'a, T> =
+    core::pin::Pin<Box<dyn core::future::Future<Output = Result<T, SourceError>> + Send + 'a>>;
+
 /// The seller's own catalogue, as this device can read it.
 ///
 /// A seam over the marketplace adapter rather than the adapter itself, for the
@@ -90,13 +124,13 @@ pub trait CatalogueSource: Send + Sync {
     /// refuses rather than returning a truncation, which is the contract
     /// `list_own_resources` already keeps: a short catalogue read as complete
     /// would silently migrate part of a shop.
-    fn list(&self) -> PlaneFuture<'_, Vec<i64>>;
+    fn list(&self) -> SourceFuture<'_, Vec<i64>>;
 
     /// One listing, verbatim, for canonicalisation.
-    fn read(&self, resource: i64) -> PlaneFuture<'_, ImportedListing>;
+    fn read(&self, resource: i64) -> SourceFuture<'_, ImportedListing>;
 
     /// The bytes of one resource's bundle.
-    fn bundle(&self, resource: i64) -> PlaneFuture<'_, Vec<u8>>;
+    fn bundle(&self, resource: i64) -> SourceFuture<'_, Vec<u8>>;
 }
 
 /// What one pass did.
@@ -437,6 +471,17 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
             .read(locator)
             .await
             .map_err(|why| format!("its listing could not be read: {why}"))?;
+        // Skipped by its state rather than by its download failing: a draft
+        // has no published bundle, and the page its manifest route answers
+        // with reads as a dead session to a classifier that never sees the
+        // state. The seller is told the one thing that changes it.
+        if listing.state == Some(ListingState::Draft) {
+            return Err(format!(
+                "it is a draft on {:?}, and a draft has no published file to bring across; \
+                 publish it there and import again",
+                self.permission.marketplace
+            ));
+        }
         let bundle = self
             .source
             .bundle(locator)
@@ -554,10 +599,11 @@ mod tests {
     use crate::device::DeviceId;
     use crate::entitlement::{Claims, Entitlement, EntitlementGate};
     use crate::heartbeat::{ControlPlaneError, PlaneFuture};
+    use crate::import::{SourceError, SourceFuture};
     use crate::ledger::LedgerTransport;
     use core::sync::atomic::AtomicBool;
     use std::sync::Arc;
-    use tam_marketplace::{ImportedListing, RemoteListingId};
+    use tam_marketplace::{ImportedListing, ListingState, RemoteListingId};
     use tam_types::{CopyFormat, FileKind, ImportedPrice, Marketplace, ScanOutcome, Timestamp};
     use tokio::sync::Mutex;
 
@@ -569,7 +615,7 @@ mod tests {
     const NOW: Timestamp = Timestamp(NOW_SECONDS * 1_000);
     const PDF: &[u8] = b"%PDF-1.7 the seller's own worksheet";
 
-    fn listing(id: i64) -> ImportedListing {
+    fn listing(id: i64, state: Option<ListingState>) -> ImportedListing {
         ImportedListing {
             remote: RemoteListingId::Tes {
                 url: format!("https://www.tes.com/api/v2/resources/{id}"),
@@ -580,7 +626,14 @@ mod tests {
             native: Vec::new(),
             rights: None,
             price: ImportedPrice::Free,
-            state: None,
+            state,
+        }
+    }
+
+    fn tes_answered(why: &str) -> SourceError {
+        SourceError::Marketplace {
+            marketplace: Marketplace::Tes,
+            why: why.to_owned(),
         }
     }
 
@@ -591,6 +644,9 @@ mod tests {
         /// Resources whose bundle fetch fails, so one bad resource in a shop
         /// can be driven without failing the others.
         unfetchable: Vec<i64>,
+        /// Resources the marketplace holds as drafts, whose bundle the pass
+        /// must never ask for.
+        drafts: Vec<i64>,
     }
 
     impl Scripted {
@@ -599,23 +655,34 @@ mod tests {
                 catalogue: Ok((1..=count).collect()),
                 bundle,
                 unfetchable: Vec::new(),
+                drafts: Vec::new(),
             }
         }
     }
 
     impl CatalogueSource for Scripted {
-        fn list(&self) -> PlaneFuture<'_, Vec<i64>> {
-            Box::pin(async move { self.catalogue.clone().map_err(ControlPlaneError::Refused) })
+        fn list(&self) -> SourceFuture<'_, Vec<i64>> {
+            Box::pin(async move { self.catalogue.clone().map_err(|why| tes_answered(&why)) })
         }
 
-        fn read(&self, resource: i64) -> PlaneFuture<'_, ImportedListing> {
-            Box::pin(async move { Ok(listing(resource)) })
-        }
-
-        fn bundle(&self, resource: i64) -> PlaneFuture<'_, Vec<u8>> {
+        fn read(&self, resource: i64) -> SourceFuture<'_, ImportedListing> {
             Box::pin(async move {
+                let state = if self.drafts.contains(&resource) {
+                    Some(ListingState::Draft)
+                } else {
+                    None
+                };
+                Ok(listing(resource, state))
+            })
+        }
+
+        fn bundle(&self, resource: i64) -> SourceFuture<'_, Vec<u8>> {
+            Box::pin(async move {
+                if self.drafts.contains(&resource) {
+                    return Err(tes_answered("a draft's bundle was asked for"));
+                }
                 if self.unfetchable.contains(&resource) {
-                    return Err(ControlPlaneError::Refused("the session expired".to_owned()));
+                    return Err(tes_answered("the session expired"));
                 }
                 Ok(self.bundle.clone())
             })
@@ -973,6 +1040,62 @@ mod tests {
         );
     }
 
+    /// A draft is skipped by its state, with the sentence that names what
+    /// changes it, and its bundle is never asked for.
+    ///
+    /// The founder's 2026-09-07 import skipped both drafts in the shop as
+    /// "the control plane refused: SessionExpired": the marketplace's answer
+    /// was rendered as the control plane's, in the classifier's own
+    /// vocabulary, for a resource whose only fact was that it was a draft.
+    #[tokio::test]
+    async fn a_draft_is_skipped_by_its_state_and_its_bundle_is_never_asked_for() {
+        let plane = Arc::new(FakePlane::default());
+        let mut source = Scripted::of(3, PDF.to_vec());
+        source.drafts = vec![2];
+        let report = pass(source, &plane)
+            .run(NOW, |_| {})
+            .await
+            .expect("a draft costs that draft and not the migration");
+
+        assert_eq!(report.described, 2, "the two published ones crossed");
+        let [skipped] = report.skipped.as_slice() else {
+            panic!("one skip, and got {:?}", report.skipped);
+        };
+        assert_eq!(skipped.locator, Locator::from_resource_id(2));
+        assert!(
+            skipped.why.as_str().contains("draft on Tes")
+                && skipped.why.as_str().contains("publish it there"),
+            "the seller reads what it is and what changes it: {}",
+            skipped.why
+        );
+        assert!(
+            !skipped.why.as_str().contains("could not be fetched"),
+            "and no download was attempted for it: {}",
+            skipped.why
+        );
+    }
+
+    /// The marketplace's refusal is reported as the marketplace's, in a
+    /// sentence, rather than as the control plane's.
+    #[tokio::test]
+    async fn a_marketplace_refusal_is_attributed_to_the_marketplace() {
+        let plane = Arc::new(FakePlane::default());
+        let mut source = Scripted::of(2, PDF.to_vec());
+        source.unfetchable = vec![1];
+        let report = pass(source, &plane)
+            .run(NOW, |_| {})
+            .await
+            .expect("the pass completes");
+
+        let [skipped] = report.skipped.as_slice() else {
+            panic!("one skip, and got {:?}", report.skipped);
+        };
+        assert_eq!(
+            skipped.why.as_str(),
+            "its file could not be fetched: Tes answered: the session expired"
+        );
+    }
+
     /// An empty catalogue still completes, and is not a failure.
     ///
     /// Both halves matter. Completing is what mints the jobs, so a pass that
@@ -1040,6 +1163,7 @@ mod tests {
             catalogue: Err("403".to_owned()),
             bundle: PDF.to_vec(),
             unfetchable: Vec::new(),
+            drafts: Vec::new(),
         };
         let why = pass(source, &plane)
             .run(NOW, |_| {})

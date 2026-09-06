@@ -699,3 +699,99 @@ The version it replaces asserted no read at all and tried only INSERT, so the wr
 The engine's grant on `notification` is `INSERT` alone for the same reason.
 Nothing on an engine path reads that table — `record` is an `INSERT ... ON CONFLICT DO NOTHING` with no `RETURNING` — and nothing on an engine path marks a row read, the only caller of `mark_read_through` being the API route on the application pool.
 A cross-tenant role holding `UPDATE` there could mark every organisation's inbox read and take from a seller the record that they had not yet seen a run.
+
+## A provider-supplied address counts as verified, 2026-09-07
+
+The completion mail goes only to an address the identity service vouches for, and whether it vouches is a field better-auth fills from the provider at sign-in.
+Google sends `email_verified` on every id token; Microsoft Entra sends it only as an optional claim an app registration has to be configured for, so better-auth 1.7.2 defaults a Microsoft address to unverified (`packages/core/src/social-providers/microsoft-entra-id.ts` in the pinned checkout, and the same in the installed dist).
+Under the rule as first built, every seller who signed in with Microsoft would have had their completion mail dead-lettered on its first attempt, into a row nothing read.
+
+The founder decided on 2026-09-07 that an address Google or Microsoft supplied at sign-in counts as verified.
+`tam-auth` maps both providers' profiles through `vouchedByProvider` (`auth/src/provider-profile.ts`), which answers verified for any non-blank address the provider supplied; both providers spread that answer over their own default, so it is the last word, and a profile with no address stays unverified.
+A password sign-up is unchanged and verifies through the confirmation mail as before.
+
+The drainer's side of the rule changes with it.
+An address the identity service will not vouch for, or a subject it holds no address for, now completes the message with a logged line naming the subject and nothing sent, rather than dead-lettering it: a retry cannot change either answer, and a dead letter nobody reads is a worse record than a log line.
+An unreachable identity service stays retryable, and a relay's refusal still dead-letters, because those are the cases the attempt budget exists for.
+
+## A price crosses in its own unit and its own currency, or not at all, 2026-09-07
+
+The founder's first live migration imported two £5.00 Tes listings as £500.00.
+`TesAdapter::fetch_for_import` read the resource state's `price` as a major-unit amount and multiplied it by a hundred, while every other reader and writer in the adapter carries that field as the wire's own integer of minor units: the captured publish body reads `"price": 500` for GBP 5.00 and the dashboard rows carry the same integer as `price_pence`.
+The read now carries the integer without conversion and refuses a number with a fractional part rather than rounding it, and the one fixture that had encoded the major-unit reading, `4.5` for 450 pence in `crates/tam-import/tests/import.rs`, is corrected to the wire's `450`.
+
+No rate is ever invented on the way to another marketplace.
+The TPT and Tes write adapters already refused a price denominated in a currency their inventory does not sell in, naming both currencies; that refusal surfaced only at submit, as a failed attempt.
+The projection now blocks the same condition as `ProjectionBlocked::CurrencyMismatch`, gate `currency_mismatch`, before any marketplace request, so a GBP-priced product mapped to TPT parks on a named condition the seller clears by restating the price in USD on the listing.
+A rate table, and any choice about who sets a rate and when it is re-read, is a separate founder decision and is recorded here as owed rather than taken.
+
+## The two logo permission requests are not sent, 2026-09-07
+
+"Every mark we may lawfully show is shown, in its owner's colours, 2026-09-06" said two permissions were being sought: a Partner Marketing Hub approval from Google for the Chrome product icon, and a trademark use licence from Microsoft for the Windows symbol.
+On 2026-09-07 the founder decided not to send either request, and that sentence is superseded.
+
+What stands is what was already drawn while the requests were pending.
+The Chrome tile keeps Google's full product name, `Google Chrome™`, set in our own type, with the Chrome trademark line beneath the grid.
+The Windows download card and the landing page's platform row keep a neutral glyph of ours, untinted, with the name "Windows" in text and Microsoft's trademark line beneath.
+Neither form is provisional any longer: each is the shipped design, and `downloads.test.ts` and `catalogue.test.ts` hold both rows as they are.
+
+The drafted letters stay in `../notes/design/marketplace-logo-sources.md`, each marked not sent by this decision, so the route to either permission is recorded should a later decision reopen it.
+Reopening is a fresh founder decision rather than an application of this one, and it lands as a change to one table on each side, exactly as the superseded entry described.
+
+What is deliberately not claimed: nothing here says either owner would have refused, and nothing says the wordmark forms are the better design.
+It says the founder chose not to ask, and that the console and the site state that rather than a pending request.
+
+## The profile picture is the user's, named by a handle and served to its owner alone, 2026-09-07
+
+A seller can set a picture for themselves, and it belongs to the person rather than the organisation: `app_user.avatar_hash` (migration 0064) names it, so an invited second user does not inherit a face that is not theirs.
+The column carries the same `(org_id, hash)` foreign key onto `blob` that the import row's cover carries, so it can name only bytes this organisation sealed, and the bytes arrive through `POST /{version}/uploads` slot-bound as a picture: no second upload path, no second store, no image processing, and the picture is sized by the console's CSS alone.
+The profile write repeats the thumbnail slots' three checks, held by this organisation, bounded, and read back as a picture, and `GET /{version}/profile/avatar` serves the signed-in user's own bytes through the image answer every other picture route uses.
+No profile route takes a user in its path or its body, and a body that names one is refused rather than narrowed.
+The engine's column-scoped read on `app_user` from 0063 does not extend to the column, and nothing on an engine path draws a picture; `tam_backoffice` reads the hash under its existing table-wide grant on `app_user`, which is a content address and not the bytes.
+Replacing or removing the picture frees no storage, as removing any file does not.
+
+## The Teachouse brand kit replaces Pounamu on every surface, 2026-09-11
+
+The founder delivered a brand kit on 2026-09-11: Indigo `#1E2A5A` as the primary, Teal `#00B894` as the secondary, Lavender `#C8B4FF` and Peach `#FFD6B3` as accents, Cream `#F8FAF8` as the ground, Charcoal `#2D3748` for text and Slate `#64748B` for secondary text, with Success, Warning and Error at `#10B981`, `#F59E0B` and `#EF4444`; Poppins for headings and Inter for body; pill buttons; and one logo, the "TeacHouse" wordmark whose H is a house, over the tagline "Teach. Create. Inspire."
+It is applied exactly, and it supersedes Pounamu (2026-09-06) the way Pounamu superseded Kauri: one live palette, the old one retired rather than kept.
+The console, the landing site, the desktop and Android icons, the offline page and the mail marks all draw from `web/static/brand/` and the token block in `web/src/lib/styles/tokens.css`; the landing's `site.css` carries the same values and the console's token test holds the two together.
+Both typefaces are self-hosted, as the desktop and Android content-security-policy requires.
+The house on an indigo tile is the favicon and the app icon; the 2026-09-06 mark and its note are superseded, and the regeneration procedure in `../notes/design/product-icon.md` stands.
+
+## The landing page is the founder's mockup, and its pricing replaces the 2026-09-05 tiers, 2026-09-11
+
+The founder supplied a full mockup of the public site and chose on 2026-09-11 that it is built section for section: hero, "You already did the hard part", "You need more from your resources", pricing, testimonials, footer.
+Its pricing is the pricing: a one-off Catalogue Import ladder of $47 up to 20 resources, $77 up to 50, $127 up to 100 and $247 up to 250; a Teachouse Subscription paid monthly or annually; and a Founding 100 offer of 25 percent off the first year, 20 percent off thereafter, the first 20 resources imported free, and 100 places.
+The Free, Solo, Studio and Publisher tiers and the migration bands approved on 2026-09-05 are withdrawn from the site; the subscription's monthly figure is carried from the old Studio price until the founder states another, and `apps/landing/src/pricing.js` says so.
+The mockup names TPT, Tes, Classful and Teach Simple in its hero, its catalogue card and its illustration, so "Marketplace marks on the public site, and copy that names no marketplace, 2026-09-06" is superseded in its second half: the copy gate now exempts the bands the mockup draws marks in and holds the rest of the site to the old rule.
+The photo and the illustration are crops of the mockup itself, shipped as placeholders until the founder supplies originals, and the testimonial band renders nothing until a real quote exists: no invented endorsement ships.
+
+## The form shows one Tes, and the region is a Tes field, 2026-09-11
+
+The founder's rule is that a teacher choosing where a listing goes sees one Tes, not three.
+The backend already has one `Marketplace::Tes`; the inventories `TesGb`, `TesUs` and `TesNz` stay, because they carry the currency, the age field, the taxonomy tree and the source and target of the GB-to-NZ duplication the wedge is built on.
+The console collapses them at presentation: a single Tes tile among the marketplace tiles, and inside the Tes-only panel a Curriculum field with England, United States and New Zealand as ticks, which is the field Tes's own form asks and is what "Wedge reorientation, 2026-08-25" said market targeting is.
+A tick maps to an inventory; two ticks list on two.
+Nothing on the wire, in the schema or in the crosswalk changes.
+
+## A British year is a declared equivalent of an American grade, 2026-09-11
+
+The crosswalk never inverts an age band into a year, because a band covers several years and inverting it would invent a distinction the band dropped; that rule stands for projection.
+The founder decided on 2026-09-11 that the form does the translation for a teacher who knows only one system, by declaration rather than inference: Reception is Pre-K, Year 1 is Kindergarten, Year N is Grade N minus one through Year 13 as 12th Grade, and the bands read Primary School for Elementary, Secondary School for Middle School, College for High School and University for College.
+The table lives in `tam-taxonomy`, the authoring vocabulary serves each grade with its British label beside the American one, and the form's toggle relabels one set of ticks.
+A teacher picks in either system and is never asked for both.
+
+## The preview is made on the seller's device with two web dependencies, 2026-09-11
+
+A TPT preview is what a buyer sees of a resource before paying, and the founder asked for one a teacher can make from the file: choose pages, and optionally watermark them with the seller's name.
+No PDF library exists in the workspace and the pipeline's cover for a PDF is a placeholder card; a native renderer on the server would break the pure-Rust rule the portable crates hold.
+The founder approved `pdfjs-dist` and `pdf-lib` as web dependencies for this purpose on 2026-09-11: the console renders the pages, the teacher ticks them, the new document is assembled in the browser and uploaded through the existing upload route as the product's preview, which keeps the bytes on the seller's device as D27 wants and reaches the desktop and Android through the webview without a client release.
+What is not claimed: TPT's preview slot has never been exercised by a capture, so the preview is stored and shown here today and reaches TPT once that slot is captured under supervision, which is a named follow-up rather than a thing this decision delivers.
+The video preview slot the founder's feedback also mentions is set aside by the founder on the same day and is not built.
+
+## The form and every page speak to a teacher, 2026-09-11
+
+The founder's feedback of 2026-09-11 found the console's copy written for developers.
+Every sentence on the new-resource form and on the other pages is rewritten to one rule: say what to do, in a short sentence, and never explain why a rule exists unless the teacher has to act on it.
+"Shelf" is "category"; "Localisation" is spelled "Localization" on screen; the sidebar reads Import, Crosslist and Automations in the founder's words; marketplaces are chosen from icon tiles at the top of the form, with each marketplace's own requirements grouped under a panel headed "TPT only" or "Tes only"; the errors are buttons that take the teacher to the section; and the button says "Create listing".
+The sentences that carried a decision number as their justification (D6, D7, D8, D32) keep the behaviour those decisions fixed; only the explanation leaves the screen and stays in this record.

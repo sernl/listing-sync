@@ -2,7 +2,7 @@
 	import { tick } from 'svelte';
 	import type { FacetView } from '$lib/api';
 	import Button from '$lib/Button.svelte';
-	import { closes, doneLabel, pressedInside, returnsFocus } from '$lib/picker-dismissal';
+	import { closes, doneLabel, focusLeft, pressedInside, returnsFocus } from '$lib/picker-dismissal';
 	import { atCap, counterOf, searchFacets, togglePick } from '$lib/tpt-form';
 
 	let {
@@ -43,14 +43,21 @@
 	// Focus goes back to the search box the seller opened the picker from
 	// rather than through `$lib/focus-return`: that module answers where focus
 	// goes when the control holding it has left the document, and this one is
-	// still in it.
-	async function close() {
-		const held = anchor !== null && anchor.contains(document.activeElement);
+	// still in it. `held` is whether focus was inside the picker, and a close
+	// on focus leaving passes false: pulling focus back from the field the
+	// seller tabbed to would trap them here.
+	async function close(held = anchor !== null && anchor.contains(document.activeElement)) {
 		const coarse = window.matchMedia('(pointer: coarse)').matches;
 		open = false;
 		await tick();
 		if (returnsFocus(held, coarse)) {
 			search?.focus();
+		}
+	}
+
+	function blurred(event: FocusEvent) {
+		if (open && focusLeft(event.relatedTarget, anchor) && closes({ kind: 'focusLeft' })) {
+			void close(false);
 		}
 	}
 
@@ -139,7 +146,7 @@
      everything Escape does here the Done button does too, and it is the button
      that carries the name and the focus ring. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="field fp" bind:this={anchor} onkeydown={keyed}>
+<div class="field fp" bind:this={anchor} onkeydown={keyed} onfocusout={blurred}>
 	<span id="{base}-label">
 		{label}{#if required}<span class="req">Required</span>{/if}
 		<span class="fp-count" class:over={counter.over}>{counter.text}</span>
@@ -180,7 +187,7 @@
 		     sheet is still under the finger when it lifts; `pressedInside`
 		     says what a close on the press lets the tap fall through to. -->
 		<div class="fp-scrim" aria-hidden="true" onclick={dimmed}></div>
-		<div class="fp-sheet">
+		<div class="fp-sheet" role="dialog" aria-label={label}>
 			<div class="fp-list" role="group" aria-labelledby="{base}-label">
 				{#if matches.length === 0}
 					<p class="fp-note">Nothing matches “{query}”.</p>
@@ -199,7 +206,10 @@
 					{/each}
 				{/if}
 			</div>
-			<div class="fp-acts">
+			<!-- Polite and on the row rather than the button: Done's words change
+			     under a tick while focus is on the tick, and a button's own name
+			     changing is not announced. -->
+			<div class="fp-acts" aria-live="polite">
 				<Button tier="primary" onclick={done}>{doneLabel(chosen.length)}</Button>
 				{#if full}
 					<span class="hint">That is the limit TPT's own form states.</span>
@@ -247,7 +257,7 @@
 	}
 
 	.fp-count.over {
-		color: var(--bad);
+		color: var(--bad-ink);
 		font-weight: 600;
 	}
 

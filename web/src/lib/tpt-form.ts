@@ -29,11 +29,23 @@ import type {
 	TptBaseInput,
 	VocabularyView
 } from '$lib/api';
-import type { CopyFormat, FileRole, FormGroup, InventoryId, TermKind } from '$lib/generated/vocab';
+import type {
+	CopyFormat,
+	FileRole,
+	FormGroup,
+	InventoryId,
+	Marketplace,
+	TermKind
+} from '$lib/generated/vocab';
 import { core, loadCore } from '$lib/core';
 import { licenceElections, licenceGated, rightsOf, type LicenceIntent } from '$lib/authoring';
 import { MARKETPLACE_OF } from '$lib/listings-view';
-import { platformTitle } from '$lib/platforms';
+import {
+	MARKETPLACE_TILES,
+	MARKETPLACE_WORD,
+	TES_CURRICULA,
+	platformTitle
+} from '$lib/platforms';
 
 // Started at module scope so the rules are ready before the seller has typed
 // anything; guarded because there is no asset to fetch while prerendering.
@@ -41,64 +53,57 @@ if (typeof window !== 'undefined') {
 	void loadCore();
 }
 
-/** TPT's create form is nine sections and every one of them is a heading the
- *  seller reads. Education Standards is lifted out of Categories, where TPT
- *  nests it, because a jurisdiction picker is not a category picker. */
-export const GROUP_HEADINGS: Record<FormGroup, string> = {
+/** Where a section of the form sits, and what a refusal about it scrolls to.
+ *
+ *  A superset of the nine groups the domain names. Three of the form's bands
+ *  are the console's own — the marketplace grid at the top, the preview file
+ *  and the thumbnails — and two more are the per-marketplace panels; none of
+ *  them is a group the core refuses against, so they are added here rather
+ *  than asked of the generated union. Every refusal the core raises carries a
+ *  `FormGroup`, which is one of these by construction. */
+export type FormAnchor =
+	| FormGroup
+	| 'marketplaces'
+	| 'preview'
+	| 'thumbnails'
+	| 'tpt_options'
+	| 'tes_options';
+
+/** The heading over each band, in the order the form reads. */
+export const GROUP_HEADINGS: Record<FormAnchor, string> = {
+	marketplaces: 'Marketplaces',
 	name: 'Name',
 	files: 'Files',
+	preview: 'Preview',
+	thumbnails: 'Thumbnails (TPT layout)',
 	description: 'Description',
 	price: 'Price',
 	categories: 'Categories',
 	education_standards: 'Education Standards',
 	details: 'Details',
 	copyright: 'Copyright',
+	tpt_options: 'TPT only',
+	tes_options: 'Tes only',
 	product_status: 'Product Status'
 };
 
-/** TPT's own helper text, quoted where the DOM carries it, so a seller who
- *  knows the TPT form reads the same sentence here. */
-export const GROUP_HELP: Partial<Record<FormGroup, string>> = {
-	files: 'The file buyers download, an optional preview, and the images that front the listing.',
-	price: 'Free hides the price and the tax code, exactly as it does on TPT.',
-	categories: 'How buyers find this, and each list has its own limit.',
-	details: 'Nothing here is required.',
-	product_status: 'Active listings show up in search; inactive ones only you can see.'
+/** One short sentence under a heading, telling the teacher what to do there,
+ *  and nothing at all where the heading already says it. */
+export const GROUP_HELP: Partial<Record<FormAnchor, string>> = {
+	marketplaces: 'Choose where this goes.',
+	files: 'The files buyers download.',
+	preview: 'A free sample buyers can look at before they buy.',
+	description: 'Tell buyers what this is and how it helps.',
+	price: 'Free hides the price and tax code.',
+	categories: 'Help buyers find this.',
+	details: 'Optional.',
+	product_status: 'Active listings show up in search; a draft only you can see.'
 };
 
-/** The Education Standards heading's helper text, or nothing.
- *
- *  A function rather than an entry in `GROUP_HELP` because the number is the
- *  server's: the count was written out as "Four" and stood over a panel saying
- *  no framework was offered at all, whenever the vocabulary served none.
- *
- *  Nothing at all when none is offered, rather than a shorter version of the
- *  same fact: the picker below says it at more length, in the place the seller
- *  is already looking, and two sentences saying one thing read as two things. */
-export function standardsHelp(frameworks: number): string | undefined {
-	if (frameworks <= 0) {
-		return undefined;
-	}
-	if (frameworks === 1) {
-		return 'Optional. One framework.';
-	}
-	return `Optional. ${SPELLED[frameworks] ?? frameworks} frameworks, each searched on its own.`;
-}
-
-/** Small counts read as words in a sentence, which is the register the rest of
- *  this helper text is written in. Above ten the digit reads better than the
- *  word, and the list stops there. */
-const SPELLED: Record<number, string> = {
-	2: 'Two',
-	3: 'Three',
-	4: 'Four',
-	5: 'Five',
-	6: 'Six',
-	7: 'Seven',
-	8: 'Eight',
-	9: 'Nine',
-	10: 'Ten'
-};
+/** The Education Standards heading's helper text, or nothing where the server
+ *  serves no framework: with nothing to search the panel below says so at more
+ *  length, in the place the seller is already looking. */
+export const STANDARDS_HELP = 'Optional. Search a framework by code or words.';
 
 /** One alignment the seller claimed. */
 export interface StandardPick {
@@ -183,6 +188,16 @@ export interface TptDraft {
 	 *  between them would be the same grant issued twice. Never defaulted — a
 	 *  rights grant is the seller's to make. */
 	licence: string | null;
+	/** The tiles the seller ticked. One Tes, never three, because that is what
+	 *  the form shows. */
+	marketplaces: Marketplace[];
+	/** Where on Tes this should be listed, from the Tes panel's Curriculum
+	 *  ticks. Empty until Tes is ticked and a curriculum chosen. */
+	curricula: InventoryId[];
+	/** The two answers above, resolved to what the request carries. Held on the
+	 *  draft rather than recomputed at every reader because the refusals, the
+	 *  rail, the licence gate and both request bodies all ask for it; every
+	 *  write goes through [`withMarketplaces`], so the three cannot disagree. */
 	inventories: InventoryId[];
 	/** One marketplace's own value for one field, held only where the seller
 	 *  edited it away from the canonical one. Keyed `inventory:field`. */
@@ -240,9 +255,74 @@ export function emptyTptDraft(): TptDraft {
 		copyright: null,
 		status: '0',
 		licence: null,
+		marketplaces: [],
+		curricula: [],
 		inventories: [],
 		overrides: {}
 	};
+}
+
+// ------------------------------------------------------- the marketplaces
+
+/** What the request carries, from the two answers the form asks for.
+ *
+ *  The founder's rule of 2026-09-11 is that the form shows one Tes, so the
+ *  three Tes catalogues are not three tiles: ticking Tes says the listing goes
+ *  to Tes, and the Curriculum ticks in the Tes panel say which of its three
+ *  catalogues carry it. Nothing in the model changes — `inventories` is the
+ *  same list it always was — and the collapse is presentation alone, which is
+ *  why it is resolved here and nowhere on the wire.
+ *
+ *  Ordered by the tile grid rather than by the order the seller ticked, so two
+ *  identical listings compose one identical body. */
+export function inventoriesOf(
+	marketplaces: readonly Marketplace[],
+	curricula: readonly InventoryId[]
+): InventoryId[] {
+	return MARKETPLACE_TILES.filter(
+		(tile) => tile.authorable && marketplaces.includes(tile.marketplace)
+	).flatMap((tile) =>
+		tile.inventories.length === 1
+			? [...tile.inventories]
+			: tile.inventories.filter((inventory) => curricula.includes(inventory))
+	);
+}
+
+/** The draft with its marketplace answers replaced and the request's own list
+ *  resolved from them, which is the only way those three fields are written. */
+export function withMarketplaces(
+	draft: TptDraft,
+	marketplaces: readonly Marketplace[],
+	curricula: readonly InventoryId[]
+): TptDraft {
+	return {
+		...draft,
+		marketplaces: [...marketplaces],
+		curricula: [...curricula],
+		inventories: inventoriesOf(marketplaces, curricula)
+	};
+}
+
+/** The two answers a stored listing's inventories stand for: the inverse of
+ *  [`inventoriesOf`], so an edit form opens with the tiles the listing's own
+ *  mappings imply rather than with three Tes rows. */
+export function tilesOf(inventories: readonly InventoryId[]): {
+	marketplaces: Marketplace[];
+	curricula: InventoryId[];
+} {
+	const marketplaces = MARKETPLACE_TILES.filter((tile) =>
+		tile.inventories.some((inventory) => inventories.includes(inventory))
+	).map((tile) => tile.marketplace);
+	const curricula = TES_CURRICULA.filter((entry) => inventories.includes(entry.inventory)).map(
+		(entry) => entry.inventory
+	);
+	return { marketplaces, curricula };
+}
+
+/** Whether Tes is ticked with nowhere on Tes to put the listing, which is the
+ *  one thing the Tes panel is allowed to be incomplete about. */
+export function tesNeedsCurriculum(draft: TptDraft): boolean {
+	return draft.marketplaces.includes('Tes') && draft.curricula.length === 0;
 }
 
 // ------------------------------------------------------------- the pickers
@@ -337,6 +417,45 @@ export function gradeColumns(vocabulary: FormVocabularyView): FacetView[][] {
 	return columns;
 }
 
+/** Which words the grade grid is written in.
+ *
+ *  One selection underneath either way: the teacher picks in the system they
+ *  teach in and Teachouse writes the other one for the marketplaces that
+ *  expect it, which is the founder's rule of 2026-09-11. */
+export type GradeLabels = 'american' | 'british';
+
+/** Where the choice is remembered, so a teacher who works in years is not
+ *  asked to switch on every listing. */
+export const GRADE_LABELS_KEY = 'teachouse.grade-labels';
+
+/** One grade in the words the teacher chose, falling back to the American
+ *  label where no British one is declared.
+ *
+ *  The fall-back is the crosswalk's own shape rather than a defensive default:
+ *  Preschool, Higher Education, Adult Education and Not Grade Specific have no
+ *  year group, and inventing one would be the inference the founder's table
+ *  exists to avoid. */
+export function gradeLabel(facet: FacetView, labels: GradeLabels): string {
+	if (labels === 'american') {
+		return facet.label;
+	}
+	return facet.british_label ?? facet.label;
+}
+
+/** The heading over one column of the grade grid, in the chosen words, or the
+ *  empty string where the server headed no such column. */
+export function gradeBandLabel(
+	vocabulary: FormVocabularyView,
+	column: number,
+	labels: GradeLabels
+): string {
+	const band = vocabulary.grade_bands[column];
+	if (band === undefined) {
+		return '';
+	}
+	return labels === 'american' ? band.american : band.british;
+}
+
 /** The label for one option id, or the id itself where the list holds none.
  *  Never a reading invented here. */
 export function labelOf(options: readonly { id: string; label: string }[], id: string | null) {
@@ -344,6 +463,94 @@ export function labelOf(options: readonly { id: string; label: string }[], id: s
 		return null;
 	}
 	return options.find((option) => option.id === id)?.label ?? id;
+}
+
+// --------------------------------------------------------- the description
+
+/** What one button on the description toolbar does. */
+export type MarkKind = 'bold' | 'italic' | 'bullets' | 'numbers';
+
+/** The description after a toolbar button, and where the caret goes.
+ *
+ *  The caret matters as much as the text: a teacher who presses Bold with
+ *  nothing selected expects to type between the two pairs of asterisks rather
+ *  than after them, and one who bolded a phrase expects that phrase still
+ *  selected so a second press is undoable by eye. */
+export interface MarkedUp {
+	text: string;
+	start: number;
+	end: number;
+}
+
+const WRAP: Record<'bold' | 'italic', string> = { bold: '**', italic: '*' };
+
+/** The description with Markdown written around what the teacher selected.
+ *
+ *  Markdown rather than the marketplace's own markup: the body already travels
+ *  as `CopyFormat::Markdown` and each adapter renders it in its own way, so a
+ *  toolbar that wrote a platform's HTML would write it for every platform. */
+export function markUp(text: string, start: number, end: number, kind: MarkKind): MarkedUp {
+	if (kind === 'bold' || kind === 'italic') {
+		const mark = WRAP[kind];
+		const selected = text.slice(start, end);
+		return {
+			text: `${text.slice(0, start)}${mark}${selected}${mark}${text.slice(end)}`,
+			start: start + mark.length,
+			end: end + mark.length
+		};
+	}
+	// A list is written per line, and the lines are the whole lines the
+	// selection touches: prefixing from the middle of a line would put the
+	// bullet inside a sentence.
+	const from = text.lastIndexOf('\n', Math.max(start - 1, 0)) + 1;
+	const to = text.indexOf('\n', end) === -1 ? text.length : text.indexOf('\n', end);
+	const lines = text.slice(from, to).split('\n');
+	const marked = lines
+		.map((line, index) => `${kind === 'bullets' ? '- ' : `${index + 1}. `}${line}`)
+		.join('\n');
+	return {
+		text: `${text.slice(0, from)}${marked}${text.slice(to)}`,
+		start: from,
+		end: from + marked.length
+	};
+}
+
+/** A byte limit in the unit a teacher would say it in. Shared by the three
+ *  places that state one, so the file section and a thumbnail slot cannot
+ *  round the same number two ways. */
+export function sizeWords(bytes: number): string {
+	if (bytes >= 1024 ** 3) {
+		return `${Math.round(bytes / 1024 ** 3)} GB`;
+	}
+	return `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+/** One file the teacher added, and the handles one upload landed it as.
+ *
+ *  A ZIP uploaded to be unpacked becomes several payload handles under one
+ *  name, so the row a teacher sees is the file they chose rather than the
+ *  handles it became, and removing it removes all of them. `cover` is the
+ *  thumbnail that upload drew; only the first file's is used, because the
+ *  thumbnail is drawn from the file buyers see first. */
+export interface StoredFile {
+	name: string;
+	bytes: number;
+	payload: FileHandle[];
+	cover: FileHandle;
+	storedBytes: number;
+	storageBytesMax: number;
+}
+
+/** Every handle the added files came to, in order, with the first file's
+ *  thumbnail as the listing's cover. */
+export function payloadOf(files: readonly StoredFile[]): {
+	payload: FileHandle[];
+	cover: FileHandle | null;
+} {
+	return {
+		payload: files.flatMap((file) => file.payload),
+		cover: files[0]?.cover ?? null
+	};
 }
 
 // --------------------------------------------------------------- the price
@@ -381,9 +588,24 @@ export function suggestedAdditionalLicence(price: string, percentage: number): s
 // ------------------------------------------------------------ the refusals
 
 export interface Refusal {
-	group: FormGroup;
+	group: FormAnchor;
 	control: string | null;
 	message: string;
+}
+
+/** Which band of this form a refusal scrolls to.
+ *
+ *  The core answers in the domain's own nine groups, and this form no longer
+ *  draws two of them where the domain puts them: the copyright attestation and
+ *  the tax code are questions only TPT asks, so they live in the TPT-only
+ *  panel and a refusal about either has to land there rather than on a
+ *  Copyright heading that is not on the page or in the middle of Price. Every
+ *  other group is its own band and is left alone. */
+export function anchorOf(group: FormGroup, control: string | null): FormAnchor {
+	if (group === 'copyright' || control === 'Tax Code') {
+		return 'tpt_options';
+	}
+	return group;
 }
 
 /** Everything this form refuses, in the order the groups read.
@@ -417,14 +639,14 @@ export function refusalsOf(
 	} else {
 		for (const refusal of rules.checkDraft(draftInputOf(draft)).refusals) {
 			found.push({
-				group: refusal.group,
+				group: anchorOf(refusal.group, refusal.control ?? null),
 				control: refusal.control ?? null,
 				message: refusal.message
 			});
 		}
 	}
-	// The one rule the core does not hold, and the reason it does not: the
-	// domain describes a product, and which marketplaces to publish it to is a
+	// The rules the core does not hold, and the reason it does not: the domain
+	// describes a product, and which marketplaces to publish it to is a
 	// decision about this listing rather than a property of the product.
 	//
 	// A resource with no marketplace is a draft kept here, which is a thing a
@@ -433,25 +655,36 @@ export function refusalsOf(
 	// combination the marketplace itself will not take.
 	if (needsFileBeforeMarketplace(draft)) {
 		found.push({
-			group: 'product_status',
+			group: 'marketplaces',
 			control: null,
-			message: 'Add your file before sending this to a marketplace.'
+			message: 'Add your file before you choose a marketplace.'
 		});
 	}
-	// The second rule the core does not hold, and for the same reason: which
-	// marketplaces carry this listing is a decision about the listing, and only
-	// that decision makes a licence necessary.
-	//
+	// Tes is one tile and three catalogues, so ticking it without saying which
+	// catalogue names a marketplace the create would reach nowhere on.
+	if (tesNeedsCurriculum(draft)) {
+		found.push({
+			group: 'tes_options',
+			control: 'Curriculum',
+			message: 'Choose where on Tes this should be listed.'
+		});
+	}
 	// Refused rather than left to the server, because the server refuses it
 	// either way: `required_fields_answered` in `crates/tam-api/src/catalogue.rs`
 	// rejects a create naming a marketplace whose registry declares a required
 	// field it cannot see answered. Sending it and reading the refusal back was
 	// how every Tes create from this form failed.
-	for (const inventory of unlicensed(draft, known)) {
+	//
+	// One sentence per marketplace rather than per inventory: three Tes
+	// catalogues share one licence control, so three sentences would ask for
+	// the same answer three times.
+	for (const marketplace of new Set(
+		unlicensed(draft, known).map((inventory) => MARKETPLACE_OF[inventory])
+	)) {
 		found.push({
-			group: 'product_status',
+			group: marketplace === 'Tpt' ? 'tpt_options' : 'tes_options',
 			control: 'Licence',
-			message: `Choose a licence for ${platformTitle(inventory)}; it will not list without one.`
+			message: `Choose a licence. ${MARKETPLACE_WORD[marketplace]} needs one to list this.`
 		});
 	}
 	return found;
@@ -514,7 +747,7 @@ export function submittable(refusals: readonly Refusal[]): boolean {
 }
 
 /** The refusals belonging to one group, so a section renders its own. */
-export function refusalsIn(refusals: readonly Refusal[], group: FormGroup): Refusal[] {
+export function refusalsIn(refusals: readonly Refusal[], group: FormAnchor): Refusal[] {
 	return refusals.filter((refusal) => refusal.group === group);
 }
 
@@ -1109,6 +1342,7 @@ export function draftOf(
 		copyright: optionalId(base?.copyright_declaration_id),
 		status: base === undefined ? empty.status : String(base.status_user),
 		licence: product.rights?.native_id ?? product.rights?.segments[0] ?? null,
+		...tilesOf(inventories),
 		inventories: [...inventories]
 	};
 }
@@ -1176,18 +1410,6 @@ function storedPick(alignment: {
 	};
 }
 
-/** What the form renders and does not collect, named so the page can say so
- *  rather than implying otherwise.
- *
- *  Empty, and the page says nothing where it is. The four thumbnail slots used
- *  to be the one entry, on the reasoning that a per-slot upload needed an
- *  endpoint `POST /{version}/uploads` does not offer. That was wrong about the
- *  endpoint rather than about the slots: it takes one file per request and
- *  answers with that file's own handle, so the slot is named by which request
- *  the client made rather than by anything the wire carries, and the handles
- *  land in the sidecar's `thumbnail_hashes` in slot order. */
-export const UNCOLLECTED_FIELDS: readonly string[] = [];
-
 /** One thumbnail slot's state, in the order TPT lays the four out.
  *
  *  `local` is where the picture can be drawn from: the browser's own object
@@ -1248,25 +1470,30 @@ export function slotsSettling(slots: readonly ThumbnailSlot[]): boolean {
 	return slots.some((slot) => slot.sending);
 }
 
-/** What the seller is told once the draft exists.
+/** What the seller is told once the listing exists.
+ *
+ *  Counted in marketplaces rather than in mappings: Tes is one tile and three
+ *  catalogues, so a listing the teacher sent to TPT and Tes writes four
+ *  mappings and "four marketplaces" would be a number they never chose.
  *
  *  Three arms, and the zero one is the reason this is a function rather than a
- *  ternary in the handler: an empty mapping list fell through to the plural and
- *  read "Draft created on 0 marketplaces. Publish when you are ready.", which
- *  miscounts and then tells a seller to publish something they deliberately
- *  kept here. The page's own footer already says "kept here"; this is the one
- *  place that disagreed with it.
- *
- *  Lifted out of the template for the reason `sweep-triage.md` gives: a
- *  substitution written in markup is reachable only by rendering the page. */
+ *  ternary in the handler: an empty list fell through to the plural and read
+ *  "on 0 marketplaces", which miscounts and then tells a seller to publish
+ *  something they deliberately kept here. */
 export function createdToast(marketplaces: number): string {
 	if (marketplaces === 0) {
-		return 'Draft saved here. Choose marketplaces when you are ready.';
+		return 'Listing created.';
 	}
 	if (marketplaces === 1) {
-		return 'Draft created on one marketplace. Publish when you are ready.';
+		return 'Listing created on one marketplace.';
 	}
-	return `Draft created on ${marketplaces} marketplaces. Publish when you are ready.`;
+	return `Listing created on ${marketplaces} marketplaces.`;
+}
+
+/** How many marketplaces a set of inventories reaches, which is the figure a
+ *  teacher counted when they ticked the tiles. */
+export function marketplacesReached(inventories: readonly InventoryId[]): number {
+	return new Set(inventories.map((inventory) => MARKETPLACE_OF[inventory])).size;
 }
 
 /** Whether the create should navigate to the resource it just made.

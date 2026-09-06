@@ -27,7 +27,7 @@
 .btn.quiet {
 	border-color: transparent;
 	background: none;
-	color: var(--accent-deep);
+	color: var(--primary);
 }
 
 .btn.quiet:hover:not(:disabled) {
@@ -71,22 +71,22 @@
 
 .status.ok {
 	background: var(--ok-soft);
-	color: var(--ok);
+	color: var(--ok-ink);
 }
 
 .status.warn {
 	background: var(--warn-soft);
-	color: var(--warn);
+	color: var(--warn-ink);
 }
 
 .status.bad {
 	background: var(--bad-soft);
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 .status.run {
 	background: var(--accent-soft);
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 /* Which branch a marketplace runs on is a recorded fact rather than a state,
@@ -150,7 +150,7 @@
 }
 
 .toggle input:focus-visible + .track {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--primary);
 	outline-offset: 2px;
 }
 
@@ -197,7 +197,7 @@
 .tab-bar button[aria-current='true'] {
 	color: var(--text);
 	font-weight: 600;
-	border-bottom-color: var(--accent);
+	border-bottom-color: var(--primary);
 }
 
 /* On a phone four equal columns cut the longest label mid-word, so the tabs
@@ -284,7 +284,7 @@
 }
 
 .banner.warn > .ico {
-	color: var(--warn);
+	color: var(--warn-ink);
 }
 
 .banner.bad {
@@ -292,15 +292,29 @@
 }
 
 .banner.bad > .ico {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
+/* The kit's "Cross-listed successfully!" element: a solid teal-green disc with
+   a white tick, and the sentence's own heading in the readable green beside
+   it. The disc is drawn here rather than in the glyph, so the same icon
+   component serves all four tones. */
 .banner.ok {
 	background: var(--ok-soft);
 }
 
 .banner.ok > .ico {
-	color: var(--ok);
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	background: var(--ok);
+	color: var(--on-fill);
+	place-items: center;
+	margin-top: 0;
+}
+
+.banner.ok .t {
+	color: var(--ok-ink);
 }
 
 /* On a phone the action drops below the sentence rather than squeezing it into
@@ -537,7 +551,7 @@
 	height: 34px;
 	border-radius: 50%;
 	background: var(--accent-soft);
-	color: var(--accent-ink);
+	color: var(--primary);
 	display: grid;
 	place-items: center;
 }

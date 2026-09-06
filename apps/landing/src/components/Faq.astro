@@ -1,4 +1,9 @@
 ---
+import { founding, importLadder } from '../pricing.js';
+
+/* Every figure in an answer comes from `src/pricing.js`, so the price list and
+   the questions about it cannot disagree. */
+
 const faqs = [
 	{
 		q: 'Do you get my marketplace password?',
@@ -10,15 +15,23 @@ const faqs = [
 	},
 	{
 		q: 'Do I need to install anything?',
-		a: 'For the marketplaces that publish no interface, yes: a small app you install once on the computer that does that work. Your catalogue, your mapping decisions and your results are on our side and open in any browser.'
+		a: 'For the marketplaces that publish no interface, yes: a small app you install once on the computer that does that work. Your catalogue, your settings and your results are on our side and open in any browser.'
 	},
 	{
 		q: 'What happens to a listing when I change it?',
 		a: 'Teachouse edits the listing that is already there. It does not delete your listing and create a new one, which is the thing that would cost you its address, its reviews and the followers attached to it.'
 	},
 	{
-		q: 'What does a migration include?',
-		a: 'A fixed price for the band, quoted before we start, and 30 days of Studio so you can look over the mappings on the listings we just created.'
+		q: 'What does a catalogue import include?',
+		a: `We bring your existing resources into Teachouse for you, at the one-off price of the band you pick, from ${importLadder[0].price} for ${importLadder[0].cap.toLowerCase()} resources to ${importLadder[importLadder.length - 1].price} for ${importLadder[importLadder.length - 1].cap.toLowerCase()}. You look over every listing we created before anything is published.`
+	},
+	{
+		q: 'What is the Founding 100?',
+		a: `The first ${founding.places} teachers to join: ${founding.discountYearOne}% off your first year, ${founding.discountOngoing}% off after that, and your first ${founding.freeImports} resources imported free. When the ${founding.places} places are taken, the offer closes.`
+	},
+	{
+		q: 'Can I pay monthly?',
+		a: 'Yes. The subscription is monthly or annual, the annual price is two months cheaper, and you can cancel from the billing screen. Prices are in US dollars.'
 	},
 	{
 		q: 'Are you part of any of these marketplaces?',
@@ -30,7 +43,7 @@ const faqs = [
 <section class="section" id="faq">
 	<div class="wrap">
 		<h2>Common questions</h2>
-		<p class="lede">The six we are asked first.</p>
+		<p class="lede">The ones we are asked first.</p>
 		<div class="panel">
 			<dl class="faq">
 				{

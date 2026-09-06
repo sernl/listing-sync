@@ -56,9 +56,9 @@ export const PLATFORM_NAME: Record<Platform, string> = {
  *  logos, icons and designs "can never be used without an express license", and
  *  the Windows guidelines of February 2026 open with "A trademark use license is
  *  required to: Use any Windows logo, symbol or icon". The same document names
- *  an exception covering this exact row, and the request quoting it is drafted
- *  in `docs/notes/design/marketplace-logo-sources.md` for the founder to send,
- *  so the glyph is what stands until it is sent and answered.
+ *  an exception covering this exact row, and a request quoting it is drafted
+ *  in `docs/notes/design/marketplace-logo-sources.md`; the founder decided on
+ *  2026-09-07 not to send it, so the glyph is what stands.
  *
  *  macOS draws a glyph of ours and always will. Apple's marketing guidelines
  *  say "Don't use the standalone Apple logo", with no route to permission worth

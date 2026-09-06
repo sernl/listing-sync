@@ -1,6 +1,9 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.tam_desktop" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/brand_indigo</item>
+        <item name="colorSecondary">@color/brand_teal</item>
+        <item name="android:statusBarColor">@color/brand_indigo</item>
+        <item name="android:navigationBarColor">@color/brand_indigo</item>
     </style>
 </resources>

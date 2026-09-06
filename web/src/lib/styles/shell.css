@@ -28,20 +28,28 @@
 
 /* --- the icon rail ------------------------------------------------------- */
 
+/* Indigo, as the kit draws the console's sidebar: the rail is the one band on
+   the page that is not a light neutral, which is what makes the sections read
+   as the frame rather than as content. The icons on it are white, and the
+   section the seller is in takes the kit's mint tile with Indigo on it -- the
+   same pairing the navigation card below uses, so one active state is learned
+   once. */
 .rail {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 	gap: 12px;
-	padding: 6px 0;
+	padding: 10px 0;
+	background: var(--primary);
+	border-radius: var(--r-card);
 }
 
-/* The mark carries its own rounded square and its own ground, so this sets
-   only the size it is drawn at. */
+/* The house alone, drawn in teal on the rail's own indigo, so this sets only
+   the size. */
 .rail .mark {
 	display: block;
-	width: 34px;
-	height: 34px;
+	width: 36px;
+	height: 36px;
 	margin-bottom: 10px;
 	flex: none;
 }
@@ -52,7 +60,7 @@
 	border-radius: 10px;
 	display: grid;
 	place-items: center;
-	color: var(--muted);
+	color: color-mix(in srgb, var(--on-fill) 78%, var(--primary));
 	flex: none;
 	border: 0;
 	background: none;
@@ -60,13 +68,13 @@
 }
 
 .rail-item:hover {
-	background: var(--hover);
-	color: var(--text);
+	background: color-mix(in srgb, var(--on-fill) 14%, transparent);
+	color: var(--on-fill);
 }
 
 .rail-item[aria-current='page'] {
 	background: var(--accent-soft);
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 .rail-gap {
@@ -85,11 +93,13 @@
 	min-width: 0;
 }
 
+/* A column rather than a row: the card's head is the wordmark, the section's
+   name and the section's one sentence, stacked. */
 .nav-top {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
+	flex-direction: column;
+	align-items: start;
+	gap: 4px;
 	padding: 2px 6px 8px;
 }
 
@@ -138,12 +148,12 @@
 
 .nav-item[aria-current='page'] {
 	background: var(--accent-soft);
-	color: var(--accent-ink);
+	color: var(--primary);
 	font-weight: 600;
 }
 
 .nav-item[aria-current='page'] .ico {
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 /* Bottom-anchored, and only under Account. */
@@ -227,13 +237,15 @@
 	background: var(--bad);
 }
 
+/* The kit's search field: white, a hairline border and the 8px field shape
+   rather than the pill the strip carried before. */
 .search {
 	display: flex;
 	align-items: center;
 	gap: 7px;
-	background: var(--ground);
+	background: var(--surface);
 	border: 1px solid var(--line);
-	border-radius: var(--r-pill);
+	border-radius: var(--r-field);
 	padding: 0 12px;
 	min-height: var(--control-h);
 	min-width: 200px;
@@ -270,8 +282,8 @@
 }
 
 .search:focus-within {
-	border-color: var(--accent);
-	outline: 2px solid var(--accent);
+	border-color: var(--primary);
+	outline: 2px solid var(--primary);
 	outline-offset: 2px;
 }
 
@@ -298,7 +310,7 @@
 	height: 30px;
 	border-radius: 9px;
 	background: var(--accent-soft);
-	color: var(--accent-deep);
+	color: var(--primary);
 	display: grid;
 	place-items: center;
 	font: 600 11.5px var(--sans);
@@ -490,15 +502,17 @@
 		padding: 18px 14px 96px;
 	}
 
-	/* Five equal cells and a sixth fixed one. Account is the narrowest thing on
-	   the bar -- a 26px tile over the shortest of the six labels -- so an equal
-	   sixth column would take a sixth of the width from the five cells carrying
-	   longer words. 56px takes about eleven pixels from each of them instead,
-	   leaving 66.8px at 390px and 60.8px at 360px, the narrower of which is
-	   what the label size below is sized against. */
+	/* Six equal cells and a seventh fixed one. Account is the narrowest thing
+	   on the bar -- a 26px tile over the shortest of the labels -- so an equal
+	   column would take a seventh of the width from the six cells carrying
+	   longer words. 56px takes about nine pixels from each of them instead,
+	   leaving 55.7px at 390px and 50.7px at 360px. The sixth section costs the
+	   bar the headroom it had: at 360px the longest labels no longer fit the
+	   9px below and ellipse, which is the trade for a phone having a route to
+	   Import at all. */
 	.tabbar {
 		display: grid;
-		grid-template-columns: repeat(5, 1fr) 56px;
+		grid-template-columns: repeat(6, 1fr) 56px;
 		position: fixed;
 		inset: auto 0 0;
 		z-index: 20;
@@ -552,7 +566,7 @@
 	}
 
 	.tab-item[aria-current='page'] {
-		color: var(--accent-ink);
+		color: var(--primary);
 	}
 
 	/* The organisation's initials, in the cell the founder asked to have them
@@ -565,7 +579,7 @@
 		height: 26px;
 		border-radius: 8px;
 		background: var(--accent-soft);
-		color: var(--accent-deep);
+		color: var(--primary);
 		display: grid;
 		place-items: center;
 		font: 600 10.5px var(--sans);
@@ -588,7 +602,7 @@
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: -0.01em;
-		color: var(--accent-ink);
+		color: var(--primary);
 		overflow: hidden;
 	}
 
@@ -770,18 +784,18 @@ dialog.pal-box[open] {
 }
 
 .pal-bad {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 .pal-stale {
 	margin-top: 4px;
-	color: var(--warn);
+	color: var(--warn-ink);
 }
 
 .pal-more {
 	font-size: 12px;
 	font-weight: 600;
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 /* The top bar's own control, which now opens the palette rather than filtering

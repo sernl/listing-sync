@@ -923,16 +923,31 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         let manifest = self.send(endpoints::download_manifest_request(id)).await?;
         // A draft's manifest route redirects to an HTML `?error=notfound`
         // page, so a body that will not parse as a manifest means the
-        // resource is unpublished, not that the read failed.
+        // resource is unpublished, not that the read failed. That page is a
+        // Tes page and carries the word the sign-in sniffer keys on, so the
+        // classifier calls it a dead session; the state route, which a dead
+        // session cannot read, is what tells the two apart.
         let body = match classify_read(&manifest) {
             Ok(body) => body,
-            Err(error) => {
-                return Err(if matches!(error, AdapterError::Rejected { .. }) {
-                    no_published_bundle(id)
-                } else {
-                    error
-                })
+            Err(AdapterError::Rejected { .. }) => return Err(no_published_bundle(id)),
+            Err(AdapterError::SessionExpired) => {
+                return Err(match self.resource_state(id).await {
+                    Ok(state) if state.get("draft").and_then(Value::as_bool) == Some(true) => {
+                        no_published_bundle(id)
+                    }
+                    Ok(_) => AdapterError::Rejected {
+                        code: FailureCode::Other,
+                        detail: FailureDetail(format!(
+                            "the download manifest for resource {} answered a page rather than \
+                             a manifest while the resource itself still reads, so the session \
+                             stands and there is no bundle behind that page",
+                            id.0
+                        )),
+                    },
+                    Err(error) => error,
+                });
             }
+            Err(error) => return Err(error),
         };
         let path = endpoints::parse_download_manifest(&body, id).map_err(|error| match error {
             endpoints::DownloadManifestError::NoPublishedBundle => no_published_bundle(id),
@@ -1113,6 +1128,9 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         for orientation in string_list(state.get("curriculum")) {
             native.push(term(None, &orientation));
         }
+        if let Some(main_type) = state.get("mainType").and_then(native_id_string) {
+            native.push(term(Some(TermKind::ResourceType), &main_type));
+        }
 
         // Declared by the resource rather than guessed from the bytes. The
         // write posts the type the projection carried, so a read that assumed
@@ -1131,7 +1149,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
 
         let licence = state.get("licence").and_then(Value::as_str);
         let rights = licence.map(|token| term(Some(TermKind::Licence), token));
-        let price = self.import_price(licence, state.get("price").and_then(Value::as_f64))?;
+        let price = self.import_price(licence, state.get("price"))?;
 
         Ok(ImportedListing {
             remote: RemoteListingId::Tes {
@@ -1163,10 +1181,17 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// price is refused and a paid one without is too — so the licence is
     /// what says whether the number means anything, and an unrecognised token
     /// refuses rather than being read as free.
+    ///
+    /// The number is the wire's own integer of minor units, carried without
+    /// conversion: the captured publish body reads `"price": 500` for
+    /// GBP 5.00, the dashboard rows carry the same integer as `price_pence`,
+    /// and the draft route echoes the metadata the write posted in that unit.
+    /// This read multiplied it by a hundred until 2026-09-07, so every £5.00
+    /// listing was imported as £500.00.
     fn import_price(
         &self,
         licence: Option<&str>,
-        price: Option<f64>,
+        price: Option<&Value>,
     ) -> Result<ImportedPrice, AdapterError> {
         let Some(token) = licence else {
             return Ok(ImportedPrice::Free);
@@ -1184,17 +1209,11 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                 "{token} requires a price and the resource carried none"
             ))
         })?;
-        let pence = (value * 100.0).round();
-        if !(0.0..=1_000_000_000.0).contains(&pence) {
-            return Err(refused(format!(
-                "price {value} is outside the representable range"
-            )));
-        }
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "rounded and range-checked immediately above; the cast is the conversion"
-        )]
-        let minor_units = pence as i64;
+        let minor_units = minor_units_of(value).ok_or_else(|| {
+            refused(format!(
+                "Tes states a price as a whole number of minor units, and {value} is not one"
+            ))
+        })?;
         Ok(ImportedPrice::Paid {
             minor_units,
             // Every Tes inventory is CurrencyRule::Fixed, so the denomination
@@ -1246,6 +1265,24 @@ impl<T: Transport, F: FileSource> FirstPartyExport for TesAdapter<T, F> {
 
 /// The marketplace serialises ids sometimes as numbers and sometimes as
 /// strings; the import keeps them as strings, the edge relation's own form.
+/// The wire's price integer. A number with a fractional part is refused
+/// rather than rounded, because rounding is how a major-unit amount would
+/// pass as a hundredth of itself.
+fn minor_units_of(value: &Value) -> Option<i64> {
+    if let Some(units) = value.as_i64() {
+        return (0..=1_000_000_000).contains(&units).then_some(units);
+    }
+    let float = value.as_f64()?;
+    if float.fract() != 0.0 || !(0.0..=1_000_000_000.0).contains(&float) {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "whole and range-checked immediately above; the cast is the conversion"
+    )]
+    Some(float as i64)
+}
+
 fn native_id_string(value: &Value) -> Option<String> {
     match value {
         Value::Number(number) => Some(number.to_string()),

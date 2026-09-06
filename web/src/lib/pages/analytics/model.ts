@@ -14,7 +14,7 @@
 import { METRIC_COLUMNS } from '$lib/analytics-view';
 import type { ListingMetricsView, MappingHead, ProductHead } from '$lib/api';
 import { agoLabel } from '$lib/elapsed';
-import type { InventoryId } from '$lib/generated/vocab';
+import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 import type { IconName } from '$lib/icons';
 import { INVENTORY_ORDER } from '$lib/listings-view';
 import { SHORT_NAME } from '$lib/platforms';
@@ -50,12 +50,15 @@ export interface Scope {
 	label: string;
 	/** What the tab narrows to, in the words its tooltip shows. */
 	hint: string;
+	/** The marketplace the tab draws as its mark, and null for the tab that
+	 *  covers every marketplace and has no one mark to draw. */
+	mark: Marketplace | null;
 }
 
 export const SCOPES: readonly Scope[] = [
-	{ id: 'all', label: 'All', hint: 'Every marketplace your resources are set up for.' },
-	{ id: 'tes', label: 'TES', hint: 'Your listings on TES, across all three sites.' },
-	{ id: 'tpt', label: 'TPT', hint: 'Your listings on Teachers Pay Teachers.' }
+	{ id: 'all', label: 'All', hint: 'Every marketplace your resources are set up for.', mark: null },
+	{ id: 'tes', label: 'TES', hint: 'Your listings on TES, across all three sites.', mark: 'Tes' },
+	{ id: 'tpt', label: 'TPT', hint: 'Your listings on Teachers Pay Teachers.', mark: 'Tpt' }
 ];
 
 /** The scope a selector's value names, falling back to the widest.
@@ -218,7 +221,6 @@ export interface ResourceRow {
 	 *  stand-in: the table renders such a row by its identifier. */
 	title: string | undefined;
 	inventory: InventoryId;
-	platform: string;
 	metrics: Record<string, number>;
 	observedAt: number;
 }
@@ -253,7 +255,6 @@ export function resourceRows(
 			mapping: listing.mapping,
 			title: titles.get(listing.mapping),
 			inventory: listing.inventory,
-			platform: SHORT_NAME[listing.inventory],
 			metrics: listing.metrics,
 			observedAt: listing.observed_at
 		}));

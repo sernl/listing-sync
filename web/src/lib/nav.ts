@@ -29,12 +29,24 @@ export interface NavItem {
 	owns?: readonly string[];
 }
 
-export type SectionId = 'crosslist' | 'automations' | 'marketplaces' | 'account' | 'admin';
+export type SectionId =
+	| 'import'
+	| 'crosslist'
+	| 'automations'
+	| 'marketplaces'
+	| 'account'
+	| 'admin';
 
 export interface NavSection {
 	id: SectionId;
 	/** The rail glyph's accessible name, and the navigation card's title. */
 	label: string;
+	/** The one sentence the section says for itself, in the founder's words.
+	 *
+	 *  One string on the section rather than two copies in markup, because the
+	 *  rail's tooltip and the navigation card's lede are the same sentence and
+	 *  a second copy is how they come to disagree. */
+	hint: string;
 	icon: IconName;
 	/** Where the rail glyph itself lands. */
 	href: string;
@@ -46,22 +58,44 @@ export interface NavSection {
 	items: readonly NavItem[];
 }
 
-/** The three sections the founder named, then Account. In rail order.
+/** The four sections the founder named, then Account. In rail order.
+ *
+ * Import leads, because bringing a portfolio in is the first thing a teacher
+ * does and the founder's own list opens with it.
  *
  * Marketplaces carries no page list on purpose: its connections, browser
  * extensions and downloads are three headings on one scrolling page, which is
  * how Vendoo's own equivalent reads and what the founder's list describes. */
 export const SECTIONS: readonly NavSection[] = [
 	{
+		id: 'import',
+		label: 'Import',
+		hint: 'Bring your current portfolio to Teachouse from anywhere it is housed.',
+		icon: 'download',
+		href: '/import',
+		items: [
+			{
+				href: '/import',
+				label: 'Import',
+				icon: 'download',
+				// A batch's own report sits at `/imports/<batch>`, one letter away
+				// from this section's path and not underneath it, so the section has
+				// to claim it by name or the breadcrumb answers "Console" on every
+				// import a teacher opens.
+				owns: ['/imports']
+			}
+		]
+	},
+	{
 		id: 'crosslist',
 		label: 'Crosslist',
+		hint: 'Publish your resources to multiple marketplaces.',
 		icon: 'package',
 		href: '/resources',
 		primary: { href: '/resources/new', label: 'New resource', icon: 'circle-plus' },
 		items: [
 			{ href: '/resources', label: 'Resources', icon: 'layout-list' },
 			{ href: '/labels', label: 'Labels', icon: 'tag' },
-			{ href: '/import', label: 'Import', icon: 'download' },
 			{ href: '/analytics', label: 'Analytics', icon: 'chart-line' },
 			{ href: '/templates', label: 'Template Manager', icon: 'layout-template' },
 			{ href: '/export', label: 'Export', icon: 'file-down' }
@@ -70,6 +104,7 @@ export const SECTIONS: readonly NavSection[] = [
 	{
 		id: 'automations',
 		label: 'Automations',
+		hint: 'Edit tags, descriptions, titles and files across your listings.',
 		icon: 'waves-horizontal',
 		// A landing page of its own, unlike the other sections, whose rail glyph
 		// lands on their first page. `/automations` lists the three as cards, so
@@ -100,6 +135,7 @@ export const SECTIONS: readonly NavSection[] = [
 	{
 		id: 'marketplaces',
 		label: 'Marketplaces',
+		hint: 'Connect the places you sell.',
 		icon: 'store',
 		href: '/marketplaces',
 		items: []
@@ -107,6 +143,7 @@ export const SECTIONS: readonly NavSection[] = [
 	{
 		id: 'account',
 		label: 'Account',
+		hint: 'Your settings, plan and notifications.',
 		icon: 'circle-user',
 		href: '/settings',
 		items: [
@@ -154,6 +191,7 @@ const PINNED: readonly NavItem[] = [HOME_ITEM, OPEN_QUESTIONS_ITEM];
 export const ADMIN_SECTION: NavSection = {
 	id: 'admin',
 	label: 'Admin',
+	hint: 'The operator views of this deployment.',
 	icon: 'shield-check',
 	href: '/admin',
 	items: [
@@ -342,14 +380,13 @@ const LEADING_SECTION_TABS: readonly NavItem[] = SECTION_TABS.filter(
 	(tab) => tab.href !== ACCOUNT_TAB.href
 );
 
-/** The phone bar: three section tabs with the create action in the middle,
- * search fifth, and the account cell sixth.
+/** The phone bar: the four navigating sections with the create action after the
+ * second, search next to last, and the account cell last.
  *
  * Composed from `SECTION_TABS` rather than listed again, so the navigating tabs
- * stay exactly what the rail says they are and only their spacing changes. Every
- * cell a seller has already learned keeps the position it had in 0.3.2 and the
- * new one is appended. Five labelled cells at about 67px on a 390px screen,
- * beside the fixed 56px column `shell.css` gives the account cell. */
+ * stay exactly what the rail says they are and only their spacing changes. Six
+ * labelled cells at about 55px on a 390px screen, beside the fixed 56px column
+ * `shell.css` gives the account cell. */
 export const PHONE_BAR: readonly PhoneTab[] = [
 	...LEADING_SECTION_TABS.slice(0, 2),
 	CREATE_TAB,
@@ -480,6 +517,26 @@ export function initialsOf(name: string | undefined | null): string {
 		.map((word) => [...word].find((glyph) => /\p{L}|\p{N}/u.test(glyph)))
 		.filter((glyph): glyph is string => glyph !== undefined);
 	return words.slice(0, 2).join('').toUpperCase();
+}
+
+/** What the account tile draws, decided once for the top strip and the phone
+ *  bar so the two cannot disagree: the seller's own picture where one is set,
+ *  the organisation's initials otherwise, and the section glyph while neither
+ *  is known -- every frame before the reads land, and a name with no letter. */
+export type AccountTile =
+	| { kind: 'picture'; src: string }
+	| { kind: 'initials'; text: string }
+	| { kind: 'glyph' };
+
+export function accountTile(
+	pictureSrc: string | null,
+	orgName: string | undefined | null
+): AccountTile {
+	if (pictureSrc !== null) {
+		return { kind: 'picture', src: pictureSrc };
+	}
+	const text = initialsOf(orgName);
+	return text === '' ? { kind: 'glyph' } : { kind: 'initials', text };
 }
 
 /** Where a query with more matches than the palette shows sends the browser:

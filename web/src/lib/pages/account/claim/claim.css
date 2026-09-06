@@ -60,11 +60,11 @@
 }
 
 .claim-verdict.claim-good {
-	color: var(--ok);
+	color: var(--ok-ink);
 }
 
 .claim-verdict.claim-bad {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 .claim-verdict.claim-waiting {

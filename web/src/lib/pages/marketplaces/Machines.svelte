@@ -7,7 +7,7 @@
 	import { type BrowserSession, matchNote, type Merged } from '$lib/device-merge';
 	import { deviceFootnote, deviceRows, deviceSummary } from '$lib/devices-view';
 	import { agoLabel } from '$lib/elapsed';
-	import { MARKETPLACE_NAME } from '$lib/platforms';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
@@ -169,7 +169,7 @@
 	{#if pending}
 		<p class="quiet">Loading…</p>
 	{:else if failed}
-		<p class="quiet">Your machines could not be listed.</p>
+		<p class="quiet">We could not list your machines.</p>
 	{:else if joined.rows.length === 0}
 		<div class="mp-card">
 			<p class="mp-body">
@@ -224,7 +224,7 @@
 						<div class="mp-held">
 							{#each row.device.sessions as session (session.marketplace)}
 								<div class="one">
-									<span>{MARKETPLACE_NAME[session.marketplace]}</span>
+									<MarketplaceMark marketplace={session.marketplace} size={18} />
 									<StatusPill
 									tone={sessionTone(session.status)}
 									label={sessionLabel(session.status)}

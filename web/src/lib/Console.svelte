@@ -4,7 +4,7 @@
 	import { page } from '$app/state';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { impersonationState, operatorVerdict } from '$lib/admin';
-	import { api } from '$lib/api';
+	import { api, avatarSrc } from '$lib/api';
 	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
 	import { desktopInvoker, registerThisMachine } from '$lib/desktop';
@@ -17,9 +17,9 @@
 		HOME_ITEM,
 		PHONE_BAR,
 		SECTIONS,
+		accountTile,
 		breadcrumbFor,
 		currentDestination,
-		initialsOf,
 		sectionFor
 	} from '$lib/nav';
 	import { queryKeys } from '$lib/query';
@@ -121,7 +121,17 @@
 	const pathname = $derived(page.url.pathname);
 	const crumb = $derived(breadcrumbFor(pathname));
 	const orgName = $derived(organisation.data?.name);
-	const initials = $derived(initialsOf(orgName));
+	// The seller's own picture, read here because this shell draws it twice;
+	// the preferences screen writes it and sets this same key.
+	const profile = createQuery(() => ({
+		queryKey: queryKeys.profile,
+		queryFn: () => api.profile()
+	}));
+	// The picture whose bytes would not draw, held as its address so a later
+	// picture clears it by being a different address.
+	let unshowable = $state<string | null>(null);
+	const picture = $derived(avatarSrc(profile.data));
+	const tile = $derived(accountTile(picture === unshowable ? null : picture, orgName));
 	const links = $derived(connections.data ?? []);
 
 	// Which section the rail lights and whose pages the card lists. The
@@ -186,8 +196,13 @@
 	{/if}
 
 	<nav class="rail" aria-label="Sections">
+		<!-- The house alone, not the tiled mark: the rail's own ground is the
+		     kit's indigo, and the mark is that same indigo with the house on it,
+		     so the tile would vanish into the column it sits on. The tiled mark
+		     is the favicon and the app icon, where there is no indigo behind
+		     it. -->
 		<a class="mark" href={HOME_ITEM.href} aria-label={HOME_ITEM.label}>
-			<img src="/favicon.svg" alt="" width="34" height="34" />
+			<img src="/brand/house.svg" alt="Teachouse" width="36" height="36" />
 		</a>
 
 		{#each railSections as entry (entry.id)}
@@ -196,7 +211,7 @@
 				href={entry.href}
 				aria-current={entry.id === section?.id ? 'page' : undefined}
 				aria-label={entry.label}
-				title={entry.label}
+				title={entry.hint}
 			>
 				<Icon name={entry.icon} size={20} />
 			</a>
@@ -214,7 +229,7 @@
 				href={accountSection.href}
 				aria-current={accountSection.id === section?.id ? 'page' : undefined}
 				aria-label={accountSection.label}
-				title={accountSection.label}
+				title={accountSection.hint}
 			>
 				<Icon name={accountSection.icon} size={20} />
 			</a>
@@ -224,7 +239,9 @@
 	{#if card}
 		<div class="nav-card">
 			<div class="nav-top">
+				<img class="nav-wordmark" src="/brand/wordmark.svg" alt="Teachouse" height="26" />
 				<h2>{card.label}</h2>
+				<p class="nav-hint">{card.hint}</p>
 			</div>
 
 			{#if card.primary}
@@ -285,7 +302,13 @@
 			     claims no `aria-current` -- the rail entry beside it already claims
 			     the section, and this strip is not drawn on a phone at all. -->
 			<a class="account" href="/settings" aria-label={accountSection?.label ?? 'Account'}>
-				<span class="avatar" aria-hidden="true">{initials}</span>
+				<span class="avatar" aria-hidden="true">
+					{#if tile.kind === 'picture'}
+						<img class="avatar-pic" src={tile.src} alt="" onerror={() => (unshowable = picture)} />
+					{:else if tile.kind === 'initials'}
+						{tile.text}
+					{/if}
+				</span>
 				<span class="who">
 					<span class="org" title={orgName}>
 						{#if orgName !== undefined}
@@ -358,23 +381,28 @@
 					<span>{tab.label}</span>
 				</a>
 			{:else if tab.account}
-				<!-- The initials tile in place of a glyph. The tile is the thing the
-				     founder asked to move off the top strip, and this cell is where
-				     it went. The section's own glyph stands in while `initialsOf`
-				     answers nothing, which is every frame before the organisation
-				     has been read: an empty accent tile would read as a loading
-				     state that never resolves, and the glyph reads as Account,
-				     which is true in both states. -->
+				<!-- The account tile in place of a glyph: the seller's own picture
+				     where they set one, the initials otherwise. The tile is the
+				     thing the founder asked to move off the top strip, and this
+				     cell is where it went. The section's own glyph stands in while
+				     `accountTile` knows neither, which is every frame before the
+				     reads land: an empty accent tile would read as a loading state
+				     that never resolves, and the glyph reads as Account, which is
+				     true in every state. -->
 				<a
 					class="tab-item"
 					href={tab.href}
 					aria-current={tab.href === section?.href ? 'page' : undefined}
 				>
 					<span class="ico">
-						{#if initials === ''}
-							<Icon name={tab.icon} size={19} />
+						{#if tile.kind === 'picture'}
+							<span class="tab-avatar" aria-hidden="true">
+								<img class="avatar-pic" src={tile.src} alt="" onerror={() => (unshowable = picture)} />
+							</span>
+						{:else if tile.kind === 'initials'}
+							<span class="tab-avatar" aria-hidden="true">{tile.text}</span>
 						{:else}
-							<span class="tab-avatar" aria-hidden="true">{initials}</span>
+							<Icon name={tab.icon} size={19} />
 						{/if}
 					</span>
 					<span>{tab.label}</span>
@@ -394,3 +422,34 @@
 
 	<SearchPalette bind:open={searching} />
 </div>
+
+<style>
+	/* The seller's own picture inside the shell's two tiles, which `shell.css`
+	   sizes. Cropped to the tile here and nowhere else: no upload is ever
+	   resized, so this is the whole of how a large picture becomes a small
+	   face. */
+	.avatar-pic {
+		display: block;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		border-radius: inherit;
+	}
+
+	/* The wordmark above the section name, and the section's one sentence
+	   beneath it. Only what these two elements need: `shell.css` owns the card
+	   and stacks `.nav-top`, including hiding the whole header at the tablet
+	   breakpoint, so neither rule here touches that block. */
+	.nav-wordmark {
+		display: block;
+		width: auto;
+		height: 26px;
+	}
+
+	.nav-hint {
+		margin: 0;
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.4;
+	}
+</style>

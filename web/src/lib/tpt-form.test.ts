@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadCoreForTest } from '$lib/core/testing';
 import {
+	advisoriesOf,
 	applyToAll,
 	atCap,
 	capOf,
@@ -30,7 +31,8 @@ import {
 	thumbnailHashes,
 	thumbnailRefusal,
 	unlicensed,
-	standardsHelp,
+	STANDARDS_HELP,
+	marketplacesReached,
 	refusalsIn,
 	searchFacets,
 	submittable,
@@ -39,6 +41,15 @@ import {
 	tptBaseOf,
 	valueFor,
 	withOverride,
+	withMarketplaces,
+	inventoriesOf,
+	tilesOf,
+	tesNeedsCurriculum,
+	gradeLabel,
+	gradeBandLabel,
+	markUp,
+	payloadOf,
+	type StoredFile,
 	type MarketplaceProjection,
 	type TptDraft
 } from './tpt-form';
@@ -59,34 +70,45 @@ loadCoreForTest();
  *  fields these tests read. Transcribed from `crates/tam-api/src/product/mod.rs`
  *  and the committed capture rather than invented; the caps are the numbers
  *  `TptForm` reads, including the absent subject-area one. */
-function facet(slug: string, label: string, writable = true): FacetView {
-	return { slug, label, seller_writable: writable };
+function facet(
+	slug: string,
+	label: string,
+	writable = true,
+	british: string | null = null
+): FacetView {
+	return { slug, label, seller_writable: writable, british_label: british };
 }
 
 const VOCABULARY: FormVocabularyView = {
 	grades: [
 		facet('preschool', 'Preschool'),
-		facet('kindergarten', 'Kindergarten'),
-		facet('1st-grade', '1st Grade'),
-		facet('2nd-grade', '2nd Grade'),
-		facet('3rd-grade', '3rd Grade'),
-		facet('4th-grade', '4th Grade'),
-		facet('5th-grade', '5th Grade'),
-		facet('6th-grade', '6th Grade'),
-		facet('7th-grade', '7th Grade'),
-		facet('8th-grade', '8th Grade'),
-		facet('9th-grade', '9th Grade'),
-		facet('10th-grade', '10th Grade'),
-		facet('11th-grade', '11th Grade'),
-		facet('12th-grade', '12th Grade'),
+		facet('kindergarten', 'Kindergarten', true, 'Year 1'),
+		facet('1st-grade', '1st Grade', true, 'Year 2'),
+		facet('2nd-grade', '2nd Grade', true, 'Year 3'),
+		facet('3rd-grade', '3rd Grade', true, 'Year 4'),
+		facet('4th-grade', '4th Grade', true, 'Year 5'),
+		facet('5th-grade', '5th Grade', true, 'Year 6'),
+		facet('6th-grade', '6th Grade', true, 'Year 7'),
+		facet('7th-grade', '7th Grade', true, 'Year 8'),
+		facet('8th-grade', '8th Grade', true, 'Year 9'),
+		facet('9th-grade', '9th Grade', true, 'Year 10'),
+		facet('10th-grade', '10th Grade', true, 'Year 11'),
+		facet('11th-grade', '11th Grade', true, 'Year 12'),
+		facet('12th-grade', '12th Grade', true, 'Year 13'),
 		facet('higher-education', 'Higher Education'),
 		facet('adult-education', 'Adult Education'),
 		facet('not-grade-specific', 'Not Grade Specific'),
-		facet('elementary', 'Elementary', false),
-		facet('middle-school', 'Middle School', false),
-		facet('high-school', 'High School', false)
+		facet('elementary', 'Elementary', false, 'Primary School'),
+		facet('middle-school', 'Middle School', false, 'Secondary School'),
+		facet('high-school', 'High School', false, 'College')
 	],
 	grade_columns: [5, 5, 4, 3],
+	grade_bands: [
+		{ american: 'Elementary', british: 'Primary School' },
+		{ american: 'Middle School', british: 'Secondary School' },
+		{ american: 'High School', british: 'College' },
+		{ american: 'Other', british: 'Other' }
+	],
 	subject_areas: [facet('math', 'Math'), facet('science', 'Science'), facet('art', 'Art')],
 	tags: [facet('centers', 'Centers'), facet('autumn', 'Autumn')],
 	formats: [facet('easel', 'Easel')],
@@ -129,7 +151,7 @@ const VOCABULARY: FormVocabularyView = {
 	},
 	statuses: [
 		{ id: '0', label: 'Draft, visible only to you' },
-		{ id: '1', label: 'Make Listing Active' }
+		{ id: '1', label: 'Make listing active on my selected marketplaces' }
 	],
 	standards_frameworks: [
 		{ jurisdiction_id: 3054, name: 'Common Core State Standards', button_label: 'Select CCSS' }
@@ -153,17 +175,23 @@ const VOCABULARY: FormVocabularyView = {
 /** A draft with every required control answered, so each test below changes
  *  one thing and the refusal names that one. */
 function complete(): TptDraft {
-	return {
-		...emptyTptDraft(),
-		name: 'Fractions on a number line',
-		payload: [{ hash: 'a'.repeat(64), kind: 'pdf', byte_len: 1024 }],
-		free: true,
-		grades: ['3rd-grade'],
-		subjectAreas: ['math'],
-		tags: ['centers'],
-		copyright: '1',
-		inventories: ['Tpt']
-	};
+	// Through `withMarketplaces`, because that is the only way the form writes
+	// the three marketplace fields: a fixture that set `inventories` alone
+	// would be a draft the page cannot produce.
+	return withMarketplaces(
+		{
+			...emptyTptDraft(),
+			name: 'Fractions on a number line',
+			payload: [{ hash: 'a'.repeat(64), kind: 'pdf', byte_len: 1024 }],
+			free: true,
+			grades: ['3rd-grade'],
+			subjectAreas: ['math'],
+			tags: ['centers'],
+			copyright: '1'
+		},
+		['Tpt'],
+		[]
+	);
 }
 
 describe('the grade grid', () => {
@@ -230,8 +258,13 @@ describe('the copyright gate', () => {
 		const unstated = { ...complete(), copyright: null };
 		const refusals = refusalsOf(unstated, VOCABULARY);
 		expect(submittable(refusals)).toBe(false);
-		expect(refusalsIn(refusals, 'copyright')).toHaveLength(1);
-		expect(refusalsIn(refusals, 'copyright')[0].message).toContain('Nothing is pre-selected');
+		// The attestation is asked in the TPT-only panel now, so the refusal
+		// about it has to land there rather than on a Copyright heading that is
+		// no longer on the page.
+		expect(refusalsIn(refusals, 'tpt_options')).toHaveLength(1);
+		expect(refusalsIn(refusals, 'tpt_options')[0].message).toBe(
+			'Choose one of the two copyright statements.'
+		);
 	});
 
 	it('is not pre-selected on a blank draft, unlike TPT’s own form', () => {
@@ -252,7 +285,7 @@ describe('the refusals', () => {
 		};
 		const [refusal] = refusalsIn(refusalsOf(over, VOCABULARY), 'categories');
 		expect(refusal.control).toBe('Grade Level');
-		expect(refusal.message).toBe('Grade Level takes up to 4, and 5 are chosen.');
+		expect(refusal.message).toBe('Choose up to 4 under Grade Level; you have 5.');
 	});
 
 	it('accepts four subject areas, because a create TPT accepted posted four', () => {
@@ -271,9 +304,11 @@ describe('the refusals', () => {
 
 	it('asks for a tax code on a paid listing and never chooses one', () => {
 		const paid = { ...complete(), free: false, price: '4.50' };
-		expect(refusalsIn(refusalsOf(paid, VOCABULARY), 'price').map((r) => r.control)).toEqual([
-			'Tax Code'
-		]);
+		// The tax code is asked in the TPT-only panel, so its refusal points
+		// there rather than into the middle of Price.
+		expect(refusalsIn(refusalsOf(paid, VOCABULARY), 'tpt_options').map((r) => r.control)).toEqual(
+			['Tax Code']
+		);
 		expect(emptyTptDraft().taxCode).toBeNull();
 	});
 
@@ -299,9 +334,36 @@ describe('the refusals', () => {
 
 	it('refuses a marketplace chosen before the file it would carry', () => {
 		const early = { ...complete(), payload: [] };
-		expect(refusalsIn(refusalsOf(early, VOCABULARY), 'product_status')[0].message).toBe(
-			'Add your file before sending this to a marketplace.'
+		expect(refusalsIn(refusalsOf(early, VOCABULARY), 'marketplaces')[0].message).toBe(
+			'Add your file before you choose a marketplace.'
 		);
+	});
+});
+
+describe('a vocabulary id the core’s own range does not hold', () => {
+	// The wave-5 render fixture offered tax codes with invented ids, 81111
+	// and 81112, and choosing one threw `invalid value: integer 81111,
+	// expected u8` out of the core inside the page's own `$derived`, so the
+	// whole resource page drew its error boundary. The id is now one refusal
+	// naming the one control, and everything else the page derives from the
+	// core still stands.
+	const invented = { ...complete(), free: false, price: '4.50', taxCode: '81111' };
+
+	it('travels to the core as the number the form holds', () => {
+		expect(draftInputOf(invented).tax_code_id).toBe(81111);
+	});
+
+	it('is refused by the control that holds it rather than thrown', () => {
+		const refusals = refusalsOf(invented, VOCABULARY);
+		expect(submittable(refusals)).toBe(false);
+		expect(refusalsIn(refusals, 'tpt_options').map((r) => r.control)).toEqual(['Tax Code']);
+		expect(refusalsIn(refusals, 'tpt_options')[0].message).toBe('Choose a tax code from the list.');
+	});
+
+	it('leaves the rest of the view model standing', () => {
+		expect(advisoriesOf(invented, VOCABULARY)).toEqual([]);
+		expect(projectionOf(invented, 'Tpt').rows.length).toBeGreaterThan(0);
+		expect(refusalsIn(refusalsOf(invented, VOCABULARY), 'categories')).toEqual([]);
 	});
 });
 
@@ -716,26 +778,11 @@ describe('the standards a marketplace will not carry', () => {
 });
 
 describe('the standards heading', () => {
-	it('names the count the server served', () => {
-		expect(standardsHelp(4)).toBe('Optional. Four frameworks, each searched on its own.');
-		expect(standardsHelp(2)).toBe('Optional. Two frameworks, each searched on its own.');
-	});
-
-	it('says nothing at all when none is offered', () => {
-		// The sentence used to read "Four frameworks" over a panel saying none
-		// was offered at all, whenever the vocabulary served an empty list. It
-		// says nothing now rather than a shorter version of what the picker
-		// below already says at more length.
-		expect(standardsHelp(0)).toBeUndefined();
-		expect(standardsHelp(-1)).toBeUndefined();
-	});
-
-	it('does not say "each" of one', () => {
-		expect(standardsHelp(1)).toBe('Optional. One framework.');
-	});
-
-	it('falls back to the digit above the words it spells', () => {
-		expect(standardsHelp(12)).toBe('Optional. 12 frameworks, each searched on its own.');
+	// The count is gone: the founder's rule is one short sentence that says
+	// what to do, and how many frameworks there are is something the tab bar
+	// below already shows.
+	it('tells the teacher what to do rather than counting frameworks', () => {
+		expect(STANDARDS_HELP).toBe('Optional. Search a framework by code or words.');
 	});
 });
 
@@ -818,9 +865,11 @@ describe('the licence a marketplace gates', () => {
 	it('refuses a gating marketplace with no licence chosen, naming it', () => {
 		const bare = { ...complete(), inventories: ['TesGb' as const], free: true, licence: null };
 		expect(unlicensed(bare, GATING)).toEqual(['TesGb']);
-		const said = refusalsIn(refusalsOf(bare, VOCABULARY, GATING), 'product_status');
+		// One sentence for the one Tes tile, in the panel that asks for it,
+		// rather than one per catalogue in a list at the foot of the page.
+		const said = refusalsIn(refusalsOf(bare, VOCABULARY, GATING), 'tes_options');
 		expect(said).toHaveLength(1);
-		expect(said[0].message).toContain('Choose a licence');
+		expect(said[0].message).toBe('Choose a licence. Tes needs one to list this.');
 	});
 
 	it('asks for no licence where no chosen marketplace gates one', () => {
@@ -889,21 +938,25 @@ describe('the four thumbnail slots', () => {
 	});
 });
 
-describe('what the seller is told once the draft exists', () => {
+describe('what the seller is told once the listing exists', () => {
 	// Found live: an empty mapping list fell through to the plural arm, so a
-	// resource kept here was announced as "Draft created on 0 marketplaces.
-	// Publish when you are ready." — a wrong count, and an instruction to
-	// publish something deliberately going nowhere.
+	// resource kept here was announced as being on "0 marketplaces".
 
-	it('says the draft is kept here when no marketplace was chosen', () => {
-		expect(createdToast(0)).toBe('Draft saved here. Choose marketplaces when you are ready.');
+	it('says only that it was created when no marketplace was chosen', () => {
+		expect(createdToast(0)).toBe('Listing created.');
 		expect(createdToast(0)).not.toContain('0 marketplaces');
-		expect(createdToast(0)).not.toContain('Publish');
 	});
 
 	it('counts one marketplace as a word and several as a figure', () => {
 		expect(createdToast(1)).toContain('one marketplace');
 		expect(createdToast(3)).toContain('3 marketplaces');
+	});
+
+	// Tes is one tile and three catalogues, so a listing sent to TPT and Tes
+	// writes four mappings and the teacher ticked two marketplaces.
+	it('counts the marketplaces the teacher ticked, not the catalogues written', () => {
+		expect(marketplacesReached(['Tpt', 'TesGb', 'TesUs', 'TesNz'])).toBe(2);
+		expect(marketplacesReached([])).toBe(0);
 	});
 });
 
@@ -1285,5 +1338,171 @@ describe('taking back an upload before the draft is made', () => {
 
 	it('tells the compiled core the file is gone', () => {
 		expect(draftInputOf(withoutPayload(complete())).payload_hash).toBeNull();
+	});
+});
+
+describe('one Tes tile, three Tes catalogues', () => {
+	// The founder's rule of 2026-09-11: the form shows one Tes, and which of
+	// its three regional catalogues a listing reaches is the Tes panel's
+	// Curriculum question. Nothing on the wire changes.
+
+	it('sends a ticked TPT on its own, which has one catalogue', () => {
+		expect(inventoriesOf(['Tpt'], [])).toEqual(['Tpt']);
+	});
+
+	it('sends nothing for a ticked Tes with no curriculum chosen', () => {
+		// Not all three: a tile ticked and unanswered is an unfinished answer,
+		// and publishing to three catalogues nobody named is the thing the
+		// panel exists to stop.
+		expect(inventoriesOf(['Tes'], [])).toEqual([]);
+	});
+
+	it('sends one catalogue per curriculum ticked', () => {
+		expect(inventoriesOf(['Tes'], ['TesNz'])).toEqual(['TesNz']);
+		expect(inventoriesOf(['Tes'], ['TesGb', 'TesNz'])).toEqual(['TesGb', 'TesNz']);
+	});
+
+	it('orders by the tile grid rather than by the order they were ticked', () => {
+		expect(inventoriesOf(['Tes', 'Tpt'], ['TesNz', 'TesGb'])).toEqual([
+			'Tpt',
+			'TesGb',
+			'TesNz'
+		]);
+	});
+
+	it('ignores a curriculum ticked under an unticked Tes', () => {
+		expect(inventoriesOf(['Tpt'], ['TesGb'])).toEqual(['Tpt']);
+	});
+
+	it('sends nothing for a marketplace no adapter exists for', () => {
+		expect(inventoriesOf(['Etsy'], [])).toEqual([]);
+	});
+
+	it('refuses a ticked Tes with nowhere on Tes to put it', () => {
+		const bare = withMarketplaces(complete(), ['Tes'], []);
+		expect(tesNeedsCurriculum(bare)).toBe(true);
+		const said = refusalsIn(refusalsOf(bare, VOCABULARY), 'tes_options');
+		expect(said.map((refusal) => refusal.message)).toEqual([
+			'Choose where on Tes this should be listed.'
+		]);
+	});
+
+	it('stops refusing once a curriculum is chosen', () => {
+		const chosen = withMarketplaces(complete(), ['Tes'], ['TesGb']);
+		expect(tesNeedsCurriculum(chosen)).toBe(false);
+		expect(refusalsIn(refusalsOf(chosen, VOCABULARY), 'tes_options')).toEqual([]);
+	});
+
+	// An edit form opens on the listing's own mappings, and three Tes rows
+	// would be the presentation the tile replaced.
+	it('reads a stored listing back as one Tes tile and its curricula', () => {
+		expect(tilesOf(['Tpt', 'TesGb', 'TesNz'])).toEqual({
+			marketplaces: ['Tpt', 'Tes'],
+			curricula: ['TesGb', 'TesNz']
+		});
+		expect(tilesOf([])).toEqual({ marketplaces: [], curricula: [] });
+	});
+
+	it('round-trips the tiles a listing was composed from', () => {
+		const listing = withMarketplaces(complete(), ['Tpt', 'Tes'], ['TesUs']);
+		const read = tilesOf(listing.inventories);
+		expect(read.marketplaces).toEqual(listing.marketplaces);
+		expect(read.curricula).toEqual(listing.curricula);
+	});
+});
+
+describe('the grade grid in either system', () => {
+	const grade = (slug: string) =>
+		VOCABULARY.grades.find((facet) => facet.slug === slug) as FacetView;
+
+	it('reads the declared British label, which is a table and never an inference', () => {
+		expect(gradeLabel(grade('8th-grade'), 'british')).toBe('Year 9');
+		expect(gradeLabel(grade('8th-grade'), 'american')).toBe('8th Grade');
+	});
+
+	// Preschool, Higher Education, Adult Education and Not Grade Specific have
+	// no year group, and inventing one is the inference the founder's table
+	// exists to avoid. A blank there would be worse than the American word.
+	it('falls back to the American label where no British one is declared', () => {
+		expect(grade('preschool').british_label).toBeNull();
+		expect(gradeLabel(grade('preschool'), 'british')).toBe('Preschool');
+		expect(gradeLabel(grade('not-grade-specific'), 'british')).toBe('Not Grade Specific');
+	});
+
+	it('heads each column in the system the teacher chose', () => {
+		expect(gradeBandLabel(VOCABULARY, 0, 'american')).toBe('Elementary');
+		expect(gradeBandLabel(VOCABULARY, 0, 'british')).toBe('Primary School');
+		expect(gradeBandLabel(VOCABULARY, 2, 'british')).toBe('College');
+	});
+
+	it('heads nothing where the server headed no such column', () => {
+		expect(gradeBandLabel(VOCABULARY, 9, 'american')).toBe('');
+	});
+
+	// One selection underneath either way: the slug a teacher ticks is the
+	// same slug whichever words it was shown to them in, which is what makes
+	// the toggle a relabelling rather than a second field.
+	it('changes no selection when the words change', () => {
+		const picked = { ...complete(), grades: ['8th-grade'] };
+		expect(draftInputOf(picked).grades).toEqual(['8th-grade']);
+	});
+});
+
+describe('the description formatting bar', () => {
+	it('wraps the selection and keeps it selected', () => {
+		const marked = markUp('a bold word', 2, 6, 'bold');
+		expect(marked.text).toBe('a **bold** word');
+		expect(marked.text.slice(marked.start, marked.end)).toBe('bold');
+	});
+
+	it('leaves the caret between the marks when nothing is selected', () => {
+		const marked = markUp('ab', 1, 1, 'italic');
+		expect(marked.text).toBe('a**b');
+		expect(marked.start).toBe(2);
+		expect(marked.end).toBe(2);
+	});
+
+	it('writes a bullet per line the selection touches, from the line start', () => {
+		// From the line start rather than from the caret: prefixing mid-line
+		// would put the bullet inside a sentence.
+		const marked = markUp('one\ntwo', 1, 5, 'bullets');
+		expect(marked.text).toBe('- one\n- two');
+	});
+
+	it('numbers the lines it marks', () => {
+		expect(markUp('one\ntwo\nthree', 0, 13, 'numbers').text).toBe('1. one\n2. two\n3. three');
+	});
+
+	it('leaves the rest of the description alone', () => {
+		const marked = markUp('before\nmid\nafter', 7, 10, 'bullets');
+		expect(marked.text).toBe('before\n- mid\nafter');
+	});
+});
+
+describe('the files a teacher added', () => {
+	function stored(name: string, hashes: string[]): StoredFile {
+		return {
+			name,
+			bytes: 2048,
+			payload: hashes.map((hash) => ({ hash, kind: 'pdf' as const, byte_len: 1024 })),
+			cover: { hash: `cover-${name}`, kind: 'image' as const, byte_len: 512 },
+			storedBytes: 4096,
+			storageBytesMax: 8192
+		};
+	}
+
+	it('joins every file handle in the order they were added', () => {
+		const { payload } = payloadOf([stored('a.pdf', ['h1']), stored('b.pdf', ['h2', 'h3'])]);
+		expect(payload.map((handle) => handle.hash)).toEqual(['h1', 'h2', 'h3']);
+	});
+
+	it('draws the thumbnail from the file buyers see first', () => {
+		expect(payloadOf([stored('a.pdf', ['h1']), stored('b.pdf', ['h2'])]).cover?.hash).toBe(
+			'cover-a.pdf'
+		);
+	});
+
+	it('has no thumbnail at all where no file was added', () => {
+		expect(payloadOf([])).toEqual({ payload: [], cover: null });
 	});
 });

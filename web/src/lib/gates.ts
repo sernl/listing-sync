@@ -12,6 +12,7 @@ const LABELS: Record<BlockedGate, string> = {
 	reconciliation: 'reconciliation',
 	election: 'your answer',
 	currency_unknown: 'an unknown currency',
+	currency_mismatch: 'a price in another currency than this marketplace sells in',
 	cover_missing: 'a missing thumbnail',
 	scan_incomplete: 'a scan that is still running',
 	awaiting_counterpart: 'the other marketplace',

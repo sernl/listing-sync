@@ -46,6 +46,20 @@ describe('the landing hero band', () => {
 		expect(entries.filter((entry) => !/home: 'https:\/\//.test(entry))).toEqual([]);
 	});
 
+	it('draws the four marks the founder\'s mockup puts in the hero row, each with a file', () => {
+		// The hero row is four marks and "and beyond."; the rest of the
+		// catalogue sits behind the disclosure beside it. A featured entry with
+		// no file would draw its initial at the top of the page, which is the
+		// one place on the site where a mark we may not draw must not appear.
+		const featured = entries
+			.filter((entry) => /featured: true/.test(entry))
+			.map((entry) => entry.match(/name: '([^']+)'/)?.[1]);
+		expect(featured).toEqual(['TPT', 'Tes', 'Classful', 'Teach Simple']);
+		expect(
+			entries.filter((entry) => /featured: true/.test(entry) && !/file: '/.test(entry))
+		).toEqual([]);
+	});
+
 	it('ships the console\'s own bytes for every mark it copies, never a second fetch', () => {
 		// Every file here is a copy of one under `web/static/marketplaces/`,
 		// whose provenance row in `docs/notes/design/marketplace-logo-sources.md`
@@ -85,6 +99,57 @@ describe('the landing hero band', () => {
 		// on a phone cannot produce at all.
 		const sheet = readFileSync(`${REPO}apps/landing/src/styles/site.css`, 'utf8');
 		expect(sheet).not.toContain('grayscale(');
+	});
+});
+
+describe('the landing brand copies', () => {
+	// The landing build and the console build separately, so the landing's
+	// brand files and fonts are copies rather than links, for the reason its
+	// marks are. A copy that drifted would put a second drawing of the same
+	// logo, or a second cut of the same face, on the same origin.
+	//
+	// `served-artefacts` in `flake.nix` holds the fonts and the top-level names
+	// to the same rule against the built store paths, because tam-server
+	// answers both tiers from the landing copy. Nothing held `public/brand/`,
+	// which is a subdirectory that check does not walk.
+
+	const pairs: [string, string][] = [
+		['apps/landing/public/brand', 'web/static/brand'],
+		['apps/landing/public/fonts', 'web/static/fonts']
+	];
+
+	it.each(pairs)('%s carries the console\'s own bytes', (landing, console_) => {
+		const drifted = readdirSync(`${REPO}${landing}`)
+			.filter((file) => file.endsWith('.svg') || file.endsWith('.woff2'))
+			.filter(
+				(file) =>
+					!existsSync(`${REPO}${console_}/${file}`) ||
+					!readFileSync(`${REPO}${landing}/${file}`).equals(
+						readFileSync(`${REPO}${console_}/${file}`)
+					)
+			);
+		expect(drifted).toEqual([]);
+	});
+
+	it('serves the same favicon as the console', () => {
+		expect(
+			readFileSync(`${REPO}apps/landing/public/favicon.svg`).equals(
+				readFileSync(`${REPO}web/static/favicon.svg`)
+			)
+		).toBe(true);
+	});
+
+	it('asks only for faces it ships', () => {
+		// `served-artefacts` makes this claim against the built store path. It
+		// is made here too because that check runs under `nix flake check` and
+		// this one runs in the web suite, so a face renamed in the sheet and
+		// not in the directory fails in the lane the edit was made in.
+		const sheet = readFileSync(`${REPO}apps/landing/src/styles/site.css`, 'utf8');
+		const asked = [...sheet.matchAll(/url\('\/fonts\/([^']+)'\)/g)].map((m) => m[1]);
+		expect(asked.length).toBeGreaterThan(0);
+		expect(
+			asked.filter((file) => !existsSync(`${REPO}apps/landing/public/fonts/${file}`))
+		).toEqual([]);
 	});
 });
 

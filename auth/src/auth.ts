@@ -7,15 +7,23 @@ import pg from 'pg';
 import { type AuthEvent, record } from './audit.ts';
 import { deliver } from './email.ts';
 import { env } from './env.ts';
+import { vouchedByProvider } from './provider-profile.ts';
 import { greetingFor, utcTime } from './template.ts';
 
 export const pool = new pg.Pool({ connectionString: env.databaseUrl });
 
 const dialect = new PostgresDialect({ pool });
 
+// Both providers map their profile through the same mapper, and the reason is
+// in provider-profile.ts: without it a Microsoft address arrives unverified and
+// the completion mail is never sent to it.
 const socialProviders = {
-  ...(env.google === undefined ? {} : { google: env.google }),
-  ...(env.microsoft === undefined ? {} : { microsoft: env.microsoft }),
+  ...(env.google === undefined
+    ? {}
+    : { google: { ...env.google, mapProfileToUser: vouchedByProvider } }),
+  ...(env.microsoft === undefined
+    ? {}
+    : { microsoft: { ...env.microsoft, mapProfileToUser: vouchedByProvider } }),
 };
 
 const audit = (event: AuthEvent): void => record(pool, event);

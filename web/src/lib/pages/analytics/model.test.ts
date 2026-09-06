@@ -201,11 +201,11 @@ describe('the resource rows', () => {
 		]);
 	});
 
-	it('names the platform and leaves an unknown title undefined', () => {
+	it('carries the inventory and leaves an unknown title undefined', () => {
 		const rows = resourceRows(captured, titles, 'all');
 		const unknown = rows.find((row) => row.mapping === 'm3');
 		expect(unknown?.title).toBeUndefined();
-		expect(unknown?.platform).toBe('TES GB');
+		expect(unknown?.inventory).toBe('TesGb');
 	});
 
 	it('breaks a tie on the charted metric by sales, then by identifier', () => {

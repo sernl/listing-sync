@@ -35,6 +35,7 @@ export const RESERVED_SLUGS: readonly string[] = [
 	'automations',
 	'billing',
 	'blog',
+	'brand',
 	'cdn',
 	'connections',
 	'docs',

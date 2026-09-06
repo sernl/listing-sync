@@ -162,7 +162,7 @@
 	{#if awaitingVerification !== null}
 		<h1>Verify your email</h1>
 		<p>
-			We sent a link to <b>{awaitingVerification}</b>. The console opens once that address is
+			We sent a link to <b>{awaitingVerification}</b>. Teachouse opens once that address is
 			confirmed.
 		</p>
 		<div class="actions">

@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod british;
 pub mod drift;
 pub mod grades;
 pub mod licences;
@@ -18,6 +19,7 @@ pub mod subjects;
 pub mod tes;
 pub mod tpt_form;
 
+pub use british::{british_grade_label, GRADE_BANDS};
 pub use drift::{diff, DriftError, DriftKind, DriftReport, DriftRow};
 pub use grades::{derive_grade_crosswalk, GradeCrosswalk, GradeError, Uncovered};
 pub use licences::{derive_licence_crosswalk, LicenceCrosswalk, LicenceError};

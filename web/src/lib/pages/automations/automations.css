@@ -47,7 +47,7 @@
 	flex: none;
 	border-radius: var(--r-pill);
 	background: var(--accent-soft);
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 .auto-card h2 {
@@ -423,7 +423,7 @@
 	margin: 10px 0 0;
 	font-size: 13px;
 	line-height: 1.5;
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 /* The three-figure queue tally the open-questions header carries.

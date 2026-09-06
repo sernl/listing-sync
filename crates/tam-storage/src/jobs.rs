@@ -552,10 +552,11 @@ pub async fn append_event_asserted(
 /// ledger to explain it. `blocked_on` is what tells the two apart: these are
 /// written by the seed gate, and a challenge park writes the challenge's own
 /// debug form.
-pub const REVIVABLE_GATES: [&str; 10] = [
+pub const REVIVABLE_GATES: [&str; 11] = [
     "reconciliation",
     ELECTION,
     "currency_unknown",
+    "currency_mismatch",
     "cover_missing",
     "scan_incomplete",
     AWAITING_COUNTERPART,
@@ -614,10 +615,11 @@ pub const AWAITING_MARKETPLACE_ANSWER: &str = "awaiting_marketplace_answer";
 /// label every gate it might render rather than printing the raw string for
 /// the ones nobody thought of, and `the_gate_vocabulary_covers_every_gate_the_tree_writes`
 /// keeps it in step with the two sources it unions.
-pub const ALL_GATES: [&str; 13] = [
+pub const ALL_GATES: [&str; 14] = [
     "reconciliation",
     ELECTION,
     "currency_unknown",
+    "currency_mismatch",
     "cover_missing",
     "scan_incomplete",
     AWAITING_COUNTERPART,

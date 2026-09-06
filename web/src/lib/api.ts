@@ -376,6 +376,25 @@ export interface NotifyPreferences {
 	notify_email: boolean;
 }
 
+/** The signed-in user's own profile: which picture they set, as the handle
+ *  `POST /v1/uploads` answered, or `null` for none. The bytes are fetched
+ *  separately, by the img element, from `avatarSrc`. */
+export interface ProfileView {
+	user: string;
+	avatar_hash: string | null;
+}
+
+/** Where the signed-in user's picture is fetched from, or `null` while the
+ *  profile is unread or carries none. The hash rides in the query so a changed
+ *  picture is a different address to the browser's cache; the route reads
+ *  nothing from it. */
+export function avatarSrc(profile: ProfileView | undefined): string | null {
+	if (profile === undefined || profile.avatar_hash === null) {
+		return null;
+	}
+	return `/v1/profile/avatar?v=${profile.avatar_hash}`;
+}
+
 /** The term counters one measurement against the canonical taxonomy produced.
  *
  *  Optional wherever it is carried, and absent and present-with-zeros are two
@@ -724,6 +743,22 @@ export interface ImportDrainRowView {
 export interface ImportDrainView {
 	rows: ImportDrainRowView[];
 	truncated: boolean;
+}
+
+/** Dead letters on one outbox topic: messages the drainer gave up on, and how
+ *  many organisations they belong to. Two figures rather than rows, because
+ *  two figures answer the operator's question: one organisation holding many
+ *  is an address the relay refuses, many holding one each is the relay or the
+ *  key. */
+export interface DeadLetterTopicView {
+	topic: string;
+	messages: number;
+	orgs: number;
+}
+
+/** Every topic carrying a dead letter, alphabetically; empty where none does. */
+export interface DeadLettersView {
+	topics: DeadLetterTopicView[];
 }
 
 export interface FailedWriteView {
@@ -1179,6 +1214,12 @@ export interface FacetView {
 	label: string;
 	parent?: string;
 	seller_writable: boolean;
+	/** The same facet in British words, and null where no British equivalent
+	 *  is declared, so the grade toggle falls back to `label` rather than
+	 *  showing a blank. The table is the founder's declared one and is never
+	 *  inferred: an age band is not a year group, and inverting one would
+	 *  invent a reading nobody stated. */
+	british_label: string | null;
 }
 
 /** One option of a listbox, radio group or switch.
@@ -1250,10 +1291,20 @@ export interface FrameworkView {
 	button_label: string;
 }
 
+/** One column heading of the grade grid, in both systems.
+ *
+ *  One entry per `grade_columns` size and in the same order, so the grid can
+ *  head each column without deciding for itself which band a column is. */
+export interface GradeBandView {
+	american: string;
+	british: string;
+}
+
 /** Every controlled list the canonical create form renders. */
 export interface FormVocabularyView {
 	grades: FacetView[];
 	grade_columns: number[];
+	grade_bands: GradeBandView[];
 	subject_areas: FacetView[];
 	tags: FacetView[];
 	formats: FacetView[];
@@ -1876,6 +1927,12 @@ export const api = {
 	notifyPreferences: () => request<NotifyPreferences>('/v1/notifications/preferences'),
 	setNotifyPreferences: (notifyEmail: boolean) =>
 		patch<NotifyPreferences>('/v1/notifications/preferences', { notify_email: notifyEmail }),
+	/** The seller's own picture. The session's user is the only user any of
+	 *  these can name; the bytes reach `POST /v1/uploads` first, slot-bound as
+	 *  a picture, and the write names the handle that upload answered. */
+	profile: () => request<ProfileView>('/v1/profile'),
+	setAvatar: (hash: string) => put<ProfileView>('/v1/profile/avatar', { hash }),
+	clearAvatar: () => request<ProfileView>('/v1/profile/avatar', { method: 'DELETE' }),
 
 	status: () => request<{ inventories: InventoryStatus[] }>('/v1/status'),
 
@@ -1891,6 +1948,7 @@ export const api = {
 	adminSyncHealth: () => request<SyncHealthView>('/v1/admin/sync-health'),
 	adminFailedWrites: () => request<FailedWritesView>('/v1/admin/failed-writes'),
 	adminImportDrain: () => request<ImportDrainView>('/v1/admin/import-drain'),
+	adminDeadLetters: () => request<DeadLettersView>('/v1/admin/dead-letters'),
 	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations')
 };
 

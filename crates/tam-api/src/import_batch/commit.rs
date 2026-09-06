@@ -13,14 +13,21 @@
 //! transaction, then creates them one at a time outside it. A pass killed
 //! between the two leaves rows in `creating` with identifiers already reserved,
 //! and the next chunk reads whether the reserved product exists and either
-//! records the breadcrumb or re-runs the create under the same identifier. No
-//! pass can therefore mint a second product for one spreadsheet row, which is
-//! the hazard migration 0058's own header names. That is the whole of it: the
-//! resume proves the reserved product exists and re-runs none of the mapping,
-//! election and label writes trailing it, so a pass killed between the product
-//! insert and those writes leaves a row that settles as `created` with them
-//! missing and nothing on the wire saying so. Widening the check to cover them
-//! is recorded as a follow-up in the phase's scope note rather than taken here.
+//! completes it or re-runs the create under the same identifier. No pass can
+//! therefore mint a second product for one spreadsheet row, which is the
+//! hazard migration 0058's own header names.
+//!
+//! The product is the first of a row's writes rather than the whole of them:
+//! its mapping, its elections and its labels trail it, each in its own
+//! transaction, so a pass killed after the insert and before those leaves a
+//! product missing some of what its row named. The resume covers that too. A
+//! row whose product exists has the trailing writes run again, and each of
+//! them completes what is missing and re-writes nothing that stands, so the
+//! row settles as `created` only once everything it named exists.
+//!
+//! What no chunk can see is a batch nobody drives: a row stays claimed and a
+//! batch stays `importing` until a chunk returns, and the expiry sweep's stale
+//! rule in [`super::sweep`] is what returns a batch a dead pass left there.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -32,7 +39,7 @@ use tam_storage::{
 };
 use tam_types::OrgId;
 
-use crate::catalogue::create_one;
+use crate::catalogue::{create_one, finish_one};
 use crate::error::{APIError, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
 
@@ -108,7 +115,7 @@ pub(crate) async fn commit(
     }
 
     let claimed = batches
-        .claim_page(context.org, batch, ROWS_PER_CHUNK)
+        .claim_page(context.org, batch, ROWS_PER_CHUNK, (state.wall)())
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     let mut applied = 0_u32;
@@ -186,27 +193,33 @@ pub(crate) async fn commit(
     }))
 }
 
-/// Creates one claimed row, answering whether this pass is what created it.
+/// Creates one claimed row, answering whether this pass is what created its
+/// product.
 ///
-/// The existence read comes first and is the whole of the resume: a row whose
-/// reserved product already exists was created by an earlier pass that died
-/// before writing its breadcrumb, and creating it again would charge the
-/// seller twice for one spreadsheet row. It proves the product and nothing
-/// downstream of it, so the skip re-runs neither the mappings and elections
-/// `create_one` writes nor the labels set below; the module doc says what that
-/// leaves open.
+/// The existence read comes first and decides which road the row takes. A row
+/// whose reserved product does not exist is created whole, under that
+/// identifier. A row whose product exists was created by an earlier pass that
+/// died before its breadcrumb, and creating it again would charge the seller
+/// twice for one spreadsheet row — so that pass's trailing writes run instead:
+/// [`finish_one`] completes the mapping and the elections the product is
+/// missing and re-writes nothing it holds, and the labels are set again,
+/// which is a replace and so the same set. Either road ends with a product
+/// carrying everything its row named, which is what lets the caller record the
+/// row `created` on both.
 async fn create_row(state: &AppState, org: OrgId, row: &ClaimedRow) -> Result<bool, APIError> {
     let already = ProductRepo::new(state.pool.clone())
         .get(org, row.product)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    if already.is_some() {
-        return Ok(false);
-    }
-
     let Lowered { body, labels } = lower(row)?;
     let mappings: Vec<tam_types::MappingId> = row.mapping.into_iter().collect();
-    create_one(state, org, &body, row.product, &mappings).await?;
+    let created = if already.is_some() {
+        finish_one(state, org, &body, row.product, &mappings).await?;
+        false
+    } else {
+        create_one(state, org, &body, row.product, &mappings).await?;
+        true
+    };
 
     // After the create, because `product_label` names a product. A label the
     // organisation does not hold yet is created by this write, which is what
@@ -217,7 +230,7 @@ async fn create_row(state: &AppState, org: OrgId, row: &ClaimedRow) -> Result<bo
         .set_for_product(org, row.product, &labels, (state.wall)())
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    Ok(true)
+    Ok(created)
 }
 
 /// The sentence a refused row carries on the report.

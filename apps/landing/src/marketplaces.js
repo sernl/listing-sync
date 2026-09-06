@@ -31,18 +31,30 @@
  * requires a statement we cannot truthfully make. Boom Learning is different in
  * kind rather than a smaller version of the same thing, which is why it stayed.
  *
- * `live` is the two marketplaces that connect today, which is the claim
- * `site.js`'s availability sentence makes and the only one the caption repeats.
+ * `featured` is the four the founder's mockup draws in the hero row, in the
+ * mockup's order; the rest sit behind the "and beyond." disclosure beside them,
+ * which is what the Resources link in the header points at.
+ *
+ * `shape` is what the file is, which decides both the height it is drawn at and
+ * whether the row prints the name beside it: an `icon` carries no lettering and
+ * takes our own label, a `wordmark` is the name drawn across a wide canvas, and
+ * a `square` is a mark drawn inside a square canvas, which needs a square's
+ * height before its own lettering can be read at all.
+ *
+ * The three marks we authored ourselves -- TPT, Tes and Etsy -- are SVG traced
+ * from the PNG favicons whose provenance rows are in
+ * `docs/notes/design/marketplace-logo-sources.md`, and the files here are byte
+ * copies of the console's.
  */
 export const marks = [
-	{ name: 'TPT', home: 'https://www.teacherspayteachers.com/', file: 'tpt-mark.png', shape: 'icon', live: true },
-	{ name: 'TES', home: 'https://www.tes.com/', file: 'tes-mark.png', shape: 'icon', live: true },
-	{ name: 'Etsy', home: 'https://www.etsy.com/', file: 'etsy.png', shape: 'icon' },
+	{ name: 'TPT', home: 'https://www.teacherspayteachers.com/', file: 'tpt-mark.svg', shape: 'icon', featured: true },
+	{ name: 'Tes', home: 'https://www.tes.com/', file: 'tes-mark.svg', shape: 'square', featured: true },
+	{ name: 'Classful', home: 'https://classful.com/', file: 'classful.svg', shape: 'wordmark', featured: true },
+	{ name: 'Teach Simple', home: 'https://teachsimple.com/', file: 'teach-simple.svg', shape: 'square', featured: true },
+	{ name: 'Etsy', home: 'https://www.etsy.com/', file: 'etsy.svg', shape: 'icon' },
 	{ name: 'Shopify', home: 'https://www.shopify.com/', file: 'shopify.png', shape: 'icon' },
 	{ name: 'Made By Teachers', home: 'https://madebyteachers.com/', file: 'made-by-teachers.jpg', shape: 'icon' },
-	{ name: 'Classful', home: 'https://classful.com/', file: 'classful.svg', shape: 'wordmark' },
 	{ name: 'Boom Learning', home: 'https://www.boomlearning.com/' },
-	{ name: 'Teach Simple', home: 'https://teachsimple.com/', file: 'teach-simple.svg', shape: 'wordmark' },
 	{ name: 'Amped Up Learning', home: 'https://ampeduplearning.com/', file: 'amped-up-learning.png', shape: 'wordmark' },
 	{ name: 'Teacha!', home: 'https://www.teacharesources.com/', file: 'teacha.svg', shape: 'icon' },
 	{ name: 'TeachShare', home: 'https://www.teachshare.com/', file: 'teachshare.svg', shape: 'icon' },

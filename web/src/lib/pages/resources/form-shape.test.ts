@@ -61,10 +61,13 @@ describe('the resource form is one surface of bands', () => {
 	});
 
 	it('passes every band an icon the console already has', () => {
+		// Eleven bands on the canonical tab. The two per-marketplace panels are
+		// headed by the marketplace's own mark instead, which is what says
+		// whose options they hold.
 		const passed = [
 			...RESOURCE_FORM.matchAll(/<FormSection\b[^>]*?\bicon="([^"]+)"/gs)
 		].map((match) => match[1]);
-		expect(passed.length).toBe(9);
+		expect(passed.length).toBe(11);
 		expect(passed.filter((name) => !ICON_NAMES.includes(name as never))).toEqual([]);
 	});
 
@@ -87,7 +90,9 @@ describe('the resource form is one surface of bands', () => {
 		// Scoped to the classes this form owns rather than to the whole sheet:
 		// the board's own tiles and two off-screen file inputs carry heights of
 		// their own that predate the form and are not what this guards.
-		const OWNED = /\.res-(card|sec|sec-h|sec-ico|sec-help|actbar|row|picks|pick)\b/;
+		// `(?![\w-])` rather than `\b`, so `res-sec-mark` — a logo, which has a
+		// size of its own — is not read as the `res-sec` band.
+		const OWNED = /\.res-(card|sec|sec-h|sec-ico|sec-help|actbar|row|picks|pick)(?![\w-])/;
 		const offending = rulesIn(css)
 			.filter((rule) => OWNED.test(rule.selector))
 			.filter((rule) =>
@@ -126,13 +131,25 @@ describe('what the form says is required, it says out loud', () => {
 });
 
 describe('a read in flight is drawn as pending', () => {
-	it('gives every section-level vocabulary gate an else branch', () => {
-		// A section that gates its whole content on the vocabulary renders a
+	it('gives every band that gates its whole content on the vocabulary an else branch', () => {
+		// A band whose entire content sits behind `{#if form}` renders a
 		// heading over nothing while the read is in flight, and one surface of
-		// bands makes that more conspicuous than nine cards did.
-		const gates = RESOURCE_FORM.split('{#if form}').length - 1;
-		const said = [...RESOURCE_FORM.matchAll(/still being read/g)].length;
-		expect(gates).toBeGreaterThanOrEqual(6);
-		expect(said).toBe(6);
+		// bands makes that more conspicuous than a dozen cards did. A gate
+		// around one counter is not that case, so the shape is what is
+		// measured rather than the count.
+		const bands = [...RESOURCE_FORM.matchAll(/<FormSection\b[\s\S]*?<\/FormSection>/g)].map(
+			(match) => match[0]
+		);
+		expect(bands.length).toBeGreaterThanOrEqual(11);
+		const whole = bands.filter((band) => /<\/FormSection>/.test(band) && /\{#if form\}/.test(band));
+		const silent = whole.filter((band) => {
+			const opened = band.indexOf('{#if form}');
+			const rest = band.slice(opened);
+			// The gate wraps the band's own content where nothing but
+			// whitespace precedes it after the opening tag.
+			const head = band.slice(band.indexOf('>') + 1, opened);
+			return head.trim().length === 0 && !rest.includes('{:else}');
+		});
+		expect(silent).toEqual([]);
 	});
 });

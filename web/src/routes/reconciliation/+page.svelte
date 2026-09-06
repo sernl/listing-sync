@@ -73,7 +73,7 @@
 			toast('info', 'Saved. Every later resource with this word will use it.');
 			await refetch();
 		} catch {
-			toast('error', 'That answer was refused. The path may already be in use.');
+			toast('error', 'That answer was not saved. Something else may already use it.');
 		} finally {
 			busy = null;
 		}
@@ -81,8 +81,7 @@
 
 	async function noCounterpart(item: QueueItem) {
 		const sure = confirm(
-			'Record that this word has no match on that marketplace? Listings will ' +
-				'leave it out from now on.'
+			'Leave this word out on that marketplace from now on?'
 		);
 		if (!sure) {
 			return;
@@ -90,7 +89,7 @@
 		busy = item.id;
 		try {
 			await api.noCounterpart(item.id);
-			toast('info', 'Recorded. That word will be left out instead of holding things up.');
+			toast('info', 'Saved. That word will be left out from now on.');
 			await refetch();
 		} finally {
 			busy = null;
@@ -103,7 +102,7 @@
 		icon="circle-question-mark"
 		back={{ href: '/sync', label: 'Back to Marketplace Sync' }}
 		title="Open questions"
-		description="The few questions sync cannot answer for you."
+		description="Words we could not match on a marketplace. Tell us where each one belongs."
 	>
 		{#snippet aside()}
 			{#if stats}
@@ -114,7 +113,7 @@
 
 	<Panel title="Every question waiting" description="Each one you answer stays answered.">
 		{#if !loaded}
-			<p class="quiet">Loading the queue…</p>
+			<p class="quiet">Loading…</p>
 		{:else if questions.length === 0}
 			<Placeholder icon="circle-check" headline={DRAINED_TITLE} body={DRAINED_BODY} />
 		{:else}
@@ -123,7 +122,7 @@
 					<div class="t">{question.title}</div>
 					<div class="meta">{question.meta}</div>
 					<div class="answer">
-						<label class="sr-only" for={`target-${question.id}`}>Target path</label>
+						<label class="sr-only" for={`target-${question.id}`}>Where it belongs</label>
 						<input
 							id={`target-${question.id}`}
 							type="text"
@@ -133,18 +132,18 @@
 						<Button
 							tier="primary"
 							disabled={busy === question.id}
-							reason={busy === question.id ? 'This answer is being recorded.' : undefined}
+							reason={busy === question.id ? 'This answer is being saved.' : undefined}
 							onclick={() => void resolve(question.item)}
 						>
-							Resolve
+							Save answer
 						</Button>
 						<Button
 							tier="outline"
 							disabled={busy === question.id}
-							reason={busy === question.id ? 'This answer is being recorded.' : undefined}
+							reason={busy === question.id ? 'This answer is being saved.' : undefined}
 							onclick={() => void noCounterpart(question.item)}
 						>
-							No counterpart
+							Leave it out
 						</Button>
 					</div>
 				</div>

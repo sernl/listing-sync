@@ -2095,6 +2095,106 @@ async fn a_second_payload_file_is_added_and_reads_back_beside_the_first(pool: Pg
     );
 }
 
+/// A preview made on the seller's device reaches the catalogue, and one over
+/// TPT's own 30 MiB ceiling is refused in words the seller can act on.
+///
+/// The preview is what a buyer is shown before they pay, so it travels as its
+/// own upload and is named beside the payload rather than derived from it.
+/// Without the cap an oversized one is stored happily, charged for, and
+/// refused by the marketplace at send — a failure the seller cannot see
+/// coming, and the only place they could have fixed it is the form they have
+/// already left.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_preview_from_its_own_upload_is_stored_and_one_over_the_cap_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("preview-cap");
+    let state = configured(pool.clone(), &root);
+    let payload = upload(state.clone(), &TOKEN_A, pdf("sellable"), "").await;
+    let preview = upload(state.clone(), &TOKEN_A, pdf("first-two-pages"), "").await;
+
+    let mut body = create_body(&payload, "A resource with a preview", &["TesGb"]);
+    body["previews"] = serde_json::json!([preview.payload[0]]);
+    let (status, response) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a handle from a second upload is a preview: {}",
+        String::from_utf8_lossy(&response)
+    );
+    let created: CreatedProductView = parse(&response);
+    let (status, response) = get(
+        state.clone(),
+        &TOKEN_A,
+        &format!("/v1/products/{}", created.product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&response);
+    assert_eq!(
+        view.files
+            .iter()
+            .filter(|file| file.role == "preview")
+            .count(),
+        1,
+        "the preview reads back in its own role rather than as a second payload: {:?}",
+        view.files
+    );
+
+    // One byte over the ceiling the same server serves as
+    // `form.limits.preview.max_size_bytes`.
+    let mut oversized = pdf("too-many-pages");
+    oversized.resize(30 * 1024 * 1024 + 1, b' ');
+    let bulky = upload(state.clone(), &TOKEN_A, oversized, "").await;
+
+    let mut body = create_body(&payload, "A resource with a fat preview", &["TesGb"]);
+    body["previews"] = serde_json::json!([bulky.payload[0]]);
+    let (status, response) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        refusal_of(&response),
+        (
+            Some(APIErrorCode::UploadRejected),
+            "A preview file can be up to 30 MB.".to_owned()
+        ),
+        "the sentence states the ceiling the form already showed them"
+    );
+
+    // And the other door into the same slot.
+    let (status, response) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(created.product),
+        &serde_json::json!({"role": "preview", "handle": bulky.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        refusal_of(&response).1,
+        "A preview file can be up to 30 MB.",
+        "a preview added after the create meets the cap the create enforced"
+    );
+
+    // The cap is the preview's alone: a payload of the same size is a whole
+    // resource and is stored.
+    let (status, response) = json_call(
+        state,
+        &TOKEN_A,
+        Method::POST,
+        &files_path(created.product),
+        &serde_json::json!({"role": "payload", "handle": bulky.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_client_named_cover_is_refused_on_every_write_that_could_place_one(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;

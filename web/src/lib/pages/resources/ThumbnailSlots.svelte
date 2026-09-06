@@ -5,14 +5,13 @@
 	// a hundred lines of image markup it does not read.
 	import StatusPill from '$lib/StatusPill.svelte';
 	import type { FormVocabularyView } from '$lib/api';
-	import type { ThumbnailSlot } from '$lib/tpt-form';
+	import { sizeWords, type ThumbnailSlot } from '$lib/tpt-form';
 
 	let {
 		form,
 		mode,
 		slots,
 		coverUrl,
-		gigabytes,
 		onMode,
 		onPick,
 		onClear
@@ -26,7 +25,6 @@
 		 *  own handle, because no product exists to address it through; the edit
 		 *  reads the saved resource's cover. */
 		coverUrl: string | null;
-		gigabytes: (bytes: number) => string;
 		onMode: (id: string) => void;
 		onPick: (index: number, file: File) => void;
 		onClear: (index: number) => void;
@@ -40,11 +38,8 @@
 </script>
 
 <fieldset class="res-choices res-stack">
-	<legend>Thumbnails</legend>
-	<p class="res-note">
-		The pictures buyers see first. The four slots appear only under "Upload thumbnails now",
-		exactly as they do on TPT.
-	</p>
+	<legend class="sr-only">Thumbnails</legend>
+	<p class="res-note">Add up to four pictures. The first is the main cover.</p>
 
 	<div class="res-choices">
 		{#each form.thumbnail_modes as option (option.id)}
@@ -114,7 +109,7 @@
 						<label class="res-slot-pick">
 							<span class="res-note">Choose a picture</span>
 							<span class="res-note">
-								Up to {gigabytes(form.limits.thumbnail.max_size_bytes)}
+								Up to {sizeWords(form.limits.thumbnail.max_size_bytes)}
 							</span>
 							<input
 								type="file"
@@ -135,9 +130,5 @@
 				</div>
 			{/each}
 		</div>
-		<p class="res-foot">
-			These four slots match TPT's own layout. Each picture is saved as you choose it, and only
-			the ones marked stored travel with the listing.
-		</p>
 	{/if}
 </fieldset>

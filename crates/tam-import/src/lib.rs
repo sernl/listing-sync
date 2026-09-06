@@ -312,30 +312,55 @@ pub async fn measure_one(
     listing: &ImportedListing,
 ) -> Result<MeasureReport, ImportError> {
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
-    let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, listing).await?;
+    let inbound = inbound_terms(&taxonomy, run.source, listing).await?;
     let terms_seen = listing.native_ids(TermKind::Subject).len();
-    let terms_mapped = subjects.len();
+    let terms_mapped = inbound.subjects.len();
 
-    let uncovered = uncovered_terms(&taxonomy, run.target, &subjects, &COVERAGE_AXES).await?;
+    let uncovered =
+        uncovered_terms(&taxonomy, run.target, &inbound.subjects, &COVERAGE_AXES).await?;
 
     Ok(MeasureReport {
         resource,
         title: listing.title.clone(),
         terms_seen,
         terms_mapped,
-        unmapped_native_ids: unmapped,
+        unmapped_native_ids: inbound.unmapped,
         terms_uncovered: uncovered.len(),
     })
 }
 
+/// What the source's own values map to over its vocabulary's edges.
+///
+/// The subject axis and the resource type are held apart because the
+/// coverage counters are a measurement over subjects and topics alone, taken
+/// before the resource type was read at all; folding the type into them would
+/// move a number somebody compares over time.
+struct InboundTerms {
+    subjects: Vec<CanonicalTermId>,
+    /// A native subject or topic id the relation does not know, verbatim.
+    unmapped: Vec<String>,
+    resource_type: Option<CanonicalTermId>,
+}
+
+impl InboundTerms {
+    /// Every canonical term the product carries, in the order the projection
+    /// filters them by axis.
+    fn all(&self) -> Vec<CanonicalTermId> {
+        let mut terms = self.subjects.clone();
+        terms.extend(self.resource_type);
+        terms
+    }
+}
+
 /// The inbound projection shared by the full import and the measure path: the
 /// seller's native category ids mapped to canonical subjects over the source
-/// vocabulary's edges, an unmapped id retained verbatim.
-async fn inbound_subjects(
+/// vocabulary's edges, an unmapped id retained verbatim, and the declared
+/// resource type mapped over the same relation.
+async fn inbound_terms(
     taxonomy: &TaxonomyRepo,
     source: InventoryId,
     listing: &tam_marketplace::ImportedListing,
-) -> Result<(Vec<CanonicalTermId>, Vec<String>), ImportError> {
+) -> Result<InboundTerms, ImportError> {
     // One slice over every vocabulary the source binds: `ingest_by_native_id`
     // filters by vocabulary itself, so two reads of the same relation are two
     // round trips for one answer.
@@ -364,7 +389,21 @@ async fn inbound_subjects(
             None => unmapped.push(native.clone()),
         }
     }
-    Ok((subjects, unmapped))
+    let resource_type = listing
+        .native_ids(TermKind::ResourceType)
+        .iter()
+        .find_map(|native| {
+            ingest_by_native_id(
+                native,
+                tam_domain::VocabularyId(source, tam_domain::TermKind::ResourceType),
+                &edges,
+            )
+        });
+    Ok(InboundTerms {
+        subjects,
+        unmapped,
+        resource_type,
+    })
 }
 
 /// The axes the coverage number is measured over.
@@ -477,16 +516,17 @@ pub async fn import_one(
     // name a canonical term that does not exist — and the outbound raise
     // below covers every term that does.
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
-    let (subjects, unmapped) = inbound_subjects(&taxonomy, run.source, &listing).await?;
+    let inbound = inbound_terms(&taxonomy, run.source, &listing).await?;
     // The coverage number, from the one helper the measurement also uses, and
     // taken here while the mapped terms are still in hand rather than after
     // the product has consumed them. It runs on those terms rather than on the
     // projection's outcome, so a listing blocked on a currency or a cover still
     // reports a truthful count instead of a zero produced by never reaching
     // the taxonomy.
-    let uncovered = uncovered_terms(&taxonomy, run.target, &subjects, &COVERAGE_AXES).await?;
+    let uncovered =
+        uncovered_terms(&taxonomy, run.target, &inbound.subjects, &COVERAGE_AXES).await?;
     let terms_seen = listing.native_ids(TermKind::Subject).len();
-    let terms_mapped = subjects.len();
+    let terms_mapped = inbound.subjects.len();
 
     // Grades verbatim: the declared age-range ids as paths, the label looked
     // up from the measured table where it exists, the interval derived only
@@ -534,7 +574,7 @@ pub async fn import_one(
         payload,
         cover,
         previews: vec![],
-        subjects,
+        subjects: inbound.all(),
         grades,
         price,
         rights,
@@ -656,6 +696,14 @@ pub async fn import_one(
                 already_open: 0,
             },
         ),
+        Err(tam_domain::ProjectionBlocked::CurrencyMismatch { .. }) => (
+            false,
+            Some("currency_mismatch".to_owned()),
+            RaiseReport {
+                new: 0,
+                already_open: 0,
+            },
+        ),
         Err(tam_domain::ProjectionBlocked::CoverMissing) => (
             false,
             Some("cover_missing".to_owned()),
@@ -682,7 +730,7 @@ pub async fn import_one(
         terms_seen,
         terms_mapped,
         terms_uncovered: uncovered.len(),
-        unmapped_native_ids: unmapped,
+        unmapped_native_ids: inbound.unmapped,
         curriculum: curriculum_of(&listing),
         raised,
         projectable,

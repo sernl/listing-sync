@@ -221,7 +221,7 @@
 				remember('labels.what-are-labels');
 			}}
 		>
-			Use labels to group and filter your resources; the colour of each is picked from its
+			Use labels to group and filter your resources. Each label's colour comes from its
 			name.
 		</Banner>
 	{/if}
@@ -247,8 +247,8 @@
 	{#if labels.isPending}
 		<p class="quiet">Loading…</p>
 	{:else if labels.isError}
-		<Banner tone="bad" title="Your labels could not be read">
-			Nothing has changed; we could not load the list just now.
+		<Banner tone="bad" title="We could not read your labels">
+			Nothing has changed. We could not load the list just now.
 			{#snippet action()}
 				<Button onclick={() => labels.refetch()}>Try again</Button>
 			{/snippet}
@@ -282,10 +282,10 @@
 		{#if uncounted && uncountedShown}
 			<Banner
 				tone="warn"
-				title="Some resource counts could not be read"
+				title="Some counts are missing"
 				onDismiss={() => (uncountedShown = false)}
 			>
-				Your labels are all listed below; we could not read all of the counts.
+				Every label is listed below. We could not read all of the counts.
 				{#snippet action()}
 					<Button onclick={() => counts.refetch()}>Try again</Button>
 				{/snippet}

@@ -30,6 +30,6 @@ describe('a question row', () => {
 
 describe('the queue tally', () => {
 	it('states all three figures, because the open count alone cannot say whether it drained', () => {
-		expect(tallyLine(2, 40, 3)).toBe('2 open · 40 resolved · 3 with no counterpart');
+		expect(tallyLine(2, 40, 3)).toBe('2 to answer · 40 answered · 3 left out');
 	});
 });

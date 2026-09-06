@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
-	import { ApiFailure, api, type NotifyPreferences, type OrgView } from '$lib/api';
+	import {
+		ApiFailure,
+		api,
+		avatarSrc,
+		type NotifyPreferences,
+		type OrgView,
+		type ProfileView
+	} from '$lib/api';
 	import {
 		currentSessionToken,
 		listBrowserSessions,
@@ -25,6 +32,7 @@
 	import { type BrowserSession, merge, sessionLabel } from '$lib/device-merge';
 	import { agoLabel } from '$lib/elapsed';
 	import Field from '$lib/Field.svelte';
+	import { initialsOf } from '$lib/nav';
 	import { NAME_MAX_CHARS, checkOrgName } from '$lib/org-name';
 	import { checkOrgSlug } from '$lib/org-slug';
 	import PageHead from '$lib/PageHead.svelte';
@@ -35,6 +43,8 @@
 	import StatusPill from '$lib/StatusPill.svelte';
 	import Toggle from '$lib/Toggle.svelte';
 	import { toast } from '$lib/toast';
+	import { NOT_REMOVED, avatarRefusal, pictureRefusal } from '$lib/pages/account/avatar';
+	import { STORAGE_NOT_RECLAIMED } from '$lib/pages/resources/files';
 	import '$lib/pages/account/account.css';
 
 	const queryClient = useQueryClient();
@@ -265,6 +275,74 @@
 		renamingUser.mutate(displayName.trim());
 	}
 
+	// ------------------------------------------------------------- picture
+
+	// The picture is the domain's rather than the identity service's: it is
+	// read and written on our own API, so its block draws whether or not the
+	// identity read above succeeded.
+	const picture = createQuery(() => ({
+		queryKey: queryKeys.profile,
+		queryFn: () => api.profile()
+	}));
+
+	let avatarSending = $state(false);
+	let avatarRefused = $state<string | null>(null);
+	// The picture whose bytes would not draw, held as its address so a later
+	// picture clears it by being a different address.
+	let unshowable = $state<string | null>(null);
+	const avatarShown = $derived.by(() => {
+		const src = avatarSrc(picture.data);
+		return src === unshowable ? null : src;
+	});
+	const hasPicture = $derived(picture.data !== undefined && picture.data.avatar_hash !== null);
+	const avatarInitials = $derived(initialsOf(organisation.data?.name));
+
+	/** The bytes go where every picture goes, slot-bound so the server refuses
+	 *  a worksheet before it is sealed, and the profile write names the handle
+	 *  that upload answered; the cache takes the server's answer rather than
+	 *  the handle this client sent. */
+	async function chooseAvatar(event: Event & { currentTarget: HTMLInputElement }) {
+		const file = event.currentTarget.files?.[0];
+		event.currentTarget.value = '';
+		if (!file) {
+			return;
+		}
+		const unusable = pictureRefusal(file.type);
+		if (unusable !== null) {
+			avatarRefused = unusable;
+			return;
+		}
+		avatarSending = true;
+		avatarRefused = null;
+		try {
+			const landed = await api.upload(file, 'keep_whole', undefined, 'image');
+			const handle = landed.payload[0]?.hash;
+			if (handle === undefined) {
+				avatarRefused = 'That file was stored with no handle to attach.';
+				return;
+			}
+			const stored = await api.setAvatar(handle);
+			queryClient.setQueryData(queryKeys.profile, stored);
+			toast('info', 'Profile picture saved.');
+		} catch (failure) {
+			avatarRefused = avatarRefusal(failure);
+		} finally {
+			avatarSending = false;
+		}
+	}
+
+	const removingAvatar = createMutation(() => ({
+		mutationFn: () => api.clearAvatar(),
+		onSuccess: (stored: ProfileView) => {
+			queryClient.setQueryData(queryKeys.profile, stored);
+			avatarRefused = null;
+			toast('info', 'Profile picture removed.');
+		},
+		onError: () => {
+			toast('error', NOT_REMOVED);
+		}
+	}));
+
 	// ------------------------------------------------------------- passkeys
 
 	const supported = passkeysSupported();
@@ -403,12 +481,12 @@
 
 	<Panel
 		title="Organisation"
-		description="What this account is called. The display name is what we print; the name below is yours alone and appears in your address. Neither is ever sent to a marketplace."
+		description="What this account is called. Neither name is ever sent to a marketplace."
 	>
 		{#if organisation.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if organisation.isError}
-			<p class="quiet">The organisation could not be read.</p>
+			<p class="quiet">We could not read your organisation.</p>
 		{:else}
 			<form onsubmit={rename} class="form">
 				<!-- No `maxlength`: it counts UTF-16 code units, so it would silently
@@ -482,10 +560,71 @@
 		title="Profile"
 		description="Who you are signed in as. Your email address cannot be changed yet."
 	>
+		<div class="acct-avatar">
+			<!-- Decoration beside the control that names it: the tile shows the
+			     picture or the initials the shell would draw in its place. -->
+			<span class="acct-avatar-tile" aria-hidden="true">
+				{#if avatarShown !== null}
+					<img
+						class="acct-avatar-img"
+						src={avatarShown}
+						alt=""
+						onerror={() => (unshowable = avatarShown)}
+					/>
+				{:else}
+					{avatarInitials}
+				{/if}
+			</span>
+			<div class="acct-avatar-body">
+				<label class="drop" for="avatar-file">
+					<b>
+						{avatarSending
+							? 'Uploading…'
+							: hasPicture
+								? 'Choose a different picture'
+								: 'Choose a picture'}
+					</b>
+					A JPEG, PNG or GIF. It is shown to you beside your organisation's name and is never
+					sent to a marketplace.
+					<input
+						id="avatar-file"
+						type="file"
+						accept="image/png,image/jpeg,image/gif"
+						disabled={avatarSending}
+						onchange={chooseAvatar}
+					/>
+				</label>
+				{#if avatarRefused !== null}
+					<Banner tone="bad">{avatarRefused}</Banner>
+				{/if}
+				{#if hasPicture}
+					<div class="actions">
+						<Button
+							tier="outline"
+							danger
+							small
+							disabled={avatarSending || removingAvatar.isPending}
+							reason={avatarSending
+								? 'A picture is being uploaded.'
+								: removingAvatar.isPending
+									? 'The picture is being removed.'
+									: undefined}
+							onclick={() => removingAvatar.mutate()}
+						>
+							{removingAvatar.isPending ? 'Removing…' : 'Remove picture'}
+						</Button>
+					</div>
+					<p class="foot-note">{STORAGE_NOT_RECLAIMED}</p>
+				{/if}
+			</div>
+		</div>
+
+		<hr class="acct-rule" />
+
 		{#if profile.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if profile.isError || !profile.data}
-			<p class="quiet">Your profile could not be read.</p>
+			<p class="quiet">We could not read your profile.</p>
 		{:else}
 			<dl class="acct-detail">
 				<dt>Email</dt>
@@ -523,12 +662,12 @@
 
 	<Panel
 		title="Notifications"
-		description="What we send you when one of your runs finishes."
+		description="What we email you when something finishes."
 	>
 		{#if notifyPrefs.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if notifyPrefs.isError || !notifyPrefs.data}
-			<p class="quiet">Your notification settings could not be read.</p>
+			<p class="quiet">We could not read your notification settings.</p>
 		{:else}
 			<Toggle
 				label="Email me when a run finishes"
@@ -565,7 +704,7 @@
 			{#if passkeys.isPending}
 				<p class="quiet">Loading…</p>
 			{:else if passkeys.isError}
-				<p class="quiet">Your passkeys could not be listed.</p>
+				<p class="quiet">We could not list your passkeys.</p>
 			{:else if passkeys.data.length === 0}
 				<p class="quiet">No passkeys registered yet.</p>
 			{:else}
@@ -640,7 +779,7 @@
 		{#if signIns.isPending || registry.isPending || current.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if signIns.isError || registry.isError}
-			<p class="quiet">Your browser sign-ins could not be listed.</p>
+			<p class="quiet">We could not list your browser sign-ins.</p>
 		{:else if joined.orphans.length === 0}
 			<p class="quiet">
 				Every browser sign-in on this account is shown against a machine on Marketplaces.

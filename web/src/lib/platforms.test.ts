@@ -4,9 +4,12 @@ import { describe, expect, it } from 'vitest';
 import {
 	AUTHORABLE_PLATFORMS,
 	CARD_ANCHOR,
+	MARKETPLACE_TILES,
+	MARKETPLACE_WORD,
 	MARK_SRC,
 	PLATFORMS,
 	REGION_TAG,
+	TES_CURRICULA,
 	cardAnchor,
 	marketplacesHref,
 	platformTitle
@@ -33,6 +36,45 @@ describe('how a platform is named', () => {
 
 	it('offers only the platforms an adapter exists for', () => {
 		expect(AUTHORABLE_PLATFORMS).toEqual(['Tpt', 'TesGb', 'TesUs', 'TesNz']);
+	});
+});
+
+describe('the tiles the form offers', () => {
+	// The founder's rule of 2026-09-11: the form shows one Tes, not three.
+	it('draws one tile per marketplace, Tes included', () => {
+		expect(MARKETPLACE_TILES.map((tile) => tile.marketplace)).toEqual(['Tpt', 'Tes', 'Etsy']);
+	});
+
+	it('stands the Tes tile for all three of its catalogues', () => {
+		const tes = MARKETPLACE_TILES.find((tile) => tile.marketplace === 'Tes');
+		expect(tes?.inventories).toEqual(['TesGb', 'TesUs', 'TesNz']);
+	});
+
+	// Shown rather than hidden, so a teacher can see it is coming; the tile
+	// itself is disabled because nothing can write to it.
+	it('shows Etsy and says it cannot be authored', () => {
+		expect(MARKETPLACE_TILES.find((tile) => tile.marketplace === 'Etsy')?.authorable).toBe(false);
+	});
+
+	it('names every tile in full, for the hover and the screen reader', () => {
+		for (const tile of MARKETPLACE_TILES) {
+			expect(tile.name.length, tile.marketplace).toBeGreaterThan(tile.marketplace.length);
+		}
+	});
+
+	it('offers the three Tes curricula the founder named, against their catalogues', () => {
+		expect(TES_CURRICULA).toEqual([
+			{ inventory: 'TesGb', label: 'England' },
+			{ inventory: 'TesUs', label: 'United States' },
+			{ inventory: 'TesNz', label: 'New Zealand' }
+		]);
+	});
+
+	it('has a one-word name for every marketplace, for use inside a sentence', () => {
+		expect(Object.keys(MARKETPLACE_WORD).sort()).toEqual([...MARKETPLACES].sort());
+		for (const word of Object.values(MARKETPLACE_WORD)) {
+			expect(word).not.toContain(' ');
+		}
 	});
 });
 

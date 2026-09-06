@@ -82,6 +82,10 @@ export const queryKeys = {
 	 *  preferences screen alone; the rail carries no unread badge, so
 	 *  nothing else asks. */
 	notifyPreferences: ['notify-preferences'] as const,
+	/** The seller's own picture. Read by the shell, which draws it in the top
+	 *  strip and the phone bar, and set by the preferences screen from the
+	 *  server's answer, so the tile moves without a refetch. */
+	profile: ['profile'] as const,
 	passkeys: ['passkeys'] as const,
 	billing: ['billing'] as const,
 	/** The newest runs read in full, which the jobs list alone cannot give:
@@ -101,6 +105,7 @@ export const queryKeys = {
 	adminOrg: (org: string) => ['admin-org', org] as const,
 	adminFailures: ['admin-failed-writes'] as const,
 	adminImportDrain: ['admin-import-drain'] as const,
+	adminDeadLetters: ['admin-dead-letters'] as const,
 	adminImpersonations: ['admin-impersonations'] as const,
 	/** The identity plane's user list, keyed by the search that produced it. */
 	identityUsers: (search: string) => ['identity-users', search] as const

@@ -414,10 +414,10 @@ describe('the page header action', () => {
 });
 
 describe('the transport line D1 requires', () => {
-	it('says whose machine, and names the marketplace whose token it is', () => {
-		expect(transportLine('SellerDevice', 'TPT')).toBe('Runs on your own device.');
+	it('says whose machine, and names the marketplace that gave the permission', () => {
+		expect(transportLine('SellerDevice', 'TPT')).toBe('Runs on your own computer.');
 		expect(transportLine('OfficialApi', 'Etsy')).toBe(
-			'Runs on our servers, under a token Etsy issued us.'
+			'Runs on our servers, with the permission Etsy gave us.'
 		);
 	});
 

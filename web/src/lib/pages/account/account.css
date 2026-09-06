@@ -104,7 +104,7 @@
 	font-size: 12px;
 	line-height: 1.4;
 	min-height: 1.4em;
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 .acct-plan ul {
@@ -129,7 +129,7 @@
 	display: grid;
 	flex: none;
 	margin-top: 1px;
-	color: var(--ok);
+	color: var(--ok-ink);
 }
 
 /* Where the one checkout control would stand on a build that has no Paddle
@@ -241,4 +241,52 @@
 .acct-slug-preview .acct-slug-said {
 	font-weight: 600;
 	color: var(--ink);
+}
+
+/* --- the profile picture -------------------------------------------------- */
+
+/* The tile and the control side by side: the tile is the shell's account tile
+   at a size a seller can judge a crop by, and the control is the same drop
+   panel the resource form uses. No upload is ever resized, so the crop here
+   and in the shell is the whole of how a large picture becomes a small face. */
+.acct-avatar {
+	display: flex;
+	align-items: flex-start;
+	gap: 16px;
+	margin-bottom: 16px;
+}
+
+.acct-avatar-tile {
+	flex: none;
+	width: 72px;
+	height: 72px;
+	border-radius: var(--r-card);
+	background: var(--accent-soft);
+	color: var(--primary);
+	display: grid;
+	place-items: center;
+	font: 600 22px var(--sans);
+	overflow: hidden;
+}
+
+.acct-avatar-img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.acct-avatar-body {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+@media (max-width: 620px) {
+	.acct-avatar {
+		flex-direction: column;
+		align-items: stretch;
+	}
 }

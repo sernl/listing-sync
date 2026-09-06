@@ -11,6 +11,7 @@
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import TabBar from '$lib/TabBar.svelte';
 	import { PORTFOLIO_ROWS, tesPortfolio } from '$lib/tes-portfolio';
 	import { ticker } from './clock.svelte';
@@ -104,7 +105,8 @@
 			// fails: a zero here is a counted figure like any other, and it is
 			// the plausible wrong answer rather than an obviously missing one.
 			count: catalogueRead === 'read' ? counts[entry.id] : null,
-			hint: entry.hint
+			hint: entry.hint,
+			mark: entry.mark === null ? undefined : entry.mark
 		}))
 	);
 
@@ -197,7 +199,7 @@
 		</Field>
 		<p class="an-why">
 			There is no date range, because we keep only the newest figure for each listing.
-			{#if labels.isError}Your labels could not be read, so the filter
+			{#if labels.isError}We could not read your labels, so the filter
 				is unavailable.{/if}
 		</p>
 	</div>
@@ -211,8 +213,8 @@
 				remember('analytics.tpt-reports-only');
 			}}
 		>
-			Only TPT reports figures today; TES publishes none, so its panel counts your own
-			Resources instead.
+			Only TPT reports figures today. TES reports none, so its panel counts your own
+			resources instead.
 		</Banner>
 	{/if}
 
@@ -404,7 +406,7 @@
 										<div class="an-t" title={row.title}>{row.title}</div>
 									{/if}
 								</td>
-								<td><span class="an-chip">{row.platform}</span></td>
+								<td><MarketplaceMark inventory={row.inventory} size={18} /></td>
 								{#each METRIC_COLUMNS as column (column.key)}
 									<td class="an-num">{formatMetric(row.metrics[column.key])}</td>
 								{/each}

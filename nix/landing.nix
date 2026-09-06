@@ -59,14 +59,19 @@ stdenv.mkDerivation {
     runHook preInstall
     # tam-server serves this directory as it stands, so an adapter or output
     # change that stopped emitting any of these has to fail here rather than as
-    # a 404 on the box. Every page is linked from every footer, and the script
-    # is referenced from every head.
+    # a 404 on the box. Every page is linked from every footer, the script is
+    # referenced from every head, and `og:image` on every page points at the
+    # card under `images/`. `brand/logo.svg` is the full logo that card is
+    # rendered from, shipped so the card can be regenerated from the bytes the
+    # site itself serves.
     for emitted in \
       index.html \
       pricing/index.html \
       privacy/index.html \
       terms/index.html \
-      app-redirect.js; do
+      app-redirect.js \
+      brand/logo.svg \
+      images/og.png; do
       test -f "dist/$emitted"
     done
     cp -r dist $out

@@ -120,7 +120,7 @@
 		{/if}
 
 		{#if refusal !== null}
-			<Banner tone="bad" title="This import could not be read just now">
+			<Banner tone="bad" title="We could not read this import just now">
 				{refusal} Below is the last state we read.
 			</Banner>
 		{/if}
@@ -167,8 +167,8 @@
 
 			{#if coverage !== null}
 				<Panel
-					title="Coverage"
-					description="What the import measured against our own word lists — a zero here was measured, not missing."
+					title="Words we could match"
+					description="How much of this shop's wording we could match to our own lists. A zero here was measured, not missing."
 				>
 					<ul class="import-figures">
 						{#each coverageRows(coverage) as figure (figure.label)}
@@ -212,10 +212,10 @@
 			icon="download"
 			back={{ href: MIGRATION_HREF, label: 'Back to Marketplace Migration' }}
 			title="Import"
-			description="This import could not be read."
+			description="We could not read this import."
 		/>
 		<Panel>
-			<Placeholder icon="download" headline="This import could not be read" body={refusal}>
+			<Placeholder icon="download" headline="We could not read this import" body={refusal}>
 				{#snippet actions()}
 					<Button href={MIGRATION_HREF}>Back to Marketplace Migration</Button>
 				{/snippet}

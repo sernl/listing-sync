@@ -8,6 +8,7 @@
 	import { SHORT_NAME } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { queryKeys } from '$lib/query';
+	import { deadLetterHeadline, topicLabel } from '$lib/pages/admin/dead-letters';
 	import '$lib/pages/admin/admin.css';
 
 	// The whole view rather than its rows: `truncated` is the half of the
@@ -18,6 +19,13 @@
 	}));
 
 	const readout = $derived(seriesByOrg(drain.data?.rows ?? []));
+
+	// Its own read, so a fault in one does not blank the other: the two share
+	// this page and nothing else.
+	const dead = createQuery(() => ({
+		queryKey: queryKeys.adminDeadLetters,
+		queryFn: () => api.adminDeadLetters()
+	}));
 </script>
 
 <div class="page">
@@ -30,6 +38,47 @@
 			<StatusPill tone="soon" label="every tenant" />
 		{/snippet}
 	</PageHead>
+
+	<!-- Counted rather than listed: which topic and how many tenants is the
+	     whole operator question, and a row would carry a run summary an
+	     operator has no reading for. -->
+	<Panel title="Dead letters">
+		{#if dead.isPending}
+			<p class="quiet">Reading the outbox…</p>
+		{:else if dead.isError}
+			<p class="quiet">The dead letters could not be read.</p>
+		{:else}
+			<p class="s">{deadLetterHeadline(dead.data.topics)}</p>
+			{#if dead.data.topics.length > 0}
+				<div class="op-table">
+					<table>
+						<thead>
+							<tr>
+								<th>Topic</th>
+								<th class="num">Messages</th>
+								<th class="num">Organisations</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each dead.data.topics as entry (entry.topic)}
+								<tr>
+									<td data-label="Topic">{topicLabel(entry.topic)}</td>
+									<td class="num op-flag" data-label="Messages">{entry.messages}</td>
+									<td class="num" data-label="Organisations">{entry.orgs}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				<p class="foot-note">
+					A message is dead after twelve failed attempts, or on a refusal the relay called
+					permanent; the drainer never retries one. Many organisations holding one each
+					points at the relay or its key, one organisation holding many at an address the
+					relay refuses.
+				</p>
+			{/if}
+		{/if}
+	</Panel>
 
 	{#if drain.isPending}
 		<Panel><p class="quiet">Reading the drain measurements…</p></Panel>

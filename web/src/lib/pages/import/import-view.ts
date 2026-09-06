@@ -221,15 +221,15 @@ export const HANDOFF_LABEL = 'Continue on Marketplace Migration';
  * yet. Saying the coming feature outright is what keeps the page honest about
  * why it is a description and not an action. */
 export const IMPORT_IS_A_MIGRATION =
-	'Today an import runs as a migration: every listing found is drafted on TPT for you to ' +
-	'review. Importing without drafting anywhere is a coming feature.';
+	'For now, every listing we find is saved as a TPT draft for you to check. Importing ' +
+	'without drafting anywhere is coming.';
 
 /** What the card says while this console could not read the connections list.
  *
  * Says that we do not know, never that the marketplace is disconnected. */
 export function connectionUnknown(card: ImportCard): string {
 	return (
-		`Your marketplaces could not be read, so we cannot say whether ${card.name} is ` +
+		`We could not read your marketplaces, so we cannot say whether ${card.name} is ` +
 		'connected. Nothing has changed — reload to try again.'
 	);
 }
@@ -260,15 +260,15 @@ export function standingBadge(card: ImportCard): { tone: PillTone; label: string
 export function notConnected(card: ImportCard): string {
 	return (
 		`${card.name} is not connected. Connect it on Marketplaces, in the Teachouse app on your ` +
-		'computer: the app opens the marketplace\u2019s own sign-in and keeps the login on that ' +
-		'machine, which is the only place it is ever kept.'
+		'computer: the app opens the marketplace sign-in and keeps your login on that machine, ' +
+		'which is the only place it is kept.'
 	);
 }
 
 /** The permanent line under the site choice, which says where the work runs
  *  and therefore when it starts. */
 export function deviceLine(card: ImportCard): string {
-	return `${card.name} runs on your own device, so the import starts the next time that device checks in.`;
+	return `${card.name} runs on your own computer, so the import starts the next time that computer checks in.`;
 }
 
 /** What an import is, said before anything is chosen.
@@ -278,8 +278,8 @@ export function deviceLine(card: ImportCard): string {
  * is `FILES_STAY_ON_YOUR_COMPUTER`'s sentence, and stating it twice on one
  * screen makes a seller read the second as a correction of the first. */
 export const WHAT_AN_IMPORT_IS =
-	'An import copies a marketplace’s listings into your Resources: the details, ' +
-	'and where each file sits on your own computer.';
+	'An import copies your listings into Resources, with their details and where each file ' +
+	'sits on your computer.';
 
 /** Where a connection is made, which is the marketplaces screen.
  *
@@ -301,9 +301,9 @@ export const CONNECT_LABEL = 'Connect on Marketplaces';
  * complete: the founder's own reading of this screen was that there was no
  * option to connect anywhere on it. */
 export const NOTHING_CONNECTED =
-	'You have no marketplace connected, so there is no shop to import from yet. A marketplace ' +
-	'login is made in the Teachouse app on your computer and stays on that machine \u2014 ' +
-	'Marketplaces is where you connect one, and where the app can be downloaded.';
+	'You have no marketplace connected, so there is nothing to import yet. Connect one on ' +
+	'Marketplaces: you sign in through the Teachouse app on your computer, and that login ' +
+	'stays on that machine.';
 
 /** What the seller is told after asking this computer to run the import, or
  *  null where there is nothing to say.
@@ -332,8 +332,9 @@ export function startRefusal(outcome: StartOutcome): string | null {
 /** One import as the list shows it. */
 export interface ImportRow {
 	request: string;
-	/** Where the shop was read and where it arrived. */
-	title: string;
+	/** Where the shop was read and where it arrived, each drawn by its mark. */
+	source: InventoryId;
+	target: InventoryId;
 	/** The one line the row says about where the request stands. */
 	line: string;
 	label: string;
@@ -346,10 +347,7 @@ export interface ImportRow {
  * Filtered to the migrate disposition, because a sync is not an import and
  * belongs to the Automations screens; the endpoint serves both. The order is
  * the endpoint's own, which is newest first, so nothing is re-sorted here. */
-export function importRows(
-	heads: readonly SyncRequestHead[],
-	name: (inventory: InventoryId) => string
-): ImportRow[] {
+export function importRows(heads: readonly SyncRequestHead[]): ImportRow[] {
 	return heads
 		.filter((head) => head.disposition === 'migrate')
 		.map((head) => {
@@ -357,7 +355,8 @@ export function importRows(
 			const shown = presentStage(stage);
 			return {
 				request: head.request,
-				title: `${name(head.source)} → ${name(head.target)}`,
+				source: head.source,
+				target: head.target,
 				line: listRowLine(stage),
 				label: shown.label,
 				tone: PILL_TONE[shown.tone],
@@ -374,12 +373,12 @@ export const NO_IMPORT_YET = 'No import has run yet.';
  *  shop across. Told the second when the first is true, they start the import
  *  again. */
 export const IMPORTS_UNREAD =
-	'Your imports could not be read, so this page cannot list them. Any import already ' +
-	'running is unaffected.';
+	'We could not read your imports, so this page cannot list them. Any import already ' +
+	'running carries on.';
 
 /** A marketplace list that could not be read is not a seller with no
  *  marketplace, so the page says which of the two it is looking at rather than
  *  letting an outage read as "you have no shop". */
 export const CONNECTIONS_UNREAD =
-	'Your marketplaces could not be read, so we cannot list the shops you can bring ' +
-	'across; nothing has been started.';
+	'We could not read your marketplaces, so this page cannot list what you can import. ' +
+	'Nothing has started.';

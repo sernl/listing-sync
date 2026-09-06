@@ -36,7 +36,8 @@ export interface MigrationRow {
 	href: string;
 	/** Which shop went where, named in full: three Tes sites differ only by
 	 *  region, and a short name would render them identically. */
-	title: string;
+	source: InventoryId;
+	target: InventoryId;
 	meta: string;
 	label: string;
 	tone: RowTone;
@@ -58,7 +59,8 @@ export function migrationRows(
 		return {
 			request: row.request,
 			href: `/sync/requests/${row.request}`,
-			title: `${platformTitle(row.source)} → ${platformTitle(row.target)}`,
+			source: row.source,
+			target: row.target,
 			meta: `${listRowLine(stage)} · started ${agoLabel(row.created_at, now)}`,
 			label: shown.label,
 			tone: PILL[shown.tone]

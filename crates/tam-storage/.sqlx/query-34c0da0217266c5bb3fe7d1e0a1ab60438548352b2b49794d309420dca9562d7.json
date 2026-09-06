@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH doomed AS (\n                   SELECT org_id, id FROM import_batch\n                    WHERE expires_at < $1\n                      AND state IN ('parsed', 'attaching', 'importing')\n                    ORDER BY expires_at, org_id, id\n                    LIMIT $2\n               ),\n               released AS (\n                   UPDATE import_batch_row r\n                      SET file_hash = NULL, file_kind = NULL, file_byte_len = NULL,\n                          cover_hash = NULL, cover_kind = NULL, cover_byte_len = NULL\n                     FROM doomed d\n                    WHERE r.org_id = d.org_id AND r.batch_id = d.id\n                      AND r.state NOT IN ('creating', 'created', 'published')\n                      AND (r.file_hash IS NOT NULL OR r.cover_hash IS NOT NULL)\n                   RETURNING r.org_id\n               ),\n               settled AS (\n                   UPDATE import_batch b\n                      SET state = 'abandoned', settled_at = $1, failure_detail = $3\n                     FROM doomed d\n                    WHERE b.org_id = d.org_id AND b.id = d.id\n                   RETURNING b.org_id\n               )\n               SELECT (SELECT count(*) FROM settled)  AS \"abandoned!\",\n                      (SELECT count(*) FROM released) AS \"released!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "abandoned!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "released!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "34c0da0217266c5bb3fe7d1e0a1ab60438548352b2b49794d309420dca9562d7"
+}

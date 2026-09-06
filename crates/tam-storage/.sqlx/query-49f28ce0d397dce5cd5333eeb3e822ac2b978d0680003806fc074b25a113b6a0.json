@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (COALESCE(claimed_at, created_at) < $3) AS \"stale!\"\n                     FROM import_batch\n                    WHERE org_id = $1 AND id = $2 AND state = 'importing'\n                      FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stale!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "49f28ce0d397dce5cd5333eeb3e822ac2b978d0680003806fc074b25a113b6a0"
+}

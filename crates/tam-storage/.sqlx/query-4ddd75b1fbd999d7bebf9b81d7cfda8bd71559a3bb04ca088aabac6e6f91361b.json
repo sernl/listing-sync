@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_batch b SET state = CASE WHEN EXISTS (SELECT 1 FROM import_batch_row r WHERE r.org_id = b.org_id AND r.batch_id = b.id AND r.file_hash IS NOT NULL) THEN 'attaching' ELSE 'parsed' END WHERE b.org_id = $1 AND b.id = $2 AND b.state = 'importing'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4ddd75b1fbd999d7bebf9b81d7cfda8bd71559a3bb04ca088aabac6e6f91361b"
+}

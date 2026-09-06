@@ -476,7 +476,7 @@ fn picture_slots(
 /// The catalogue insert upserts a `blob` row rather than requiring one, so a
 /// fabricated hash would otherwise mint a row pointing at no object and charge
 /// the tenant for storage that does not exist.
-fn refuse_unheld(
+pub(crate) fn refuse_unheld(
     claimed: &[ContentHash],
     lengths: &std::collections::HashMap<ContentHash, i64>,
 ) -> Result<(), APIError> {
@@ -495,6 +495,50 @@ fn refuse_unheld(
             .kind(APIErrorKind::Validation)
             .detail(serde_json::json!({ "hashes": unknown })),
     ))
+}
+
+/// How the preview cap reads in a sentence a teacher can act on.
+///
+/// Formatted from the capture's own number rather than typed beside it, so a
+/// re-poll that moves the ceiling moves the sentence with it.
+fn preview_cap_refusal(ceiling: u64) -> String {
+    format!(
+        "A preview file can be up to {} MB.",
+        ceiling.div_euclid(1024 * 1024)
+    )
+}
+
+/// Refuses a preview larger than the marketplace takes.
+///
+/// A preview is what a buyer is shown before they pay, and TPT's own form
+/// caps one at 30 MiB — the same number this server serves the console as
+/// `form.limits.preview.max_size_bytes`, read here from the same capture so
+/// the figure the seller was told and the figure they are refused against
+/// cannot differ. Without it a 200 MB preview is stored happily, charged for,
+/// and refused by the marketplace at send, which is a failure the seller
+/// cannot see coming.
+///
+/// The length is the caller's own `stored_hashes` answer, so no second query
+/// is made; an absent length refuses rather than reads, which is the safe
+/// direction and unreachable anyway because `refuse_unheld` runs first.
+pub(crate) fn previews_within_cap(
+    state: &AppState,
+    previews: &[ContentHash],
+    lengths: &std::collections::HashMap<ContentHash, i64>,
+) -> Result<(), APIError> {
+    if previews.is_empty() {
+        return Ok(());
+    }
+    let ceiling = crate::product::preview_slot_bytes_max().ok_or_else(|| {
+        state.internal("the committed TPT capture did not parse; the preview cap is unknown")
+    })?;
+    for hash in previews {
+        let stored = lengths.get(hash).copied().unwrap_or(i64::MAX);
+        if u64::try_from(stored).unwrap_or(u64::MAX) > ceiling {
+            return Err(slot_refusal(*hash, &preview_cap_refusal(ceiling)));
+        }
+    }
+    Ok(())
 }
 
 fn slot_refusal(hash: ContentHash, message: &str) -> APIError {
@@ -523,7 +567,7 @@ fn slot_refusal(hash: ContentHash, message: &str) -> APIError {
 /// second query is needed; the bound is
 /// [`crate::product::thumbnail_slot_bytes_max`], TPT's measured ceiling on a
 /// slot image and the only one this system has measured.
-async fn image_bytes_only(
+pub(crate) async fn image_bytes_only(
     state: &AppState,
     org: OrgId,
     slots: &[(ContentHash, &'static str)],
@@ -906,7 +950,9 @@ pub(crate) async fn create_product(
 /// The identifiers are the caller's because the import reserves them before it
 /// creates anything: a pass resumed after a closed browser has to be able to
 /// finish the row it already claimed rather than mint a second product for it.
-/// The handler above mints its own and is unchanged by the arrangement.
+/// The handler above mints its own and is unchanged by the arrangement. The
+/// writes after the product row are [`finish_one`], which the import also
+/// calls on its own for a row whose product a dead pass had already written.
 pub(crate) async fn create_one(
     state: &AppState,
     org: OrgId,
@@ -982,15 +1028,27 @@ pub(crate) async fn create_one(
             .as_ref()
             .map_or(&[][..], |base| &base.thumbnail_hashes),
     )?;
-    let mut claimed: Vec<ContentHash> = body
-        .payload
+    // The previews are parsed apart from the payload as well as with it: the
+    // held check wants one list and the preview cap wants only the handles it
+    // applies to, and a payload file is a whole resource that the cap would
+    // wrongly refuse.
+    let previews_claimed: Vec<ContentHash> = body
+        .previews
         .iter()
-        .chain(body.previews.iter())
         .map(|handle| {
             parse_hash(&handle.hash)
                 .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))
         })
         .collect::<Result<Vec<_>, APIError>>()?;
+    let mut claimed: Vec<ContentHash> = body
+        .payload
+        .iter()
+        .map(|handle| {
+            parse_hash(&handle.hash)
+                .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))
+        })
+        .collect::<Result<Vec<_>, APIError>>()?;
+    claimed.extend(previews_claimed.iter().copied());
     claimed.extend(pictures.iter().map(|(hash, _)| *hash));
     let lengths: std::collections::HashMap<ContentHash, i64> = products
         .stored_hashes(org, &claimed)
@@ -999,6 +1057,7 @@ pub(crate) async fn create_one(
         .into_iter()
         .collect();
     refuse_unheld(&claimed, &lengths)?;
+    previews_within_cap(state, &previews_claimed, &lengths)?;
     image_bytes_only(state, org, &pictures, &lengths).await?;
 
     let mut names = std::collections::HashMap::new();
@@ -1094,7 +1153,43 @@ pub(crate) async fn create_one(
             .map_err(|error| create_fault(state, &error))?;
     }
 
+    finish_one(state, org, body, product, mappings).await
+}
+
+/// The writes that trail the product row: its mappings and its elections.
+///
+/// Split from [`create_one`] at the product insert because that is where a
+/// pass can die. The spreadsheet import reserves a row's identifiers, creates
+/// the product, and writes these afterwards, each in its own transaction; a
+/// commit resumed after a crash between the insert and these finds the
+/// product and calls this to complete what is missing. So every write here
+/// holds for a product that already carries some of them: a mapping is
+/// inserted only where the product does not already hold one under that
+/// identifier, and an answered election the tenant has already recorded for
+/// this product writes no second row, which is the guard
+/// [`ElectionRepo::record_answered`] carries for a retried create.
+///
+/// None of the create's refusals runs again here — not the quota, which would
+/// count the product that exists, and not the held-bytes read-back, which the
+/// stored product already passed — because the product's existence is the
+/// proof those were met.
+pub(crate) async fn finish_one(
+    state: &AppState,
+    org: OrgId,
+    body: &CreateProductBody,
+    product: ProductId,
+    mappings: &[MappingId],
+) -> Result<CreatedProductView, APIError> {
+    let price = checked_price(body.price)?;
+    let now = (state.wall)();
     let bindings = MappingRepo::new(state.pool.clone());
+    let existing: Vec<MappingId> = bindings
+        .list_for_product(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .into_iter()
+        .map(|record| record.mapping.id)
+        .collect();
     let mut written = Vec::with_capacity(body.inventories.len());
     for (slot, inventory) in body.inventories.iter().enumerate() {
         // One identifier per inventory, by position. A caller that supplied
@@ -1103,15 +1198,17 @@ pub(crate) async fn create_one(
         let mapping = *mappings.get(slot).ok_or_else(|| {
             state.internal("a create was handed fewer mapping identifiers than it names platforms")
         })?;
-        bindings
-            .insert(
-                org,
-                &unbound_mapping(org, product, *inventory, mapping, price),
-                0,
-                now,
-            )
-            .await
-            .map_err(|error| storage_fault(state, &error))?;
+        if !existing.contains(&mapping) {
+            bindings
+                .insert(
+                    org,
+                    &unbound_mapping(org, product, *inventory, mapping, price),
+                    0,
+                    now,
+                )
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+        }
         written.push(MappingView {
             inventory: *inventory,
             mapping,
@@ -2025,14 +2122,23 @@ async fn reaches_after(
 
 /// Refuses a handle naming bytes this tenant has never uploaded, which is the
 /// create's own check applied to the one handle a file change carries.
-async fn held(state: &AppState, org: OrgId, handle: &FileHandle) -> Result<(), APIError> {
+///
+/// Returns how many bytes are held under it, because the caller that has just
+/// established the handle is real is also the one that has to size it, and a
+/// second query for a number this one already read is a second chance for the
+/// two answers to differ.
+async fn held(
+    state: &AppState,
+    org: OrgId,
+    handle: &FileHandle,
+) -> Result<(ContentHash, i64), APIError> {
     let claimed = parse_hash(&handle.hash)
         .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))?;
     let known = ProductRepo::new(state.pool.clone())
         .stored_hashes(org, &[claimed])
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    if known.is_empty() {
+    let Some((hash, length)) = known.first().copied() else {
         return Err(APIError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             APIErrorEntry::new("a file handle names bytes this organisation has not uploaded")
@@ -2040,8 +2146,8 @@ async fn held(state: &AppState, org: OrgId, handle: &FileHandle) -> Result<(), A
                 .kind(APIErrorKind::Validation)
                 .detail(serde_json::json!({ "hashes": [hex_encode(&claimed.0)] })),
         ));
-    }
-    Ok(())
+    };
+    Ok((hash, length))
 }
 
 /// Refused because a cover is ours to draw and never a client's to name.
@@ -2177,7 +2283,16 @@ pub(crate) async fn add_file(
     }
     let now = (state.wall)();
     refuse_uncaptured(&state, context.org, product).await?;
-    held(&state, context.org, &body.handle).await?;
+    let (hash, length) = held(&state, context.org, &body.handle).await?;
+    // The same cap the create enforces, at the other door into the same
+    // slot: a preview added after the fact is the preview a buyer is shown.
+    if role == FileRole::Preview {
+        previews_within_cap(
+            &state,
+            &[hash],
+            &std::collections::HashMap::from([(hash, length)]),
+        )?;
+    }
     let file = body.handle.resolve(role, now)?;
     let name = body.handle.checked_name()?;
     ProductRepo::new(state.pool.clone())

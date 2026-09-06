@@ -1,20 +1,30 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import type { FormGroup } from '$lib/generated/vocab';
 	import Icon from '$lib/Icon.svelte';
 	import type { IconName } from '$lib/icons';
-	import { GROUP_HEADINGS, refusalsIn, type Advisory, type Refusal } from '$lib/tpt-form';
+	import {
+		GROUP_HEADINGS,
+		refusalsIn,
+		type Advisory,
+		type FormAnchor,
+		type Refusal
+	} from '$lib/tpt-form';
 
 	let {
 		group,
 		icon,
+		mark,
 		help,
 		refusals = [],
 		advisories = [],
 		children
 	}: {
-		group: FormGroup;
+		group: FormAnchor;
 		icon?: IconName;
+		/** A marketplace's own mark in place of an icon, which is how the two
+		 *  per-marketplace panels say whose options they hold: a teacher
+		 *  recognises the logo faster than the words beside it. */
+		mark?: string;
 		help?: string;
 		refusals?: readonly Refusal[];
 		advisories?: readonly Advisory[];
@@ -26,18 +36,22 @@
 	const said = $derived(advisories.filter((advisory) => advisory.group === group));
 </script>
 
-<!-- One of TPT's own nine sections, with its heading, its helper text and the
-     refusals that belong to it. The heading is the segregation: a seller
-     looking for the tax code looks under Price because that is where TPT puts
-     it, and a refusal about a picker appears under the picker rather than in
-     one list at the foot of the page.
+<!-- One band of the form, with its heading, its one sentence of help and the
+     refusals that belong to it. The heading is the segregation: a teacher
+     looking for the tax code looks under TPT only because that is the
+     marketplace that asks for it, and a refusal about a picker appears under
+     the picker rather than in one list at the foot of the page.
 
-     A band rather than a card: nine cards abutting inside one form read as one
-     white slab seamed by a shadow, so the sections are separated by a hairline
-     and the card is the surface that holds them all. -->
+     A band rather than a card: a dozen cards abutting inside one form read as
+     one white slab seamed by a shadow, so the sections are separated by a
+     hairline and the card is the surface that holds them all. -->
 <section class="res-sec" id="group-{group}" aria-labelledby="heading-{group}">
 	<div class="res-sec-h">
-		{#if icon}<span class="res-sec-ico"><Icon name={icon} size={16} /></span>{/if}
+		{#if mark}
+			<img class="res-sec-mark" src={mark} alt="" />
+		{:else if icon}
+			<span class="res-sec-ico"><Icon name={icon} size={16} /></span>
+		{/if}
 		<h2 id="heading-{group}">{heading}</h2>
 	</div>
 	{#if help}<p class="res-sec-help">{help}</p>{/if}

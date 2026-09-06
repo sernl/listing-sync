@@ -227,6 +227,23 @@
     "name": "Fractions",
     "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
+  "tax_code_out_of_range": {
+    "copyright_declaration_id": 1,
+    "free": false,
+    "grades": [
+      "3rd-grade"
+    ],
+    "name": "Fractions",
+    "payload_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "price_minor_units": 450,
+    "subject_areas": [
+      "math"
+    ],
+    "tags": [
+      "centers"
+    ],
+    "tax_code_id": 81111
+  },
   "thumbnails_without_upload_now": {
     "copyright_declaration_id": 1,
     "free": true,

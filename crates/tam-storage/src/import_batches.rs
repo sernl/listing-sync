@@ -495,7 +495,7 @@ pub struct CommitCounts {
     pub failed: u32,
 }
 
-/// What one sweep pass settled.
+/// What one expiry pass settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SweepReport {
     /// Batches settled to `abandoned`.
@@ -503,6 +503,17 @@ pub struct SweepReport {
     /// Rows whose file handles were released, counted once per row rather
     /// than once per handle.
     pub released: u64,
+}
+
+/// What one pass of the stale-commit rule did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StaleReport {
+    /// Batches a dead pass left `importing` with every row settled, now
+    /// `imported` or `failed` with the seller's notification written.
+    pub settled: u64,
+    /// Batches a dead pass left `importing` with rows still to create,
+    /// returned to the seller to finish.
+    pub reopened: u64,
 }
 
 pub struct ImportBatchRepo {
@@ -1155,6 +1166,14 @@ impl ImportBatchRepo {
     /// deletion path in this repository — so the pass answers what it released
     /// rather than what it erased. Both handles go together: a row holding a
     /// cover for a payload it no longer names is a thumbnail of nothing.
+    ///
+    /// A row past creation keeps both handles. They are the breadcrumb of what
+    /// its product was created from, the product's own file rows hold the
+    /// bytes, and `import_batch_row_live_creation_names_a_file` refuses to
+    /// clear them on a live row — so a release that reached such a row would
+    /// fail the whole statement and settle nothing for any organisation, on
+    /// every pass, until someone fixed the batch by hand. The predicate below
+    /// is that constraint's own state list.
     pub async fn sweep_pass(
         &self,
         cutoff: Timestamp,
@@ -1175,6 +1194,7 @@ impl ImportBatchRepo {
                           cover_hash = NULL, cover_kind = NULL, cover_byte_len = NULL
                      FROM doomed d
                     WHERE r.org_id = d.org_id AND r.batch_id = d.id
+                      AND r.state NOT IN ('creating', 'created', 'published')
                       AND (r.file_hash IS NOT NULL OR r.cover_hash IS NOT NULL)
                    RETURNING r.org_id
                ),
@@ -1273,11 +1293,18 @@ impl ImportBatchRepo {
     /// worth is minted whether or not the page fills: an unused identifier is
     /// four words of stack, and asking the database how many rows it would
     /// claim before claiming them is the race this statement exists to avoid.
+    ///
+    /// `at` is stamped on the batch as `claimed_at`, in the claim's own
+    /// transaction, and it is what [`Self::sweep_stale`] reads: a claim
+    /// seconds old is a chunk at work, and one older than any chunk could run
+    /// is a pass that died. Stamped whether or not the page holds a row,
+    /// because an empty claim is still a chunk that reached the batch.
     pub async fn claim_page(
         &self,
         org: OrgId,
         batch: Uuid,
         limit: i64,
+        at: Timestamp,
     ) -> Result<Vec<ClaimedRow>, StorageError> {
         let reserved = usize::try_from(limit.max(0)).unwrap_or(0);
         let products: Vec<uuid::Uuid> = (0..reserved).map(|_| uuid::Uuid::new_v4()).collect();
@@ -1319,6 +1346,14 @@ impl ImportBatchRepo {
             &mappings,
         )
         .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query!(
+            "UPDATE import_batch SET claimed_at = $3 WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
         .await?;
         tx.commit().await?;
 
@@ -1466,58 +1501,165 @@ impl ImportBatchRepo {
             return Ok(held);
         }
         let counts = commit_counts_in(&mut tx, org, batch).await?;
-        let settled = if counts.failed == 0 {
-            BatchState::Imported
-        } else {
-            BatchState::Failed
-        };
-        let detail = (counts.failed > 0).then(|| {
-            format!(
-                "{} of {} rows did not create",
-                counts.failed,
-                counts.failed.saturating_add(counts.created)
-            )
-        });
-        sqlx::query!(
-            "UPDATE import_batch SET state = $3, settled_at = $4, failure_detail = $5 \
-              WHERE org_id = $1 AND id = $2 AND state = 'importing'",
-            uuid_to_db(org.0),
-            uuid_to_db(batch),
-            settled.as_str(),
-            timestamp_to_db(at)?,
-            detail.as_deref(),
-        )
-        .execute(&mut *tx)
-        .await?;
-        // In this transaction rather than after it, because this is the
-        // transaction that owns the fact, which is the rule the sync path's
-        // `settle_if_complete` already follows. Written after the state update
-        // and before the commit, so a batch is never `imported` with no inbox
-        // row: a process that dies between the two rolls both back and the
-        // next chunk settles it again, where a separate write would have left
-        // the seller a finished import nothing ever told them about, with
-        // `CommitOpening::BatchClosed` refusing every later attempt to revisit
-        // it.
-        crate::notifications::record(
-            &mut tx,
-            org,
-            &crate::notifications::Completion {
-                kind: tam_types::NotificationKind::Import,
-                subject: batch,
-                inventory: None,
-                counts: tam_types::NotificationCounts {
-                    succeeded: counts.created,
-                    skipped: counts.skipped,
-                    failed: counts.failed,
-                    ..tam_types::NotificationCounts::default()
-                },
-                at,
-            },
-        )
-        .await?;
+        let settled = settle_in(&mut tx, org, batch, counts, at).await?;
         tx.commit().await?;
         Ok(settled)
     }
+
+    /// The sweep's second rule: a batch a dead pass left `importing` is
+    /// settled where every row has an outcome and returned to the seller
+    /// where any row has none.
+    ///
+    /// A commit is chunked and each chunk is one request the seller's console
+    /// sends, so a closed console or a server restart mid-chunk leaves a batch
+    /// `importing` with nothing driving it — a state the console reads as
+    /// being created right now, and one that refuses every bind. The evidence
+    /// is the stamp [`Self::claim_page`] writes: `stale_before` is the instant
+    /// a claim has to predate to count as dead, and the caller derives it from
+    /// how long a chunk can run. A batch with no claim at all is judged from
+    /// its upload, so a pass that died between opening the commit and claiming
+    /// its first page is not exempt.
+    ///
+    /// Each batch is its own transaction, and the batch row is locked and
+    /// re-read inside it: a chunk that claimed between the scan and the lock
+    /// moved the stamp, and a batch whose stamp moved is left to that chunk.
+    /// The settle is [`settle_in`], so a batch this rule finishes carries the
+    /// notification the commit route's own settle would have written, in the
+    /// transaction that settles it. An unfinished batch returns to the state a
+    /// bind wrote — `attaching` where any of its rows holds bytes, `parsed`
+    /// where none does, which is a batch no bind ever reached — and its
+    /// claimed rows keep their state and their reserved identifiers, so the
+    /// seller's next commit finishes them rather than minting a second product
+    /// for any of them.
+    ///
+    /// Cross-tenant, on the engine pool, for the reason [`Self::sweep_pass`]
+    /// gives.
+    pub async fn sweep_stale(
+        &self,
+        stale_before: Timestamp,
+        at: Timestamp,
+        batch: i64,
+    ) -> Result<StaleReport, StorageError> {
+        let stale_db = timestamp_to_db(stale_before)?;
+        let found = sqlx::query!(
+            "SELECT org_id, id FROM import_batch \
+              WHERE state = 'importing' AND COALESCE(claimed_at, created_at) < $1 \
+              ORDER BY COALESCE(claimed_at, created_at), org_id, id \
+              LIMIT $2",
+            stale_db,
+            batch,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut report = StaleReport::default();
+        for candidate in found {
+            let org = OrgId(uuid_from_db(candidate.org_id));
+            let id = uuid_from_db(candidate.id);
+            let mut tx = self.pool.begin().await?;
+            let still_stale = sqlx::query_scalar!(
+                r#"SELECT (COALESCE(claimed_at, created_at) < $3) AS "stale!"
+                     FROM import_batch
+                    WHERE org_id = $1 AND id = $2 AND state = 'importing'
+                      FOR UPDATE"#,
+                uuid_to_db(org.0),
+                uuid_to_db(id),
+                stale_db,
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            if still_stale != Some(true) {
+                tx.rollback().await?;
+                continue;
+            }
+            let counts = commit_counts_in(&mut tx, org, id).await?;
+            if counts.outstanding == 0 {
+                settle_in(&mut tx, org, id, counts, at).await?;
+                report.settled = report.settled.saturating_add(1);
+            } else {
+                sqlx::query!(
+                    "UPDATE import_batch b \
+                        SET state = CASE \
+                                WHEN EXISTS (SELECT 1 FROM import_batch_row r \
+                                              WHERE r.org_id = b.org_id AND r.batch_id = b.id \
+                                                AND r.file_hash IS NOT NULL) \
+                                THEN 'attaching' ELSE 'parsed' END \
+                      WHERE b.org_id = $1 AND b.id = $2 AND b.state = 'importing'",
+                    uuid_to_db(org.0),
+                    uuid_to_db(id),
+                )
+                .execute(&mut *tx)
+                .await?;
+                report.reopened = report.reopened.saturating_add(1);
+            }
+            tx.commit().await?;
+        }
+        Ok(report)
+    }
+}
+
+/// Writes the settled state of an `importing` batch the caller holds locked,
+/// and the seller's notification beside it.
+///
+/// `counts` are the caller's own read under that lock, in this transaction,
+/// so the sentence a failed batch carries counts the rows the database holds
+/// rather than the rows one chunk happened to see. The notification is written
+/// here rather than after the commit because this is the transaction that
+/// owns the fact, which is the rule the sync path's `settle_if_complete`
+/// already follows: after the state update and before the commit, so a batch
+/// is never `imported` with no inbox row. A process that dies between the two
+/// rolls both back and the next settle writes both again, where a separate
+/// write would have left the seller a finished import nothing ever told them
+/// about, with `CommitOpening::BatchClosed` refusing every later attempt to
+/// revisit it.
+async fn settle_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    batch: Uuid,
+    counts: CommitCounts,
+    at: Timestamp,
+) -> Result<BatchState, StorageError> {
+    let settled = if counts.failed == 0 {
+        BatchState::Imported
+    } else {
+        BatchState::Failed
+    };
+    let detail = (counts.failed > 0).then(|| {
+        format!(
+            "{} of {} rows did not create",
+            counts.failed,
+            counts.failed.saturating_add(counts.created)
+        )
+    });
+    sqlx::query!(
+        "UPDATE import_batch SET state = $3, settled_at = $4, failure_detail = $5 \
+          WHERE org_id = $1 AND id = $2 AND state = 'importing'",
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+        settled.as_str(),
+        timestamp_to_db(at)?,
+        detail.as_deref(),
+    )
+    .execute(&mut **tx)
+    .await?;
+    crate::notifications::record(
+        tx,
+        org,
+        &crate::notifications::Completion {
+            kind: tam_types::NotificationKind::Import,
+            subject: batch,
+            inventory: None,
+            counts: tam_types::NotificationCounts {
+                succeeded: counts.created,
+                skipped: counts.skipped,
+                failed: counts.failed,
+                ..tam_types::NotificationCounts::default()
+            },
+            at,
+        },
+    )
+    .await?;
+    Ok(settled)
 }
 
 /// One batch's state, locked, inside the caller's own transaction.

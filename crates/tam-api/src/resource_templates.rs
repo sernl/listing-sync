@@ -759,7 +759,7 @@ mod tests {
             assert!(
                 messages
                     .iter()
-                    .any(|message| message == "TPT refuses a price below $0.95."),
+                    .any(|message| message == "Raise the price to at least $0.95."),
                 "the sentence is the create form's own, borrowed rather than retyped, \
                  for a stated price of {stated}: {messages:?}"
             );

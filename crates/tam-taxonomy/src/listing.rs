@@ -277,10 +277,19 @@ pub fn project_listing_with_overrides(
     }
 
     // Gate two: currency. Free needs none; a priced listing into an
-    // inventory whose currency is unmeasured or unverified blocks.
-    if let PriceIntent::Paid(_) = product.price {
+    // inventory whose currency is unmeasured or unverified blocks, and one
+    // priced in a currency the inventory does not sell in blocks by name
+    // rather than crossing as a bare amount in the other denomination.
+    if let PriceIntent::Paid(money) = product.price {
         match ctx.inventory.currency_rule() {
-            CurrencyRule::Fixed(_) => {}
+            CurrencyRule::Fixed(sells) if sells == money.currency() => {}
+            CurrencyRule::Fixed(sells) => {
+                return Err(ProjectionBlocked::CurrencyMismatch {
+                    inventory: ctx.inventory,
+                    priced: money.currency(),
+                    sells,
+                });
+            }
             CurrencyRule::SellerScoped | CurrencyRule::Unmeasured => {
                 return Err(ProjectionBlocked::CurrencyUnknown {
                     inventory: ctx.inventory,
@@ -849,6 +858,33 @@ mod tests {
             )
             .is_ok(),
             "a free listing needs no currency and passes the same gate"
+        );
+    }
+
+    /// A GBP-priced product into the USD-fixed TPT inventory is the shape
+    /// every Tes-to-TPT migration arrives in. The TPT adapter refuses it at
+    /// submit already; the gate refuses it here so the item blocks on a
+    /// named condition the seller can act on before any marketplace request,
+    /// and so no rate is ever invented on the way.
+    #[test]
+    fn a_price_in_another_currency_than_the_inventory_sells_in_blocks_by_name() {
+        let catalogue = terms();
+        let policy = licence_policy();
+        let edges = [nz_edge()];
+        let dollars = PriceIntent::Paid(Money::new(500, Currency::Usd).expect("a price"));
+        let blocked = project_listing(
+            &product(dollars, true, ScanOutcome::Clean { at: NOW }),
+            &ctx(&catalogue, &edges, &policy),
+        );
+        assert_eq!(
+            blocked,
+            Err(ProjectionBlocked::CurrencyMismatch {
+                inventory: InventoryId::TesNz,
+                priced: Currency::Usd,
+                sells: Currency::Gbp,
+            }),
+            "the NZ inventory sells in GBP, so a USD price is named on both sides rather than \
+             posted as that many pounds"
         );
     }
 

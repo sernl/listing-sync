@@ -90,14 +90,14 @@
 	<PageHead
 		icon="bell"
 		title="Notifications"
-		description="Every run that has finished, newest first."
+		description="Everything Teachouse has finished for you, newest first."
 	/>
 
 	{#if read.kind === 'pending'}
 		<p class="ntf-said">Loading…</p>
 	{:else if read.kind === 'failed'}
-		<Banner tone="bad" title="Your notifications could not be read">
-			Nothing has changed; we could not load the list just now.
+		<Banner tone="bad" title="We could not read your notifications">
+			Nothing has changed. We could not load the list just now.
 			{#snippet action()}
 				<Button
 					onclick={() => {
@@ -112,7 +112,7 @@
 		<Placeholder
 			icon="bell"
 			headline="Nothing has finished yet"
-			body="When a sync, a migration or an import finishes, it is listed here with what it did."
+			body="When an import or an update finishes, it is listed here with what it did."
 		>
 			{#snippet actions()}
 				<Button tier="outline" href="/sync" icon="refresh-cw">Go to Sync</Button>
@@ -162,7 +162,7 @@
 
 		{#if moreFailed}
 			<Banner tone="bad" title="The next page could not be read">
-				The runs above are what finished; only the page after them failed to load.
+				The runs above are what finished. Only the page after them failed to load.
 				{#snippet action()}
 					<Button disabled={loadingMore} onclick={loadMore}>Try again</Button>
 				{/snippet}

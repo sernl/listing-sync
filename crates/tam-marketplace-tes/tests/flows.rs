@@ -2326,3 +2326,155 @@ fn a_grade_without_a_numeric_id_is_refused_rather_than_dropped() {
          the failure this refusal exists to prevent: {refused:?}"
     );
 }
+
+/// The first-party read of one resource, as the device's import reads it.
+///
+/// The price is the wire's own integer of minor units — the captured publish
+/// body reads `"price": 500` for GBP 5.00 and the dashboard rows carry the
+/// same number as `price_pence` — so it crosses without conversion. Until
+/// 2026-09-07 this read multiplied it by a hundred, and the founder's £5.00
+/// listings arrived as £500.00.
+#[test]
+fn an_import_read_carries_the_price_in_the_wires_own_minor_units() {
+    let cassette = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::read_draft_request(DRAFT),
+            response: ok(&json!({
+                "id": 9001, "draft": false, "title": "Fractions pack",
+                "descriptionRaw": "A pack.", "licence": "TES-PAID", "price": 500,
+                "categories": [{ "id": 1_000_448 }], "ageRanges": [4], "mainType": 99_009
+            })),
+        }],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let listing = futures::executor::block_on(adapter.fetch_for_import(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect("the resource reads for import");
+
+    assert_eq!(
+        listing.price,
+        tam_types::ImportedPrice::Paid {
+            minor_units: 500,
+            denomination: "GBP".to_owned(),
+        },
+        "500 on the wire is £5.00, and the denomination is the inventory's"
+    );
+    assert_eq!(
+        listing.native_ids(TermKind::ResourceType),
+        vec!["99009".to_owned()],
+        "the declared resource type crosses with the read rather than being dropped"
+    );
+    assert_eq!(
+        listing.native_ids(TermKind::Subject),
+        vec!["1000448".to_owned()]
+    );
+}
+
+/// A number with a fractional part is not a count of minor units, and reading
+/// it as one by rounding is how a major-unit amount would pass as a hundredth
+/// of itself.
+#[test]
+fn an_import_read_refuses_a_price_that_is_not_a_whole_number_of_minor_units() {
+    let cassette = Cassette {
+        interactions: vec![Interaction {
+            request: endpoints::read_draft_request(DRAFT),
+            response: ok(&json!({
+                "id": 9001, "draft": false, "title": "Fractions pack",
+                "licence": "TES-PAID", "price": 4.5
+            })),
+        }],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.fetch_for_import(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect_err("4.5 is not a number of pence");
+    let AdapterError::Rejected { detail, .. } = &refused else {
+        panic!("a price this read cannot place is a refusal, and got: {refused:?}");
+    };
+    assert!(
+        detail.0.contains("minor units"),
+        "the refusal names the unit it expected: {detail:?}"
+    );
+}
+
+/// The page a draft's manifest route redirects to is a Tes page, and a Tes
+/// page carries the word the sign-in sniffer keys on. Read on its own that
+/// page is a dead session, and the founder's 2026-09-07 import skipped both
+/// of its drafts as `SessionExpired` on a session that read the next listing
+/// fine. The state route settles it: a session that can read the draft is
+/// alive, and the draft is what has no bundle.
+#[test]
+fn a_drafts_manifest_page_that_mentions_login_is_no_bundle_rather_than_a_dead_session() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: HttpResponse::plain(
+                    200,
+                    b"<html><a href=\"/login\">Log in</a> Page not found</html>".to_vec(),
+                ),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect_err("a draft has no bundle");
+    let AdapterError::Rejected { code, detail } = &refused else {
+        panic!("an unpublished resource is a rejection naming the cause, and got: {refused:?}");
+    };
+    assert_eq!(*code, FailureCode::PreconditionElementAbsent);
+    assert!(
+        detail.0.contains("no published bundle"),
+        "the seller reads why: {detail:?}"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+/// The same page on a session that really has lapsed stays a dead session,
+/// because the state route cannot be read either.
+#[test]
+fn a_manifest_page_on_a_session_the_state_route_also_refuses_is_a_dead_session() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: HttpResponse::plain(200, b"<html>login</html>".to_vec()),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: status(401),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(401),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::TesGb,
+        },
+        DRAFT,
+    ))
+    .expect_err("nothing reads on a dead session");
+    assert_eq!(refused, AdapterError::SessionExpired);
+    assert_eq!(adapter.transport().remaining(), 0);
+}

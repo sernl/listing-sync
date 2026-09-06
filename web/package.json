@@ -20,6 +20,8 @@
     "@tanstack/svelte-query": "^6.1.48",
     "@types/node": "^26.3.0",
     "better-auth": "^1.7.2",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289",
     "svelte": "^5.38.0",
     "svelte-check": "^4.3.0",
     "tailwindcss": "^4.1.0",

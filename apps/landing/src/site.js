@@ -34,4 +34,4 @@ export const downloadUrl = null;
  * What the founder is willing to say about availability today. This sentence
  * is the only claim on the site about whether a seller can use it right now.
  */
-export const availability = 'TPT and TES connections work today, with more marketplaces coming.';
+export const availability = 'TPT and Tes connections work today, with more marketplaces coming.';

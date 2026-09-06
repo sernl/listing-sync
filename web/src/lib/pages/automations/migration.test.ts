@@ -25,10 +25,10 @@ describe('which requests this page owns', () => {
 });
 
 describe('a migration row', () => {
-	it('names both shops in full, because three Tes sites differ only by region', () => {
+	it('carries both shops, so the row draws each by its own mark and region', () => {
 		const [row] = migrationRows([request({ source: 'TesNz' })], 0);
-		expect(row.title).toContain('New Zealand');
-		expect(row.title).toContain('Teachers Pay Teachers');
+		expect(row.source).toBe('TesNz');
+		expect(row.target).toBe('Tpt');
 	});
 
 	it('opens the request’s own page', () => {

@@ -19,6 +19,7 @@ use tam_domain::product::{
 };
 use tam_storage::TptBaseRecord;
 
+use tam_authoring::member_of;
 pub use tam_authoring::{
     refusal_of, verdict, AdvisoryView, CheckView, DraftHead, DraftInput, RefusalView,
     StandardInput, TptBaseInput,
@@ -46,7 +47,7 @@ pub(crate) fn record_of(draft: &DraftInput) -> Result<TptBaseRecord, APIError> {
     Ok(TptBaseRecord {
         thumbnail_mode: match draft.thumbnail_mode {
             None => ThumbnailMode::AutoGenerate,
-            Some(id) => ThumbnailMode::from_wire_id(id).ok_or_else(|| {
+            Some(id) => member_of(id, ThumbnailMode::from_wire_id).ok_or_else(|| {
                 validation_refusal(&format!("{id} is not a thumbnail mode this form offers"))
             })?,
         },
@@ -104,7 +105,7 @@ pub(crate) fn record_of(draft: &DraftInput) -> Result<TptBaseRecord, APIError> {
         )?,
         status: match draft.status_user {
             None => ListingStatus::Draft,
-            Some(id) => ListingStatus::from_wire_id(id).ok_or_else(|| {
+            Some(id) => member_of(id, ListingStatus::from_wire_id).ok_or_else(|| {
                 validation_refusal(&format!("{id} is not a listing status this form offers"))
             })?,
         },
@@ -117,13 +118,13 @@ pub(crate) fn record_of(draft: &DraftInput) -> Result<TptBaseRecord, APIError> {
 /// set must be refused here as an answer the seller can act on rather than
 /// reaching the database and returning as a fault.
 fn member<T>(
-    held: Option<u8>,
-    of: impl Fn(u8) -> Option<T>,
+    held: Option<i64>,
+    of: impl FnOnce(u8) -> Option<T>,
     what: &str,
 ) -> Result<Option<T>, APIError> {
     match held {
         None => Ok(None),
-        Some(id) => of(id)
+        Some(id) => member_of(id, of)
             .map(Some)
             .ok_or_else(|| validation_refusal(&format!("{id} is not a {what} this form offers"))),
     }

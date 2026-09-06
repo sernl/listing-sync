@@ -17,6 +17,7 @@
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { readState } from '$lib/pages/automations/read-state';
 	import { saveDocument } from '$lib/pages/export/download';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { SHORT_NAME, platformTitle } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import {
@@ -92,7 +93,7 @@
 	const nothingHeld = $derived(
 		!connectionsUnread && connections !== null && !anyConnectionStands(connections)
 	);
-	const rows = $derived(importRows(requests, (inventory) => SHORT_NAME[inventory]));
+	const rows = $derived(importRows(requests));
 	const sheets = $derived(readState(batchesLoaded, batchesUnread, batchRows(batches)));
 	const sheetsSay = $derived(listCopy(sheets));
 
@@ -193,14 +194,14 @@
 	<PageHead
 		icon="download"
 		title="Import"
-		description="Bring a shop across: your own device reads it, signed in as you, and sends us what it finds."
+		description="Bring your current portfolio to Teachouse from anywhere it is housed."
 	/>
 
 	<p class="import-lead">{WHAT_AN_IMPORT_IS}</p>
 	<p class="import-lead">{IMPORT_IS_A_MIGRATION}</p>
 
 	{#if connectionsUnread}
-		<Banner tone="bad" title="Your marketplaces could not be read">{CONNECTIONS_UNREAD}</Banner>
+		<Banner tone="bad" title="We could not read your marketplaces">{CONNECTIONS_UNREAD}</Banner>
 	{:else if nothingHeld}
 		<Banner tone="warn" title="No marketplace is connected" action={toMarketplaces}>
 			{NOTHING_CONNECTED}
@@ -213,12 +214,12 @@
 			<span class="badges"><StatusPill tone="flat" label="Read on our server" /></span>
 		</div>
 		<p>
-			One row per resource in our template. We read the sheet here and show you what every row
-			said before anything is created; no marketplace login is involved and none is asked for.
+			One row per resource in our template. We check every row and show you the result before
+			anything is created. No marketplace login is needed.
 		</p>
 		<ol class="sh-steps">
-			<li>Download the template and fill one row for each resource.</li>
-			<li>Upload it. Every row is checked, and you read the report before anything is created.</li>
+			<li>Download the template and fill in one row for each resource.</li>
+			<li>Upload it and read the report before anything is created.</li>
 			<li>Add the files your rows named, then import.</li>
 		</ol>
 
@@ -262,7 +263,7 @@
 			{@const site = siteOf(card)}
 			<section class="import-card">
 				<div class="head">
-					<h2>{card.name}</h2>
+					<h2><MarketplaceMark marketplace={card.marketplace} size={22} /></h2>
 					<span class="badges">
 						{#if card.unreadable === null}
 							{@const badge = standingBadge(card)}
@@ -357,7 +358,7 @@
 
 	<Panel
 		title="Your imports"
-		description="Every shop you have brought across, newest first."
+		description="Every import you have run, newest first."
 	>
 		{#if requestsUnread}
 			<p class="quiet">{IMPORTS_UNREAD}</p>
@@ -382,7 +383,10 @@
 				<a class="import-row" href={`/sync/requests/${row.request}`}>
 					<span class="mark"><StatusPill tone={row.tone} label={row.label} /></span>
 					<span class="who">
-						<span class="t">{row.title}</span>
+						<span class="t">
+							<MarketplaceMark inventory={row.source} /> →
+							<MarketplaceMark inventory={row.target} />
+						</span>
 						<span class="w">{row.line}</span>
 					</span>
 					<span class="at">{agoLabel(row.created_at, Date.now())}</span>

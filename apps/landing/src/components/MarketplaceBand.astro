@@ -2,49 +2,72 @@
 import { marks } from '../marketplaces.js';
 import { availability } from '../site.js';
 
-/* The strip under the hero: every marketplace the console's catalogue tiles,
-   drawn as its own mark where we hold one and as its initial where we do not.
-   Every mark is in its owner's own colours, at rest, on every page load, by the
-   founder's decision of 2026-09-06; the file is the owner's published bytes
-   unaltered and nothing in the stylesheet reaches the image.
+/* The strip under the hero: the four marks the founder's mockup draws, then
+   "and beyond.", which opens the rest of the marketplaces teachers told us they
+   sell in. Every mark is in its owner's own colours, at rest, on every page
+   load, by the founder's decision of 2026-09-06; the file is the owner's
+   published bytes unaltered and nothing in the stylesheet reaches the image.
 
-   The classes are `marks-*` rather than `band-*` because `.band` is the
-   migration table's, and the two declared the same selector in one stylesheet.
+   `data-marketplace-band` is what exempts this block from
+   `just landing-copy-gate`: the mockup names marketplaces here, and nowhere
+   else on the site does prose name one.
 
-   The caption is not decoration. Every other sentence on this site speaks of
-   marketplaces without naming one, so this is where a reader learns which of
-   these actually connect, and it carries `availability` itself rather than a
-   second wording of it. The disclaimer under it is the footer's, which is what
-   makes a strip of marks on a marketing page defensible at all. */
+   The caption is not decoration. It is where a reader learns which of these
+   actually connect, and it carries `availability` itself rather than a second
+   wording of it. The disclaimer under it is the footer's, which is what makes a
+   strip of marks on a marketing page defensible at all. */
+
+const featured = marks.filter((mark) => mark.featured);
+const rest = marks.filter((mark) => !mark.featured);
 ---
 
-<div class="marks-wrap">
-	<ul class="marks">
-		{
-			marks.map((mark) => (
-				<li>
-					<a class:list={['mark', { glyph: !mark.file }]} href={mark.home} rel="nofollow noopener">
-						{
-							mark.file ? (
-								<img
-									src={`/marks/${mark.file}`}
-									alt={mark.name}
-									class:list={[mark.shape]}
-									loading="lazy"
-									decoding="async"
-								/>
-							) : (
-								<>
-									<span class="initial" aria-hidden="true">{mark.name.slice(0, 1)}</span>
-									<span class="name">{mark.name}</span>
-								</>
-							)
-						}
-					</a>
-				</li>
-			))
-		}
-	</ul>
+<div class="marks-wrap" id="resources" data-marketplace-band>
+	<p class="marks-label">Built for creators selling on</p>
+	<div class="marks-line">
+		<ul class="marks">
+			{
+				featured.map((mark) => (
+					<li>
+						<a class="mark" href={mark.home} rel="nofollow noopener">
+							<img
+								src={`/marks/${mark.file}`}
+								alt={mark.name}
+								class:list={[`mark-${mark.shape}`]}
+							/>
+							{mark.shape === 'icon' && <span>{mark.name}</span>}
+						</a>
+					</li>
+				))
+			}
+		</ul>
+		<details class="marks-rest">
+			<summary>and beyond.</summary>
+			<ul class="marks">
+				{
+					rest.map((mark) => (
+						<li>
+							<a class="mark" href={mark.home} rel="nofollow noopener">
+								{
+									mark.file ? (
+										<img
+											src={`/marks/${mark.file}`}
+											alt={mark.name}
+											class:list={[`mark-${mark.shape}`]}
+											loading="lazy"
+											decoding="async"
+										/>
+									) : (
+										<span class="initial" aria-hidden="true">{mark.name.slice(0, 1)}</span>
+									)
+								}
+								{(mark.shape === 'icon' || !mark.file) && <span>{mark.name}</span>}
+							</a>
+						</li>
+					))
+				}
+			</ul>
+		</details>
+	</div>
 	<p class="marks-note">
 		{availability} The others shown here are places teachers told us they sell, and none of them
 		is connected yet. Marketplace names and logos belong to their own companies. Teachouse is an

@@ -293,7 +293,7 @@
 			icon="layout-list"
 			back={{ href: '/import', label: 'Back to Import' }}
 			title={detail.source_name}
-			description="A spreadsheet import: what it read, what it will create, and what it refused."
+			description="What your sheet said, what will be created, and what we could not accept."
 		>
 			{#snippet aside()}
 				<StatusPill tone={shown.tone} label={shown.label} />
@@ -458,7 +458,7 @@
 				<p class="sh-note">{NOTHING_SENT}</p>
 			</Panel>
 		{:else if stage.kind === 'unrecognised'}
-			<Panel title="This import is in a state this page does not know">
+			<Panel title="This import is in a state we do not recognise">
 				<p class="sh-note">{shown.line}</p>
 			</Panel>
 		{:else}
@@ -471,10 +471,10 @@
 		<PageHead
 			icon="layout-list"
 			back={{ href: '/import', label: 'Back to Import' }}
-			title="This import could not be read"
+			title="We could not read this import"
 			description="Nothing here has been changed."
 		/>
-		<Banner tone="bad" title="This import could not be read">{BATCH_UNREAD}</Banner>
+		<Banner tone="bad" title="We could not read this import">{BATCH_UNREAD}</Banner>
 	{:else if gone}
 		<PageHead
 			icon="layout-list"

@@ -108,7 +108,7 @@
 }
 
 .ntf-page .ntf-row.is-unread .ntf-title {
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 /* --- the counts, in the outcome bar's own words and colours -------------- */

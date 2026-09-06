@@ -30,6 +30,7 @@ pub mod operators;
 pub mod org;
 pub mod overrides;
 mod product;
+pub mod profile;
 pub mod pruning;
 pub mod resource_templates;
 pub mod sessions;
@@ -39,9 +40,9 @@ pub mod tpt_base;
 pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{
-    BackofficeRepo, DailyCount, FailedWrite, HaltRecord, IdentityAuditRepo, ImpersonationEvent,
-    ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, SignupsRepo, SubscriptionRecord,
-    SyncHealth,
+    BackofficeRepo, DailyCount, DeadLetterTopic, FailedWrite, HaltRecord, IdentityAuditRepo,
+    ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, SignupsRepo,
+    SubscriptionRecord, SyncHealth,
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
@@ -60,7 +61,7 @@ pub use import_batches::{
     AttachCounts, BatchState, BatchWrite, BindOutcome, BoundRow, ClaimedRow, CommitCounts,
     CommitOpening, ImportBatchDraftRecord, ImportBatchRecord, ImportBatchRepo,
     ImportBatchRowRecord, NewImportBatch, NewImportBatchRow, RowAddress, RowFile, RowFiles,
-    RowIntent, RowRef, RowState, SweepReport, UnbindOutcome, BATCHES_LISTED_MAX,
+    RowIntent, RowRef, RowState, StaleReport, SweepReport, UnbindOutcome, BATCHES_LISTED_MAX,
 };
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
@@ -100,6 +101,7 @@ pub use product::{
     ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary, ReplacedFiles,
     StoredCover, ThumbnailChange,
 };
+pub use profile::{AvatarWrite, ProfileRepo};
 pub use pruning::{PruneRepo, PruneReport};
 pub use resource_templates::{
     NewResourceTemplate, ResourceTemplateRecord, ResourceTemplateRepo, ResourceTemplateSummary,

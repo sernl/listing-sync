@@ -36,7 +36,7 @@
 	<PageHead
 		icon="waves-horizontal"
 		title="Automations"
-		description="The three things Teachouse can keep doing for you on a schedule."
+		description="Edit tags, descriptions, titles and files across your listings."
 	/>
 
 	<div class="auto-cards">

@@ -39,6 +39,8 @@ const DEVICE: &str = "11112222333344445555666677778888";
 const OTHER_ORG: OrgId = OrgId(Uuid([0xAB; 16]));
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
 const TOPIC: CanonicalTermId = CanonicalTermId(Uuid([0x78; 16]));
+/// The resource type the fixture's `mainType: 1` names.
+const RESOURCE_TYPE: CanonicalTermId = CanonicalTermId(Uuid([0x79; 16]));
 const NOW: Timestamp = Timestamp(1_000);
 
 fn draft_body(resource: i64) -> String {
@@ -135,7 +137,16 @@ async fn seed(pool: &PgPool, with_nz_edges: bool) {
             parent: Some(SUBJECT),
             label: "Time".to_owned(),
         },
+        CanonicalTerm {
+            id: RESOURCE_TYPE,
+            kind: TermKind::ResourceType,
+            parent: None,
+            label: "Worksheet".to_owned(),
+        },
     ];
+    // The resource type's edges are seeded on both sides whatever
+    // `with_nz_edges` says, so the tests that count subject gaps count the
+    // same gaps they counted before the type crossed with the read.
     let mut edges = vec![
         edge(
             SUBJECT,
@@ -150,6 +161,20 @@ async fn seed(pool: &PgPool, with_nz_edges: bool) {
             TermKind::Topic,
             &["Maths for early years", "Time"],
             "1000732",
+        ),
+        edge(
+            RESOURCE_TYPE,
+            InventoryId::TesGb,
+            TermKind::ResourceType,
+            &["Worksheet"],
+            "1",
+        ),
+        edge(
+            RESOURCE_TYPE,
+            InventoryId::TesNz,
+            TermKind::ResourceType,
+            &["Worksheet"],
+            "1",
         ),
     ];
     if with_nz_edges {
@@ -463,8 +488,8 @@ async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
     assert_eq!(product.price, PriceIntent::Free, "CC-BY is free");
     assert_eq!(
         product.subjects,
-        vec![SUBJECT, TOPIC],
-        "the canonical terms landed on the product"
+        vec![SUBJECT, TOPIC, RESOURCE_TYPE],
+        "the canonical terms landed on the product, the declared resource type among them"
     );
     assert_eq!(
         product.grades.raw[0].native_id.as_deref(),
@@ -596,10 +621,15 @@ async fn the_three_licences_the_import_used_to_refuse_now_import(pool: PgPool) {
             serde_json::Value::Null,
             PriceIntent::Free,
         ),
+        // The wire's integer is minor units: the captured publish body reads
+        // `"price": 500` for GBP 5.00, and the dashboard rows carry the same
+        // number as `price_pence`. The `4.5` this fixture carried until
+        // 2026-09-07 was an invented major-unit amount, and the read that
+        // agreed with it imported the founder's £5.00 listings as £500.00.
         (
             13_000_003,
             "TES-PAID-SCHOOL",
-            serde_json::json!(4.5),
+            serde_json::json!(450),
             PriceIntent::Paid(
                 tam_types::Money::new(450, tam_types::Currency::Gbp)
                     .expect("450 pence is a positive amount"),
@@ -1023,7 +1053,7 @@ async fn the_coverage_number_counts_terms_and_not_the_projections_blocker(pool: 
     seed(&pool, true).await;
     // Paid, because the currency gate applies to a price and reaching a
     // blocker that is not a term is the whole point of the fixture.
-    let adapter = adapter_licensed(13_549_794, "TES-PAID-SCHOOL", serde_json::json!(4.5));
+    let adapter = adapter_licensed(13_549_794, "TES-PAID-SCHOOL", serde_json::json!(450));
     let run = ImportRun {
         pool: pool.clone(),
         org: ORG,
@@ -1075,7 +1105,7 @@ async fn the_coverage_number_counts_terms_and_not_the_projections_blocker(pool: 
         .await
         .expect("the no-counterpart decisions record");
 
-    let again = adapter_licensed(13_549_794, "TES-PAID-SCHOOL", serde_json::json!(4.5));
+    let again = adapter_licensed(13_549_794, "TES-PAID-SCHOOL", serde_json::json!(450));
     let entry = applied_held(&pool, store_root("etsy-coverage"), &again, 13_549_794).await;
     let decided = import_one(&run, &entry)
         .await

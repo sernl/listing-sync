@@ -113,7 +113,7 @@
 .resources-page .mk-tile[aria-pressed='true'] {
 	background: var(--accent-soft);
 	border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-	color: var(--accent-ink);
+	color: var(--primary);
 }
 
 /* Declared, refused and legible: a tile that cannot be chosen keeps its word
@@ -461,6 +461,15 @@
 	color: var(--muted);
 }
 
+/* A marketplace's own mark in a band heading, at the icon's size, so the two
+   per-marketplace panels are recognised by logo before they are read. */
+.resources-page .res-sec-mark {
+	width: 18px;
+	height: 18px;
+	flex: none;
+	object-fit: contain;
+}
+
 .resources-page .res-sec-help {
 	margin: 4px 0 14px;
 	font-size: 12.5px;
@@ -485,21 +494,18 @@
 	align-items: start;
 }
 
-/* The card's last band: what the two actions mean at the left, and the actions
-   themselves at the right. In flow rather than fixed — the reference pins its
-   footer to a modal, and a bar fixed here would float over the whole resource
-   page while the seller reads the panels above the form. */
+/* The card's last band: Cancel and the primary at its right. In flow rather
+   than fixed — the reference pins its footer to a modal, and a bar fixed here
+   would float over the whole resource page while the seller reads the panels
+   above the form. */
 .resources-page .res-actbar {
 	border-top: 1px solid var(--line);
 	padding: 16px 24px;
 	display: flex;
 	align-items: center;
+	justify-content: flex-end;
 	gap: 14px;
 	flex-wrap: wrap;
-}
-
-.resources-page .res-actbar .res-note {
-	margin-right: auto;
 }
 
 /* The upload target inside a band rather than inside a card of its own. Radius
@@ -519,11 +525,105 @@
 	padding: 20px 24px;
 }
 
-/* The figure under the action band's sentence: the same muted grey on its own
-   line rather than a second sentence competing for the left of the bar. */
-.resources-page .res-note .block {
-	display: block;
-	margin-top: 4px;
+/* The marketplace grid at the top of the form: evenly spaced tiles, each one
+   a mark and a checkbox and nothing else, with the full name on hover and for
+   a screen reader. The founder's rule — no dropdown, no names on the tiles,
+   even rows and columns. */
+.resources-page .res-tiles {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, 96px);
+	gap: 16px;
+}
+
+.resources-page .res-tile {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 96px;
+	height: 96px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	background: var(--surface);
+	cursor: pointer;
+}
+
+.resources-page .res-tile:hover {
+	border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+/* The tick in its own corner rather than beside the mark: the mark is what
+   the tile is for, and a checkbox on the same line would halve it. */
+.resources-page .res-tile input {
+	position: absolute;
+	top: 8px;
+	left: 8px;
+	margin: 0;
+}
+
+.resources-page .res-tile:has(input:checked) {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.resources-page .res-tile:has(input:focus-visible) {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/* A marketplace with no adapter yet is shown rather than hidden, so a teacher
+   can see it is coming; the tooltip says so. */
+.resources-page .res-tile.off {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.resources-page .res-tile-mark {
+	width: 48px;
+	height: 48px;
+	object-fit: contain;
+}
+
+/* The description's formatting bar, directly above the box it writes into. */
+.resources-page .res-md {
+	display: flex;
+	gap: 4px;
+	margin-bottom: 6px;
+}
+
+.resources-page .res-md-b {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-field);
+	min-width: 30px;
+	height: var(--control-h-sm);
+	font: inherit;
+	font-size: 13px;
+	color: var(--primary);
+	cursor: pointer;
+}
+
+.resources-page .res-md-b:hover {
+	background: var(--hover);
+}
+
+/* The errors, as the founder asked: a heading that says what to do, and one
+   button per error that takes the teacher to the field. */
+.resources-page .res-errs-h {
+	margin: 0 0 8px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--primary);
+}
+
+.resources-page .res-errs {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
 }
 
 @media (max-width: 620px) {
@@ -597,7 +697,7 @@
 }
 
 .resources-page .res-count.over {
-	color: var(--bad);
+	color: var(--bad-ink);
 	font-weight: 600;
 }
 
@@ -712,7 +812,7 @@
 }
 
 .resources-page .res-pick-why.bad {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 /* Offered and refused, with the reason in place: the fill says it cannot be
@@ -723,10 +823,6 @@
 	border-radius: var(--r-panel);
 	padding-inline: 12px;
 	cursor: not-allowed;
-}
-
-.resources-page .res-rail {
-	margin-top: 16px;
 }
 
 /* The sentence a marketplace states before its own options, quoted from them
@@ -740,35 +836,7 @@
 .resources-page .res-loss {
 	display: block;
 	margin-top: 4px;
-	color: var(--bad);
-}
-
-/* What the form is refusing, listed where it is refused. Not a banner: several
-   arrive at once and each names one group. */
-.resources-page .res-refusals {
-	list-style: none;
-	margin: 12px 0 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
-}
-
-.resources-page .res-refusal {
-	display: flex;
-	gap: 8px;
-	font-size: 12.5px;
-	color: var(--bad);
-}
-
-.resources-page .res-refusal::before {
-	content: '•';
-	flex: none;
-}
-
-.resources-page .res-refusal a {
-	color: inherit;
-	text-decoration: underline;
+	color: var(--bad-ink);
 }
 
 /* A loss or a constraint the marketplace imposes, disclosed rather than left
@@ -844,7 +912,7 @@
    shared menu's buttons, so two pages cannot come to colour one component
    differently from two sheets. */
 .resources-page .res-danger {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 /* --- the thumbnail preview ----------------------------------------------- */
@@ -929,7 +997,7 @@
 }
 
 .resources-page .res-file-no {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 .resources-page .res-file-ask {
@@ -1016,7 +1084,7 @@
 }
 
 .resources-page .res-slot-drop:hover {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 /* A file nobody named. Muted rather than italic, because the row's heading is

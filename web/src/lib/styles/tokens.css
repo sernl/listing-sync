@@ -1,21 +1,29 @@
 /* The console's colour, type and shape tokens.
  *
- * Pounamu: New Zealand forest and the greenstone taken from its rivers. Deep
- * forest carries the primary action, jade carries the accent, and a violet
- * carries the additive tier, which leaves the four status colours as the only
- * other saturated things on a screen. That separation is the point: this
- * console's failures are per-marketplace and long-lived, so a status has to
- * win the eye against everything else on the page.
+ * The founder's Teachouse brand kit of 2026-09-11: Indigo and Teal, with
+ * Lavender and Peach as accent surfaces, Cream as the page, Charcoal as the
+ * body ink and Slate as the secondary one. Every value below is the kit's own,
+ * transcribed rather than tuned, and `apps/landing/src/styles/site.css`
+ * declares the same names with the same values so the marketing site and the
+ * console are one brand; `tokens.test.ts` compares the two sheets.
  *
- * It replaces "Kauri", the warm bleached-floorboard palette this file carried
- * until 2026-09-06. Kauri is retired rather than kept as an alternate: two
- * live palettes is two sources of truth, and the design specification records
- * what it was.
+ * It replaces "Pounamu", the forest-and-greenstone palette this file carried
+ * from 2026-09-06, which in turn replaced "Kauri". Both are retired rather
+ * than kept as alternates: two live palettes is two sources of truth, and the
+ * design notes record what each was.
  *
- * Names are stable: `--card`, `--ink` and `--serif` are the sheet's original
- * spellings and stay as aliases of `--surface`, `--text` and `--display`,
- * because renaming them across 2000 lines of component rules would be a
- * separate change from choosing a palette.
+ * Names are stable: `--card`, `--ink`, `--serif` and `--accent-deep` are the
+ * sheet's original spellings and stay as aliases of `--surface`, `--text`,
+ * `--display` and `--accent-ink`, because renaming them across 2000 lines of
+ * component rules would be a separate change from choosing a palette.
+ *
+ * The kit's saturated colours are fills, ticks and dots rather than ink: Teal
+ * measures 2.42 against the page and the kit sets every word in Indigo,
+ * Charcoal or Slate. So text that has to carry a verdict takes one of the
+ * three `-ink` tokens below, each the kit's own colour mixed with the kit's
+ * Charcoal until it clears 4.5 on every ground the console paints. Those three
+ * are derived here and not in the kit, which is why they are not in the shared
+ * table the landing declares.
  *
  * There is no dark block here yet. It is its own change, and it is gated on
  * this one: a stray white literal on a dark ground is invisible, so every
@@ -34,59 +42,75 @@
 	color-scheme: light;
 
 	/* grounds, lightest to the card the content sits on */
-	--ground: #f6f4f1;
-	--nav: #e8ece9;
-	--surface: #fdfdfc;
+	--ground: #f8faf8;
+	--nav: #f1f3f9;
+	--surface: #ffffff;
 	--card: var(--surface);
-	--hover: #eef1ee;
+	--hover: #eef1f7;
 
-	/* action tiers */
-	--primary: #1f4a38;
-	--accent: #127761;
-	/* The accent as ink. Both are drawn as text somewhere, so both clear 4.5 on
-	   every ground in this file; `--accent-ink` is the deeper one, and it is
-	   what accent-coloured text on `--accent-soft` takes, where `--accent`
-	   itself measures 4.74 and this token 5.59. */
-	--accent-ink: #0f6b54;
+	/* action tiers: the kit's Indigo and Teal */
+	--primary: #1e2a5a;
+	--accent: #00b894;
+	/* The kit's deeper Teal. It is a rule, a tick and a fill on a tinted
+	   ground, not a word: at 3.35 on the page it is below the bar for text,
+	   and `--ok-ink` or `--primary` is what a teal-feeling sentence takes. */
+	--accent-ink: #009b7d;
 	--accent-deep: var(--accent-ink);
-	--accent-soft: #e3f2ec;
-	--additive: #544799;
-	--additive-soft: #ece9f6;
+	--accent-soft: #e6f8f3;
+	--additive: #6d57c9;
+	--additive-soft: #efe9ff;
+	/* The kit's two accent surfaces. Bands and cards, never ink and never a
+	   status: both are lighter than the page. */
+	--lavender: #c8b4ff;
+	--peach: #ffd6b3;
 
-	/* ink */
-	--text: #17231c;
+	/* ink: the kit's Charcoal, and its one Slate under all three secondary
+	   names */
+	--text: #2d3748;
 	--ink: var(--text);
-	--muted: #5a6560;
-	--faint: #626d68;
-	--line: #dde3df;
+	--muted: #64748b;
+	--faint: #64748b;
+	--line: #e2e8f0;
 
-	/* State, and only state. Every one of these is darker than a palette proof
-	   would suggest, because a status badge is 10.5px uppercase and so earns no
-	   large-text allowance: each clears 4.5 on its own soft ground. */
-	--ok: #1f6a45;
-	--ok-soft: #e6f1ea;
-	--warn: #7a5410;
-	--warn-soft: #f6eedc;
-	--bad: #96311f;
-	--bad-soft: #f8e5e1;
-	--soon: #5e6169;
-	--soon-soft: #edebf2;
+	/* State, and only state. Each of these is the kit's own colour, and each
+	   is drawn as a fill, a dot or a track rather than as a word: the kit's
+	   Success measures 2.42 against the page and its Warning 2.05. The `-ink`
+	   trio below is what a sentence takes. */
+	--ok: #10b981;
+	--ok-soft: #e6f8f1;
+	--warn: #f59e0b;
+	--warn-soft: #fef3dd;
+	--bad: #ef4444;
+	--bad-soft: #fde8e8;
+	--soon: #64748b;
+	--soon-soft: #eef1f7;
+
+	/* The three verdict inks, each the kit's colour carried to a readable
+	   weight with the kit's Charcoal rather than with a hex the kit does not
+	   contain. Each clears 4.5 on every ground in this file and on its own
+	   soft badge ground, with about a point of headroom, so a badge at 10.5px
+	   uppercase is read rather than guessed at. */
+	--ok-ink: color-mix(in srgb, var(--ok) 45%, var(--text));
+	--warn-ink: color-mix(in srgb, var(--warn) 40%, var(--text));
+	--bad-ink: color-mix(in srgb, var(--bad) 65%, var(--text));
 
 	/* The two members of the outcome bar's scale that no other token names.
 	   The bar borrows `--ok`, `--warn`, `--bad`, `--additive`, `--accent`,
 	   `--muted` and `--faint` for its other seven segments, and nine of them
 	   can be drawn side by side in one stacked bar, so neither of these may be
-	   folded into the neighbour it resembles: `--blocked` into `--warn` would
-	   draw blocked and degraded the same colour, and `--queued` into `--line`
-	   would draw a segment at the weight of a hairline. */
-	--blocked: #c07a2c;
-	--queued: #cdd6d1;
+	   folded into the neighbour it resembles: `--queued` into `--line` would
+	   draw a segment at the weight of a hairline. `--blocked` is the kit's
+	   Warning, which the bar draws beside `--warn` itself -- the two segments
+	   are told apart by order and by their legend rather than by hue, which is
+	   the kit's arithmetic and not a drift. */
+	--blocked: #f59e0b;
+	--queued: #cbd5e1;
 
 	/* The marketing hero's wash, and the ink a filled control carries.
 	   `--tint` is the violet `--additive` already belongs to, which is why it
-	   is neither forest nor jade and competes with neither. */
-	--tint: #efebf7;
-	--tint-edge: #f3f4f7;
+	   is neither indigo nor teal and competes with neither. */
+	--tint: #efe9ff;
+	--tint-edge: #f5f2ff;
 	--on-fill: #ffffff;
 
 	/* The seven colours a seller can give a label, and the one scale here that
@@ -110,10 +134,11 @@
 	--label-violet: #6a4bb3;
 	--label-pink: #b3407f;
 
-	/* type */
-	--display: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+	/* type: the kit's two faces, Poppins for headings and Inter for everything
+	   else, both served from `static/fonts` */
+	--display: 'Poppins', 'Segoe UI', system-ui, sans-serif;
 	--serif: var(--display);
-	--sans: 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+	--sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
 
 	/* radius, layered by what the shape contains */
 	--r-region: 20px;

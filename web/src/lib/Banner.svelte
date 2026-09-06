@@ -28,11 +28,14 @@
 		dismissLabel?: string;
 	} = $props();
 
+	// The `ok` tone's glyph is a bare tick, not `circle-check`: `components.css`
+	// draws that tone's icon well as a filled disc, and a ring inside a disc
+	// reads as a mistake.
 	const GLYPH: Record<Tone, IconName> = {
 		info: 'info',
 		warn: 'triangle-alert',
 		bad: 'circle-alert',
-		ok: 'circle-check'
+		ok: 'check'
 	};
 
 	// Named after the sentence it closes rather than "Close", because a screen

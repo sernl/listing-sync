@@ -75,11 +75,11 @@
 }
 
 .op-table td.op-flag {
-	color: var(--warn);
+	color: var(--warn-ink);
 }
 
 .op-unreadable {
-	color: var(--warn);
+	color: var(--warn-ink);
 }
 
 /* A cell of two lines: a name over an identifier, each clipped rather than

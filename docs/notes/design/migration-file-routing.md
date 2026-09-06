@@ -21,6 +21,8 @@ The flow is two steps, both implemented and both gated on `FetchReason::FirstPar
 The ground truth is `docs/design/decisions.md`, "The two uncaptured endpoints, resolved by a founder-supervised capture, 2026-08-28".
 Resource 13549126 returned a 471 KB zip wrapping a 493 KB source pdf and resource 13436008 returned a 12.5 MB zip, both fetched as real bytes rather than assumed from a contract.
 A draft has no published bundle and the first step redirects to an HTML `?error=notfound` page, which the adapter classifies as `NoPublishedBundle` rather than as a read failure.
+Amended 2026-09-07: that page is a Tes page and carries the word the sign-in sniffer keys on, so the founder's first live import skipped both drafts in the shop as `SessionExpired` on a session that read the next listing fine.
+The adapter now reads the state route when the manifest hop looks like a sign-in page, and answers `NoPublishedBundle` for a draft; the device skips a draft by the state it already read, before the manifest is asked for, with a sentence naming the draft and what changes it.
 The first pass of that research concluded no download existed; it had probed the resource `attachments` array and missed the download flow the resource-detail page's own button drives, and the correction is recorded in the same section.
 
 Catalogue enumeration is equally settled.
@@ -29,6 +31,11 @@ Catalogue enumeration is equally settled.
 Previews and thumbnails are not a download path and do not need to be.
 The `attachments` array carries a signed preview-image url and metadata only, and no fetch of it has been captured.
 TPT generates its own thumbnails from the product file — `data[Item][generate_thumbnail]` is a three-way radio whose value `1` is pre-selected on a blank form — so nothing about a Tes preview needs to cross.
+Amended 2026-09-07: what the console shows for a migrated resource is therefore the device's own derived cover, and for anything but an image payload that is `tam_pipeline::render::placeholder_card`, a solid card coloured by file kind — PDF red, PPTX orange, DOCX blue, a bundle of several files grey.
+The founder read those cards as wrong thumbnails; carrying the Tes preview instead needs a capture of the `attachments` shape on one resource state and of its preview url's answer, and is a founder decision because it fetches an image the seller did not upload through us.
+
+The listing read carries the declared resource type as of 2026-09-07: `mainType` crosses as the `ResourceType` axis and the import maps it over the seeded crosswalk, so a migrated product is typed on the target rather than arriving typeless.
+The same read carries the price as the wire's own integer of minor units; until then it multiplied that integer by a hundred, and the founder's £5.00 listings were imported as £500.00.
 
 ## 2. The file path end to end
 

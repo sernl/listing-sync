@@ -33,6 +33,7 @@ pub mod openapi;
 pub mod org;
 pub mod paddle;
 pub mod product;
+pub mod profile;
 pub mod quota;
 pub mod resource_templates;
 pub mod resources;
@@ -440,12 +441,24 @@ pub fn router(state: AppState) -> Router {
             "/{version}/notifications/preferences",
             get(notifications::preferences).patch(notifications::update_preferences),
         )
+        // The seller's own picture, beside the other per-user setting. No
+        // route here takes a user: the session's is the only one any of them
+        // can read or write, and the bytes reach `POST /{version}/uploads`
+        // first.
+        .route("/{version}/profile", get(profile::profile_view))
+        .route(
+            "/{version}/profile/avatar",
+            get(profile::avatar)
+                .put(profile::set_avatar)
+                .delete(profile::clear_avatar),
+        )
         .route("/{version}/admin/signups", get(admin::signups))
         .route("/{version}/admin/orgs", get(admin::list_orgs))
         .route("/{version}/admin/orgs/{org}", get(admin::org_detail))
         .route("/{version}/admin/sync-health", get(admin::sync_health))
         .route("/{version}/admin/failed-writes", get(admin::failed_writes))
         .route("/{version}/admin/import-drain", get(admin::import_drain))
+        .route("/{version}/admin/dead-letters", get(admin::dead_letters))
         .route(
             "/{version}/admin/impersonations",
             get(admin::impersonations),

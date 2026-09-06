@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import type { Marketplace } from '$lib/generated/vocab';
+
 	export interface Tab {
 		id: string;
 		label: string;
@@ -14,6 +16,9 @@
 		/** What the tab means where the label cannot say it, such as a filter
 		 *  that deliberately overlaps the others. */
 		hint?: string;
+		/** The marketplace whose mark is drawn in place of the label, where the
+		 *  tab is one marketplace; the label stays the tab's accessible name. */
+		mark?: Marketplace;
 	}
 
 	/** What a tab reads as. An unknown count shows the label alone: no
@@ -25,6 +30,8 @@
 </script>
 
 <script lang="ts">
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+
 	let {
 		tabs,
 		current = $bindable(),
@@ -43,13 +50,26 @@
 			role="tab"
 			aria-current={tab.id === current}
 			aria-selected={tab.id === current}
+			aria-label={tab.mark === undefined ? undefined : labelFor(tab)}
 			title={tab.hint}
 			onclick={() => {
 				current = tab.id;
 				onselect?.(tab.id);
 			}}
 		>
-			{labelFor(tab)}
+			{#if tab.mark === undefined}
+				{labelFor(tab)}
+			{:else}
+				<MarketplaceMark marketplace={tab.mark} size={18} />{#if tab.count !== null}<span
+						class="count">({tab.count})</span
+					>{/if}
+			{/if}
 		</button>
 	{/each}
 </div>
+
+<style>
+	.count {
+		margin-left: 5px;
+	}
+</style>

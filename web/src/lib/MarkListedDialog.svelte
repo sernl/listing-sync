@@ -161,6 +161,6 @@
 	}
 
 	.why.bad {
-		color: var(--bad);
+		color: var(--bad-ink);
 	}
 </style>

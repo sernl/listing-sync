@@ -22,7 +22,8 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
 use tam_storage::{
     BatchState, BatchWrite, BindOutcome, CommitOpening, ImportBatchRepo, NewImportBatch,
-    NewImportBatchRow, RowAddress, RowFile, RowFiles, RowIntent, RowState, UnbindOutcome,
+    NewImportBatchRow, RowAddress, RowFile, RowFiles, RowIntent, RowState, StaleReport,
+    UnbindOutcome,
 };
 use tam_types::{ContentHash, InventoryId, OrgId, Timestamp, Uuid};
 
@@ -30,19 +31,54 @@ mod common;
 use common::{seed_org_a, ORG_A};
 
 const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
+const ORG_C: OrgId = OrgId(Uuid([0xCC; 16]));
 const BATCH_A: Uuid = Uuid([0x0A; 16]);
 const BATCH_B: Uuid = Uuid([0x0B; 16]);
+const BATCH_C: Uuid = Uuid([0x0C; 16]);
 const MADE: Timestamp = Timestamp(1_000_000);
+/// When a commit claimed its chunk, after the upload and inside the deadline.
+const CLAIMED: Timestamp = Timestamp(1_500_000);
 const DEADLINE: Timestamp = Timestamp(2_000_000);
 const AFTER_DEADLINE: Timestamp = Timestamp(3_000_000);
 const SWEPT: &str = "the deadline passed";
 
 async fn seed_org_b(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-b', now())")
-        .bind(uuid::Uuid::from_bytes(ORG_B.0 .0))
+    seed_org(pool, ORG_B, "org-b").await
+}
+
+async fn seed_org_c(pool: &PgPool) -> Result<(), sqlx::Error> {
+    seed_org(pool, ORG_C, "org-c").await
+}
+
+async fn seed_org(pool: &PgPool, org: OrgId, name: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .bind(name)
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// How many import notifications one batch has written, read by direct
+/// statement because the inbox is what the stale rule's settle has to leave
+/// behind and nothing else on this path reads it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a malformed fixture is a broken test and should panic"
+)]
+async fn import_notifications(pool: &PgPool, org: OrgId, batch: Uuid) -> i64 {
+    let mut tx = pinned(pool, org).await.expect("the pin sets");
+    let counted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM notification \
+          WHERE org_id = $1 AND kind = 'import' AND subject_id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(uuid::Uuid::from_bytes(batch.0))
+    .fetch_one(&mut *tx)
+    .await
+    .expect("the count runs");
+    tx.commit().await.expect("the read commits");
+    counted
 }
 
 /// A transaction with the tenant pin set, for the direct statements that have
@@ -1003,7 +1039,7 @@ async fn a_claim_skips_the_rows_another_chunk_is_holding(pool: PgPool) {
     .expect("the rival takes the row");
 
     let claimed = repo
-        .claim_page(ORG_A, BATCH_A, 10)
+        .claim_page(ORG_A, BATCH_A, 10, CLAIMED)
         .await
         .expect("the claim runs");
     assert_eq!(
@@ -1022,7 +1058,7 @@ async fn a_claim_skips_the_rows_another_chunk_is_holding(pool: PgPool) {
 
     holding.rollback().await.expect("the rival lets go");
     let after = repo
-        .claim_page(ORG_A, BATCH_A, 10)
+        .claim_page(ORG_A, BATCH_A, 10, CLAIMED)
         .await
         .expect("the second claim runs");
     assert_eq!(
@@ -1067,7 +1103,10 @@ async fn a_settle_writes_imported_with_no_failed_row_and_failed_with_one(pool: P
             CommitOpening::Open,
             "a batch of Teachouse rows needs no file to begin"
         );
-        let claimed = repo.claim_page(org, id, 10).await.expect("the claim runs");
+        let claimed = repo
+            .claim_page(org, id, 10, CLAIMED)
+            .await
+            .expect("the claim runs");
         assert_eq!(claimed.len(), 2, "both rows are claimed");
         assert!(
             claimed.iter().all(|row| row.mapping.is_none()),
@@ -1160,5 +1199,307 @@ async fn a_settle_writes_imported_with_no_failed_row_and_failed_with_one(pool: P
         (counts.outstanding, counts.created, counts.failed),
         (0, 1, 1),
         "and nothing is outstanding once every row has an outcome"
+    );
+}
+
+/// The sweep's stale rule, driven at its boundary: a claim at the cutoff is a
+/// chunk at work and one behind it is a dead pass.
+///
+/// Three organisations rather than three batches, because one import is open
+/// per organisation at a time, and one per outcome the rule can reach. Org A's
+/// marketplace batch is left half done — one row created, one still
+/// `creating` — and goes back to the attach stage with the claimed row's
+/// reservation intact, so the commit that follows finishes it under the same
+/// identifier. Org B's batch is whole and unsettled, which is a pass that died
+/// between its last breadcrumb and the settle, and the rule settles it with
+/// the notification the route's own settle would have written. Org C's batch
+/// is half done and no row of it ever held bytes, so it goes back to `parsed`,
+/// the state a batch no bind reached was in.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stale_claim_returns_an_unfinished_batch_to_the_seller_and_settles_a_finished_one(
+    pool: PgPool,
+) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    seed_org_b(&pool).await.expect("org b seeds");
+    seed_org_c(&pool).await.expect("org c seeds");
+    let repo = ImportBatchRepo::new(pool.clone());
+    let held = draft("One");
+    let clean = no_problems();
+    let marketplace = [
+        row("TES GB", 4, RowIntent::Live, &held, &clean),
+        row("TES GB", 5, RowIntent::Draft, &held, &clean),
+    ];
+    let platform = [
+        row("Teachouse", 4, RowIntent::Draft, &held, &clean),
+        row("Teachouse", 5, RowIntent::Draft, &held, &clean),
+    ];
+    for (org, id, rows) in [
+        (ORG_A, BATCH_A, &marketplace),
+        (ORG_B, BATCH_B, &platform),
+        (ORG_C, BATCH_C, &platform),
+    ] {
+        repo.create(org, &batch(id, rows))
+            .await
+            .expect("the batch writes");
+    }
+    let payload = seal(&pool, ORG_A, 0x61).await;
+    let cover = seal(&pool, ORG_A, 0x62).await;
+    for ordinal in [4, 5] {
+        repo.bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+        .await
+        .expect("the bind writes");
+    }
+    let mut reserved = None;
+    for (org, id) in [(ORG_A, BATCH_A), (ORG_B, BATCH_B), (ORG_C, BATCH_C)] {
+        assert_eq!(
+            repo.open_commit(org, id).await.expect("the commit opens"),
+            CommitOpening::Open
+        );
+        let claimed = repo
+            .claim_page(org, id, 10, CLAIMED)
+            .await
+            .expect("the claim runs");
+        assert_eq!(claimed.len(), 2, "both rows are claimed");
+        if org == ORG_A {
+            reserved = claimed
+                .iter()
+                .find(|row| row.ordinal == 5)
+                .map(|row| row.product);
+        }
+    }
+    let Some(reserved) = reserved else {
+        panic!("org a's claim reserved a product for row five");
+    };
+    for (org, id, sheet, ordinals) in [
+        (ORG_A, BATCH_A, "TES GB", &[4][..]),
+        (ORG_B, BATCH_B, "Teachouse", &[4, 5][..]),
+        (ORG_C, BATCH_C, "Teachouse", &[4][..]),
+    ] {
+        for ordinal in ordinals {
+            assert!(
+                repo.record_created(
+                    org,
+                    id,
+                    RowAddress {
+                        sheet,
+                        ordinal: *ordinal
+                    },
+                    false
+                )
+                .await
+                .expect("the breadcrumb writes"),
+                "a claimed row records its create"
+            );
+        }
+    }
+
+    let engine = ImportBatchRepo::new(engine_pool(&pool).await);
+    assert_eq!(
+        engine
+            .sweep_stale(CLAIMED, AFTER_DEADLINE, 10)
+            .await
+            .expect("the fresh pass runs"),
+        StaleReport::default(),
+        "a claim at the cutoff is a chunk at work, and every batch is left to it"
+    );
+    for (org, id) in [(ORG_A, BATCH_A), (ORG_B, BATCH_B), (ORG_C, BATCH_C)] {
+        assert_eq!(
+            repo.get(org, id)
+                .await
+                .expect("the batch reads")
+                .map(|record| record.state),
+            Some(BatchState::Importing),
+            "and it reads as it did"
+        );
+    }
+
+    let stale = engine
+        .sweep_stale(Timestamp(CLAIMED.0 + 1), AFTER_DEADLINE, 10)
+        .await
+        .expect("the stale pass runs");
+    assert_eq!(
+        (stale.settled, stale.reopened),
+        (1, 2),
+        "a claim behind the cutoff is a dead pass: the whole batch is settled and the two \
+         unfinished ones are returned"
+    );
+
+    let returned = repo
+        .get(ORG_A, BATCH_A)
+        .await
+        .expect("the batch reads")
+        .expect("the batch is held");
+    assert_eq!(
+        (returned.state, returned.settled_at),
+        (BatchState::Attaching, None),
+        "a batch whose rows hold bytes goes back to the attach stage, unsettled"
+    );
+    let rows = repo.rows(ORG_A, BATCH_A).await.expect("the rows read");
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.ordinal, row.state, row.product_id))
+            .collect::<Vec<_>>(),
+        vec![
+            (4, RowState::Created, rows[0].product_id),
+            (5, RowState::Creating, Some(reserved)),
+        ],
+        "the created row stays created and the claimed row keeps its claim and its reservation"
+    );
+    assert_eq!(
+        repo.open_commit(ORG_A, BATCH_A)
+            .await
+            .expect("the commit reopens"),
+        CommitOpening::Open,
+        "the seller's next commit opens over the returned batch"
+    );
+    let again = repo
+        .claim_page(ORG_A, BATCH_A, 10, AFTER_DEADLINE)
+        .await
+        .expect("the resumed claim runs");
+    assert_eq!(
+        again
+            .iter()
+            .map(|row| (row.ordinal, row.product))
+            .collect::<Vec<_>>(),
+        vec![(5, reserved)],
+        "and claims exactly the unfinished row, under the identifier reserved for it"
+    );
+
+    let settled = repo
+        .get(ORG_B, BATCH_B)
+        .await
+        .expect("the batch reads")
+        .expect("the batch is held");
+    assert_eq!(
+        (settled.state, settled.settled_at, settled.failure_detail),
+        (BatchState::Imported, Some(AFTER_DEADLINE), None),
+        "a batch whose every row created is imported at the pass's own instant"
+    );
+    assert_eq!(
+        import_notifications(&pool, ORG_B, BATCH_B).await,
+        1,
+        "and the seller is told, in the transaction that settled it"
+    );
+
+    assert_eq!(
+        repo.get(ORG_C, BATCH_C)
+            .await
+            .expect("the batch reads")
+            .map(|record| (record.state, record.settled_at)),
+        Some((BatchState::Parsed, None)),
+        "a batch none of whose rows holds bytes goes back to parsed, which is where it was"
+    );
+
+    assert_eq!(
+        engine
+            .sweep_stale(Timestamp(CLAIMED.0 + 1), AFTER_DEADLINE, 10)
+            .await
+            .expect("the second stale pass runs"),
+        StaleReport::default(),
+        "nothing is importing any more, so the rule converges"
+    );
+}
+
+/// A row that became a product keeps its handles when its batch is abandoned.
+///
+/// The severity is in the statement rather than the count:
+/// `import_batch_row_live_creation_names_a_file` refuses a live row past
+/// creation with no handle, so a release that reached such a row would fail
+/// the whole pass — every organisation's expired batches left standing, on
+/// every pass — rather than skip the row. The batch is left `importing`
+/// deliberately, which is the state a dead pass leaves and the one the sweep
+/// used to fail on.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_sweep_keeps_the_handles_of_a_row_that_became_a_product(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    let repo = ImportBatchRepo::new(pool.clone());
+    let held = draft("One");
+    let clean = no_problems();
+    let rows = [
+        row("TES GB", 4, RowIntent::Live, &held, &clean),
+        row("TES GB", 5, RowIntent::Live, &held, &clean),
+    ];
+    repo.create(ORG_A, &batch(BATCH_A, &rows))
+        .await
+        .expect("the batch writes");
+    let payload = seal(&pool, ORG_A, 0x71).await;
+    let cover = seal(&pool, ORG_A, 0x72).await;
+    for ordinal in [4, 5] {
+        repo.bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+        .await
+        .expect("the bind writes");
+    }
+    assert_eq!(
+        repo.open_commit(ORG_A, BATCH_A)
+            .await
+            .expect("the commit opens"),
+        CommitOpening::Open
+    );
+    let claimed = repo
+        .claim_page(ORG_A, BATCH_A, 1, CLAIMED)
+        .await
+        .expect("the claim runs");
+    assert_eq!(
+        claimed.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
+        vec![4],
+        "a page of one claims the first row and leaves the second attached"
+    );
+    assert!(repo
+        .record_created(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+            false,
+        )
+        .await
+        .expect("the breadcrumb writes"));
+
+    let report = ImportBatchRepo::new(engine_pool(&pool).await)
+        .sweep_pass(AFTER_DEADLINE, 10, SWEPT)
+        .await
+        .expect("the sweep runs over a batch holding a created live row");
+    assert_eq!(
+        (report.abandoned, report.released),
+        (1, 1),
+        "the batch is abandoned and the one row that belongs to no product is released"
+    );
+    let rows = repo.rows(ORG_A, BATCH_A).await.expect("the rows read");
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.ordinal, row.state, row.file.is_some()))
+            .collect::<Vec<_>>(),
+        vec![(4, RowState::Created, true), (5, RowState::Attached, false)],
+        "the created row keeps the handles its product was made from and the attached row \
+         loses the ones it will never publish"
+    );
+    assert_eq!(
+        covers_held(&pool, ORG_A, BATCH_A).await,
+        1,
+        "and the cover goes with the payload on both rows"
     );
 }

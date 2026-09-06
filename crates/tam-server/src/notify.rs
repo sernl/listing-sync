@@ -40,8 +40,9 @@ pub(crate) struct Address {
 }
 
 /// Why an address could not be had. The split is the whole of the retry
-/// decision: a service that is down will answer later, and a subject that has
-/// no verified address will not.
+/// decision: a service that is down will answer later and is retried, and a
+/// subject that has no address it will vouch for will not, so that message
+/// completes with nothing sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolveError {
     /// The identity service could not be reached or answered a fault.
@@ -449,6 +450,15 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     /// it. With one user per organisation that is exactly the rule; with
     /// several, a retry can re-mail a recipient the earlier pass reached, which
     /// is the accepted cost of a single message per run.
+    ///
+    /// A recipient the identity service holds no address for, or holds one it
+    /// will not vouch for, is skipped with a logged line naming the subject,
+    /// and the message completes (founder decision A1, 2026-09-07). Retrying
+    /// cannot change either answer, and a dead letter nothing reads is a worse
+    /// record than the log line: under the earlier rule every seller whose
+    /// provider never asserted verification simply stopped receiving mail. The
+    /// subject is a platform id and not an address, so naming it costs nothing
+    /// a log should not hold.
     async fn mail_to(
         &self,
         recipients: &[Recipient],
@@ -459,24 +469,20 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
             let address = match self.resolver.address(recipient.subject).await {
                 Ok(address) => address,
                 Err(ResolveError::Unreachable(why)) => return Err(DeliveryError::Retryable(why)),
-                Err(ResolveError::NoAddress(why)) => return Err(DeliveryError::Poison(why)),
+                Err(ResolveError::NoAddress(why)) => {
+                    eprintln!(
+                        "tam-server: subject {} has no address to mail ({why}); its completion mail is not sent",
+                        uuid_text(recipient.subject)
+                    );
+                    continue;
+                }
             };
             if !address.verified {
-                // Logged as well as returned, because the row this dead-letters
-                // is written `state = 'dead'` and nothing reads dead letters
-                // yet (R2). Without this line a seller whose identity provider
-                // never asserted verification simply stops receiving mail, with
-                // no record anywhere that they were dropped. The subject is a
-                // platform id and not an address, so naming it costs nothing a
-                // log should not hold.
                 eprintln!(
-                    "tam-server: subject {} has no verified address; its completion mail is dead-lettered",
+                    "tam-server: subject {} has an address the identity service does not vouch for; its completion mail is not sent",
                     uuid_text(recipient.subject)
                 );
-                return Err(DeliveryError::Poison(
-                    "that subject's address is not verified, and retrying cannot verify it"
-                        .to_owned(),
-                ));
+                continue;
             }
             self.relay
                 .send(&address.email, &mail)
@@ -802,16 +808,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unreachable_address_service_is_retried_and_a_refused_one_is_not() {
-        for (answer, expected) in [
-            (
-                Err(ResolveError::Unreachable("down".to_owned())),
-                DeliveryError::Retryable("down".to_owned()),
-            ),
-            (
-                Err(ResolveError::NoAddress("no such subject".to_owned())),
-                DeliveryError::Poison("no such subject".to_owned()),
-            ),
+    async fn an_unreachable_address_service_is_retried() {
+        let resolver = RecordingResolver {
+            answer: Err(ResolveError::Unreachable("down".to_owned())),
+            asked: OnceLock::new(),
+        };
+        let relay = RecordingRelay {
+            answer: Ok(()),
+            sent: OnceLock::new(),
+        };
+        let deliverer = deliverer(resolver, relay);
+        let outcome = deliverer
+            .mail_to(&[one_recipient()], &notice(twelve_succeeded()))
+            .await;
+        assert_eq!(
+            outcome,
+            Err(DeliveryError::Retryable("down".to_owned())),
+            "a service that is down will answer later, so the attempt budget is kept"
+        );
+        assert!(
+            deliverer.relay.sent.get().is_none(),
+            "nothing is handed to the relay without an address"
+        );
+    }
+
+    /// Founder decision A1 (2026-09-07): an address the identity service does
+    /// not vouch for, or a subject it holds no address for, completes the
+    /// message with nothing sent rather than dead-lettering it. Retrying
+    /// cannot change either answer, and a dead letter nothing reads was how a
+    /// whole sign-in route's sellers silently stopped receiving mail.
+    #[tokio::test]
+    async fn an_unverified_or_absent_address_completes_with_nothing_sent() {
+        for answer in [
+            Ok(Address {
+                email: "sam@example.test".to_owned(),
+                verified: false,
+            }),
+            Err(ResolveError::NoAddress("no such subject".to_owned())),
         ] {
             let resolver = RecordingResolver {
                 answer,
@@ -821,37 +854,20 @@ mod tests {
                 answer: Ok(()),
                 sent: OnceLock::new(),
             };
-            let outcome = deliverer(resolver, relay)
+            let deliverer = deliverer(resolver, relay);
+            let outcome = deliverer
                 .mail_to(&[one_recipient()], &notice(twelve_succeeded()))
                 .await;
             assert_eq!(
                 outcome,
-                Err(expected),
-                "the retry decision follows the reason, not the failure"
+                Ok(()),
+                "the message completes: neither answer is a fault a later attempt fixes"
+            );
+            assert!(
+                deliverer.relay.sent.get().is_none(),
+                "and nothing reaches the relay, because there is no address to send to"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn an_unverified_address_dead_letters_because_retrying_cannot_verify_it() {
-        let resolver = RecordingResolver {
-            answer: Ok(Address {
-                email: "sam@example.test".to_owned(),
-                verified: false,
-            }),
-            asked: OnceLock::new(),
-        };
-        let relay = RecordingRelay {
-            answer: Ok(()),
-            sent: OnceLock::new(),
-        };
-        let outcome = deliverer(resolver, relay)
-            .mail_to(&[one_recipient()], &notice(twelve_succeeded()))
-            .await;
-        assert!(
-            matches!(outcome, Err(DeliveryError::Poison(_))),
-            "an unverified address is not a fault that a later attempt fixes"
-        );
     }
 
     #[tokio::test]

@@ -99,6 +99,11 @@ There must still be one phone row.
 A second row means the device identity did not survive the restart, and every token bound to the first row is stranded.
 That is worth stopping for.
 
+## One notification, once a cycle has settled something
+
+With a sync queued for a marketplace this phone holds, close the app fully and open it again so the start-up cycle claims the work, and confirm four things: the permission prompt appears once and only now, one notification appears naming the count of what settled, a second cycle with nothing due raises none, and refusing the prompt leaves the app working with the email arriving as before.
+The same check on Windows needs an installed build rather than a development run, because the plugin's own manifest records that Windows notifications work only for installed applications and show PowerShell's name and icon otherwise.
+
 ## If no phone row appears
 
 Press "Check in now", beside the "Your machines" heading, on the phone.

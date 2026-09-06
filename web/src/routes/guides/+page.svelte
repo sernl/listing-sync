@@ -7,11 +7,11 @@
 	<PageHead
 		icon="book-open"
 		title="Help and guides"
-		description="Guides, seller articles and news from Teachouse."
+		description="Guides, articles and news from Teachouse."
 	/>
 	<Placeholder
 		icon="book-open"
 		headline="Guides are not written yet"
-		body="This will hold the guides for connecting a marketplace, bringing a shop across and listing a resource everywhere."
+		body="This is where the guides will be: connecting a marketplace, importing your portfolio, and listing a resource everywhere."
 	/>
 </div>

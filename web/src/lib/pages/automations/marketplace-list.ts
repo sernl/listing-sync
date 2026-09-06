@@ -5,13 +5,12 @@
 import type { ConnectionView } from '$lib/api';
 import { present } from '$lib/connection-status';
 import type { Marketplace } from '$lib/generated/vocab';
-import { MARKETPLACE_NAME } from '$lib/platforms';
 
 export type RowTone = 'ok' | 'warn' | 'bad' | 'soon';
 
 export interface MarketplaceRow {
+	/** Drawn by its mark, which is the row's accessible name too. */
 	marketplace: Marketplace;
-	name: string;
 	/** The server's own word for the link state, rendered verbatim: the
 	 *  vocabulary is generated from Rust, and a client that re-spells it puts a
 	 *  second vocabulary in front of the seller. */
@@ -63,7 +62,6 @@ export function marketplaceRows(
 			const shown = present(connection.status);
 			return {
 				marketplace: connection.marketplace,
-				name: MARKETPLACE_NAME[connection.marketplace],
 				status: shown.label,
 				tone: PILL[shown.tone],
 				count: counts[connection.marketplace] ?? null

@@ -1,4 +1,4 @@
-//! The operator backoffice: seven reads over the whole platform rather than
+//! The operator backoffice: eight reads over the whole platform rather than
 //! one tenant.
 //!
 //! Every route here takes [`OperatorContext`], so the marking is checked
@@ -452,6 +452,52 @@ pub(crate) async fn import_drain(
             })
             .collect(),
         truncated: page.truncated,
+    }))
+}
+
+// ------------------------------------------------------------- dead letters
+
+/// Dead letters on one outbox topic, as the operator page reads them.
+///
+/// Two figures and no rows, because two figures answer the operator's
+/// question: one organisation holding many is an address the relay refuses,
+/// and many organisations holding one each is the relay or the key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterTopicView {
+    pub topic: String,
+    pub messages: i64,
+    pub orgs: i64,
+}
+
+/// Every topic carrying a dead letter, alphabetically; empty where none does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLettersView {
+    pub topics: Vec<DeadLetterTopicView>,
+}
+
+/// The outbox rows the drainer gave up on, counted rather than listed.
+///
+/// A message exhausts its attempt budget or is refused outright, is written
+/// `state = 'dead'`, and is never retried. Until this read existed nothing
+/// looked at those rows, so a completion mail that died was a line in the
+/// drainer's log and nothing else.
+pub(crate) async fn dead_letters(
+    State(state): State<AppState>,
+    _operator: OperatorContext,
+) -> Result<Json<DeadLettersView>, APIError> {
+    let rows = BackofficeRepo::new(backoffice(&state)?)
+        .dead_letters()
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(DeadLettersView {
+        topics: rows
+            .into_iter()
+            .map(|row| DeadLetterTopicView {
+                topic: row.topic,
+                messages: row.messages,
+                orgs: row.orgs,
+            })
+            .collect(),
     }))
 }
 

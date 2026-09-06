@@ -94,7 +94,7 @@
 	align-items: center;
 	justify-content: center;
 	background: var(--accent-soft);
-	color: var(--accent-ink);
+	color: var(--primary);
 	margin-bottom: 12px;
 }
 

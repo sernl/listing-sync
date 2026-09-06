@@ -3,7 +3,7 @@ name        = "tam-desktop"
 version     = "0.3.4"
 edition     = "2021"
 publish     = false
-description = "The Teachouse desktop client: the seller's device, where every no-API marketplace request originates"
+description = "Teachouse cross-lists your teaching resources to the marketplaces you sell on. Marketplace work for Tes and TPT runs on your own device."
 
 [lib]
 name = "tam_desktop"
@@ -40,6 +40,15 @@ tauri-plugin-os     = "2.3"
 # it: the plugin declares an Android implementation, and Android is where the
 # current behaviour is worst.
 tauri-plugin-opener = "2.5"
+# The one notification a cycle earns, raised from Rust rather than from the
+# console, so no capability names it and no npm package carries it. Taken on
+# every platform: the plugin declares full support on Windows and Android, and
+# it is the phone, with no other way to say what a background cycle did, where
+# it earns most. Its own Android manifest merges POST_NOTIFICATIONS,
+# RECEIVE_BOOT_COMPLETED and WAKE_LOCK into the build, and its own manifest
+# records that Windows notifications work only from an installed application.
+# Founder decision, 2026-09-07.
+tauri-plugin-notification = "2.4"
 
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"

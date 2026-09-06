@@ -14,12 +14,16 @@ A page whose first path segment is one the console answers under fails the flake
 The server computes the landing page's Content-Security-Policy from the files it just read, so a page that grew an inline script would be served under a policy carrying that script's hash rather than under a stale one.
 
 The only script on the site is `public/app-redirect.js`, loaded from our own origin on every page: the desktop app opens this origin too, and `window.__TAURI__` is the one signal available before the console loads, so it sends that window to `/app`.
-Nothing else on the site comes from anywhere but this origin: Fraunces and Instrument Sans are served from `public/fonts/` rather than from Google's CDN, so the page makes no third-party request at all.
+Nothing else on the site comes from anywhere but this origin: Poppins and Inter are served from `public/fonts/` rather than from Google's CDN, so the page makes no third-party request at all.
+No inline `style` attribute either, for the same reason there is no inline `<style>`: `style-src 'self'` refuses both, so every shape on the page — the hero's blobs and the handwritten line included — is drawn by a class in `src/styles/site.css` or by SVG presentation attributes.
 The site must keep working under the policy `landing_policy` in `crates/tam-server/src/serving.rs` builds — `default-src 'self'`, `script-src 'self'` plus a `sha256-` token per inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'` — which is why there is no inline event handler and no inline `<style>` on any page.
 The policy admits no third-party origin at all: `style-src` carried `'unsafe-inline'` and `fonts.googleapis.com`, and `font-src` carried `fonts.gstatic.com`, until the console's fonts were bundled and those origins were dropped, so a stylesheet or a font fetched from anywhere but this origin is now refused rather than merely unnecessary.
 
-Every call to action goes to `/login`, and both `/` and `/pricing` carry the same price list because both read `src/pricing.js`.
-Every price on the site is in that one file, in USD, as approved on 2026-09-05.
+Every call to action goes to `/login` or to `/pricing/#founding`, and both `/` and `/pricing` carry the same price list because both render `components/Pricing.astro` from `src/pricing.js`.
+Every price on the site is in that one file, in USD, from the founder's mockup of 2026-09-11.
+
+The brand files under `public/brand/`, the marks under `public/marks/` and the faces under `public/fonts/` are byte copies of the console's, not links: the two trees build separately, and `landing-band.test.ts` fails a copy that drifted.
+`public/images/og.png` is the social card, 1200 by 630, rendered from `public/brand/logo.svg` with resvg; nothing rebuilds it, so refreshing the logo means re-rendering the card.
 
 Every value the founder must supply is in `src/site.js` and nowhere else: the login path, the support address, the desktop download URL and the availability sentence.
 `supportEmail` is `null` and renders no address anywhere rather than a `mailto:` that reaches nobody.
@@ -27,4 +31,4 @@ Every value the founder must supply is in `src/site.js` and nowhere else: the lo
 
 `/privacy` and `/terms` are placeholders for counsel, not legal text, and must be replaced in full rather than edited.
 
-The structure, the copy decisions and the full placeholder list are in `docs/notes/design/landing-page.md`.
+The structure and the copy decisions are in `docs/notes/design/brand-kit-and-teacher-ui.md`, which supersedes the copy, tokens and pricing of `landing-page.md`; the placeholders the founder still owes — the hero photo, the challenge illustration and the console shot, all three shipped as `-placeholder.webp` — are listed there.

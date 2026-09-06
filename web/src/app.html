@@ -20,9 +20,12 @@
          builds show this same document under a policy that admits no
          third-party origin, so the two stylesheets these replace were refused
          there and the app fell back to the stacks in `tokens.css`. -->
-    <!-- PNG before any other icon: at 16 px a rasterised glyph stays crisp where
-         a scaled-down SVG goes muddy, and browsers take the first match they
-         understand. -->
+    <!-- The PNG icons and no SVG link, which is a decision rather than an
+         omission and still holds under the brand kit: `favicon-16.png` is
+         rendered from `brand/mark-small.svg`, the mark drawn with its window
+         closed for that size, and an SVG link would hand 16 px back to the
+         full mark because a browser that understands the format prefers it.
+         `docs/notes/design/product-icon.md` records the whole set. -->
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />

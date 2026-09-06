@@ -88,12 +88,13 @@ const GLOBAL_TABLES: [&str; 11] = [
 /// silently, and the reach of the one role that reads every tenant is the last
 /// thing that should move without a reviewer seeing it.
 ///
-/// Every entry is `true` -- the whole table -- except `job_event`. Migration
-/// 0060 opens exactly the rows recording an import-drain measurement, because
-/// the operator console draws that series and has no business with the rest of
-/// a tenant's ledger. That asymmetry is the point of listing quals here rather
-/// than table names.
-const BACKOFFICE_READABLE: [(&str, &str); 11] = [
+/// Every entry is `true` -- the whole table -- except `job_event` and
+/// `outbox_message`. Migration 0060 opens exactly the rows recording an
+/// import-drain measurement, because the operator console draws that series
+/// and has no business with the rest of a tenant's ledger; migration 0067 opens
+/// exactly the dead letters, because those are the rows nothing else reads.
+/// That asymmetry is the point of listing quals here rather than table names.
+const BACKOFFICE_READABLE: [(&str, &str); 12] = [
     ("billing_subscription", "true"),
     ("connection", "true"),
     ("job", "true"),
@@ -103,6 +104,7 @@ const BACKOFFICE_READABLE: [(&str, &str); 11] = [
     ("marketplace_request", "true"),
     ("org_halt", "true"),
     ("org_inventory_halt", "true"),
+    ("outbox_message", "(state = 'dead'::text)"),
     ("product", "true"),
     ("write_attempt", "true"),
 ];

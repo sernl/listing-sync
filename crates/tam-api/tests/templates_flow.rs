@@ -430,7 +430,7 @@ async fn the_route_refuses_a_draft_the_create_form_would_refuse(pool: PgPool) {
     assert!(
         refusal(&under_floor)
             .iter()
-            .any(|message| message == "TPT refuses a price below $0.95."),
+            .any(|message| message == "Raise the price to at least $0.95."),
         "a template holding a price the create form refuses would prefill a form \
          that cannot submit"
     );

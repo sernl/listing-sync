@@ -33,7 +33,7 @@ use tokio::sync::Mutex;
 
 use crate::device::DeviceId;
 use crate::entitlement::EntitlementGate;
-use crate::heartbeat::{ControlPlaneError, PlaneFuture};
+use crate::import::{SourceError, SourceFuture};
 use crate::ledger::{HttpLedger, LedgerTransport};
 use crate::marketplace::{LiveTransport, SessionTransport, TesLive, TptLive};
 use crate::payload::{DevicePayloads, MarketplaceFiles, PayloadTransport};
@@ -305,11 +305,52 @@ impl<B: LiveTransport + Clone> SellerCatalogue<B> {
     /// `NoUploads` for the same reason the file source uses it: a catalogue
     /// read uploads nothing, so the honest binding is one that refuses rather
     /// than a permissive stub a later edit could write through.
-    fn adapter(&self) -> Result<TesAdapter<SessionTransport<B>, NoUploads>, ControlPlaneError> {
+    fn adapter(&self) -> Result<TesAdapter<SessionTransport<B>, NoUploads>, SourceError> {
         let transport = SessionTransport::new(self.live.clone(), Arc::clone(&self.sessions))
-            .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
+            .map_err(|why| SourceError::NoClient(why.to_string()))?;
         TesAdapter::new(self.inventory, transport, NoUploads)
-            .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+            .map_err(|why| SourceError::NoClient(why.to_string()))
+    }
+
+    fn answered(&self, error: &AdapterError) -> SourceError {
+        SourceError::Marketplace {
+            marketplace: self.inventory.marketplace(),
+            why: marketplace_sentence(error),
+        }
+    }
+}
+
+/// The marketplace's answer in the seller's words, for the request page.
+///
+/// The `Debug` form this replaced put `SessionExpired` in front of a seller
+/// as the reason their draft did not cross.
+fn marketplace_sentence(error: &AdapterError) -> String {
+    match error {
+        AdapterError::SessionExpired => {
+            "the session has expired; sign in again on this device and start the import again"
+                .to_owned()
+        }
+        AdapterError::Rejected { detail, .. } => detail.0.clone(),
+        AdapterError::Challenge(kind) => format!(
+            "it asked for a check this device cannot answer on its own ({kind:?}); open it in \
+             the browser and sign in, then start the import again"
+        ),
+        AdapterError::RateLimited { .. } => {
+            "it is limiting how often this device may ask; try again later".to_owned()
+        }
+        AdapterError::NotSent(failure) => {
+            format!("it could not be reached from this device ({failure:?})")
+        }
+        AdapterError::Ambiguous(cause) => {
+            format!("its answer could not be read ({cause:?})")
+        }
+        AdapterError::SchemaDrift(_) => {
+            "its page has changed shape and this version of the app does not recognise it"
+                .to_owned()
+        }
+        AdapterError::Uncaptured { capability } => {
+            format!("{capability} is not built into this app yet")
+        }
     }
 }
 
@@ -317,11 +358,11 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
     /// Every resource the seller has, drafts included.
     ///
     /// Drafts are kept rather than filtered out even though a draft has no
-    /// published bundle and will fail its download. The pass turns that
-    /// failure into a named skip the seller can read, and a filter here would
-    /// instead make a draft vanish from the migration silently — which is the
-    /// outcome `ImportPage::skipped` exists to prevent, one step earlier.
-    fn list(&self) -> PlaneFuture<'_, Vec<i64>> {
+    /// published bundle. The pass skips one by its state with a sentence the
+    /// seller can read, and a filter here would instead make a draft vanish
+    /// from the migration silently — which is the outcome
+    /// `ImportPage::skipped` exists to prevent, one step earlier.
+    fn list(&self) -> SourceFuture<'_, Vec<i64>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
             let entries = adapter
@@ -329,12 +370,12 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
                     inventory: self.inventory,
                 })
                 .await
-                .map_err(|why| ControlPlaneError::Refused(format!("{why:?}")))?;
+                .map_err(|why| self.answered(&why))?;
             Ok(entries.into_iter().map(|entry| entry.id).collect())
         })
     }
 
-    fn read(&self, resource: i64) -> PlaneFuture<'_, tam_marketplace::ImportedListing> {
+    fn read(&self, resource: i64) -> SourceFuture<'_, tam_marketplace::ImportedListing> {
         Box::pin(async move {
             let adapter = self.adapter()?;
             adapter
@@ -345,11 +386,11 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
                     tam_marketplace_tes::DraftId(resource),
                 )
                 .await
-                .map_err(|why| ControlPlaneError::Refused(format!("{why:?}")))
+                .map_err(|why| self.answered(&why))
         })
     }
 
-    fn bundle(&self, resource: i64) -> PlaneFuture<'_, Vec<u8>> {
+    fn bundle(&self, resource: i64) -> SourceFuture<'_, Vec<u8>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
             adapter
@@ -360,7 +401,7 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
                     tam_marketplace_tes::DraftId(resource),
                 )
                 .await
-                .map_err(|why| ControlPlaneError::Refused(format!("{why:?}")))
+                .map_err(|why| self.answered(&why))
         })
     }
 }

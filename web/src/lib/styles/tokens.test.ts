@@ -28,17 +28,36 @@ function rootBlock(path: string): string {
 /** Every `--name: value` inside the first `:root` block of a stylesheet. */
 function rootTokens(path: string): Map<string, string> {
 	const body = rootBlock(path);
-	return new Map([...body.matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+	return new Map(
+		[...body.matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]),
+	);
 }
 
 const TOKENS = rootTokens(`${HERE}tokens.css`);
 
-/** A token's colour, following one level of `var()` aliasing. */
+/** A token's colour, following `var()` aliases and resolving the one derived
+ *  form this sheet uses: `color-mix(in srgb, var(--a) N%, var(--b))`.
+ *
+ *  The three verdict inks are written that way rather than as hexes, because
+ *  the founder's kit contains no readable green, amber or red and a hand-typed
+ *  darker one would be a colour the brand does not own. Resolving the mix here
+ *  is what lets the contrast pairs below measure them as the browser paints
+ *  them. sRGB, non-linear, which is what `color-mix(in srgb, ...)` specifies. */
 function colour(name: string): string {
 	const raw = TOKENS.get(name);
 	if (raw === undefined) throw new Error(`tokens.css declares no --${name}`);
 	const alias = raw.match(/^var\(--([a-z0-9-]+)\)$/);
-	return alias ? colour(alias[1]) : raw;
+	if (alias) return colour(alias[1]);
+	const mix = raw.match(
+		/^color-mix\(in srgb,\s*var\(--([a-z0-9-]+)\)\s+(\d+)%,\s*var\(--([a-z0-9-]+)\)\)$/,
+	);
+	if (!mix) return raw;
+	const share = Number(mix[2]) / 100;
+	const [a, b] = [colour(mix[1]), colour(mix[3])].map((hex) =>
+		[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)),
+	);
+	const blend = a.map((v, i) => Math.round(v * share + b[i] * (1 - share)));
+	return `#${blend.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 }
 
 function luminance(hex: string): number {
@@ -66,6 +85,13 @@ function ratio(ink: string, ground: string): number {
  *  allowance. */
 const AA = 4.5;
 
+/** The floor under a pair the founder's kit does not carry at `AA`, listed in
+ *  `KIT_TRADES` below. 4.0 is not a second bar anything is designed to: it is
+ *  what keeps a granted trade from drifting further, so a kit colour that
+ *  moves another half point fails the lane instead of being covered by the
+ *  exception it was granted at a different value. */
+const FLOOR = 4.0;
+
 /** Every neutral a page is painted with, which is what body text sits on.
  *
  *  A saturated fill such as `--accent` is a ground too, but only under the ink
@@ -75,43 +101,64 @@ const GROUNDS = ['ground', 'surface', 'nav', 'hover', 'tint', 'tint-edge'];
 
 /** Every token drawn as text somewhere in the console.
  *
- *  `inkTokensInUse` below asserts this list is still complete, so a token that
- *  starts being drawn as text fails the lane until somebody decides whether it
- *  clears the bar rather than discovering later that it never did. */
+ *  The kit's saturated colours are not on it, and that is the brand decision
+ *  of 2026-09-11 rather than an omission: Teal measures 2.42 against the page,
+ *  Success 2.42 and Warning 2.05, so each of them is a fill, a dot or a track
+ *  and a sentence that has to carry their meaning takes `--primary` or one of
+ *  the three derived `-ink` tokens. `every token drawn as text` below asserts
+ *  this list is still complete, so a rule that starts drawing a kit fill as
+ *  text fails the lane rather than shipping a word nobody can read. */
 const INKS = [
 	'text',
 	'ink',
 	'muted',
 	'faint',
 	'primary',
-	'accent',
-	'accent-ink',
-	'accent-deep',
 	'additive',
-	'ok',
-	'warn',
-	'bad',
-	'soon'
+	'soon',
+	'ok-ink',
+	'warn-ink',
+	'bad-ink',
 ];
+
+/** The pairs the founder's kit does not carry at `AA`, each with the reason it
+ *  is a decision rather than drift, and each keyed by the two colours rather
+ *  than by the two names: the kit has one Slate, and `--muted`, `--faint` and
+ *  `--soon` are three names for it, so one entry answers for all three.
+ *
+ *  The assertions below refuse an entry whose pair now clears `AA`, so a trade
+ *  cannot outlive the kit colour it was granted for. */
+const KIT_TRADES: Record<string, string> = {
+	'#64748b on #f1f3f9':
+		"The kit's Slate on the kit's navigation ground: 4.29. The card's own items are `--text`; what Slate draws there is the item's icon and the chip beside it.",
+	'#64748b on #eef1f7':
+		"The kit's Slate on the kit's hover ground, and on `--soon-soft`, which is the same colour: 4.21. A hover is transient and the resting ground clears the bar at 4.54.",
+	'#64748b on #efe9ff':
+		"The kit's Slate on the violet wash: 4.03. The wash is the marketing hero's, and the console draws no secondary text on it.",
+	'#64748b on #f5f2ff':
+		"The kit's Slate on the wash's edge: 4.31, and the same reason as the wash itself.",
+};
 
 /** A badge's ink against the soft ground that badge is painted on. */
 const ON_SOFT: Array<[string, string]> = [
-	['accent-ink', 'accent-soft'],
+	['primary', 'accent-soft'],
 	['additive', 'additive-soft'],
-	['ok', 'ok-soft'],
-	['warn', 'warn-soft'],
-	['bad', 'bad-soft'],
-	['soon', 'soon-soft']
+	['ok-ink', 'ok-soft'],
+	['warn-ink', 'warn-soft'],
+	['bad-ink', 'bad-soft'],
+	['soon', 'soon-soft'],
 ];
 
-/** A filled control's label against its own fill. */
+/** A filled control's label against its own fill.
+ *
+ *  Teal is not here, because nothing fills a control with it and sets a word
+ *  on top: white on the kit's Teal measures 2.54, so the accent fills discs
+ *  and ticks, and `--primary` is what a solid button is. */
 const ON_FILL: Array<[string, string]> = [
-	['on-fill', 'accent'],
 	['on-fill', 'primary'],
 	['on-fill', 'additive'],
-	['on-fill', 'bad'],
 	['on-fill', 'text'],
-	['surface', 'primary']
+	['surface', 'primary'],
 ];
 
 /** The seven label hues, which are the one scale that does not follow the
@@ -146,29 +193,23 @@ function expand(value: string): string {
 		: written;
 }
 
-/** Directories under `web/static` this palette does not reach, each with the
- *  reason it is a decision rather than drift. */
+/** Paths under `web/static` this palette does not reach, each with the reason
+ *  it is a decision rather than drift. A key is matched as a prefix, so it
+ *  names either a directory or one file. */
 const STATIC_DIRS: Record<string, string> = {
 	'marketplaces/':
 		"Each marketplace's own logo, drawn in colours that are the marketplace's and not ours to move.",
 	'vendors/':
 		"Mozilla's Firefox logo and Google's Android robot, each the vendor's published file unaltered. Both licences forbid modifying the mark, so its colours are the vendor's and not ours to move.",
-	'email/':
-		'Two of the drawings here, `teachouse-mark.svg` and `teachouse-delivery.svg`, are still in the retired Kauri palette: a mail client composes from them rather than from `tokens.css`, so recolouring them is a founder decision that has not been taken. `teachouse-mark-small.svg` is already on the current palette, because `favicon-16.png` is rendered from it, and is inside the exception only because it lives beside the other two.'
-};
-
-/** The colours the mark is drawn in that no token names, so a palette edit
- *  leaves them where they are. */
-const MARK_OWN: Record<string, string> = {
-	'#f7f2e9': "The mark's light: the gable and the near page of the open book.",
-	'#f2e9da': "The shade on the book's far page."
+	'email/teachouse-delivery.svg':
+		"An illustration rather than a mark: a figure at a door, with skin tones, a satchel and a sky that no token names and that a palette edit has no opinion about. Its two brand colours were moved to the kit's Indigo and Teal on 2026-09-11 with the geometry untouched; the rest is the drawing's own. The two marks beside it are the console's mark and are swept.",
 };
 
 /** Everything else `web/static` writes that is neither a token's value nor the
  *  mark's own. */
 const STATIC_OTHER: Record<string, string> = {
 	'rgba(':
-		"The offline card's shadow, which is `--sh-2` written out: `color-mix` is what the token uses and the webview the desktop app bundles may predate it. The channels are checked against `--text` below."
+		"The offline card's shadow, which is `--sh-2` written out: `color-mix` is what the token uses and the webview the desktop app bundles may predate it. The channels are checked against `--text` below.",
 };
 
 /** Every colour literal a file writes, comments dropped. */
@@ -184,21 +225,39 @@ function literalsIn(path: string): string[] {
 			? body.replace(/:root\s*\{[\s\S]*?\n\}/, '')
 			: body;
 	return [...sheet.matchAll(/#[0-9a-fA-F]{3}\b|#[0-9a-fA-F]{6}\b|\brgba?\(|\bhsla?\(/g)].map(
-		([literal]) => literal
+		([literal]) => literal,
 	);
 }
 
 describe('contrast', () => {
-	it.each(INKS)('--%s clears AA on every ground a page is painted with', (ink) => {
+	/** A pair's own bar: `AA`, or `FLOOR` where the kit was granted a trade. */
+	const barFor = (ink: string, ground: string) =>
+		`${expand(colour(ink))} on ${expand(colour(ground))}` in KIT_TRADES ? FLOOR : AA;
+
+	it.each(INKS)('--%s clears its bar on every ground a page is painted with', (ink) => {
 		for (const ground of GROUNDS) {
+			const bar = barFor(ink, ground);
 			expect(`--${ink} on --${ground}: ${ratio(ink, ground).toFixed(2)}`).toBe(
-				`--${ink} on --${ground}: ${Math.max(ratio(ink, ground), AA).toFixed(2)}`
+				`--${ink} on --${ground}: ${Math.max(ratio(ink, ground), bar).toFixed(2)}`,
 			);
 		}
 	});
 
-	it.each(ON_SOFT)('--%s clears AA on --%s', (ink, ground) => {
-		expect(ratio(ink, ground)).toBeGreaterThanOrEqual(AA);
+	/** A trade the kit no longer needs is a trade that has to go, or the next
+	 *  reader reads it as a standing licence. */
+	it('every trade granted to the kit is still a trade', () => {
+		const measured = new Map<string, number>();
+		for (const ink of INKS) {
+			for (const ground of [...GROUNDS, ...ON_SOFT.map(([, g]) => g)]) {
+				measured.set(`${expand(colour(ink))} on ${expand(colour(ground))}`, ratio(ink, ground));
+			}
+		}
+		const spent = Object.keys(KIT_TRADES).filter((pair) => (measured.get(pair) ?? AA) >= AA);
+		expect(spent).toEqual([]);
+	});
+
+	it.each(ON_SOFT)('--%s clears its bar on --%s', (ink, ground) => {
+		expect(ratio(ink, ground)).toBeGreaterThanOrEqual(barFor(ink, ground));
 	});
 
 	it.each(ON_FILL)('--%s clears AA on --%s', (ink, ground) => {
@@ -210,7 +269,7 @@ describe('contrast', () => {
 		const failing = LABELS.flatMap((hue) =>
 			(['ground', 'surface'] as const)
 				.filter((ground) => ratio(hue, ground) < AA)
-				.map((ground) => `--${hue} on --${ground}: ${ratio(hue, ground).toFixed(2)}`)
+				.map((ground) => `--${hue} on --${ground}: ${ratio(hue, ground).toFixed(2)}`),
 		);
 		expect(failing).toEqual([]);
 	});
@@ -223,7 +282,7 @@ describe('contrast', () => {
 		const drawn = new Set<string>();
 		for (const file of filesUnder(WEB_SRC, ['.css', '.svelte'])) {
 			for (const [, name] of readFileSync(file, 'utf8').matchAll(
-				/(?<!-)\bcolor:\s*var\(--([a-z0-9-]+)\)/g
+				/(?<!-)\bcolor:\s*var\(--([a-z0-9-]+)\)/g,
 			)) {
 				drawn.add(name);
 			}
@@ -235,34 +294,30 @@ describe('contrast', () => {
 	});
 });
 
-/** Tokens the landing deliberately declares differently from the console, each
- *  with the reason it is a decision rather than drift.
- *
- *  The assertions below refuse an entry that has stopped differing, so an
- *  exception cannot outlive the reason it was granted for. */
-const LANDING_OWN: Record<string, string> = {
-	'r-card':
-		"The marketing site's shape language is heyretro's rather than the console's: 2rem section cards against the console's 16px, which is a deliberate difference recorded in landing-page.md."
-};
-
 describe('one palette, declared once', () => {
 	const landing = rootTokens(LANDING_CSS);
 	const shared = [...landing.keys()].filter((name) => TOKENS.has(name));
 
+	/** The landing's own value for a token, aliases followed in its own sheet.
+	 *  Both sheets write `--card: var(--surface)`, so the comparison has to
+	 *  resolve each side against the sheet it is written in or every alias
+	 *  reads as drift. */
+	const landingColour = (name: string): string => {
+		const raw = landing.get(name) ?? '';
+		const alias = raw.match(/^var\(--([a-z0-9-]+)\)$/);
+		return alias ? landingColour(alias[1]) : raw;
+	};
+
+	/** No token is allowed to differ. The founder's kit of 2026-09-11 is one
+	 *  brand across the marketing site and the console, which retired the one
+	 *  difference this file used to grant: the landing's 2rem section card
+	 *  against the console's 16px, now `--r-card` in both. */
 	it('the landing and the console agree on every token both declare', () => {
 		expect(shared.length).toBeGreaterThan(10);
 		const drifted = shared
-			.filter((name) => !(name in LANDING_OWN))
-			.filter((name) => landing.get(name) !== colour(name))
+			.filter((name) => expand(landingColour(name)) !== expand(colour(name)))
 			.map((name) => `--${name}: landing ${landing.get(name)}, console ${colour(name)}`);
 		expect(drifted).toEqual([]);
-	});
-
-	it('every deliberate difference is still shared and still a difference', () => {
-		const spent = Object.keys(LANDING_OWN).filter(
-			(name) => !shared.includes(name) || landing.get(name) === colour(name)
-		);
-		expect(spent).toEqual([]);
 	});
 
 	/** Light-only is a decision with dark deferred, not an omission, and the
@@ -282,14 +337,15 @@ describe('one palette, declared once', () => {
 	 *  tokens to read, so both spell their colours out. A literal there is
 	 *  allowed only where it is a token's own value -- a copy the palette still
 	 *  owns, and one that stops matching the moment a token moves -- or where it
-	 *  is named above. */
+	 *  is named above. The mark has no colours of its own under the brand kit:
+	 *  it is drawn in Indigo and Teal and nothing else, which is what retired
+	 *  the two creams the Pounamu and Kauri marks needed an exception for. */
 	const swept = () => [
 		...filesUnder(WEB_SRC, ['.css', '.svelte']),
 		...filesUnder(`${REPO}apps/landing/src`, ['.css', '.svelte', '.astro']),
 		...filesUnder(STATIC, ['.html', '.svg']).filter(
-			(file) =>
-				!Object.keys(STATIC_DIRS).some((dir) => file.startsWith(`${STATIC}/${dir}`))
-		)
+			(file) => !Object.keys(STATIC_DIRS).some((dir) => file.startsWith(`${STATIC}/${dir}`)),
+		),
 	];
 
 	const declared = new Set([...TOKENS.keys()].map((name) => expand(colour(name))));
@@ -300,8 +356,7 @@ describe('one palette, declared once', () => {
 			for (const literal of literalsIn(file)) {
 				const written = expand(literal);
 				const allowed =
-					file.startsWith(`${STATIC}/`) &&
-					(declared.has(written) || written in MARK_OWN || written in STATIC_OTHER);
+					file.startsWith(`${STATIC}/`) && (declared.has(written) || written in STATIC_OTHER);
 				if (!allowed) {
 					stray.push(`${file.slice(REPO.length)}: ${literal}`);
 				}
@@ -314,18 +369,17 @@ describe('one palette, declared once', () => {
 		const written = new Set(
 			swept()
 				.filter((file) => file.startsWith(`${STATIC}/`))
-				.flatMap((file) => literalsIn(file).map(expand))
+				.flatMap((file) => literalsIn(file).map(expand)),
 		);
 		const all = filesUnder(STATIC, ['.html', '.svg']);
 		const spent = [
 			...Object.keys(STATIC_DIRS).filter(
 				(dir) =>
-					!all.some((file) => file.startsWith(`${STATIC}/${dir}`) && literalsIn(file).length > 0)
+					!all.some((file) => file.startsWith(`${STATIC}/${dir}`) && literalsIn(file).length > 0),
 			),
-			// A token that has taken one of the mark's colours retires the
-			// exception: the palette now owns it, and the sweep passes it.
-			...Object.keys(MARK_OWN).filter((hex) => !written.has(hex) || declared.has(hex)),
-			...Object.keys(STATIC_OTHER).filter((literal) => !written.has(literal))
+			// A file the exception names that no longer writes a colour has
+			// nothing left to except, and the exception goes with it.
+			...Object.keys(STATIC_OTHER).filter((literal) => !written.has(literal)),
 		];
 		expect(spent).toEqual([]);
 	});
@@ -339,7 +393,7 @@ describe('the offline page', () => {
 	const offline = rootTokens(OFFLINE);
 
 	it('declares the console value for every token it names', () => {
-		expect(offline.size).toBe(7);
+		expect(offline.size).toBe(6);
 		const drifted = [...offline]
 			.filter(([name, value]) => expand(value) !== expand(colour(name)))
 			.map(([name, value]) => `--${name}: offline ${value}, console ${colour(name)}`);
@@ -356,9 +410,11 @@ describe('the offline page', () => {
 		const marks = [OFFLINE, FAVICON].map((path) => {
 			const svg = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
 			const body = svg.slice(svg.indexOf('<svg'), svg.indexOf('</svg>'));
-			return [...new Set([...body.matchAll(/#[0-9a-fA-F]{6}\b/g)].map(([hex]) => expand(hex)))].sort();
+			return [
+				...new Set([...body.matchAll(/#[0-9a-fA-F]{6}\b/g)].map(([hex]) => expand(hex))),
+			].sort();
 		});
-		expect(marks[0].length).toBe(4);
+		expect(marks[0].length).toBe(2);
 		expect(marks[0]).toEqual(marks[1]);
 	});
 });
@@ -379,9 +435,7 @@ describe('the offline page', () => {
  *  palette event that adds or renames an ink fails there to be acknowledged
  *  rather than silently widening the sweep. */
 describe('no surface is painted with the ink', () => {
-	const inks = [...TOKENS.keys()].filter(
-		(name) => expand(colour(name)) === expand(colour('text'))
-	);
+	const inks = [...TOKENS.keys()].filter((name) => expand(colour(name)) === expand(colour('text')));
 
 	it('names the ink and its alias', () => {
 		expect([...inks].sort()).toEqual(['ink', 'text']);
@@ -394,7 +448,7 @@ describe('no surface is painted with the ink', () => {
 				.replace(/\/\*[\s\S]*?\*\//g, '')
 				.replace(/<!--[\s\S]*?-->/g, '');
 			for (const [rule] of body.matchAll(
-				new RegExp(`background(?:-color)?:\\s*var\\(--(?:${inks.join('|')})\\)`, 'g')
+				new RegExp(`background(?:-color)?:\\s*var\\(--(?:${inks.join('|')})\\)`, 'g'),
 			)) {
 				painted.push(`${file.slice(REPO.length)}: ${rule}`);
 			}

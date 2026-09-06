@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT topic, count(*) AS \"messages!\", count(DISTINCT org_id) AS \"orgs!\" FROM outbox_message WHERE state = 'dead' GROUP BY topic ORDER BY topic LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "topic",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "messages!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "orgs!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "76ab7839b8a7d9057a6a54093437672755f063c8fee37c8b3befe7fde7159463"
+}

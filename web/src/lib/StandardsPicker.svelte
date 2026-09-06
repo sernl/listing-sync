@@ -81,22 +81,17 @@
 	{/if}
 
 	{#if frameworks.length === 0}
-		<p class="std-note">
-			No standards framework is offered here yet, so a draft is created without one. Standards
-			alignment is optional on TPT and can be added later.
-		</p>
+		<p class="std-note">No standards are offered here yet. You can add them later.</p>
 	{:else if found.isPending}
 		<p class="std-note">Reading the standards…</p>
 	{:else if found.isError}
-		<Banner tone="bad">
-			The standards could not be read. A draft can still be created without one.
-		</Banner>
+		<Banner tone="bad">We could not read the standards. You can still create the listing.</Banner>
 	{:else if found.data?.state === 'not_ingested'}
 		<Banner tone="warn" title="This framework is not loaded yet">
-			{showing} has not been ingested, so there is nothing here to search — which is different from
-			nothing matching. Standards alignment is optional on TPT, so a listing publishes without one
-			and can gain one later.
+			{showing} cannot be searched yet. Standards are optional, so you can add them later.
 		</Banner>
+	{:else if query.trim() === ''}
+		<p class="std-note">Type a code or a few words to search.</p>
 	{:else if (found.data?.items ?? []).length === 0}
 		<p class="std-note">Nothing in this framework matches “{query}”.</p>
 	{:else}
@@ -125,9 +120,18 @@
 		</div>
 	{/if}
 
-	{#each found.data?.notices ?? [] as notice (notice.text)}
-		<p class="std-notice">{notice.text}</p>
-	{/each}
+	<!-- Folded rather than dropped. Each line is a licence obligation of the
+	     standards set we mirror, so it has to stay with the standards; the
+	     founder's objection was five paragraphs of copyright notice standing
+	     open above the fields, not the notices themselves. -->
+	{#if (found.data?.notices ?? []).length > 0}
+		<details class="std-sources">
+			<summary>Sources and licences</summary>
+			{#each found.data?.notices ?? [] as notice (notice.text)}
+				<p class="std-notice">{notice.text}</p>
+			{/each}
+		</details>
+	{/if}
 
 	{#if chosen.length > 0}
 		<div class="std-chosen" role="list">
@@ -231,6 +235,22 @@
 		margin: 0;
 		font-size: 11.5px;
 		color: var(--faint);
+	}
+
+	/* Shut by default: the obligations are discharged by being reachable, and
+	   five paragraphs of copyright notice standing open is what the founder
+	   asked to be moved out of the way. */
+	.std-sources {
+		font-size: 11.5px;
+	}
+
+	.std-sources summary {
+		color: var(--muted);
+		cursor: pointer;
+	}
+
+	.std-sources > p + p {
+		margin-top: 4px;
 	}
 
 	.std-chosen {

@@ -50,6 +50,7 @@ pub mod heartbeat;
 pub mod import;
 pub mod ledger;
 pub mod marketplace;
+pub mod notify;
 pub mod payload;
 pub mod run;
 pub mod scheduler;
@@ -68,6 +69,7 @@ use tauri::{AppHandle, Manager};
 use crate::control_plane::{base_url, install_crypto_provider, HttpControlPlane};
 use crate::device::DeviceIdentity;
 use crate::heartbeat::cycle;
+use crate::notify::{DeviceNotifier, PluginSurface};
 use crate::run::wall_now;
 use crate::scheduler::Scheduler;
 // The credential store this platform actually has. `keyring` covers Windows,
@@ -118,7 +120,8 @@ pub fn run() {
     let on_start = Arc::clone(&resumed);
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init());
     // `tauri-plugin-updater` declares `platforms.support.android.level = "none"`
     // in its own manifest, so a phone updates through the store it was
     // installed from and never through us. Registering it there anyway would
@@ -165,8 +168,12 @@ pub fn run() {
             // registry, and a state holding only the first could hand the
             // second to nothing.
             let ledger: Arc<dyn crate::ledger::LedgerTransport> = plane.clone();
+            let notifier: Arc<dyn crate::notify::Notifier> = Arc::new(DeviceNotifier::new(
+                PluginSurface::new(app.handle().clone()),
+            ));
             let state = DesktopState::with_control_plane(device.clone(), sessions, registry)
-                .with_ledger(ledger);
+                .with_ledger(ledger)
+                .with_notifier(notifier);
             let work = DeviceWork::new(
                 device.id.clone(),
                 plane,

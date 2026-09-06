@@ -198,19 +198,19 @@
 	.mk.ok {
 		border-color: color-mix(in srgb, var(--ok) 30%, var(--line));
 		background: var(--ok-soft);
-		color: var(--ok);
+		color: var(--ok-ink);
 	}
 
 	.mk.run {
 		border-color: color-mix(in srgb, var(--warn) 30%, var(--line));
 		background: var(--warn-soft);
-		color: var(--warn);
+		color: var(--warn-ink);
 	}
 
 	.mk.bad {
 		border-color: color-mix(in srgb, var(--bad) 32%, var(--line));
 		background: var(--bad-soft);
-		color: var(--bad);
+		color: var(--bad-ink);
 	}
 
 	.ghost {

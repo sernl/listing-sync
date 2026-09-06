@@ -21,10 +21,10 @@ use tam_marketplace::{
     RecordedTitle, RemoteLifecycle, RemoteListingId, SchemaDrift, SubmitEvidence, WriteAttemptId,
 };
 use tam_types::{
-    AttemptId, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
-    FieldKey, FieldMismatch, FileId, ImportedTerm, InventoryId, ListingCopy, LogicalInstant,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, Timestamp, Title,
-    UserId, Uuid,
+    AttemptId, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, Currency, FailureCode,
+    FailureDetail, FieldKey, FieldMismatch, FileId, ImportedTerm, InventoryId, ListingCopy,
+    LogicalInstant, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    Timestamp, Title, UserId, Uuid,
 };
 
 /// How long a claim on a job item stands before the reaper may steal it.
@@ -570,6 +570,14 @@ pub enum ProjectionBlocked {
     },
     CurrencyUnknown {
         inventory: InventoryId,
+    },
+    /// The listing is priced in one currency and the inventory sells in
+    /// another. No rate is invented: the seller restates the price in the
+    /// inventory's own currency, or the listing stays where it is.
+    CurrencyMismatch {
+        inventory: InventoryId,
+        priced: Currency,
+        sells: Currency,
     },
     CoverMissing,
     ScanIncomplete {

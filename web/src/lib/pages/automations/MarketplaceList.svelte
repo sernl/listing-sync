@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Marketplace } from '$lib/generated/vocab';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import type { MarketplaceRow } from './marketplace-list';
 
@@ -46,7 +47,7 @@
 				>
 					<span class="edge" aria-hidden="true"></span>
 					<span class="who">
-						<span class="t">{row.name}</span>
+						<span class="t"><MarketplaceMark marketplace={row.marketplace} /></span>
 						<StatusPill tone={row.tone} label={row.status} />
 					</span>
 					{#if row.count !== null}<span class="count">{row.count}</span>{/if}

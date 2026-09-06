@@ -594,4 +594,40 @@ impl BackofficeRepo {
             truncated,
         })
     }
+
+    /// Every topic with a dead letter, alphabetically, counted rather than
+    /// listed.
+    ///
+    /// Two figures per topic and no rows, because two figures are the whole
+    /// operator question: one organisation holding many is an address the
+    /// relay refuses, and many organisations holding one each is the relay or
+    /// the key. The role reads three columns of this table and only the dead
+    /// rows (migration 0067), which is exactly what this asks for.
+    pub async fn dead_letters(&self) -> Result<Vec<DeadLetterTopic>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT topic, count(*) AS \"messages!\", count(DISTINCT org_id) AS \"orgs!\" \
+             FROM outbox_message WHERE state = 'dead' \
+             GROUP BY topic ORDER BY topic LIMIT $1",
+            MAX_ROWS,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| DeadLetterTopic {
+                topic: row.topic,
+                messages: row.messages,
+                orgs: row.orgs,
+            })
+            .collect())
+    }
+}
+
+/// Dead letters on one outbox topic: how many, and across how many
+/// organisations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadLetterTopic {
+    pub topic: String,
+    pub messages: i64,
+    pub orgs: i64,
 }

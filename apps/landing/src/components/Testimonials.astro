@@ -1,0 +1,31 @@
+---
+import { testimonials } from '../testimonials.js';
+
+/* Built, styled, and drawing nothing while the list is empty: the founder's
+   decision of 2026-09-11 is that no invented quote ships. The heading is here
+   rather than in `testimonials.js` because it is the band's own words, not a
+   teacher's; it reaches a reader the day the first entry lands. */
+---
+
+{
+	testimonials.length > 0 && (
+		<section class="section band-testimonials" id="testimonials">
+			<div class="wrap">
+				<h2>Join hundreds of teacher creators already growing with Teachouse.</h2>
+				<div class="quotes">
+					{testimonials.map((entry) => (
+						<figure>
+							{entry.stars && (
+								<p class="stars" aria-label={`${entry.stars} out of 5`}>
+									{'\u2605'.repeat(entry.stars)}
+								</p>
+							)}
+							<blockquote>{entry.quote}</blockquote>
+							<figcaption>{entry.who}</figcaption>
+						</figure>
+					))}
+				</div>
+			</div>
+		</section>
+	)
+}

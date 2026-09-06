@@ -519,6 +519,9 @@ pub async fn prepare_item(
         Err(ProjectionBlocked::CurrencyUnknown { .. }) => {
             return Ok(blocked("currency_unknown"));
         }
+        Err(ProjectionBlocked::CurrencyMismatch { .. }) => {
+            return Ok(blocked("currency_mismatch"));
+        }
         Err(ProjectionBlocked::CoverMissing) => {
             return Ok(blocked("cover_missing"));
         }

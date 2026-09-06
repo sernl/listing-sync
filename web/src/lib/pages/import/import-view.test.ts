@@ -162,7 +162,7 @@ describe('handoffBlocked', () => {
 
 	it('states the unknown as ours rather than as a disconnection', () => {
 		const said = connectionUnknown(cardFor('Tes', null));
-		expect(said).toContain('could not be read');
+		expect(said).toContain('could not read');
 		expect(said).not.toContain('is not connected');
 	});
 
@@ -205,8 +205,8 @@ describe('the card’s own sentences', () => {
 	});
 
 	it('says what a migration does with the listings it finds', () => {
-		expect(IMPORT_IS_A_MIGRATION).toContain('drafted on TPT');
-		expect(IMPORT_IS_A_MIGRATION).toContain('coming feature');
+		expect(IMPORT_IS_A_MIGRATION).toContain('TPT draft');
+		expect(IMPORT_IS_A_MIGRATION).toContain('coming');
 	});
 
 	// The founder's own reading of this screen: "I can't see any option to
@@ -259,27 +259,23 @@ describe('pillTone', () => {
 });
 
 describe('importRows', () => {
-	const name = (inventory: string) => inventory;
-
 	it('keeps imports and drops the syncs the same endpoint serves', () => {
-		const rows = importRows([head(), head({ request: 'r-2', disposition: 'sync' })], name);
+		const rows = importRows([head(), head({ request: 'r-2', disposition: 'sync' })]);
 		expect(rows.map((row) => row.request)).toEqual(['r-1']);
 	});
 
 	it('keeps the endpoint’s own order, which is newest first', () => {
 		const rows = importRows(
-			[head({ request: 'new', created_at: 2 }), head({ request: 'old', created_at: 1 })],
-			name
-		);
+			[head({ request: 'new', created_at: 2 }), head({ request: 'old', created_at: 1 })]);
 		expect(rows.map((row) => row.request)).toEqual(['new', 'old']);
 	});
 
 	it('names both ends of the move', () => {
-		expect(importRows([head()], name)[0]?.title).toBe('TesGb → Tpt');
+		expect(importRows([head()])[0]).toMatchObject({ source: 'TesGb', target: 'Tpt' });
 	});
 
 	it('carries the stage’s own word and tone', () => {
-		const row = importRows([head({ state: 'draining', resources_total: 2 })], name)[0];
+		const row = importRows([head({ state: 'draining', resources_total: 2 })])[0];
 		expect(row?.label).toBe('Importing');
 		expect(row?.tone).toBe('run');
 	});
@@ -287,7 +283,7 @@ describe('importRows', () => {
 	// The one tone the badge spells differently from the stage model: a stage
 	// that is nothing to act on is grey, and the badge calls that grey `soon`.
 	it('renders a waiting import in the badge’s grey', () => {
-		const row = importRows([head({ state: 'pending', resources_total: 0 })], name)[0];
+		const row = importRows([head({ state: 'pending', resources_total: 0 })])[0];
 		expect(row?.tone).toBe('soon');
 		expect(row?.line).toContain('Waiting for your device');
 	});
@@ -298,9 +294,7 @@ describe('importRows', () => {
 	// achieved nothing rather than one that broke.
 	it('reads a wholly skipped import as nothing imported, with the count', () => {
 		const row = importRows(
-			[head({ state: 'enqueued', resources_total: 3, resources_failed: 3 })],
-			name
-		)[0];
+			[head({ state: 'enqueued', resources_total: 3, resources_failed: 3 })])[0];
 		expect(row?.label).toBe('Nothing imported');
 		expect(row?.line).toBe('Nothing was imported: 3 listings skipped.');
 		expect(row?.tone).toBe('run');
@@ -312,24 +306,20 @@ describe('importRows', () => {
 	// pinning from the side that reads it.
 	it('counts one skipped listing in the singular', () => {
 		const row = importRows(
-			[head({ state: 'enqueued', resources_total: 1, resources_failed: 1 })],
-			name
-		)[0];
+			[head({ state: 'enqueued', resources_total: 1, resources_failed: 1 })])[0];
 		expect(row?.line).toBe('Nothing was imported: 1 listing skipped.');
 	});
 
 	it('counts a partly skipped import by what arrived', () => {
 		const row = importRows(
-			[head({ state: 'enqueued', resources_total: 5, resources_failed: 2 })],
-			name
-		)[0];
+			[head({ state: 'enqueued', resources_total: 5, resources_failed: 2 })])[0];
 		expect(row?.line).toBe('3 listings imported.');
 		expect(row?.tone).toBe('run');
 	});
 
 	it('says a completed import differently from an empty shop', () => {
-		const done = importRows([head({ state: 'enqueued', resources_total: 3 })], name)[0];
-		const empty = importRows([head({ state: 'enqueued', resources_total: 0 })], name)[0];
+		const done = importRows([head({ state: 'enqueued', resources_total: 3 })])[0];
+		const empty = importRows([head({ state: 'enqueued', resources_total: 0 })])[0];
 		expect(done?.label).toBe('Imported');
 		expect(empty?.label).toBe('Nothing to import');
 	});

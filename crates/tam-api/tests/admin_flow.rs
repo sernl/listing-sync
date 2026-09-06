@@ -18,8 +18,8 @@ use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_api::admin::{
-    FailedWriteView, FailedWritesView, ImpersonationsView, ImportDrainView, OrgDetailView,
-    OrgsView, SignupsView, SyncHealthView,
+    DeadLettersView, FailedWriteView, FailedWritesView, ImpersonationsView, ImportDrainView,
+    OrgDetailView, OrgsView, SignupsView, SyncHealthView,
 };
 use tam_api::openapi::ROUTES;
 use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
@@ -38,13 +38,14 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 7] = [
+const ADMIN_PATHS: [&str; 8] = [
     "/v1/admin/signups",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     "/v1/admin/sync-health",
     "/v1/admin/failed-writes",
     "/v1/admin/import-drain",
+    "/v1/admin/dead-letters",
     "/v1/admin/impersonations",
 ];
 
@@ -997,6 +998,58 @@ async fn a_drain_read_that_fills_its_limit_says_so(pool: PgPool) {
         whole.map(|page| (page.runs.len(), page.truncated)),
         Some((3, false)),
         "a read that exactly fits its limit is complete, not truncated"
+    );
+}
+
+/// One outbox row in the state given, written as the tenant's own settle
+/// writes it. The dedupe key is the row's id so every seeded row is distinct
+/// under `outbox_dedupe`.
+async fn seed_outbox(pool: &PgPool, org: OrgId, id_byte: u8, topic: &str, state: &str) {
+    let id = uuid::Uuid::from_bytes([id_byte; 16]).to_string();
+    pinned(
+        pool,
+        org,
+        &[format!(
+            "INSERT INTO outbox_message \
+             (org_id, id, topic, dedupe_key, payload, state, created_at, available_at, \
+              attempts, last_error) \
+             VALUES ($1, '{id}', '{topic}', '{id}', '{{\"event\":\"JobSettled\"}}'::jsonb, \
+                 '{state}', now(), now(), 12, 'the mail relay refused: 422')"
+        )],
+    )
+    .await;
+}
+
+/// Dead letters are counted by topic across every tenant, and a pending row
+/// is not one: the read is of what the drainer gave up on, not of its queue.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn dead_letters_are_counted_by_topic_across_tenants(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    seed_outbox(&pool, ORG_A, 0x61, "email.job_settled", "dead").await;
+    seed_outbox(&pool, ORG_A, 0x62, "email.job_settled", "dead").await;
+    seed_outbox(&pool, ORG_B, 0x63, "email.job_settled", "dead").await;
+    seed_outbox(&pool, ORG_B, 0x64, "push.job_settled", "dead").await;
+    seed_outbox(&pool, ORG_B, 0x65, "email.job_settled", "pending").await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/dead-letters",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "the operator is admitted");
+    let view: DeadLettersView = answer.json();
+    assert_eq!(
+        view.topics
+            .iter()
+            .map(|topic| (topic.topic.as_str(), topic.messages, topic.orgs))
+            .collect::<Vec<_>>(),
+        vec![("email.job_settled", 3, 2), ("push.job_settled", 1, 1)],
+        "three dead completion mails across two tenants and one dead push, by topic; \
+         the pending row is the live queue and is not counted"
     );
 }
 

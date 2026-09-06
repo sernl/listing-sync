@@ -1,16 +1,14 @@
 ---
 import Base from '../layouts/Base.astro';
 import Faq from '../components/Faq.astro';
-import Migrations from '../components/Migrations.astro';
 import Pricing from '../components/Pricing.astro';
 
-const title = 'Pricing — Teachouse';
+const title = 'Pricing \u2014 Teachouse';
 const description =
-	'Teachouse plans priced by how many resources you keep in sync, from a free tier to unlimited, with fixed-price one-off migrations. Prices in US dollars.';
+	'Two ways to start with Teachouse: a one-off catalogue import priced by how many resources come across, and a monthly or annual subscription. The Founding 100 offer takes 25% off your first year. Prices in US dollars.';
 ---
 
 <Base title={title} description={description}>
-	<Pricing level={1} />
-	<Migrations />
+	<Pricing level={1} detail={true} />
 	<Faq />
 </Base>

@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use crate::device::{DeviceId, DeviceIdentity};
 use crate::entitlement::{EntitlementGate, EMBEDDED_PUBLIC_KEYS, PUBLIC_KEY_BYTES};
 use crate::heartbeat::{ControlPlane, Offline};
+use crate::notify::{Notifier, Silent};
 use crate::session::SessionStore;
 
 /// How many activity entries the console can read back.
@@ -141,6 +142,10 @@ pub struct DesktopState {
     /// Which imports are running, so a second start for one request is
     /// refused rather than walking the seller's shop twice at once.
     imports: Mutex<std::collections::HashSet<tam_types::Uuid>>,
+    /// What tells the seller, on this device's own screen, what a cycle
+    /// settled. [`Silent`] by default, because a state built without a
+    /// surface to show one on has nothing to raise it on.
+    notifier: Arc<dyn Notifier>,
 }
 
 impl DesktopState {
@@ -166,6 +171,7 @@ impl DesktopState {
             activity: Mutex::new(VecDeque::new()),
             ledger: None,
             imports: Mutex::new(std::collections::HashSet::new()),
+            notifier: Arc::new(Silent),
         }
     }
 
@@ -185,6 +191,20 @@ impl DesktopState {
     #[must_use]
     pub fn ledger(&self) -> Option<Arc<dyn crate::ledger::LedgerTransport>> {
         self.ledger.clone()
+    }
+
+    /// What raises the one notification a cycle earns. A separate step for
+    /// the reason [`Self::with_ledger`] is one: the application hands it the
+    /// plugin, and a test hands it a recorder or nothing.
+    #[must_use]
+    pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
+        self.notifier = notifier;
+        self
+    }
+
+    #[must_use]
+    pub fn notifier(&self) -> &dyn Notifier {
+        self.notifier.as_ref()
     }
 
     /// The session store, shared, for a run that outlives the call that

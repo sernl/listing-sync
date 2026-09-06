@@ -191,7 +191,7 @@
 .labels-page .row-refusal {
 	margin: 8px 0 0;
 	font-size: 13px;
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 /* Nothing has failed and there is nothing to correct, so the line that says why

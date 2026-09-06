@@ -33,8 +33,8 @@
     "createUpdaterArtifacts": false,
     "publisher": "Teachouse",
     "category": "Business",
-    "shortDescription": "Cross-listing for teaching-resource marketplaces",
-    "longDescription": "Teachouse cross-lists teaching resources. Your marketplace login never leaves your device."
+    "shortDescription": "Create once. Sell everywhere.",
+    "longDescription": "Teachouse cross-lists your teaching resources to the marketplaces you sell on. Marketplace work for Tes and TPT runs on your own device."
   },
   "plugins": {
     "updater": {

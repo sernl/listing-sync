@@ -389,3 +389,83 @@ async fn the_backoffice_role_reads_drain_measurements_and_no_other_ledger_event(
         .expect("the tenant reads its own ledger");
     assert_eq!(visible, 2, "the tenant itself sees both of its own events");
 }
+
+/// Migration 0067's grant: three columns of a dead letter, no other row of the
+/// outbox, and no other column of that row.
+///
+/// The pending row is the live queue and the payload is a run summary; an
+/// operator counting what the drainer gave up on needs neither, so the fence
+/// is asserted on both rather than trusted to the migration's silence.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_backoffice_role_reads_dead_letters_and_nothing_else_of_the_outbox(app: PgPool) {
+    seed_two_tenants(&app).await.expect("the tenants seed");
+    for (org, mark, state) in [
+        (ORG_A, 0x21u8, "dead"),
+        (ORG_B, 0x22, "dead"),
+        (ORG_B, 0x23, "pending"),
+    ] {
+        let mut tx = app.begin().await.expect("the fixture transaction opens");
+        sqlx::query("SELECT set_config('app.current_org', $1, true)")
+            .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+            .execute(&mut *tx)
+            .await
+            .expect("the tenant pins");
+        sqlx::query(
+            "INSERT INTO outbox_message \
+             (org_id, id, topic, dedupe_key, payload, state, created_at, available_at, attempts) \
+             VALUES ($1, $2, 'email.job_settled', $3, '{\"seller\":\"secret\"}'::jsonb, $4, \
+                 now(), now(), 12)",
+        )
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .bind(uuid::Uuid::from_bytes([mark; 16]))
+        .bind(format!("run-{mark}"))
+        .bind(state)
+        .execute(&mut *tx)
+        .await
+        .expect("the outbox row seeds");
+        tx.commit().await.expect("the fixture commits");
+    }
+    let backoffice = backoffice_pool(&app).await.expect("the role connects");
+
+    let counted: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT topic, count(*), count(DISTINCT org_id) FROM outbox_message \
+         GROUP BY topic ORDER BY topic",
+    )
+    .fetch_all(&backoffice)
+    .await
+    .expect("the three granted columns read under the dead-letter policy");
+    assert_eq!(
+        counted,
+        vec![("email.job_settled".to_owned(), 2, 2)],
+        "both tenants' dead letters are counted and the pending row is invisible"
+    );
+
+    let states: Vec<String> = sqlx::query_scalar("SELECT DISTINCT state FROM outbox_message")
+        .fetch_all(&backoffice)
+        .await
+        .expect("the state column reads");
+    assert_eq!(
+        states,
+        vec!["dead".to_owned()],
+        "the policy admits dead rows and no other state"
+    );
+
+    for column in ["payload", "dedupe_key", "last_error", "id"] {
+        let denied = sqlx::query(&format!("SELECT {column} FROM outbox_message"))
+            .fetch_all(&backoffice)
+            .await;
+        assert!(
+            denied.is_err(),
+            "the operator role must not read outbox_message.{column}, which the grant \
+             does not name"
+        );
+    }
+
+    let written = sqlx::query("UPDATE outbox_message SET state = 'pending'")
+        .execute(&backoffice)
+        .await;
+    assert!(
+        written.is_err(),
+        "the operator role counts dead letters and cannot revive one"
+    );
+}

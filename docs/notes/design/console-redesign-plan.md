@@ -3,7 +3,7 @@
 Redrawing the console, its emails and its landing page in one wave.
 
 - date: 2026-09-05
-- status: in progress; the shell and the backend wave are under way, four slices are delivered and awaiting review, the rest are planned
+- status: in progress; the shell and the backend wave are under way, four slices are delivered and awaiting review, the rest are planned; amended 2026-09-11 when the founder's brand kit replaced the palette, mark, sidebar words and pricing this plan carried, and `brand-kit-and-teacher-ui.md` became the design of record for every visual and wording decision below
 - sources: the console design specification and its build order, the console capability inventory, the founder's reference screenshots of a comparable product, the pricing and landing research, the marketplace catalogue, and `docs/notes/design/vendoo-for-teachers-rethink.md`
 - paths: `web/`, `crates/tam-api/`, `crates/tam-types/`, `crates/tam-server/`, `auth/`, `apps/landing/`
 
@@ -16,20 +16,18 @@ No marketplace capability is added: every page renders a verb the backend alread
 
 ## Decisions of 2026-09-05
 
-The palette is Kauri: ground `#F7F2E9`, primary `#6B4423`, accent `#C2543A`, additive `#3E5A8C`.
-The house-and-book mark is the product icon everywhere.
-Main navigation is three sections — Crosslist, Automations, Marketplaces — drawn with Lucide icons, and the Lucide dependency is approved.
-Crosslist carries six pages: Resources at the route `/resources`, Labels, Import, Analytics, Template Manager and Export.
+The palette was Kauri (ground `#F7F2E9`, primary `#6B4423`, accent `#C2543A`, additive `#3E5A8C`), then Pounamu on 2026-09-06, and since 2026-09-11 it is the founder's brand kit recorded in `brand-kit-and-teacher-ui.md`; the token names this plan introduced are unchanged and only the values moved.
+The house-and-book mark was the product icon until 2026-09-11; the brand kit's house on an indigo tile is now.
+Main navigation was three sections — Crosslist, Automations, Marketplaces — drawn with Lucide icons, and the Lucide dependency is approved; on 2026-09-11 Import became its own first section in the founder's words, so the rail reads Import, Crosslist, Automations, Marketplaces, Account.
+Crosslist carries five pages: Resources at the route `/resources`, Labels, Analytics, Template Manager and Export; Import moved to its own section.
 Marketplace Sharing means publishing one resource to every connected marketplace in one scheduled action, and it ships disabled with a stated reason until the app can run it.
 Template Manager covers both senses: marketplace mapping templates and new-resource templates.
 Export is a CSV of the catalogue carrying each marketplace's status, price and link, and it never moves a file.
-Prices are quoted in USD: Solo $12 monthly or $120 annually, Studio $24 or $240, Publisher $48 or $480, beside a free tier and a 14-day Studio trial.
-One-off migrations are banded at $49, $79, $129, $199 and $299, the last covering the first 500 resources with $0.25 for each one beyond.
-Bands combine with tiers by three rules: a migration is buyable with no subscription and includes 30 days of Studio; a subscriber's annual allowance of 50, 200 or 500 resources is consumed first and the band price applies at half beyond it; and a migration buyer who takes an annual plan within 30 days has the migration price credited in full against that first payment, capped at the annual price.
+Prices were quoted in USD as Solo $12 monthly or $120 annually, Studio $24 or $240, Publisher $48 or $480, beside a free tier and a 14-day Studio trial, with one-off migrations banded at $49, $79, $129, $199 and $299; on 2026-09-11 the founder's mockup replaced them with the Catalogue Import ladder, one subscription and the Founding 100 offer, recorded in `decisions.md` under that date.
 "Powered by PLE Group" links back to our own site, not to a PLE Group site: there is no PLE Group URL to point at, and the founder's decision is that the attribution reads as ours.
 Brand logos are shown on the Marketplaces page under a disclaimer that the marks belong to their owners.
 The landing page takes `/` and the console home moves to `/app`, every deep route unchanged, and the split is revisited at the teachouse.io cutover.
-Emails are HTML in the Kauri palette with an informal greeting and a welcome illustration, and they cover the reset flow.
+Emails are HTML with an informal greeting and a welcome illustration, and they cover the reset flow; their palette follows the brand kit since 2026-09-11.
 The Android build shows this same console inside a phone shell.
 A marketplace we have not built appears as a tile reading "Coming soon" for Etsy and Shopify and "On our list" for the rest.
 
@@ -45,7 +43,7 @@ Five slices, all in the console, each falsified by `just web-check`.
 
 | Slice | What it does | Lane | Owner | State |
 |---|---|---|---|---|
-| S1 tokens and type | Rewrites the `:root` block to the Kauri values and the size, spacing, radius and shadow scales, leaving every existing class in place. | `just web-check` | web | in progress |
+| S1 tokens and type | Rewrites the `:root` block to the palette values and the size, spacing, radius and shadow scales, leaving every existing class in place. Re-run on the brand kit on 2026-09-11. | `just web-check` | web | in progress |
 | S2 icons | Adds a hand-copied Lucide path map and a small `Icon.svelte`, closing the icon name over what is actually shipped so a typo stops the lane. | `just web-check` | web | in progress |
 | S3 shell | Rewrites `nav.ts` into a section model and `Console.svelte` into rail, secondary card and content region, with the four mobile tabs derived from the sections. | `just web-check` | web | in progress |
 | S4 routes | Renames `/resources` to `/guides`, adds the empty pages, moves the console home to `/app`, and updates the redirect table. | `just web-check` | web | in progress |
@@ -60,7 +58,7 @@ What a page in phase three cannot be written against until it exists.
 | transport class | Adds `transport_class` to `ConnectionView` and `InventoryStatusView`, read from the registry with no storage change. | `just check` | backend | in progress |
 | marketplace requests | One migration for `marketplace_request` and one org-scoped `POST /v1/marketplace-requests`. | `just check`, then `just db-test` | backend | in progress |
 | label routes | `PATCH` and `DELETE /v1/labels/{name}` over `LabelRepo`, the only label operations missing. | `just check`, then `just db-test` | backend | in progress |
-| product icons | Puts the house-and-book mark on the console, the landing site, the email header and the desktop and Android bundles. | `just web-check` | web | in progress |
+| product icons | Puts the product mark on the console, the landing site, the email header and the desktop and Android bundles. Re-run on the brand-kit mark on 2026-09-11. | `just web-check` | web | in progress |
 | export route | `GET /v1/products/export`, streaming CSV from the page walk `list_products` already uses. | `just check` | backend | delivered awaiting review |
 | landing serving | `tam-server` answers `/` from the landing build ahead of the console, under its own narrower policy. | `just check` | backend | delivered awaiting review |
 

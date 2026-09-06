@@ -99,6 +99,13 @@ pub fn selection_caps() -> SelectionCaps {
 /// refuses, so the two sides cannot disagree about a rule by restating it
 /// differently. Every field is optional or defaulted, because a half-filled
 /// draft is exactly what this endpoint exists to describe.
+///
+/// Every vocabulary id is read as `i64` rather than as the `u8` its
+/// vocabulary holds. A form can hold any integer, and reading the narrow type
+/// at the decode refused the whole draft for one field's value — a fixture
+/// tax code of 81111 took the resource page down with it — so an id outside
+/// the range, like one inside it that no member has, is refused by its
+/// control's name in [`draft_refusals`] while the rest of the draft is read.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DraftInput {
     #[serde(default)]
@@ -126,7 +133,7 @@ pub struct DraftInput {
     /// `1`, `2` or `3`; absent reads as `1`, which is TPT's own default and
     /// the only one whose slots stay hidden.
     #[serde(default)]
-    pub thumbnail_mode: Option<u8>,
+    pub thumbnail_mode: Option<i64>,
     #[serde(default)]
     pub thumbnail_hashes: Vec<String>,
     #[serde(default)]
@@ -140,7 +147,7 @@ pub struct DraftInput {
     #[serde(default)]
     pub bundle_discount_minor_units: Option<i64>,
     #[serde(default)]
-    pub tax_code_id: Option<u8>,
+    pub tax_code_id: Option<i64>,
     #[serde(default)]
     pub grades: Vec<String>,
     #[serde(default)]
@@ -161,17 +168,28 @@ pub struct DraftInput {
     #[serde(default)]
     pub standards: Vec<StandardInput>,
     #[serde(default)]
-    pub teaching_duration_id: Option<u8>,
+    pub teaching_duration_id: Option<i64>,
     #[serde(default)]
     pub pages_or_slides: Option<u32>,
     #[serde(default)]
-    pub answer_key_id: Option<u8>,
+    pub answer_key_id: Option<i64>,
     /// `1` or `2`. Absent is the ordinary state of a blank form and is what
     /// the copyright refusal names, because ours pre-selects nothing.
     #[serde(default)]
-    pub copyright_declaration_id: Option<u8>,
+    pub copyright_declaration_id: Option<i64>,
     #[serde(default)]
-    pub status_user: Option<u8>,
+    pub status_user: Option<i64>,
+}
+
+/// The vocabulary member a wire id names, or `None` where no member has it.
+///
+/// Every vocabulary's ids fit a byte, so an id beyond one is an id no member
+/// has rather than a decode failure: the narrowing is the membership test's
+/// first step, not the deserialiser's, and one caller cannot narrow
+/// differently from another.
+#[must_use]
+pub fn member_of<T>(id: i64, of: impl FnOnce(u8) -> Option<T>) -> Option<T> {
+    u8::try_from(id).ok().and_then(of)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -208,45 +226,50 @@ pub struct CheckView {
     pub advisories: Vec<AdvisoryView>,
 }
 
+/// Every sentence here is written for the teacher reading it, to the
+/// founder's rule of 2026-09-11: one short sentence, saying what to do, and
+/// no explanation of why a rule exists unless the teacher has to act on it.
+/// The reasons stay in the doc comments, where the person who has to act on
+/// them is a maintainer.
 #[must_use]
 pub fn refusal_of(error: &AuthoringError) -> RefusalView {
     let (control, message) = match error {
-        AuthoringError::NameMissing => (None, "A product needs a title.".to_owned()),
+        AuthoringError::NameMissing => (None, "Add a name for your resource.".to_owned()),
         AuthoringError::NameTooLong { used, limit } => (
             None,
-            format!("The title is {used} characters and the form takes {limit}."),
+            format!("Shorten the name to {limit} characters; it is {used} now."),
         ),
-        AuthoringError::EmptySlug => (None, "A category value cannot be blank.".to_owned()),
-        AuthoringError::MalformedUploadRef => (
+        AuthoringError::EmptySlug => (
             None,
-            "That file is not one we hold; upload it again.".to_owned(),
+            "Choose your categories again; one came through blank.".to_owned(),
         ),
-        AuthoringError::OverCap { picker, chosen, cap } => (
+        AuthoringError::MalformedUploadRef => (None, "Upload that file again.".to_owned()),
+        AuthoringError::OverCap {
+            picker,
+            chosen,
+            cap,
+        } => (
             Some(picker.label().to_owned()),
             format!(
-                "{} takes up to {cap}, and {chosen} are chosen.",
+                "Choose up to {cap} under {}; you have {chosen}.",
                 picker.label()
             ),
         ),
         AuthoringError::PickerEmpty { picker } => (
             Some(picker.label().to_owned()),
-            format!("{} is required; choose at least one.", picker.label()),
+            format!("Choose at least one under {}.", picker.label()),
         ),
-        AuthoringError::ThumbnailsWithoutUploadNow { mode } => (
+        AuthoringError::ThumbnailsWithoutUploadNow { .. } => (
             None,
-            format!(
-                "Thumbnails were attached under the option \"{}\", which shows no slots for them.",
-                mode.label()
-            ),
+            "Choose \"Upload thumbnails now\", or remove the thumbnails.".to_owned(),
         ),
         AuthoringError::PriceCurrencyMismatch => (
             None,
-            "The price and the additional-licence price are in different currencies.".to_owned(),
+            "Use one currency for the price and the additional licence price.".to_owned(),
         ),
         AuthoringError::CopyrightUnstated => (
             None,
-            "Choose one of the two copyright attestations. Nothing is pre-selected, because              the statement is yours to make."
-                .to_owned(),
+            "Choose one of the two copyright statements.".to_owned(),
         ),
     };
     RefusalView {
@@ -261,7 +284,7 @@ fn advisory_of(warning: AuthoringWarning) -> AdvisoryView {
         AuthoringWarning::FreeResourceOverPageGuidance { pages, guidance } => AdvisoryView {
             group: FormGroup::Price.token().to_owned(),
             message: format!(
-                "TPT advises that free resources be {guidance} pages or fewer, and this one                  states {pages}. It is guidance rather than a rule, so nothing is blocked."
+                "Free resources do best at {guidance} pages or fewer, and this one has {pages}."
             ),
         },
     }
@@ -345,7 +368,7 @@ fn read_draft(draft: &DraftInput) -> (Option<TptBaseProduct>, Vec<AuthoringError
                     .and_then(|hash| UploadRef::new(hash).ok()),
                 thumbnail_mode: draft
                     .thumbnail_mode
-                    .and_then(ThumbnailMode::from_wire_id)
+                    .and_then(|id| member_of(id, ThumbnailMode::from_wire_id))
                     .unwrap_or(ThumbnailMode::AutoGenerate),
                 thumbnails,
             },
@@ -371,16 +394,18 @@ fn read_draft(draft: &DraftInput) -> (Option<TptBaseProduct>, Vec<AuthoringError
             details: DetailGroup {
                 teaching_duration: draft
                     .teaching_duration_id
-                    .and_then(TeachingDuration::from_wire_id),
+                    .and_then(|id| member_of(id, TeachingDuration::from_wire_id)),
                 pages_or_slides: draft.pages_or_slides,
-                answer_key: draft.answer_key_id.and_then(AnswerKey::from_wire_id),
+                answer_key: draft
+                    .answer_key_id
+                    .and_then(|id| member_of(id, AnswerKey::from_wire_id)),
             },
             copyright: draft
                 .copyright_declaration_id
-                .and_then(CopyrightDeclaration::from_wire_id),
+                .and_then(|id| member_of(id, CopyrightDeclaration::from_wire_id)),
             status: draft
                 .status_user
-                .and_then(ListingStatus::from_wire_id)
+                .and_then(|id| member_of(id, ListingStatus::from_wire_id))
                 .unwrap_or(ListingStatus::Draft),
         }),
         errors,
@@ -415,7 +440,7 @@ fn price_of(draft: &DraftInput) -> Result<PriceGroup, AuthoringError> {
         .and_then(|minor| Money::new(minor, currency).ok());
     let tax_code = draft
         .tax_code_id
-        .and_then(TaxCode::from_wire_id)
+        .and_then(|id| member_of(id, TaxCode::from_wire_id))
         // Never defaulted (D7). A paid draft with no tax code is reported by
         // the client's own required marker; the model has no variant for a
         // priced listing without one, so the check falls back to describing
@@ -434,6 +459,10 @@ fn price_of(draft: &DraftInput) -> Result<PriceGroup, AuthoringError> {
 /// grades, and a second copy of any of them is a second thing to disagree
 /// with. [`TptBaseInput::into_draft`] merges the two into the one shape the
 /// validator reads.
+///
+/// Its ids stay `u8` where [`DraftInput`]'s are wide: this is a write's body,
+/// and the sidecar row holds only a member, so the create refuses a value no
+/// member has at its door rather than reading it in.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TptBaseInput {
     #[serde(default)]
@@ -502,14 +531,14 @@ impl TptBaseInput {
             for_marketplace: head.for_marketplace,
             preview_hash: None,
             video_preview_hash: self.video_preview_hash,
-            thumbnail_mode: self.thumbnail_mode,
+            thumbnail_mode: self.thumbnail_mode.map(i64::from),
             thumbnail_hashes: self.thumbnail_hashes,
             description: head.description,
             free: head.free,
             price_minor_units: head.price_minor_units,
             additional_licence_minor_units: self.additional_licence_minor_units,
             bundle_discount_minor_units: self.bundle_discount_minor_units,
-            tax_code_id: self.tax_code_id,
+            tax_code_id: self.tax_code_id.map(i64::from),
             grades: head.grades,
             subject_areas: self.subject_areas,
             tags: self.tags,
@@ -517,11 +546,11 @@ impl TptBaseInput {
             custom_categories: self.custom_categories,
             appropriate_for_country: self.appropriate_for_country,
             standards: self.standards,
-            teaching_duration_id: self.teaching_duration_id,
+            teaching_duration_id: self.teaching_duration_id.map(i64::from),
             pages_or_slides: self.pages_or_slides,
-            answer_key_id: self.answer_key_id,
-            copyright_declaration_id: self.copyright_declaration_id,
-            status_user: self.status_user,
+            answer_key_id: self.answer_key_id.map(i64::from),
+            copyright_declaration_id: self.copyright_declaration_id.map(i64::from),
+            status_user: self.status_user.map(i64::from),
         }
     }
 }
@@ -551,6 +580,60 @@ enum DraftRefusal {
     /// answerable for the designation, so requiring them to choose is the
     /// opposite of choosing for them.
     TaxCodeUnstated,
+    /// A stated id that no member of the control's vocabulary has, whether
+    /// beyond the byte the ids fit in or inside it. Left unread rather than
+    /// read as absent, and refused by the control's name, so a seller whose
+    /// form offered the value learns which control holds it; the unstated
+    /// rules above stay quiet about a control that is stated.
+    IdUnknown { control: IdControl, stated: i64 },
+}
+
+/// The six controls whose value travels as a vocabulary row id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdControl {
+    ThumbnailMode,
+    TaxCode,
+    TeachingDuration,
+    AnswerKey,
+    Copyright,
+    Status,
+}
+
+impl IdControl {
+    const fn group(self) -> FormGroup {
+        match self {
+            Self::ThumbnailMode => FormGroup::Files,
+            Self::TaxCode => FormGroup::Price,
+            Self::TeachingDuration | Self::AnswerKey => FormGroup::Details,
+            Self::Copyright => FormGroup::Copyright,
+            Self::Status => FormGroup::ProductStatus,
+        }
+    }
+
+    /// The control's own label, as the form heads it.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::ThumbnailMode => "Thumbnails",
+            Self::TaxCode => "Tax Code",
+            Self::TeachingDuration => "Teaching Duration",
+            Self::AnswerKey => "Answer Key",
+            Self::Copyright => "Copyright",
+            Self::Status => "Product Status",
+        }
+    }
+
+    /// What one of its options is, in the sentence `tam-api` and
+    /// `tam-storage` already use for a value no member has.
+    const fn member(self) -> &'static str {
+        match self {
+            Self::ThumbnailMode => "thumbnail mode",
+            Self::TaxCode => "tax code",
+            Self::TeachingDuration => "teaching duration",
+            Self::AnswerKey => "answer key",
+            Self::Copyright => "copyright declaration",
+            Self::Status => "listing status",
+        }
+    }
 }
 
 fn refusal_of_draft(refusal: DraftRefusal) -> RefusalView {
@@ -558,8 +641,7 @@ fn refusal_of_draft(refusal: DraftRefusal) -> RefusalView {
         DraftRefusal::PayloadMissing => (
             FormGroup::Files,
             Some("Downloadable File"),
-            "Upload the file buyers download. A marketplace will not list this without one."
-                .to_owned(),
+            "Upload the file buyers will download.".to_owned(),
         ),
         DraftRefusal::PriceUnderFloor {
             stated: None,
@@ -567,7 +649,7 @@ fn refusal_of_draft(refusal: DraftRefusal) -> RefusalView {
         } => (
             FormGroup::Price,
             Some("Price"),
-            "A paid listing needs a price, written in dollars and cents.".to_owned(),
+            "Add a price in dollars and cents.".to_owned(),
         ),
         DraftRefusal::PriceUnderFloor {
             stated: Some(_),
@@ -575,12 +657,17 @@ fn refusal_of_draft(refusal: DraftRefusal) -> RefusalView {
         } => (
             FormGroup::Price,
             Some("Price"),
-            format!("TPT refuses a price below ${}.", major_units(floor)),
+            format!("Raise the price to at least ${}.", major_units(floor)),
         ),
         DraftRefusal::TaxCodeUnstated => (
             FormGroup::Price,
             Some("Tax Code"),
-            "Choose a tax code. TPT makes this your choice rather than ours.".to_owned(),
+            "Choose a tax code.".to_owned(),
+        ),
+        DraftRefusal::IdUnknown { control, .. } => (
+            control.group(),
+            Some(control.label()),
+            format!("Choose a {} from the list.", control.member()),
         ),
     };
     RefusalView {
@@ -588,6 +675,19 @@ fn refusal_of_draft(refusal: DraftRefusal) -> RefusalView {
         control: control.map(ToOwned::to_owned),
         message,
     }
+}
+
+/// The refusal a stated id earns when no member of its vocabulary has it.
+fn unknown_id<T>(
+    control: IdControl,
+    stated: Option<i64>,
+    of: impl FnOnce(u8) -> Option<T>,
+) -> Option<DraftRefusal> {
+    let stated = stated?;
+    if member_of(stated, of).is_some() {
+        return None;
+    }
+    Some(DraftRefusal::IdUnknown { control, stated })
 }
 
 /// Cents as dollars and cents, for a message a seller reads.
@@ -635,7 +735,12 @@ pub fn stated_price_refusal(draft: &DraftInput) -> Option<RefusalView> {
     }))
 }
 
-/// The three submission rules, in the order the form's own groups read.
+/// The submission rules and the unknown-id refusals, in the order the form's
+/// own groups read.
+///
+/// An unknown id is refused whether or not the draft is free, because the
+/// sidecar refuses it on the create either way and the check must not call
+/// submittable what the create will refuse.
 fn draft_refusals(draft: &DraftInput) -> Vec<DraftRefusal> {
     let mut found = Vec::new();
     // Only where the draft is bound for a marketplace (D32). A resource kept
@@ -645,16 +750,46 @@ fn draft_refusals(draft: &DraftInput) -> Vec<DraftRefusal> {
     if draft.for_marketplace && draft.payload_hash.is_none() {
         found.push(DraftRefusal::PayloadMissing);
     }
+    found.extend(unknown_id(
+        IdControl::ThumbnailMode,
+        draft.thumbnail_mode,
+        ThumbnailMode::from_wire_id,
+    ));
     if !draft.free {
         let floor = min_price_minor_units();
         let stated = draft.price_minor_units;
         if stated.is_none_or(|minor| minor < floor) {
             found.push(DraftRefusal::PriceUnderFloor { stated, floor });
         }
-        if draft.tax_code_id.and_then(TaxCode::from_wire_id).is_none() {
+        if draft.tax_code_id.is_none() {
             found.push(DraftRefusal::TaxCodeUnstated);
         }
     }
+    found.extend(unknown_id(
+        IdControl::TaxCode,
+        draft.tax_code_id,
+        TaxCode::from_wire_id,
+    ));
+    found.extend(unknown_id(
+        IdControl::TeachingDuration,
+        draft.teaching_duration_id,
+        TeachingDuration::from_wire_id,
+    ));
+    found.extend(unknown_id(
+        IdControl::AnswerKey,
+        draft.answer_key_id,
+        AnswerKey::from_wire_id,
+    ));
+    found.extend(unknown_id(
+        IdControl::Copyright,
+        draft.copyright_declaration_id,
+        CopyrightDeclaration::from_wire_id,
+    ));
+    found.extend(unknown_id(
+        IdControl::Status,
+        draft.status_user,
+        ListingStatus::from_wire_id,
+    ));
     found
 }
 
@@ -694,7 +829,7 @@ pub fn verdict_with(draft: &DraftInput, caps: SelectionCaps) -> CheckView {
 
 #[cfg(test)]
 mod draft_rule_tests {
-    use super::{verdict, DraftInput};
+    use super::{verdict, DraftInput, RefusalView};
 
     const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -843,6 +978,97 @@ mod draft_rule_tests {
         );
     }
 
+    /// The wave-5 render fixture offered tax codes with invented ids, 81111
+    /// and 81112, and choosing one failed the whole decode with `invalid
+    /// value: integer 81111, expected u8`, which the console drew as its
+    /// error boundary. The value is now one refusal naming the one control.
+    #[test]
+    fn an_id_beyond_the_vocabulary_s_range_is_refused_by_the_control_that_holds_it() {
+        let read: Result<DraftInput, _> = serde_json::from_str(r#"{"tax_code_id":81111}"#);
+        assert!(
+            read.is_ok(),
+            "an id beyond a byte decodes, so the field can be refused rather than the draft"
+        );
+        let mut invented = paid();
+        invented.tax_code_id = Some(81111);
+        let report = verdict(&invented);
+        assert!(
+            !report.submittable,
+            "a code no member has is not a designation"
+        );
+        let about_it: Vec<&RefusalView> = report
+            .refusals
+            .iter()
+            .filter(|refusal| refusal.control.as_deref() == Some("Tax Code"))
+            .collect();
+        assert_eq!(
+            about_it.len(),
+            1,
+            "one sentence for the one control, and not the unstated one as well: {:?}",
+            report.refusals
+        );
+        assert_eq!(about_it[0].message, "Choose a tax code from the list.");
+        assert_eq!(about_it[0].group, "price");
+    }
+
+    /// The same refusal for an id inside the byte that names no member, so
+    /// the range and the vocabulary are one test rather than two.
+    #[test]
+    fn an_id_inside_the_range_that_no_member_has_is_refused_the_same_way() {
+        let mut invented = paid();
+        invented.tax_code_id = Some(200);
+        let report = verdict(&invented);
+        let about_it: Vec<&str> = report
+            .refusals
+            .iter()
+            .filter(|refusal| refusal.control.as_deref() == Some("Tax Code"))
+            .map(|refusal| refusal.message.as_str())
+            .collect();
+        assert_eq!(
+            about_it,
+            ["Choose a tax code from the list."],
+            "200 fits a byte and is nobody's tax code, and is refused as one sentence"
+        );
+    }
+
+    /// The six id controls, each refused by its own name and in the order the
+    /// form's groups read, so no control can slip back to a silent default.
+    #[test]
+    fn every_id_control_left_unread_names_itself() {
+        let mut invented = paid();
+        invented.thumbnail_mode = Some(81111);
+        invented.tax_code_id = Some(81111);
+        invented.teaching_duration_id = Some(81111);
+        invented.answer_key_id = Some(81111);
+        invented.copyright_declaration_id = Some(81111);
+        invented.status_user = Some(81111);
+        assert_eq!(
+            controls(&invented),
+            vec![
+                "Thumbnails".to_owned(),
+                "Tax Code".to_owned(),
+                "Teaching Duration".to_owned(),
+                "Answer Key".to_owned(),
+                "Copyright".to_owned(),
+                "Product Status".to_owned(),
+            ]
+        );
+    }
+
+    /// A stated value is refused on a free draft as well, where the tax code
+    /// control is hidden, because the sidecar refuses it on the create.
+    #[test]
+    fn an_unknown_id_is_refused_on_a_free_draft_too() {
+        let mut free = paid();
+        free.free = true;
+        free.price_minor_units = None;
+        free.tax_code_id = Some(81111);
+        assert!(
+            !verdict(&free).submittable,
+            "the create's sidecar would refuse the row, so the check says so first"
+        );
+    }
+
     /// Free resources are not taxed and have no price, so neither price rule
     /// applies to one. Help article 47530264334868.
     #[test]
@@ -911,11 +1137,9 @@ mod lifted_tests {
         let refusals = report(&blank);
         assert_eq!(refusals.len(), 1, "one control is unanswered: {refusals:?}");
         assert_eq!(refusals[0].group, "copyright");
-        assert!(
-            refusals[0].message.contains("Nothing is pre-selected"),
-            "the message says why there is no default, because the default is the thing TPT \
-             does and we deliberately do not: {:?}",
-            refusals[0].message
+        assert_eq!(
+            refusals[0].message, "Choose one of the two copyright statements.",
+            "the seller is told what to do; why nothing is pre-selected is ours to know"
         );
     }
 
@@ -942,7 +1166,7 @@ mod lifted_tests {
             (
                 "categories",
                 Some("Grade Level"),
-                "Grade Level takes up to 4, and 5 are chosen."
+                "Choose up to 4 under Grade Level; you have 5."
             ),
         );
     }
@@ -981,16 +1205,15 @@ mod lifted_tests {
     }
 
     #[test]
-    fn thumbnails_under_a_mode_with_no_slots_are_refused_by_name() {
+    fn thumbnails_under_a_mode_with_no_slots_are_refused() {
         let mut deferred = draft();
         deferred.thumbnail_mode = Some(3);
         deferred.thumbnail_hashes = vec![HASH.to_owned()];
         let refusals = report(&deferred);
         assert_eq!(refusals[0].group, "files");
-        assert!(
-            refusals[0].message.contains("Upload thumbnails later"),
-            "the message quotes the radio the seller actually chose: {:?}",
-            refusals[0].message
+        assert_eq!(
+            refusals[0].message, "Choose \"Upload thumbnails now\", or remove the thumbnails.",
+            "the two ways out of the contradiction, and no explanation of it"
         );
     }
 
@@ -1011,7 +1234,10 @@ mod lifted_tests {
             guidance: 10,
         });
         assert_eq!(advisory.group, "price");
-        assert!(advisory.message.contains("nothing is blocked"));
+        assert_eq!(
+            advisory.message,
+            "Free resources do best at 10 pages or fewer, and this one has 24."
+        );
         let mut long = draft();
         long.pages_or_slides = Some(24);
         assert_eq!(report(&long), vec![], "and it blocks nothing");
@@ -1025,7 +1251,7 @@ mod lifted_tests {
         assert_eq!(refusals[0].group, "name");
         assert_eq!(
             refusals[0].message,
-            "The title is 81 characters and the form takes 80."
+            "Shorten the name to 80 characters; it is 81 now."
         );
     }
 }

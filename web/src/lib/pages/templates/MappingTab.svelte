@@ -11,6 +11,7 @@
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
 	import { remember, remembered } from '$lib/dismissal';
@@ -195,7 +196,7 @@
 
 <Panel
 	title="Add an override"
-	description="Choose which of a marketplace's own values one of your own words lands in. This applies to your resources alone."
+	description="Pick which of a marketplace's own choices one of your words should use. This applies to your resources only."
 >
 	<div class="tpl-grid">
 		<Field label="Marketplace" id="{base}-inventory">
@@ -330,7 +331,7 @@
 <Panel title="Your overrides">
 	{#each byMarketplace as group (group.inventory)}
 		<div class="tpl-group">
-			<h3>{platformTitle(group.inventory)}</h3>
+			<h3><MarketplaceMark inventory={group.inventory} size={16} /></h3>
 			{#each group.rows as row (`${row.axis}:${row.from_term}`)}
 				<div class="tpl-row">
 					<span class="who">

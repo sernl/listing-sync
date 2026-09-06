@@ -293,7 +293,7 @@ a.mp-mark:hover {
 	display: inline;
 	font-size: 13.5px;
 	font-weight: 600;
-	color: var(--accent-ink);
+	color: var(--primary);
 	text-decoration: none;
 	background: none;
 	border: 0;
@@ -327,7 +327,7 @@ a.mp-mark:hover {
 }
 
 .mp-foot .off:hover {
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 .mp-foot .off:disabled {
@@ -404,7 +404,7 @@ a.mp-mark:hover {
 .mp-request .refused {
 	margin: 12px 0 0;
 	font-size: 13px;
-	color: var(--bad);
+	color: var(--bad-ink);
 }
 
 /* --- sections ------------------------------------------------------------ */
@@ -501,7 +501,7 @@ a.mp-mark:hover {
 .mp-warned {
 	margin: 8px 0 0;
 	font-size: 12.5px;
-	color: var(--bad);
+	color: var(--bad-ink);
 	max-width: 76ch;
 }
 

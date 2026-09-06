@@ -404,7 +404,7 @@
 	<PageHead
 		icon="layout-list"
 		title="Resources"
-		description="Every resource once, and what each marketplace is doing with it."
+		description="Every resource you have, and where each one is listed."
 	>
 		{#snippet aside()}
 			<Menu bind:open={bulkMenu} label="Bulk actions">
@@ -622,20 +622,19 @@
 	{#if reading}
 		<p class="res-note">Loading the catalogue…</p>
 	{:else if unread.length > 0}
-		<!-- Named rather than summarised, and the stack withheld rather than
+		<!-- Named rather than summarised, and the rows withheld rather than
 		     drawn from what did arrive: a row built without the connections says
 		     every marketplace needs a sign-in, and one built without the statuses
 		     says a paused marketplace is running. -->
-		<Banner tone="bad" title="Some of what this page needs could not be read">
-			What failed: {unread.join(', ')}. The resources are not shown, because a row drawn
-			without {unread.length === 1 ? 'that' : 'those'} would say things nobody has been told.
-			Reload to try again.
+		<Banner tone="bad" title="Some of this page could not be loaded">
+			What failed: {unread.join(', ')}. Your resources are not shown, because what we could
+			draw would be wrong. Reload to try again.
 		</Banner>
 	{:else if allRows.length === 0 && !anythingSet}
 		<Placeholder
 			icon="layout-list"
 			headline="Nothing in your Resources yet."
-			body="An import brings an existing shop across as drafts you review; creating one starts from a blank form."
+			body="Import brings your existing shop across as drafts you review. Creating one starts from a blank form."
 		>
 			{#snippet actions()}
 				<Button tier="primary" href="/import" icon="download">Import from a marketplace</Button>
