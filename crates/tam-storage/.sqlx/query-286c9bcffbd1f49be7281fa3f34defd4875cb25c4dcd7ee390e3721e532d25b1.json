@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE app_user SET notify_email = $3 WHERE id = $1 AND org_id = $2 RETURNING notify_email",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notify_email",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "286c9bcffbd1f49be7281fa3f34defd4875cb25c4dcd7ee390e3721e532d25b1"
+}

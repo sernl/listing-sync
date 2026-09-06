@@ -680,7 +680,10 @@ impl SyncRequestRepo {
                 match crate::jobs::create_job_in_tx(
                     &mut tx,
                     org,
-                    mint.request_key,
+                    crate::jobs::JobOrigin {
+                        request_key: mint.request_key,
+                        run: Some(completion.request),
+                    },
                     mint.job,
                     mint.items,
                 )

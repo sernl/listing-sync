@@ -486,7 +486,12 @@ pub struct ClaimedRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CommitCounts {
     pub outstanding: u32,
+    /// Rows this batch put in the catalogue.
     pub created: u32,
+    /// Rows a pass claimed and did not create, because an earlier pass already
+    /// had. Counted apart from `created` so a re-commit of a sheet already
+    /// imported does not report itself as work done.
+    pub skipped: u32,
     pub failed: u32,
 }
 
@@ -1362,19 +1367,21 @@ impl ImportBatchRepo {
         org: OrgId,
         batch: Uuid,
         at: RowAddress<'_>,
+        skipped: bool,
     ) -> Result<bool, StorageError> {
         let RowAddress { sheet, ordinal } = at;
         let ordinal = ordinal_to_db(ordinal)?;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let written = sqlx::query!(
-            "UPDATE import_batch_row SET state = 'created' \
+            "UPDATE import_batch_row SET state = 'created', skipped = $5 \
               WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
                 AND state = 'creating'",
             uuid_to_db(org.0),
             uuid_to_db(batch),
             sheet,
             ordinal,
+            skipped,
         )
         .execute(&mut *tx)
         .await?;
@@ -1481,6 +1488,32 @@ impl ImportBatchRepo {
             detail.as_deref(),
         )
         .execute(&mut *tx)
+        .await?;
+        // In this transaction rather than after it, because this is the
+        // transaction that owns the fact, which is the rule the sync path's
+        // `settle_if_complete` already follows. Written after the state update
+        // and before the commit, so a batch is never `imported` with no inbox
+        // row: a process that dies between the two rolls both back and the
+        // next chunk settles it again, where a separate write would have left
+        // the seller a finished import nothing ever told them about, with
+        // `CommitOpening::BatchClosed` refusing every later attempt to revisit
+        // it.
+        crate::notifications::record(
+            &mut tx,
+            org,
+            &crate::notifications::Completion {
+                kind: tam_types::NotificationKind::Import,
+                subject: batch,
+                inventory: None,
+                counts: tam_types::NotificationCounts {
+                    succeeded: counts.created,
+                    skipped: counts.skipped,
+                    failed: counts.failed,
+                    ..tam_types::NotificationCounts::default()
+                },
+                at,
+            },
+        )
         .await?;
         tx.commit().await?;
         Ok(settled)
@@ -1592,7 +1625,12 @@ async fn commit_counts_in(
                count(*) FILTER (
                    WHERE state IN ('parsed', 'attached', 'creating')
                ) AS "outstanding!",
-               count(*) FILTER (WHERE state IN ('created', 'published')) AS "created!",
+               count(*) FILTER (
+                   WHERE state IN ('created', 'published') AND NOT skipped
+               ) AS "created!",
+               count(*) FILTER (
+                   WHERE state IN ('created', 'published') AND skipped
+               ) AS "skipped!",
                count(*) FILTER (
                    WHERE state = 'failed' AND failure_detail IS NOT NULL
                ) AS "failed!"
@@ -1606,6 +1644,7 @@ async fn commit_counts_in(
     Ok(CommitCounts {
         outstanding: attach_count_from_db(counted.outstanding)?,
         created: attach_count_from_db(counted.created)?,
+        skipped: attach_count_from_db(counted.skipped)?,
         failed: attach_count_from_db(counted.failed)?,
     })
 }

@@ -188,3 +188,31 @@ The alternative is telling a seller the machine is clear while the server still 
 One transition is accepted rather than removed.
 The forced check-in briefly moves a `linked` connection to `needs_reauth` before the console's own disconnect writes `unlinked`, and `derive_link` records that in the connection event log with detail `device-reported`.
 The two events are ordered and distinguishable, the end state is `unlinked` either way, and no screen renders the intermediate; reordering the console's two halves would reintroduce the re-link the current order exists to prevent.
+
+## Amended 2026-09-06: the capture happens on both surfaces, so a phone is a machine that holds a login
+
+The amendment above says the login happens on the seller's own device, in the marketplace's own page.
+That was true of a computer and not yet of a phone, and the gap was one line of the console's: `hostOf` answered `browser` on Android even inside the application, so the card offered "Connect TPT from the Teachouse app on your computer" to a seller who was already standing in it.
+The reason was real rather than a caution — `connect_marketplace` built a second window unconditionally, and Android has one Activity, so the button would have failed at `build()`.
+
+`connect_marketplace` now chooses a surface.
+On a computer it opens the second window and waits, unchanged in behaviour and unchanged in code path.
+On a phone it navigates the console's own window to the marketplace's sign-in page, captures from Rust exactly as the computer does, and navigates back to `/marketplaces` with the verdict in a query parameter — because the page that asked was unloaded by the navigation, so no promise survives to carry the answer.
+Five verdicts, closed: captured, deadline, abandoned, refused and notkept.
+The last two are one distinction a review insisted on and it is the seller's rather than ours: refused is the sign-in page never opening, and notkept is a sign-in that finished and could not be filed — which is what a device signed out or revoked from the console produces, and which the console words by saying so and where to sign in again.
+`hostOf` answers `app` on a phone accordingly, and `signsInPlace` is the new predicate for the one thing the two surfaces do differently.
+The return leg needs the seller to be able to leave a sign-in they changed their mind about, so `MainActivity.kt` turns wry's back handling back on against the default Tauri's generated activity sets: back walks the webview's history through a callback of ours and finishes the Activity only when it is exhausted.
+An emulator showed the platform already doing that without the override, so this makes the behaviour explicit rather than repairing an observed break; `docs/notes/design/android-client.md` records the measurement.
+
+Nothing about D1 moves.
+The login is still on the seller's own device, still in the marketplace's own page, and the server is still told only what the device holds.
+Nothing about D3 moves either: the phone gains no timer and still checks in on every resume while pulling work at most hourly.
+
+Two consequences are worth recording because they are visible to a seller.
+A phone that holds a login is a machine that runs that marketplace's queued work, so the import and migration screens stop being a dead end there — their refusal, "this device is not signed in to Tes, so it cannot read your shop. Connect it on this device", becomes an instruction that can now be followed.
+And a disconnect on a phone removes our sealed copy and cannot remove the marketplace's own cookie, because `delete_cookie` is a no-op on Android and `clear_all_browsing_data` is all-or-nothing across every origin the application has visited, ours included.
+The disconnect prompt says so rather than leaving a seller to discover it by reconnecting without a password.
+
+The fence changes character rather than weakening.
+On a computer the marketplace page sits in a window no capability names.
+On a phone it sits in window `main`, and what refuses it is the per-invoke remote-origin check against the single origin `capabilities/console.json` grants — which is why `control_plane::the_capability_grants_the_origin_this_build_uses` asserts that list holds exactly one entry equal to `DEFAULT_BASE_URL`, and why that test is now doing more work than it was written for.

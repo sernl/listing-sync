@@ -13,11 +13,12 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
 mod downloads;
+mod notify;
 mod serving;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -27,8 +28,8 @@ use tam_api::{
     AppState, AuthBridge, BlobStore, Config, Disclosure, JwkSet, JwksFuture, JwksSource,
     JwksUnavailable, WebhookSecret,
 };
-use tam_engine::outbox::{drain, LoggingDeliverer};
-use tam_storage::{ImportBatchRepo, OutboxRepo, PruneRepo};
+use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
+use tam_storage::{ImportBatchRepo, NotificationRepo, OutboxRepo, PruneRepo};
 use tam_types::Timestamp;
 use tokio_util::sync::CancellationToken;
 
@@ -152,6 +153,38 @@ const ENTITLEMENT_PUBLIC_KEY_FLAG: &str = "--entitlement-public-key";
 /// bounded, and without this that described the path rather than the length.
 const ENTITLEMENT_KEY_BYTES_MAX: u64 = 8 * 1024;
 
+/// The five values the completion mail needs, given together or not at all.
+///
+/// The relay's key and the identity service's shared secret are read from
+/// files the way the blob and entitlement keys are, rather than given inline
+/// the way the Paddle secret is: a secret on a command line is in every
+/// process listing on the host. The other three are not secrets and are given
+/// directly.
+///
+/// All five or none. A key with no sender address composes a mail nothing
+/// accepts; a console origin missing puts a button in front of a seller that
+/// goes nowhere; and an address route with no secret is a route that answers
+/// 404. With none of them the drainer selects `LoggingDeliverer` and behaves
+/// exactly as it did before mail existed, which is what development and CI run.
+const RESEND_API_KEY_FLAG: &str = "--resend-api-key-file";
+/// See [`RESEND_API_KEY_FLAG`].
+const EMAIL_FROM_FLAG: &str = "--email-from";
+/// The console's own public origin, which the mail's button is resolved
+/// against. Stated rather than derived from the identity issuer: they are the
+/// same origin in today's deployment shape and nothing holds them to that, and
+/// a mail whose button goes nowhere is worse than a mail not sent.
+const CONSOLE_URL_FLAG: &str = "--console-url";
+/// Where the identity service's internal address route is reached, which is
+/// not necessarily its public base: the fence is the shared secret either way.
+const AUTH_INTERNAL_URL_FLAG: &str = "--auth-internal-url";
+/// See [`RESEND_API_KEY_FLAG`].
+const AUTH_INTERNAL_SECRET_FLAG: &str = "--auth-internal-secret-file";
+
+/// The most of a secret file that is read. A relay key and a shared secret are
+/// both under a hundred bytes; this refuses to allocate a mis-pointed gigabyte
+/// before rejecting it, exactly as the entitlement key's own cap does.
+const SECRET_BYTES_MAX: u64 = 8 * 1024;
+
 /// The directory the sealed objects are written beneath, which is the same
 /// root the worker reads them back from. Paired with the key above for the
 /// reason the identity pair is paired: a key with nowhere to write would seal
@@ -227,14 +260,19 @@ fn retention_cutoff(now: Timestamp) -> Timestamp {
     Timestamp(millis.max(0))
 }
 
-/// The drainer the design hosts in this process, through the logging
-/// deliverer until a relay exists, so drained messages are visible rather
+/// The drainer the design hosts in this process, through whichever deliverer
+/// the configuration selected: the real mail relay where one is configured,
+/// and the logging deliverer otherwise, so drained messages are visible rather
 /// than silently accumulating.
 #[expect(
     clippy::disallowed_methods,
     reason = "the drain loop is owned by the serving process and stopped by its cancellation token, not a fire-and-forget spawn"
 )]
-fn spawn_outbox_drain(outbox: OutboxRepo, cancel: CancellationToken) {
+fn spawn_outbox_drain(
+    outbox: OutboxRepo,
+    deliverer: impl Deliverer + 'static,
+    cancel: CancellationToken,
+) {
     let period = core::time::Duration::from_secs(tam_limits::ledger::OUTBOX_DRAIN_INTERVAL_SECS);
     tokio::spawn(async move {
         loop {
@@ -242,7 +280,7 @@ fn spawn_outbox_drain(outbox: OutboxRepo, cancel: CancellationToken) {
                 () = cancel.cancelled() => break,
                 () = tokio::time::sleep(period) => {}
             }
-            match drain(&outbox, &LoggingDeliverer, wall_now(), DRAIN_BATCH).await {
+            match drain(&outbox, &deliverer, wall_now(), DRAIN_BATCH).await {
                 Ok(report) if report.delivered + report.retried + report.dead > 0 => eprintln!(
                     "tam-server: outbox delivered {} retried {} dead {}",
                     report.delivered, report.retried, report.dead
@@ -425,7 +463,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!(
             "tam-server hosting the outbox drainer, the job-event pruner and the import sweep"
         );
-        spawn_outbox_drain(OutboxRepo::new(engine.clone()), loops.clone());
+        match notify::select(invocation.mail.as_ref()) {
+            notify::Selected::Logging => {
+                eprintln!(
+                    "tam-server sending no completion mail ({RESEND_API_KEY_FLAG} unset); \
+                     the console's notification list still fills"
+                );
+                spawn_outbox_drain(
+                    OutboxRepo::new(engine.clone()),
+                    LoggingDeliverer,
+                    loops.clone(),
+                );
+            }
+            notify::Selected::Email => {
+                let mail = invocation
+                    .mail
+                    .as_ref()
+                    .ok_or("the mail deliverer was selected with no configuration")?;
+                eprintln!(
+                    "tam-server sending completion mail from {}",
+                    mail.email_from
+                );
+                spawn_outbox_drain(
+                    OutboxRepo::new(engine.clone()),
+                    notify::EmailDeliverer::new(
+                        NotificationRepo::new(engine.clone()),
+                        notify::AuthAddresses::new(
+                            &mail.auth_internal_url,
+                            &mail.auth_internal_secret,
+                        )?,
+                        notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
+                        &mail.console_url,
+                    ),
+                    loops.clone(),
+                );
+            }
+        }
         spawn_event_pruner(PruneRepo::new(engine.clone()), loops.clone());
         spawn_import_batch_sweep(ImportBatchRepo::new(engine), loops.clone());
     }
@@ -487,6 +560,8 @@ struct Invocation {
     entitlement_key_path: Option<String>,
     /// The public half that key is expected to have, if the operator stated one.
     entitlement_public_key: Option<String>,
+    /// The completion mail's five values, if this deployment sends any.
+    mail: Option<notify::MailConfig>,
 }
 
 /// The database url first, then an optional bind address and the disclosure
@@ -508,6 +583,11 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut entitlement_key_path = None;
     let mut entitlement_public_key = None;
     let mut require_entitlement_key = false;
+    let mut resend_api_key_file = None;
+    let mut email_from = None;
+    let mut console_url = None;
+    let mut auth_internal_url = None;
+    let mut auth_internal_secret_file = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -578,6 +658,36 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             );
         } else if argument == REQUIRE_ENTITLEMENT_KEY_FLAG {
             require_entitlement_key = true;
+        } else if argument == RESEND_API_KEY_FLAG {
+            resend_api_key_file = Some(
+                arguments
+                    .next()
+                    .ok_or("--resend-api-key-file needs a path argument")?,
+            );
+        } else if argument == EMAIL_FROM_FLAG {
+            email_from = Some(
+                arguments
+                    .next()
+                    .ok_or("--email-from needs an address argument")?,
+            );
+        } else if argument == CONSOLE_URL_FLAG {
+            console_url = Some(
+                arguments
+                    .next()
+                    .ok_or("--console-url needs a url argument")?,
+            );
+        } else if argument == AUTH_INTERNAL_URL_FLAG {
+            auth_internal_url = Some(
+                arguments
+                    .next()
+                    .ok_or("--auth-internal-url needs a url argument")?,
+            );
+        } else if argument == AUTH_INTERNAL_SECRET_FLAG {
+            auth_internal_secret_file = Some(
+                arguments
+                    .next()
+                    .ok_or("--auth-internal-secret-file needs a path argument")?,
+            );
         } else if argument == BLOB_STORE_ROOT_FLAG {
             blob_store_root = Some(std::path::PathBuf::from(
                 arguments
@@ -625,6 +735,35 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     // The assertion a production unit file makes, refused rather than warned
     // about: a deployment that meant to mint tokens and was started without a
     // key would serve every seller a closed gate and look healthy doing it.
+    // Refused rather than half-configured, exactly as the identity and blob
+    // pairs are: four fifths of a mail path is a deployment that composes mail
+    // it cannot address, cannot send, or points at nothing.
+    let mail = match (
+        resend_api_key_file,
+        email_from,
+        console_url,
+        auth_internal_url,
+        auth_internal_secret_file,
+    ) {
+        (None, None, None, None, None) => None,
+        (Some(key_path), Some(from), Some(console), Some(auth_url), Some(secret_path)) => {
+            Some(notify::MailConfig {
+                resend_api_key: read_secret(&key_path)?,
+                email_from: from,
+                console_url: console,
+                auth_internal_url: auth_url,
+                auth_internal_secret: read_secret(&secret_path)?,
+            })
+        }
+        _ => {
+            return Err(format!(
+                "{RESEND_API_KEY_FLAG}, {EMAIL_FROM_FLAG}, {CONSOLE_URL_FLAG}, \
+                 {AUTH_INTERNAL_URL_FLAG} and {AUTH_INTERNAL_SECRET_FLAG} are given together \
+                 or not at all"
+            )
+            .into())
+        }
+    };
     if require_entitlement_key && entitlement_key_path.is_none() {
         return Err(format!(
             "{REQUIRE_ENTITLEMENT_KEY_FLAG} demands {ENTITLEMENT_KEY_FLAG}, which was not given"
@@ -644,7 +783,33 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         blobs,
         entitlement_key_path,
         entitlement_public_key,
+        mail,
     })
+}
+
+/// A secret off disk: a bounded read, trimmed of the newline a file written by
+/// an editor or a deployment tool carries, rather than `std::fs::read`, which
+/// the lint table bans.
+fn read_secret(path: &str) -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(SECRET_BYTES_MAX + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > SECRET_BYTES_MAX {
+        return Err(format!(
+            "{path} is larger than {SECRET_BYTES_MAX} bytes, so it is not a secret"
+        )
+        .into());
+    }
+    let secret = String::from_utf8(bytes)
+        .map_err(|_| format!("{path} is not utf-8, so it is not a secret this process can send"))?
+        .trim()
+        .to_owned();
+    if secret.is_empty() {
+        return Err(format!("{path} is empty").into());
+    }
+    Ok(secret)
 }
 
 /// The key-encryption key off disk, read the way `tam-worker` reads its own:

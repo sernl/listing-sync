@@ -245,6 +245,63 @@ The four sentences name no credential, no jar and no host but our own control pl
 On a phone that difference is the whole diagnostic surface: `startup.log` is in private storage no one reaches without `run-as`, and stdout goes to logcat, which needs a cable.
 `docs/notes/runbooks/android-phone-check.md` is the ten-minute check that reads this line, and is the first exercise of any of this on a real handset rather than on an emulator.
 
+## Amended 2026-09-06: the login capture landed on Android, by navigation
+
+The section above plans the phone's login as a navigation of the one webview and leaves open whether a second window would in fact build there.
+Both halves are now settled, and the open question is closed against the second window rather than left unproven.
+
+A second window does not build on Android.
+tao's `Window::new` takes the next Android context with no window created, and there is exactly one Activity, so a second window answers `OsError::NoAvailableActivity` (tao 0.35.3, `src/platform_impl/android/mod.rs` and `src/platform_impl/android/ndk_glue.rs`).
+That is why the console withheld the Connect button on a phone rather than offering one that would fail: the seller would have read "the sign-in could not be opened on this machine" and had nothing to do about it.
+
+What is built is the navigation this note recommended.
+`commands::connect_marketplace` now chooses between two surfaces rather than assuming one.
+`ConnectSurface::SecondWindow` is every desktop platform and is today's body unchanged — a window labelled `login-<Marketplace>`, the same poll, the same ten-minute deadline, the same destroy.
+`ConnectSurface::OneWindow` is Android: it navigates window `main` to `target.login_url`, spawns the capture on the runtime, and answers `ConnectOutcome::Opening` before the navigation lands.
+The surface is a value rather than a `cfg`, so both bodies compile on every target and the phone's arm is exercised by host tests on a developer's machine instead of only on a handset.
+
+Answering before navigating is the shape the surface forces rather than a preference.
+Tauri delivers a command's answer by evaluating a callback in whatever page the webview is showing, and on this surface the page that asked is about to be the marketplace's own — the one page `capabilities/default.json` describes the fence as keeping our code out of.
+So the answer carries no result, the capture runs with no caller waiting on it, and the verdict comes back in the address: `connect::return_url` builds `{base}/marketplaces?connect=<code>&marketplace=<name>` over a closed `ConnectVerdict` of `Captured`, `Deadline`, `Abandoned`, `Refused` and `NotKept`, and `connectReturn` in `web/src/lib/pages/marketplaces/view.ts` is its total reader.
+A query parameter rather than a command or an event because it needs no capability and no grant, and because it can only choose a sentence: whether a marketplace is connected is still read from the server's connection list, so a hand-typed parameter changes copy and never state.
+
+Two things a computer never has to deal with are dealt with here.
+A phone's abandon is the back gesture, which walks the webview's history and so lands it back at our own origin rather than closing anything, so the poll watches for that as well as for the deadline.
+And because `navigate` is a message to the platform's main thread and the address only changes when the load commits, the capture first waits for the sign-in to actually replace the console before "back at our own origin" is allowed to mean abandoned — without that the first poll would read the console's own address and report the sign-in abandoned half a second after the seller asked for it.
+A sign-in that never appears at all within thirty seconds is `Refused`, which is a different sentence from one the seller did not finish.
+A sign-in that finished and could not be filed is `NotKept`, which is a third sentence again: the cause worth naming there is a device signed out or revoked from the console, because `file_session`'s check-in learns of it and wipes the store, and the seller's remedy is to sign in to Teachouse again on the phone.
+The two were one code until a review found what that cost — a seller whose device had been signed out mid-sign-in was told the sign-in could not be opened, which is the opposite of what happened.
+
+The fence changes character on this surface and the difference is worth stating.
+On a computer the marketplace page sits in a window whose label is in no capability, and that absence is the whole fence.
+On a phone it sits in window `main`, which every capability names, and what refuses it is the per-invoke remote-origin check against the one origin `console.json` grants (tauri 2.11.5, `src/webview/mod.rs`).
+That check is only as good as the origin list, which is why `control_plane::the_capability_grants_the_origin_this_build_uses` asserts the list holds exactly one entry and that it equals `DEFAULT_BASE_URL`.
+
+## Amended 2026-09-06: back walks the webview's history
+
+The section above assumes the back gesture returns the seller to the console, and until this change nothing in our own code arranged that.
+wry registers a back callback that calls `goBack()` only when `handleBackNavigation` is set (`vendor/wry-0.55.1/src/android/kotlin/WryActivity.kt:52-77`), and Tauri's generated `TauriActivity` overrides it to `false` (`tauri-2.11.5/mobile/android-codegen/TauriActivity.kt:35`), so no callback of ours was registered and back was left to whatever the platform does with it.
+That matters here more than elsewhere, because on this surface the marketplace's sign-in is the whole window: if back leaves the app, the seller is stranded and `ConnectVerdict::Abandoned` is unreachable, since the poll's test for the seller having gone is the webview arriving back at our origin.
+
+`MainActivity.kt` now overrides it to `true`.
+That file is tracked, unlike the generated activity beside it, and the property Tauri declares is not final, so the override is legal and wins; `apkanalyzer dex packages` confirms `MainActivity.getHandleBackNavigation` is in the shipped dex and was not there before.
+Back therefore walks the webview's history through our own registered callback and finishes the Activity only when the history is exhausted.
+
+What the change is not is a repair of an observed break, and that is worth recording rather than implying otherwise.
+On an API 36 x86_64 emulator the build without this override already returned from a second page to the first on one back press, with the Activity still foregrounded and the process unchanged — so on that image the platform's own back routing was already doing what we want, and the review's reading that back finished the Activity did not reproduce.
+What the override buys is therefore that the behaviour is ours and explicit rather than a platform default we neither set nor test, on an Android version range we do not control.
+Whether a real arm64 handset behaved the way the emulator did is unmeasured in both builds, and `docs/notes/runbooks/android-phone-check.md` is where that evidence belongs.
+
+Three consequences follow and are recorded rather than discovered later.
+Back inside the console now walks its own pushState history, so a seller moving between screens goes back a screen instead of leaving; the return leg clears its verdict parameter with a replacing navigation, so back cannot replay a sentence about a sign-in that finished minutes ago.
+A seller who moved through several of the marketplace's own pages presses back once per page, so the abandon is reached when they arrive back at ours rather than on the first press.
+And the console is reached by navigating the window away from the bundled start page, so that page is one history entry behind the console's first screen and a seller pressing back from there lands on it before the app exits.
+
+Closing an open sheet or picker with back is a later refinement rather than part of this change: nothing here intercepts back above the webview's history, so a back press with a sheet open walks history as it would with the sheet closed.
+
+What has not been proved on a handset is the same thing this note has never been able to prove: that a real TPT or Tes sign-in completes in an Android WebView and that the captured session works from a mobile network.
+`docs/notes/runbooks/android-phone-check.md` is where that evidence belongs, and it is the founder's own account and their own phone.
+
 ## Sources
 
 `docs/notes/design/vendoo-for-teachers-rethink.md`, decisions D2, D3, D12, D14 and D29, and its §5.1 and §5.2 readings of mobile session capture and mobile scheduling.

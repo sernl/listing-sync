@@ -439,6 +439,52 @@ main {
 	white-space: nowrap;
 }
 
+/* The two platforms a build is published for, under the sentence that says an
+   app is involved. Quieter than the marketplace strip above it deliberately:
+   this answers "is my machine one of them", and a row of pills at the strip's
+   weight would read as a second band of marks. Microsoft's guidelines require
+   the name in direct proximity to its symbol, which is why the name is beside
+   the mark on every row and not only on the row that has no mark. */
+.platform-row {
+	margin-top: 14px;
+}
+
+.platforms {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 10px;
+}
+
+.platform {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	height: 34px;
+	padding: 0 13px;
+	border-radius: var(--r-pill);
+	background: var(--card);
+	border: 1px solid var(--line);
+	font-size: 13.5px;
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.platform img {
+	height: 18px;
+	width: auto;
+	object-fit: contain;
+}
+
+.platform-note {
+	margin: 10px 0 0;
+	font-size: 12px;
+	line-height: 1.55;
+	color: var(--muted);
+}
+
 /* Questions */
 
 .faq {
@@ -721,10 +767,10 @@ main {
 	margin: 0;
 	font-size: 15px;
 	max-width: 68ch;
+	color: var(--muted);
 }
 
-.wide-panel .persona,
-.wide-body p {
+.wide-panel .persona {
 	color: var(--muted);
 }
 
@@ -779,13 +825,20 @@ main {
 	margin-bottom: 8px;
 }
 
-/* --- the marketplace band under the hero ---------------------------------- */
+/* --- the marketplace strip under the hero ---------------------------------- */
 
-.band-wrap {
+/* Named for the marks it draws, and not `.band`, which is the domain's own word
+   for a price band and has drawn the migration table since the site was built.
+   The two declared the same selector forty-two lines apart, same specificity,
+   this one later, so the strip's centring and its zero padding won every
+   property they shared and left every migration row centred with no air under
+   its hairline. `just landing-style-gate` fails the build on a second top-level
+   declaration of any selector, so the collision cannot come back unnoticed. */
+.marks-wrap {
 	margin-top: 34px;
 }
 
-.band {
+.marks {
 	list-style: none;
 	margin: 0;
 	padding: 0;
@@ -805,41 +858,41 @@ main {
 	background: var(--card);
 	box-shadow: var(--ring);
 	text-decoration: none;
+	transition: background 140ms ease;
 }
 
-/* Greyscale at rest, colour on hover: twenty brand palettes at full strength
-   fight the page and each other. The file is the owner's published bytes
-   unaltered; this changes the drawing, not the file. */
+/* Every mark in its owner's own colours, at rest, on every page load, by the
+   founder's decision of 2026-09-06. No filter reaches the image: the file is
+   the owner's published bytes and a filter changes the drawing, which a rights
+   holder could read as alteration of their mark. */
 .mark img {
 	height: 24px;
 	width: auto;
 	max-width: 86px;
 	object-fit: contain;
-	filter: grayscale(1);
-	opacity: 0.74;
-	transition:
-		filter 140ms ease,
-		opacity 140ms ease;
 }
 
 .mark img.icon {
 	height: 26px;
 }
 
-.mark:hover img,
-.mark:focus-visible img {
-	filter: none;
-	opacity: 1;
+/* A link still has to answer a pointer, and the pill is where it answers: a
+   background change on the tile leaves every CSS property off the owner's
+   image. `--hover` against the pill's `--card` is the same pair the rest of the
+   site uses, so this adds no value to the palette. */
+.mark:hover,
+.mark:focus-visible {
+	background: var(--hover);
 }
 
 .mark.glyph {
 	gap: 8px;
 }
 
-/* The three marks we may not draw sit at the same weight as the rest at rest
-   and take the same colour on hover. Left in jade over a soft ground they were
-   the most saturated things in a band whose every other member is greyscale,
-   so the marketplaces we cannot show read as the featured ones. */
+/* The one mark we may not draw sits at the same weight as the marks beside it.
+   It takes no colour under a pointer, because nothing else on this strip does
+   any more: the jade it used to take was reasoning about being the only
+   saturated thing in a greyscale band, and the band is no longer greyscale. */
 .mark .initial {
 	display: grid;
 	place-items: center;
@@ -850,15 +903,6 @@ main {
 	color: var(--muted);
 	font: 600 14px var(--serif);
 	flex: none;
-	transition:
-		background 140ms ease,
-		color 140ms ease;
-}
-
-.mark:hover .initial,
-.mark:focus-visible .initial {
-	background: var(--accent-soft);
-	color: var(--accent-deep);
 }
 
 .mark .name {
@@ -867,7 +911,7 @@ main {
 	color: var(--muted);
 }
 
-.band-note {
+.marks-note {
 	max-width: 82ch;
 	margin: 18px auto 0;
 	font-size: 12.5px;
@@ -890,7 +934,7 @@ main {
 		height: 22px;
 	}
 
-	.band {
+	.marks {
 		gap: 6px;
 	}
 }

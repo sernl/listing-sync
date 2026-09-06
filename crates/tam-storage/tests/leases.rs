@@ -18,9 +18,9 @@ use tam_marketplace::{
 use tam_storage::{
     revive_by_gap, revive_on, settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict,
     BudgetGrant, Charged, ClaimPolicy, ConnectionAudit, ConnectionRepo, DeviceClaim, DeviceRef,
-    HaltCause, HaltRepo, ItemVerdict, JobReadRepo, JobRepo, LandingEffect, LeaseRepo, LeasedItem,
-    MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo, ProductRepo,
-    RateBudgetRepo, StorageError, WriteAttemptRepo, AWAITING_MARKETPLACE_ANSWER,
+    HaltCause, HaltRepo, ItemVerdict, JobOrigin, JobReadRepo, JobRepo, LandingEffect, LeaseRepo,
+    LeasedItem, MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
+    ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, AWAITING_MARKETPLACE_ANSWER,
     AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
 };
 use tam_types::{
@@ -1538,7 +1538,10 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
     let created = JobRepo::new(engine.clone())
         .create_with_request_key(
             tenant.org,
-            Uuid([0x71; 16]),
+            JobOrigin {
+                request_key: Uuid([0x71; 16]),
+                run: None,
+            },
             &NewJob {
                 job: JobId(Uuid([0x15; 16])),
                 inventory: InventoryId::TesGb,

@@ -25,9 +25,9 @@ use tam_import::ImportRun;
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
-    job_request_key, Disposition, Enqueued, JobRepo, LoweringRefusal, MappingRepo, NewJob,
-    NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, SyncResourceRecord, CREATE_LEG,
-    REMOVE_LEG,
+    job_request_key, Disposition, Enqueued, JobOrigin, JobRepo, LoweringRefusal, MappingRepo,
+    NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, SyncResourceRecord,
+    CREATE_LEG, REMOVE_LEG,
 };
 use tam_types::{Actor, JobId, MappingId, OrgId, Stamp, SystemComponent, Uuid};
 
@@ -240,7 +240,15 @@ async fn enqueue_create(
     let created = JobRepo::new(run.pool.clone())
         .create_with_request_key(
             run.org,
-            job_request_key(record.id, CREATE_LEG),
+            JobOrigin {
+                request_key: job_request_key(record.id, CREATE_LEG),
+                // The job names its request as it is minted, in this
+                // same statement. `record_enqueued` names it the other
+                // way in a later transaction, and a settle landing
+                // before that -- or after it failed -- would otherwise
+                // find no run to notify a seller about.
+                run: Some(record.id),
+            },
             &NewJob {
                 job,
                 inventory: record.target,
@@ -357,7 +365,15 @@ async fn enqueue_removal(
     let created = JobRepo::new(run.pool.clone())
         .create_with_request_key(
             run.org,
-            job_request_key(record.id, REMOVE_LEG),
+            JobOrigin {
+                request_key: job_request_key(record.id, REMOVE_LEG),
+                // The job names its request as it is minted, in this
+                // same statement. `record_enqueued` names it the other
+                // way in a later transaction, and a settle landing
+                // before that -- or after it failed -- would otherwise
+                // find no run to notify a seller about.
+                run: Some(record.id),
+            },
             &NewJob {
                 job,
                 inventory: record.source,

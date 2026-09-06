@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT request.id, request.disposition, request.target, request.create_job_id, request.remove_job_id FROM job JOIN sync_request AS request ON request.org_id = job.org_id AND request.id = job.sync_request_id WHERE job.org_id = $1 AND job.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "disposition",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "target",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "create_job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "remove_job_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "88f61b87bcd041c1548732c08d2a9d726e07667d113131729ff4dae22d3ca0ba"
+}

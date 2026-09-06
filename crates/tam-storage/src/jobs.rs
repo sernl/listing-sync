@@ -41,7 +41,7 @@ use tam_domain::{
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
     Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, Marketplace,
-    OrgId, Stamp, SystemComponent, Timestamp, Uuid,
+    NotificationCounts, NotificationKind, OrgId, Stamp, SystemComponent, Timestamp, Uuid,
 };
 
 use crate::codec::{
@@ -69,6 +69,24 @@ pub struct NewAttempt<'a> {
     pub mapping: MappingId,
     pub intent: &'a AttemptIntent,
     pub stamp: Stamp,
+}
+
+/// What asked for a job: the idempotency key that makes a retry a replay, and
+/// the run it belongs to where a `sync_request` asked for it.
+///
+/// The two travel together because they are written by one statement and are
+/// both facts about the request rather than about the work. Carrying them as a
+/// pair also keeps the writer inside the argument bound the lint table sets,
+/// which is what stopped a sixth parameter being added to the two functions
+/// that take it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobOrigin {
+    pub request_key: Uuid,
+    /// The `sync_request` this job is a leg of. `None` for a job nothing
+    /// requested -- a delete the seller asked for directly, an import's own
+    /// measurement job -- and those settle without a run to notify anyone
+    /// about.
+    pub run: Option<Uuid>,
 }
 
 /// The job-level half of an enqueue, grouped so call sites read as one
@@ -886,19 +904,160 @@ pub async fn settle_if_complete(
         return Ok(false);
     }
 
-    OutboxRepo::append(
+    let Some(run) = run_of(tx, org, job).await? else {
+        // A job no request names has no run page for a notification's button
+        // to open, so it gets the message it has always got and no inbox row.
+        // In production there are none: the request drain is the only path
+        // that mints an item-bearing job.
+        OutboxRepo::append(
+            tx,
+            &NewOutboxMessage {
+                org,
+                id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                topic: "email.job_settled".to_owned(),
+                dedupe_key: format!("{:?}:{:02x?}", SellerEvent::JobSettled, job.0 .0),
+                payload: serde_json::json!({ "event": format!("{:?}", SellerEvent::JobSettled) }),
+                at,
+            },
+        )
+        .await?;
+        return Ok(true);
+    };
+    if let Some(sibling) = run.sibling {
+        if unsettled_items(tx, org, sibling).await? > 0 {
+            return Ok(true);
+        }
+    }
+    let counts = settled_counts_over(tx, org, &run.jobs).await?;
+    crate::notifications::record(
         tx,
-        &NewOutboxMessage {
-            org,
-            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-            topic: "email.job_settled".to_owned(),
-            dedupe_key: format!("{:?}:{:02x?}", SellerEvent::JobSettled, job.0 .0),
-            payload: serde_json::json!({ "event": format!("{:?}", SellerEvent::JobSettled) }),
+        org,
+        &crate::notifications::Completion {
+            kind: run.kind,
+            subject: run.request,
+            inventory: Some(run.inventory),
+            counts,
             at,
         },
     )
     .await?;
     Ok(true)
+}
+
+/// The run a settled job belongs to: the request the seller asked for, rather
+/// than the job that happens to have finished.
+///
+/// A migrate owns two jobs, because `job.inventory` is single-valued, so
+/// keying a notification on the job would tell a seller twice about one
+/// migration.
+struct Run {
+    request: Uuid,
+    kind: NotificationKind,
+    /// The inventory written to, which for a migrate is the target rather than
+    /// the source: it is the marketplace the seller's listings arrived at.
+    inventory: InventoryId,
+    /// The run's other job, where it has one and it is not this one.
+    sibling: Option<uuid::Uuid>,
+    /// Every job of the run, which is what the counts sum over.
+    jobs: Vec<uuid::Uuid>,
+}
+
+async fn run_of(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+) -> Result<Option<Run>, StorageError> {
+    let job_db = uuid_to_db(job.0);
+    // Through the job's own link rather than through the request's columns.
+    // The request names its jobs in a later transaction than the one that mints
+    // them -- the cron drain's third -- so a settle landing before that
+    // statement, or after it failed, would find no request through those
+    // columns and tell a seller nothing about a run that finished. The job
+    // names its request as it is created, so the two are never written apart.
+    let Some(row) = sqlx::query!(
+        "SELECT request.id, request.disposition, request.target, \
+                request.create_job_id, request.remove_job_id \
+           FROM job \
+           JOIN sync_request AS request \
+             ON request.org_id = job.org_id AND request.id = job.sync_request_id \
+          WHERE job.org_id = $1 AND job.id = $2",
+        uuid_to_db(org.0),
+        job_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let kind = match row.disposition.as_str() {
+        "sync" => NotificationKind::Sync,
+        "migrate" => NotificationKind::Migration,
+        other => {
+            return Err(StorageError::CorruptRow {
+                reason: format!("unknown sync disposition {other:?}"),
+            })
+        }
+    };
+    let jobs: Vec<uuid::Uuid> = [row.create_job_id, row.remove_job_id]
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok(Some(Run {
+        request: uuid_from_db(row.id),
+        kind,
+        inventory: inventory_from_db(&row.target)?,
+        sibling: jobs.iter().copied().find(|other| *other != job_db),
+        jobs,
+    }))
+}
+
+/// How many of a job's items have yet to settle. A job with no items answers
+/// zero, which is the same thing `settle_if_complete` means by never emitting
+/// for one.
+async fn unsettled_items(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: uuid::Uuid,
+) -> Result<i64, StorageError> {
+    let counted = sqlx::query!(
+        r#"SELECT count(*) FILTER (WHERE state <> 'settled') AS "unsettled!"
+             FROM job_item WHERE org_id = $1 AND job_id = $2"#,
+        uuid_to_db(org.0),
+        job,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(counted.unsettled)
+}
+
+/// The run's settled outcomes, summed over every job it owns, in one aggregate.
+async fn settled_counts_over(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    jobs: &[uuid::Uuid],
+) -> Result<NotificationCounts, StorageError> {
+    let counts = sqlx::query!(
+        r#"SELECT
+             count(*) FILTER (WHERE outcome = 'succeeded') AS "succeeded!",
+             count(*) FILTER (WHERE outcome = 'degraded')  AS "degraded!",
+             count(*) FILTER (WHERE outcome = 'failed')    AS "failed!",
+             count(*) FILTER (WHERE outcome = 'ambiguous') AS "ambiguous!",
+             count(*) FILTER (WHERE outcome = 'skipped')   AS "skipped!",
+             count(*) FILTER (WHERE outcome = 'blocked')   AS "blocked!"
+           FROM job_item WHERE org_id = $1 AND job_id = ANY($2)"#,
+        uuid_to_db(org.0),
+        jobs,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(NotificationCounts {
+        succeeded: count_u32(counts.succeeded)?,
+        degraded: count_u32(counts.degraded)?,
+        failed: count_u32(counts.failed)?,
+        ambiguous: count_u32(counts.ambiguous)?,
+        skipped: count_u32(counts.skipped)?,
+        blocked: count_u32(counts.blocked)?,
+    })
 }
 
 /// The ledger counts rows and the event vocabulary counts items; the widths
@@ -3288,11 +3447,11 @@ impl JobRepo {
     pub async fn create_with_request_key(
         &self,
         org: OrgId,
-        request_key: Uuid,
+        origin: JobOrigin,
         new: &NewJob,
         items: &[NewJobItem],
     ) -> Result<CreatedJob, StorageError> {
-        if let Some(existing) = self.job_for_request_key(org, request_key).await? {
+        if let Some(existing) = self.job_for_request_key(org, origin.request_key).await? {
             return Ok(CreatedJob {
                 job: existing,
                 replay: true,
@@ -3300,7 +3459,7 @@ impl JobRepo {
         }
         let mut tx = self.pool.begin().await?;
         crate::pin_org(&mut tx, org).await?;
-        match create_job_in_tx(&mut tx, org, request_key, new, items).await? {
+        match create_job_in_tx(&mut tx, org, origin, new, items).await? {
             JobWrite::Created => {
                 tx.commit().await?;
                 Ok(CreatedJob {
@@ -3312,11 +3471,12 @@ impl JobRepo {
                 // The failed INSERT aborted this transaction, so the losing
                 // carrier reads the winner's job on a fresh one.
                 drop(tx);
-                let existing = self.job_for_request_key(org, request_key).await?.ok_or(
-                    StorageError::Inconsistent {
+                let existing = self
+                    .job_for_request_key(org, origin.request_key)
+                    .await?
+                    .ok_or(StorageError::Inconsistent {
                         reason: "the winning request's job must exist".to_owned(),
-                    },
-                )?;
+                    })?;
                 Ok(CreatedJob {
                     job: existing,
                     replay: true,
@@ -3367,10 +3527,11 @@ pub(crate) enum JobWrite {
 pub(crate) async fn create_job_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     org: OrgId,
-    request_key: Uuid,
+    origin: JobOrigin,
     new: &NewJob,
     items: &[NewJobItem],
 ) -> Result<JobWrite, StorageError> {
+    let JobOrigin { request_key, run } = origin;
     let NewJob {
         job,
         inventory,
@@ -3382,8 +3543,8 @@ pub(crate) async fn create_job_in_tx(
     let inserted = sqlx::query!(
         "INSERT INTO job \
              (org_id, id, inventory, marketplace, created_at, \
-              request_idempotency_key, actor_kind, actor_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+              request_idempotency_key, actor_kind, actor_id, sync_request_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         org_db,
         uuid_to_db(job.0),
         inventory_to_db(inventory),
@@ -3392,6 +3553,7 @@ pub(crate) async fn create_job_in_tx(
         uuid_to_db(request_key),
         actor.kind(),
         actor.id(),
+        run.map(uuid_to_db),
     )
     .execute(&mut **tx)
     .await;

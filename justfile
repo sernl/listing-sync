@@ -359,6 +359,7 @@ web-dev: web-wasm
 #
 # The landing lane: lockfile install, the static build, then the copy gate
 landing-check:
+    just landing-style-gate
     cd apps/landing && npm ci --no-audit --no-fund
     cd apps/landing && npm run build
     just landing-copy-gate
@@ -390,6 +391,120 @@ landing-copy-gate:
         exit 1
     fi
     echo "landing: one sentence names a marketplace, and it is the availability sentence"
+
+# One stylesheet draws this whole site, and on 2026-09-06 it declared `.band`
+# twice: the migration table's rule and, forty-two lines later, the marketplace
+# strip's. Same specificity, later wins, so every migration row lost its layout
+# and no lane noticed between the collision landing and the founder finding it.
+#
+# So: no selector may be restated at the top level of the file. The key is each
+# selector rather than the whole list, because the collision that shipped arose
+# from a new component's rule sweeping in a selector an older rule had already
+# declared, and a list key reads `.band, .platform` and `.band` as two unrelated
+# rules. One narrowing is allowed, because it is how a shared rule is
+# specialised rather than how one is lost: a rule whose whole list is a strict
+# subset of the list that last declared the selector passes, so `.cta` after
+# `.cta, .btn` is fine and `.cta` after `.cta` is not. Restating a list,
+# reordering it, or widening it is a clash. Selectors inside an at-rule are not
+# collected, because redeclaring one at a breakpoint is what a media query is
+# for.
+#
+# Quoted strings are blanked alongside the comments before the brace walk. A
+# single `content: "}"` otherwise desynchronises the depth counter and silently
+# disables the rest of the scan, and the floor below does not catch it because
+# the rules read before the desync already clear eighty.
+#
+# It reads the source rather than the build, so it runs before `npm run build`
+# and fails in a second rather than after an install. Like `landing-copy-gate`
+# it runs in `just landing-check` and therefore `just pre-push`, and in no other
+# lane: `nix flake check` does not run it.
+landing-style-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    node -e '
+    const fs = require("node:fs");
+    const path = "apps/landing/src/styles/site.css";
+    const src = fs.readFileSync(path, "utf8");
+
+    // Comments and quoted strings are blanked in place rather than stripped, so
+    // a line number this prints is a line number in the file a reader opens.
+    let text = "";
+    for (let i = 0; i < src.length; ) {
+      if (src[i] === "/" && src[i + 1] === "*") {
+        const end = src.indexOf("*/", i + 2);
+        const stop = end === -1 ? src.length : end + 2;
+        for (let j = i; j < stop; j += 1) text += src[j] === "\n" ? "\n" : " ";
+        i = stop;
+      } else if (src[i] === "\"" || src[i] === "\u0027") {
+        const quote = src[i];
+        let j = i + 1;
+        while (j < src.length && src[j] !== quote && src[j] !== "\n") {
+          j += src[j] === "\\" ? 2 : 1;
+        }
+        const stop = Math.min(j + 1, src.length);
+        for (let k = i; k < stop; k += 1) text += src[k] === "\n" ? "\n" : " ";
+        i = stop;
+      } else {
+        text += src[i];
+        i += 1;
+      }
+    }
+    const lineOf = (at) => text.slice(0, at).split("\n").length;
+
+    const seen = new Map();
+    const clashes = [];
+    let rules = 0;
+    let depth = 0;
+    let start = 0;
+    for (let k = 0; k < text.length; k += 1) {
+      const c = text[k];
+      if (c === "{") {
+        const prelude = text.slice(start, k).trim().replace(/\s*,\s*/g, ", ").replace(/\s+/g, " ");
+        if (depth === 0 && prelude && !prelude.startsWith("@")) {
+          rules += 1;
+          const line = lineOf(start + text.slice(start).search(/\S/));
+          const selectors = prelude.split(",").map((s) => s.trim()).filter(Boolean);
+          const set = new Set(selectors);
+          for (const selector of selectors) {
+            const earlier = seen.get(selector);
+            const narrows =
+              earlier !== undefined &&
+              set.size < earlier.set.size &&
+              selectors.every((s) => earlier.set.has(s));
+            if (earlier !== undefined && !narrows) {
+              clashes.push(
+                selector + "  declared at line " + earlier.line + " in [" + earlier.prelude +
+                "], again at line " + line + " in [" + prelude + "]"
+              );
+            }
+          }
+          for (const selector of selectors) seen.set(selector, { line, prelude, set });
+        }
+        depth += 1;
+        start = k + 1;
+      } else if (c === "}") {
+        depth -= 1;
+        start = k + 1;
+      } else if (c === ";" && depth === 0) {
+        start = k + 1;
+      }
+    }
+
+    if (clashes.length > 0) {
+      console.error("landing: a selector is declared twice at the top level of " + path + ":");
+      for (const clash of clashes) console.error("  " + clash);
+      console.error("Merge the rules, narrow the later one, or scope it under a parent selector.");
+      process.exit(1);
+    }
+    // A walk that stopped finding rules would otherwise pass by having nothing
+    // to say, which is the failure `served-artefacts` guards its own lists
+    // against twice.
+    if (rules < 80) {
+      console.error("landing: only " + rules + " top-level rules found in " + path + ", so the scan is not reading the file");
+      process.exit(1);
+    }
+    console.log("landing: " + rules + " top-level rules, no selector declared twice");
+    '
 
 # The landing-page dev server
 landing-dev:

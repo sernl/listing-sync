@@ -11,6 +11,11 @@ axum = "0.8"
 base64 = "0.22"
 sha2 = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# The outbox payload is a `serde_json::Value` and the relay's request body is
+# one too, so this crate names what it already links: `serde_json` is a
+# direct dependency of sibling crates here and reaches this binary through
+# `tam-storage`'s own public API. Naming it adds an edge and no package.
+serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-api = { path = "../tam-api" }
 tam-engine = { path = "../tam-engine" }

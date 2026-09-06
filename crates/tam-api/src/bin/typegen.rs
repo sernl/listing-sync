@@ -21,7 +21,7 @@ use tam_domain::product::FormGroup;
 use tam_storage::{Colour, DeviceSessionStatus, ItemStateKind, ALL_GATES};
 use tam_types::{
     ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,
-    JobEventPayload, LengthUnit, Marketplace, TermKind, TransportClass,
+    JobEventPayload, LengthUnit, Marketplace, NotificationKind, TermKind, TransportClass,
 };
 
 /// One closed enum, emitted twice: the union every client type is checked
@@ -100,6 +100,13 @@ fn main() {
         "TransportClass",
         "TRANSPORT_CLASSES",
         &TransportClass::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "NotificationKind",
+        "NOTIFICATION_KINDS",
+        &NotificationKind::ALL,
         serde_name,
     ));
     out.push('\n');

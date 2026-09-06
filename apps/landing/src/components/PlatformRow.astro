@@ -1,0 +1,27 @@
+---
+import { platforms, attribution } from '../platforms.js';
+
+/* The two platforms a build is published for, under the sentence that tells a
+   reader an app is involved at all. Each draws its owner's mark where the owner
+   permits one and its name where it does not, at one size, in colour.
+
+   No store badge, on either row: all three badge programmes license the badge
+   to link to a listing on that store, and Teachouse has none, so a badge here
+   would state something untrue about where the file came from. */
+---
+
+<div class="platform-row">
+	<ul class="platforms">
+		{
+			platforms.map((platform) => (
+				<li class="platform">
+					{platform.file && (
+						<img src={`/vendors/${platform.file}`} alt="" width="30" height="18" loading="lazy" decoding="async" />
+					)}
+					<span>{platform.name}</span>
+				</li>
+			))
+		}
+	</ul>
+	<p class="platform-note">{attribution.join(' ')}</p>
+</div>

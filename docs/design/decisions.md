@@ -543,6 +543,9 @@ Until then a corrupted product reads back as a resource with no file, which is t
 
 ## Browser and platform tiles carry a mark of our own, not the vendor's, 2026-09-06
 
+Superseded later the same day by "Every mark we may lawfully show is shown, in its owner's colours, 2026-09-06" below, on a correction of fact: the availability finding this entry rests on was true of the addresses checked and false of the vendors.
+What survives is the store-badge half, which that entry keeps in full.
+
 The three download tiles draw a neutral glyph from the Lucide set — `monitor`, `smartphone` and `laptop` — and the two browser tiles keep the name set in our own typeface.
 No store badge and no browser vendor's logo appears anywhere on the page, `web/static/` gains no file, and the disclaimer beneath the grid is unchanged.
 
@@ -601,3 +604,98 @@ It greps the built output rather than the sources so that an accurate comment ex
 
 What is deliberately not claimed: nothing here says the marks may stay if an owner objects.
 It says the founder accepted a known risk on a wider surface than before, having read the same policies, and that the two owners who require written permission are excluded from the band until they give it.
+
+Amended 2026-09-06, later the same day: the founder reversed the exclusion of Etsy and Shopify.
+The four sentences above beginning "Etsy, Shopify and Boom Learning are on the band without their logos" are superseded for those two marketplaces and stand unchanged for Boom Learning.
+`etsy.png` and `shopify.png` are now copied into the landing build and drawn on the band beside every other mark, so the sentence that no such file is copied at all is no longer true and is replaced by this one.
+The ground is the founder's, not a new reading of the policies: both owners still require written permission, neither has given it, and the founder — having read the same policies and having already accepted this class of risk once for the console page — decided that every mark we may lawfully show should be shown, and that approaching both owners remains the next step.
+Boom Learning is not reversed, and the reason it is different in kind rather than in degree is the one already recorded: its guidelines make a "used with permission" statement mandatory wherever the mark appears, so drawing it means either breaching the rule that governs it or printing something untrue, which is not a risk to accept but a false statement to make.
+The band's greyscale-at-rest treatment went with the same decision; every mark now draws in its owner's own colours at all times, which is recorded in the next entry rather than here.
+
+## Every mark we may lawfully show is shown, in its owner's colours, 2026-09-06
+
+This reverses "Browser and platform tiles carry a mark of our own, not the vendor's, 2026-09-06" above, taken earlier the same day, and it reverses it on a correction of fact rather than on a change of taste.
+
+That entry said both browser vendors gate their brand files behind a partner portal, so neither the file nor the licence terms could be read, and that a mark whose terms cannot be recorded cannot be landed.
+The first half was true of the addresses checked and false of the vendors.
+Mozilla's trademark policy is public at `mozilla.org` and its own product page serves the Firefox logo as a plain file; Google publishes the Android robot, its Creative Commons licence and its colour on a developer page needing no login.
+Every term behind this entry was read on 2026-09-06 and is quoted with its address in `../notes/design/marketplace-logo-sources.md`.
+
+So the rule is now what the owners permit, mark by mark, and the five marks do not answer alike.
+
+Firefox draws Mozilla's own logo, in colour, because Mozilla's policy permits logos "in visuals to truthfully refer to and/or to link to the applicable programs" without prior permission; the tile links to Mozilla's page, which is that permission's own condition rather than decoration.
+Android draws Google's own robot, in colour, because Google licenses it under Creative Commons 3.0 Attribution; the licence's attribution line is printed verbatim on the page that draws it.
+Chrome keeps the name, written as Google's own branding page requires, because Google routes every product icon through a Partner Marketing Hub approval nobody here holds.
+Windows keeps a neutral drawing of ours and its name in text, because Microsoft requires an express licence for its symbol and permits the wordmark in text meanwhile.
+Apple keeps a neutral drawing of ours permanently, because Apple forbids third-party use of its logo outright and there is no route to permission worth taking for a platform we publish no build for.
+
+Two permissions are being sought, and both are the owner's own published route: a Partner Marketing Hub approval from Google for the Chrome icon, and a trademark use licence from Microsoft for the Windows symbol shown beside the name in a platform-availability row, which is a use Microsoft's own guidelines name as an exception.
+Each lands as a change to one table.
+The drafted requests are in `../notes/design/marketplace-logo-sources.md`.
+
+What does not change.
+No store badge appears anywhere, on any surface, because all three badge programmes license the badge to link to a store listing and we still have none; that half of the superseded entry stands in full, and the Chrome Web Store badge fails it for the same reason.
+The Google Play icon is refused separately, being licensed only in association with devices licensed to access Google Play.
+The Android wordmark is refused by Google in writing, so the name stays set in our own type.
+Neither remaining glyph is tinted toward its owner's palette, because a drawing of ours coloured to look like a vendor's mark is a closer imitation than the plain drawing is.
+
+Every mark the site and the console draw is now in its owner's own colours at rest, with no filter anywhere, which is the second half of the founder's instruction and applies to the public band as well as to these five.
+A CSS filter changes the drawing rather than the file, and a rights holder could read a greyscale rendering as an alteration of their mark, so this is the safer reading of the same rule rather than only the founder's preference.
+
+The rules are enforced rather than remembered.
+`web/static/vendors/` is a second served directory, so the guard that a mark under `/marketplaces/` is named for a marketplace stays exactly as strong as it was; `catalogue.test.ts` keys each mark's directory to the list its tile came from, asserts Chrome's ™, asserts the Firefox link, and asserts that no address, date or digest reaches the page.
+`downloads.test.ts` fails on a change to any of the three platform rows and on any file arriving in `vendors/` named for a badge.
+`landing-band.test.ts` fails if `site.css` contains `grayscale(` at all.
+The attribution sentences are held against the marks that oblige them, in both directions, so a mark removed removes its obligation and a mark added without its sentence fails.
+
+What is deliberately not claimed: nothing here says these two marks may stay if their owners object, and nothing says the two pending permissions will be granted.
+It says that where an owner publishes a permission we can read and satisfy, we use the mark and satisfy it, and that where an owner does not, we use their name and ask.
+
+Amended 2026-09-07, after a review of the build against this entry.
+Three of the name forms above were drawn on conditions the build stated and did not apply, and the four corrections are recorded here because this entry is what asserts the rule is enforced rather than remembered.
+The Android name carries its symbol on both surfaces, `Android™`, because Google's brand guidelines ask for it at the name's first appearance in a creative and the build carried only the second of Google's two name conditions.
+The Chrome tile is headed with Google's full product name, `Google Chrome™`, because the sentence this entry cites gives `for Google Chrome™` as its example and the build took only the symbol from it; the mark box keeps `Chrome™`, being artwork standing in for a logo we may not draw rather than the reference that sentence governs.
+The Firefox tile is headed "Firefox browser", because Mozilla's policy asks that its wordmarks be used only as an adjective with the generic term following, and the file we draw is a lockup that already contains the word.
+Nothing had been requested from Microsoft, and three shipped files said a licence had been applied for; both requests are now drafted as letters in `../notes/design/marketplace-logo-sources.md` for the founder to send, and the shipped wording says what is so.
+`downloads.test.ts` now holds the Android symbol as `catalogue.test.ts` already held Chrome's, `catalogue.test.ts` holds both browser headings, and all five attribution sentences are derived from the marks and names the page actually draws rather than two of them being asserted true.
+
+## The seller's address is asked for, never stored, 2026-09-07
+
+The completion mail needs an address and this database was designed not to hold one.
+`app_user.email` carries `{subject}@subject.invalid` for every self-serve signup, because the login assertion's claim set names no address, and the real one lives in `auth.user`, owned by `tam-auth`.
+`db/init/02-auth-role.sql` writes that boundary down in both directions specifically so that reversing it is visible.
+
+So `tam-auth` gains one route, `GET /internal/address/{subject}`, answering `{email, emailVerified, name}` for a subject it already owns, and the outbox drainer calls it, holds the answer for the length of one send, and stores it nowhere.
+The domain database keeps its property of not knowing any seller's address, and the boundary is untouched in both directions.
+
+The route does not exist unless `TAM_AUTH_INTERNAL_SECRET` is configured: with no secret the path answers the same 404 every unknown path has always answered, so a deployment that has not opted in has no route to reach.
+With the secret configured, a caller offering the wrong one gets that same 404, so a wrong secret and an absent route are indistinguishable, and the comparison runs over SHA-256 digests through `timingSafeEqual` rather than over the secrets themselves, whose lengths would otherwise differ observably.
+Whether the reverse proxy forwards `/internal/*` at all is a second fence and a deployment question; the secret is the fence this service owns.
+
+Three alternatives were considered and refused.
+A column-scoped `SELECT` for the domain roles on `auth.user` reverses the boundary that file exists to make visible and couples our migrations to better-auth's own DDL.
+A second seller-stated address in `public` is an address the seller maintains twice and an unverified one we would mail on request.
+Handing `tam-auth` a composed summary and letting it send puts domain content and domain copy inside a service the decision record confines to identity and session, and makes a notification outage a function of an identity outage.
+
+This is a founder decision rather than an application of an existing one, because the decision record says any extension of that service beyond identity and session is one, and it was taken by the founder on 2026-09-07.
+What it permits is narrow and is the limit: answering a question about an address the service already owns, for one caller holding a shared secret, returning three fields and nothing about credentials, sessions or roles.
+Any further route on that service is a fresh decision rather than an application of this one.
+
+## The engine reads six columns of a sync request, 2026-09-07
+
+`settle_if_complete` resolves which run a settled job belongs to, so that a migration's two jobs produce one notification for the seller rather than two.
+It runs as `tam_engine`, and not only from the worker: `expire_and_steal` and `revive_expired` settle an attempt-exhausted or revived item from the maintenance loop, cross-tenant, with no organisation pin and no application role anywhere in the call.
+`tam_engine` is BYPASSRLS, which bypasses the row-level policy and not the table privilege, so without a grant that settle fails `permission denied` on every item the reaper touches — which is every run that a seller's device abandoned.
+
+So the engine may read a sync request, and only these six columns: `org_id`, `id`, `disposition`, `target`, `create_job_id`, `remove_job_id`.
+That is exactly what the resolution names, and the column scoping is the technique migration 0063 already applies to `app_user` a few lines above.
+Table-wide would additionally hand a cross-tenant role every organisation's `source`, `intent`, `state`, `requested_at`, `settled_at` and `failure_detail`, the last being free text a marketplace's own error message lands in.
+Under this form the engine learns the disposition, the target inventory and the two job ids, and it already learns the target inventory from `job`, which it reads across tenants today.
+
+The engine may never write one. `sync_request` is the read leg's own table, the drain runs as `tam_app` precisely so the cross-tenant role never enqueues a request, and that half is unchanged.
+The tripwire in `crates/tam-storage/tests/sync_requests.rs` that pinned the whole refusal is now two tests rather than one: the read half asserts the six columns are readable and the write half asserts that INSERT, UPDATE and DELETE are each refused and that the other six columns are not readable.
+The version it replaces asserted no read at all and tried only INSERT, so the write refusal is enforced more widely now than before this entry.
+
+The engine's grant on `notification` is `INSERT` alone for the same reason.
+Nothing on an engine path reads that table — `record` is an `INSERT ... ON CONFLICT DO NOTHING` with no `RETURNING` — and nothing on an engine path marks a row read, the only caller of `mark_read_through` being the API route on the application pool.
+A cross-tenant role holding `UPDATE` there could mark every organisation's inbox read and take from a seller the record that they had not yet seen a run.

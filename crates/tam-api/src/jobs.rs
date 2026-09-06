@@ -13,9 +13,9 @@ use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::ListingState;
 use tam_storage::{
-    intent_digest, Disposition, EventRow, ItemCounts, ItemRow, ItemsPageParams, JobReadRepo,
-    JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest, StorageError,
-    SyncIntent, SyncRequestRepo,
+    intent_digest, Disposition, EventRow, ItemCounts, ItemRow, ItemsPageParams, JobOrigin,
+    JobReadRepo, JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest,
+    StorageError, SyncIntent, SyncRequestRepo,
 };
 use tam_types::{Actor, FailureCode, InventoryId, JobId, MappingId, OrgId, Stamp, Timestamp, Uuid};
 
@@ -774,7 +774,15 @@ pub(crate) async fn create_job(
         },
     };
     let created = JobRepo::new(state.pool.clone())
-        .create_with_request_key(context.org, key.0, &new, &items)
+        .create_with_request_key(
+            context.org,
+            JobOrigin {
+                request_key: key.0,
+                run: None,
+            },
+            &new,
+            &items,
+        )
         .await
         .map_err(|error| {
             if matches!(error, StorageError::DuplicateIdempotencyKey { .. }) {

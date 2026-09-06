@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 91] = [
+pub const ROUTES: [Route; 95] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -118,6 +118,26 @@ pub const ROUTES: [Route; 91] = [
         method: "get",
         path: "/{version}/status",
         summary: "Public per-marketplace status from the fleet kill switch",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/notifications",
+        summary: "Finished runs, newest first, with their settled counts",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/notifications/read",
+        summary: "Mark every notification up to a given one read",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/notifications/preferences",
+        summary: "Whether the requesting user takes completion mail",
+    },
+    Route {
+        method: "patch",
+        path: "/{version}/notifications/preferences",
+        summary: "Set whether the requesting user takes completion mail",
     },
     Route {
         method: "post",

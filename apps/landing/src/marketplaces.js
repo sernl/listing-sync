@@ -18,12 +18,18 @@
  * Marketplaces screen away, with nothing failing to say so. No console route
  * in `web/src/lib/nav.ts` is named `marks`.
  *
- * Three entries carry no file. Etsy and Shopify both state that their logo may
- * not be used without written permission, and this is a public marketing page
- * rather than the page behind a login the founder's 2026-09-05 decision
- * covered; Boom Learning's guidelines make a permission statement mandatory
- * wherever its mark appears, and we do not have permission to make one. Each
- * draws its initial and its name until permission is reported.
+ * One entry carries no file. Boom Learning's guidelines make the sentence
+ * "Boom™ is the trademark of Boom Learning. Used with permission." mandatory
+ * wherever its mark appears, and we hold no permission, so showing the mark
+ * means either breaching the rule that governs it or printing something untrue.
+ * It draws its initial and its name until permission is reported.
+ *
+ * Etsy and Shopify carried no file until 2026-09-06, when the founder reversed
+ * that half of the decision recorded in `docs/design/decisions.md` and took the
+ * same risk here that was taken for the console page: both owners require
+ * written permission for logo use, both are being approached, and neither
+ * requires a statement we cannot truthfully make. Boom Learning is different in
+ * kind rather than a smaller version of the same thing, which is why it stayed.
  *
  * `live` is the two marketplaces that connect today, which is the claim
  * `site.js`'s availability sentence makes and the only one the caption repeats.
@@ -31,8 +37,8 @@
 export const marks = [
 	{ name: 'TPT', home: 'https://www.teacherspayteachers.com/', file: 'tpt-mark.png', shape: 'icon', live: true },
 	{ name: 'TES', home: 'https://www.tes.com/', file: 'tes-mark.png', shape: 'icon', live: true },
-	{ name: 'Etsy', home: 'https://www.etsy.com/' },
-	{ name: 'Shopify', home: 'https://www.shopify.com/' },
+	{ name: 'Etsy', home: 'https://www.etsy.com/', file: 'etsy.png', shape: 'icon' },
+	{ name: 'Shopify', home: 'https://www.shopify.com/', file: 'shopify.png', shape: 'icon' },
 	{ name: 'Made By Teachers', home: 'https://madebyteachers.com/', file: 'made-by-teachers.jpg', shape: 'icon' },
 	{ name: 'Classful', home: 'https://classful.com/', file: 'classful.svg', shape: 'wordmark' },
 	{ name: 'Boom Learning', home: 'https://www.boomlearning.com/' },

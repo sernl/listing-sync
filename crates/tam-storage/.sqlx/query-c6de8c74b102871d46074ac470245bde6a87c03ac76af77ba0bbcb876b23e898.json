@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               count(*) FILTER (\n                   WHERE state IN ('parsed', 'attached', 'creating')\n               ) AS \"outstanding!\",\n               count(*) FILTER (\n                   WHERE state IN ('created', 'published') AND NOT skipped\n               ) AS \"created!\",\n               count(*) FILTER (\n                   WHERE state IN ('created', 'published') AND skipped\n               ) AS \"skipped!\",\n               count(*) FILTER (\n                   WHERE state = 'failed' AND failure_detail IS NOT NULL\n               ) AS \"failed!\"\n             FROM import_batch_row\n            WHERE org_id = $1 AND batch_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "outstanding!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "created!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "skipped!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "failed!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c6de8c74b102871d46074ac470245bde6a87c03ac76af77ba0bbcb876b23e898"
+}

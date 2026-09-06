@@ -28,8 +28,9 @@ use serde::{Deserialize, Serialize};
 use tam_engine_driver::import::{ImportPage, ObservedResource};
 use tam_import::{import_one, AppliedResource, HeldFile, ImportRun, ImportedFile};
 use tam_storage::{
-    job_request_key, BlobRepo, Completion, DeviceRepo, Disposition, EventScope, JobRepo, Mint,
-    NewJob, Observed, ResourceCoverage, SyncRequestRecord, SyncRequestRepo, CREATE_LEG, IMPORT_LEG,
+    job_request_key, BlobRepo, Completion, DeviceRepo, Disposition, EventScope, JobOrigin, JobRepo,
+    Mint, NewJob, Observed, ResourceCoverage, SyncRequestRecord, SyncRequestRepo, CREATE_LEG,
+    IMPORT_LEG,
 };
 use tam_types::{
     Actor, FileBytes, FileKind, JobEventPayload, JobId, Observation, OrgId, ScanOutcome, Stamp,
@@ -506,7 +507,11 @@ async fn anchor_job(
     let created = JobRepo::new(state.pool.clone())
         .create_with_request_key(
             record.org,
-            job_request_key(record.id, IMPORT_LEG),
+            JobOrigin {
+                request_key: job_request_key(record.id, IMPORT_LEG),
+                // Not a run: it carries no items and settles nothing.
+                run: None,
+            },
             &NewJob {
                 job: JobId(fresh_uuid()),
                 inventory: record.source,

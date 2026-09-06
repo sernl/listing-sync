@@ -122,14 +122,14 @@ pub(crate) async fn commit(
         match create_row(&state, context.org, row).await {
             Ok(true) => {
                 batches
-                    .record_created(context.org, batch, at)
+                    .record_created(context.org, batch, at, false)
                     .await
                     .map_err(|error| storage_fault(&state, &error))?;
                 applied = applied.saturating_add(1);
             }
             Ok(false) => {
                 batches
-                    .record_created(context.org, batch, at)
+                    .record_created(context.org, batch, at, true)
                     .await
                     .map_err(|error| storage_fault(&state, &error))?;
                 skipped = skipped.saturating_add(1);

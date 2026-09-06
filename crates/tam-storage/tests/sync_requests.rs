@@ -148,11 +148,23 @@ fn a_migrate_derives_one_request_key_per_leg() {
     );
 }
 
-/// The role decision, pinned at the database rather than in prose. The drain
-/// runs as `tam_app` precisely so the cross-tenant role never needs a grant
-/// here; a grant added later to make something pass would fail this.
+/// The read half of the role decision, and the reason the grant behind it
+/// exists.
+///
+/// The engine may read a request in order to settle a run. `settle_if_complete`
+/// resolves which run a settled job belongs to, so that a migration's two legs
+/// produce one seller notification rather than two, and it is reached as
+/// `tam_engine` from the worker and from `expire_and_steal` — which settles an
+/// attempt-exhausted item from the maintenance loop with no job context at all.
+/// The role is BYPASSRLS, which bypasses the policy and not the table
+/// privilege, so without migration 0063's `GRANT SELECT ON sync_request` that
+/// settle fails `permission denied` on every reaper-settled item.
+///
+/// Asserted positively rather than left implicit, because the grant is now
+/// load-bearing in both directions: revoking it would break the settle path,
+/// and nothing else here would say so.
 #[sqlx::test(migrations = "./migrations")]
-async fn the_cross_tenant_role_cannot_read_or_write_a_sync_request(pool: PgPool) {
+async fn the_cross_tenant_role_may_read_a_sync_request_to_settle_a_run(pool: PgPool) {
     seed_org_a(&pool).await.expect("the org seeds");
     SyncRequestRepo::new(pool.clone())
         .create(ORG_A, &request_for(REQUEST, &["101"]))
@@ -160,26 +172,88 @@ async fn the_cross_tenant_role_cannot_read_or_write_a_sync_request(pool: PgPool)
         .expect("the request writes");
     let engine = engine_pool(&pool).await;
 
-    let read = sqlx::query("SELECT id FROM sync_request")
-        .fetch_all(&engine)
-        .await;
+    let read = sqlx::query(
+        "SELECT org_id, id, disposition, target, create_job_id, remove_job_id \
+           FROM sync_request",
+    )
+    .fetch_all(&engine)
+    .await;
     assert!(
-        read.is_err(),
-        "the engine holds no grant on the read leg's own table: {read:?}"
+        read.is_ok(),
+        "the settle resolves a job's run through these six columns: {read:?}"
     );
-    let written = sqlx::query(
+}
+
+/// The write half, which is the whole of what the role decision ever refused.
+///
+/// The drain runs as `tam_app` precisely so the cross-tenant role never enqueues
+/// a request, and reading one grants nothing toward that: the engine may never
+/// insert, update or delete a row here, and all three verbs are asserted rather
+/// than the one an earlier version happened to try. A grant widened later to
+/// make something pass fails this.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_cross_tenant_role_can_never_write_a_sync_request(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    SyncRequestRepo::new(pool.clone())
+        .create(ORG_A, &request_for(REQUEST, &["101"]))
+        .await
+        .expect("the request writes");
+    let engine = engine_pool(&pool).await;
+    let org = uuid::Uuid::from_bytes(ORG_A.0 .0);
+
+    let inserted = sqlx::query(
         "INSERT INTO sync_request \
          (org_id, id, source, target, disposition, intent, state, requested_at) \
          VALUES ($1, $2, 'tes_gb', 'tes_nz', 'sync', 'draft', 'pending', now())",
     )
-    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(org)
     .bind(uuid::Uuid::from_bytes([0x72; 16]))
     .execute(&engine)
     .await;
     assert!(
-        written.is_err(),
-        "and it cannot enqueue one either: {written:?}"
+        inserted.is_err(),
+        "the engine cannot enqueue a request: {inserted:?}"
     );
+
+    let updated = sqlx::query("UPDATE sync_request SET state = 'failed' WHERE org_id = $1")
+        .bind(org)
+        .execute(&engine)
+        .await;
+    assert!(
+        updated.is_err(),
+        "nor settle one it did not drain: {updated:?}"
+    );
+
+    let deleted = sqlx::query("DELETE FROM sync_request WHERE org_id = $1")
+        .bind(org)
+        .execute(&engine)
+        .await;
+    assert!(
+        deleted.is_err(),
+        "nor erase one; the engine stalls and settles, it never erases: {deleted:?}"
+    );
+
+    // The read is column scoped, so the refusal has a second half: the engine
+    // reads the six columns `run_of` names and no others. `failure_detail` is
+    // the one that matters most -- it is free text a marketplace's own error
+    // message lands in -- and a table-wide grant would have handed every
+    // organisation's to a role that crosses tenants by construction.
+    for withheld in [
+        "source",
+        "intent",
+        "state",
+        "requested_at",
+        "settled_at",
+        "failure_detail",
+    ] {
+        let read = sqlx::query(&format!("SELECT {withheld} FROM sync_request"))
+            .fetch_all(&engine)
+            .await;
+        assert!(
+            read.is_err(),
+            "{withheld} is outside the six columns the settle reads: {read:?}"
+        );
+    }
 }
 
 #[sqlx::test(migrations = "./migrations")]

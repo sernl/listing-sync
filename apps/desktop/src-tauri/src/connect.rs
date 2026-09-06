@@ -106,9 +106,110 @@ pub const fn login_target(marketplace: Marketplace) -> Result<LoginTarget, NotSe
     }
 }
 
+/// How a login ended, in the one word that survives a navigation.
+///
+/// A closed set rather than a string because on a phone it is the whole
+/// channel between the capture and the sentence the seller reads: the page
+/// that asked for the login is unloaded by the navigation to the marketplace,
+/// so the promise it was holding is gone before there is anything to resolve
+/// it with, and the answer has to come back in the address bar or not at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectVerdict {
+    /// A session is filed on this device.
+    Captured,
+    /// The login deadline passed with no session in the jar.
+    Deadline,
+    /// The seller left the marketplace's pages before signing in, which on a
+    /// phone is the back gesture and has no equivalent on a computer, where
+    /// leaving means closing a window. The gesture walks the webview's
+    /// history, so a seller who moved through several of the marketplace's own
+    /// pages presses back once per page and this is reached when they arrive
+    /// back at ours (`MainActivity.kt`, `handleBackNavigation`).
+    Abandoned,
+    /// The sign-in never appeared: a navigation the platform dropped, or a page
+    /// that could not begin to load. The seller has something to do about it,
+    /// which is to press Connect again.
+    Refused,
+    /// The sign-in was not saved on this device. The cause worth naming is a
+    /// device signed out or revoked from the console, because the check-in that
+    /// follows a capture wipes the store and the seller's own remedy is to sign
+    /// in to Teachouse again here; a jar that could not be read lands here too,
+    /// having saved nothing either.
+    ///
+    /// Split from [`Self::Refused`] because the two were one code and the
+    /// console could only word one of them: a seller whose device had been
+    /// signed out was told the sign-in could not be opened, which is the
+    /// opposite of what happened and names nothing they can act on.
+    NotKept,
+}
+
+impl ConnectVerdict {
+    /// Every verdict, beside the variants rather than in a test, so a new one
+    /// is listed where it is declared. `Marketplace::ALL` is the same shape and
+    /// is the reason this is a constant and not an iterator.
+    pub const ALL: [Self; 5] = [
+        Self::Captured,
+        Self::Deadline,
+        Self::Abandoned,
+        Self::Refused,
+        Self::NotKept,
+    ];
+
+    /// The word this verdict travels as.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Captured => "captured",
+            Self::Deadline => "deadline",
+            Self::Abandoned => "abandoned",
+            Self::Refused => "refused",
+            Self::NotKept => "notkept",
+        }
+    }
+}
+
+/// The query parameter carrying [`ConnectVerdict::code`].
+pub const RETURN_PARAM: &str = "connect";
+
+/// The query parameter naming which marketplace the verdict is about, so the
+/// sentence can name it rather than saying "the marketplace".
+pub const RETURN_MARKETPLACE_PARAM: &str = "marketplace";
+
+/// How a marketplace is spelled in the address the console is resumed at.
+///
+/// An exhaustive match rather than `Debug`, because the console reads this
+/// string as its own `Marketplace` type and `Debug` is not a wire contract;
+/// `the_marketplace_spelling_is_the_one_the_console_deserialises` holds the two
+/// together.
+const fn marketplace_code(marketplace: Marketplace) -> &'static str {
+    match marketplace {
+        Marketplace::Tes => "Tes",
+        Marketplace::Tpt => "Tpt",
+        Marketplace::Etsy => "Etsy",
+    }
+}
+
+/// Where the console is resumed after a login that replaced it, and what it is
+/// told when it gets there.
+///
+/// Pure, so the whole return leg is decided and tested on the host with no
+/// webview. A query parameter rather than a command or an event because it
+/// needs no capability and no grant, and because it can only choose a
+/// sentence: whether a marketplace is connected is read from the server's own
+/// connection list, so a hand-typed parameter changes copy and never state.
+#[must_use]
+pub fn return_url(base: &str, marketplace: Marketplace, verdict: ConnectVerdict) -> String {
+    format!(
+        "{}/marketplaces?{RETURN_PARAM}={}&{RETURN_MARKETPLACE_PARAM}={}",
+        base.trim_end_matches('/'),
+        verdict.code(),
+        marketplace_code(marketplace),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{login_target, NotSellerDevice};
+    use super::{login_target, return_url, ConnectVerdict, NotSellerDevice};
     use crate::session::{Cookie, CookieJar};
     use tam_types::{Marketplace, TransportClass};
 
@@ -173,6 +274,87 @@ mod tests {
             !target.is_logged_in(&jar(&["siteCountry"])),
             "the country cookie is set for anonymous visitors too"
         );
+    }
+
+    /// Every verdict reaches the console as its own address.
+    ///
+    /// Total over [`ConnectVerdict::ALL`] rather than a sample, because this is
+    /// the only channel a phone's outcome travels down: a verdict with no
+    /// address, or two verdicts sharing one, is a seller returned to the
+    /// console with the wrong sentence or with none.
+    #[test]
+    fn every_verdict_returns_to_the_marketplaces_page_naming_itself() {
+        let mut seen: Vec<String> = Vec::new();
+        for verdict in ConnectVerdict::ALL {
+            let url = return_url("https://teachouse.stowiq.io", Marketplace::Tpt, verdict);
+            assert!(
+                url.starts_with("https://teachouse.stowiq.io/marketplaces?"),
+                "the return leg lands on the page the seller pressed Connect on, or they come \
+                 back somewhere they did not leave. Got: {url}"
+            );
+            assert!(
+                url.contains(&format!("connect={}", verdict.code())),
+                "the verdict is what the address carries; without it the page has nothing to \
+                 say. Got: {url}"
+            );
+            assert!(
+                url.contains("marketplace=Tpt"),
+                "and which marketplace it is about, or the sentence cannot name it. Got: {url}"
+            );
+            assert!(
+                !seen.contains(&url),
+                "two verdicts sharing one address would make one of them unreadable. Got: {url}"
+            );
+            seen.push(url);
+        }
+    }
+
+    /// A base with a trailing slash produces the same address as one without.
+    ///
+    /// `base_url()` takes `TAM_CONTROL_PLANE` verbatim from the environment,
+    /// so a developer's `https://host/` is a value this actually receives, and
+    /// `//marketplaces` is a path the console does not serve.
+    #[test]
+    fn a_trailing_slash_on_the_base_does_not_become_a_second_one() {
+        assert_eq!(
+            return_url(
+                "http://localhost:5173/",
+                Marketplace::Tes,
+                ConnectVerdict::Deadline
+            ),
+            return_url(
+                "http://localhost:5173",
+                Marketplace::Tes,
+                ConnectVerdict::Deadline
+            ),
+        );
+        assert!(!return_url(
+            "http://localhost:5173/",
+            Marketplace::Tes,
+            ConnectVerdict::Deadline
+        )
+        .contains("//marketplaces"));
+    }
+
+    /// The marketplace in the address is spelled the way the console's own
+    /// `Marketplace` type is.
+    ///
+    /// `marketplace_code` is a hand-written match and the console deserialises
+    /// the parameter into a generated union, so nothing but this holds the two
+    /// spellings together: a rename on either side would leave the return leg
+    /// naming a marketplace the page cannot look up, and the sentence would go
+    /// missing on exactly the outcome it exists for.
+    #[test]
+    fn the_marketplace_spelling_is_the_one_the_console_deserialises() {
+        for marketplace in Marketplace::ALL {
+            let serialised = serde_json::to_string(&marketplace).expect("a marketplace serialises");
+            let quoted = serialised.trim_matches('"');
+            assert!(
+                return_url("https://x", marketplace, ConnectVerdict::Captured)
+                    .ends_with(&format!("marketplace={quoted}")),
+                "{marketplace:?} travels as its own serialised name"
+            );
+        }
     }
 
     #[test]

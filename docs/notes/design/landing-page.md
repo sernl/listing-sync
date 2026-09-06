@@ -82,13 +82,36 @@ This build is answered ahead of the console and the server matches files rather 
 A later `marketplaces.astro` would then answer `/marketplaces` with a marketing page and take a seller's Marketplaces screen away, with nothing failing to say so.
 The rule this site works under is that no top-level entry it writes may match a console route, and the routes are the `href` values in `web/src/lib/nav.ts`.
 
-Three of the twenty-one draw a jade initial and their name rather than a logo.
-Etsy and Shopify both require written permission for logo use, and the founder's 2026-09-05 decision to show every marketplace's mark was taken for the Marketplaces page behind a login rather than for a public marketing page, which is the surface a rights holder actually sees; Boom Learning's guidelines make a permission statement mandatory wherever its mark appears and we have none to make.
-Each becomes a real mark on the day permission is reported, and no file for Etsy or Shopify is copied into this build until then.
+One of the twenty-one draws an initial and its name rather than a logo, and it is Boom Learning.
+Its guidelines make "Boom™ is the trademark of Boom Learning. Used with permission." mandatory wherever its mark appears, and we hold no permission, so drawing the mark means either breaching the rule that governs it or printing a sentence that is untrue.
+Etsy and Shopify drew an initial too until 2026-09-06, when the founder reversed that: both owners require written permission, neither has given it, and the founder took the same accepted risk here that was taken for the console page, having read the same policies.
+Boom Learning is different in kind rather than a smaller version of it, which is why it stayed.
 
-The marks are greyscale at rest and colour on hover, because twenty brand palettes at full strength fight the page and each other.
-The file is the owner's published bytes unaltered and a CSS filter changes the drawing rather than the file, but a rights holder could read it as alteration, so it is written down here rather than left as a styling detail.
+The marks draw in their owners' own colours at all times, on every page load, by the founder's decision of 2026-09-06.
+They were greyscale at rest and coloured on hover until then, on the reasoning that twenty brand palettes at full strength fight the page and each other; a reader on a phone cannot produce a hover state at all, which is how the founder saw a page of grey marks.
+The reversal is also the safer reading of the rule the greyscale paragraph had already accepted: a CSS filter changes the drawing rather than the file, and a rights holder could read a greyscale rendering as an alteration of their mark, so drawing the published bytes unaltered removes that reading instead of accepting it.
+Nothing keeps this by memory: `landing-band.test.ts` fails if `site.css` contains `grayscale(` at all.
+A link still answers a pointer, on the pill rather than on the image — `background: var(--hover)` on `.mark:hover` — so no CSS property reaches the owner's mark.
 Each mark links to that marketplace's own front page, as every console tile does.
+
+The strip's classes are `marks-wrap`, `marks` and `marks-note`, and they were `band-*` until 2026-09-06.
+`.band` is the migration table's class and had been since the site was built, so the strip's own `.band` was a second top-level declaration of the same selector forty-two lines later in one stylesheet: same specificity, later wins, and every migration row lost its two-column layout to the strip's centring.
+`just landing-style-gate`, run by `just landing-check` and so by `just pre-push`, now fails the build on any selector declared twice at the top level of `site.css`; selectors inside an at-rule are ignored, because redeclaring one at a breakpoint is what a media query is for.
+It does not run in `nix flake check`, which is the same lane gap wave 4's landing gate recorded for `RESERVED_SLUGS`.
+
+## The platform row
+
+Under the sentence in "How it works" that says some marketplace work needs a small app, a row names the platforms a build is published for: Windows and Android.
+The sentence alone leaves a reader on a phone unable to tell whether their phone is one of them, and a row omitting Windows would say we do not support it.
+It is not a download page; `site.js` still owns the link.
+
+Android draws Google's own robot, in colour, and its name carries the trademark symbol: `Android™`.
+Google's brand guidelines license the robot under Creative Commons 3.0 Attribution and the caption under the row carries the attribution line verbatim, which is the condition of that grant; the same page asks that the name carry the symbol at its first appearance in a creative, and this row is a creative of its own.
+Both of Google's name conditions are therefore met here, which they were not when the row first landed.
+Windows draws its name and no symbol, because Microsoft requires an express trademark licence for the Windows symbol.
+Nothing has been requested from Microsoft: the letter quoting Microsoft's own exception for a product called out next to other platforms is drafted in `marketplace-logo-sources.md` for the founder to send, and on a licence the row changes by one field.
+Apple is deliberately absent, because no macOS build is published; `apps/landing/src/platforms.js` records that absence rather than leaving it unsaid, and `landing-band.test.ts` holds the row plus its recorded omissions against the console's own `PLATFORM_ORDER`, so a platform can neither appear here without a build nor vanish from here without a reason.
+No store badge appears on the row or anywhere else on the site: all three badge programmes license the badge to link to a store listing, and Teachouse has none.
 
 The caption under the band carries `availability` itself rather than a second wording of it, then says that the others are places teachers told us they sell and none of them is connected yet, then the footer's independence line.
 That caption is the only thing standing between a band of twenty-one marks over marketplace-agnostic copy and a claim of twenty-one supported marketplaces, which is a claim no measurement supports and which the standing rule against unmeasured numbers forbids.

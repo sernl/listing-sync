@@ -819,6 +819,84 @@ pub enum BindAnomaly {
     SeveredAfterSteal { lease_epoch: i64 },
 }
 
+/// Which kind of run a completion notification is about.
+///
+/// The kind decides what `notification.subject_id` names and therefore where
+/// the console's row and the mail's button go: `Sync` and `Migration` name a
+/// `sync_request`, and `Import` names an `import_batch`. Closed, so a fourth
+/// kind cannot be added without a destination being decided for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationKind {
+    Sync,
+    Migration,
+    Import,
+}
+
+impl NotificationKind {
+    /// The closed set, in a stable order, for the vocabulary generator.
+    pub const ALL: [Self; 3] = [Self::Sync, Self::Migration, Self::Import];
+}
+
+/// How a finished run's items settled, as the console's own outcome words
+/// count them.
+///
+/// The six settled outcomes and no unsettled one: a notification exists only
+/// for a run that has finished, so a queued or in-flight count here would
+/// always be zero and would invite a reader to believe otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NotificationCounts {
+    pub succeeded: u32,
+    pub degraded: u32,
+    pub failed: u32,
+    pub ambiguous: u32,
+    pub skipped: u32,
+    pub blocked: u32,
+}
+
+impl NotificationCounts {
+    /// Whether the run changed nothing at all, which is what decides that a
+    /// seller gets an inbox row and no mail.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.succeeded == 0
+            && self.degraded == 0
+            && self.failed == 0
+            && self.ambiguous == 0
+            && self.skipped == 0
+            && self.blocked == 0
+    }
+
+    /// The sum, saturating: a total that wrapped would understate a run.
+    #[must_use]
+    pub const fn total(self) -> u32 {
+        self.succeeded
+            .saturating_add(self.degraded)
+            .saturating_add(self.failed)
+            .saturating_add(self.ambiguous)
+            .saturating_add(self.skipped)
+            .saturating_add(self.blocked)
+    }
+}
+
+/// The `email.job_settled` outbox payload: what the run was, and what it did.
+///
+/// Composed when the run settles rather than read back at delivery, so the
+/// mail states what was true when the run finished rather than what the
+/// drainer happened to read minutes later, and so the drainer needs no read
+/// grant on the ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobSettledNotice {
+    pub kind: NotificationKind,
+    pub subject_id: Uuid,
+    /// Null for an import, which commits to the catalogue and writes to no
+    /// marketplace.
+    pub inventory: Option<InventoryId>,
+    pub marketplace: Option<Marketplace>,
+    pub counts: NotificationCounts,
+    pub settled_at: Timestamp,
+}
+
 /// The body carried beside each `job_event.kind`. The serde tag of each
 /// variant is exactly one `JobEventKind` name — the agreement test below is
 /// the tripwire — and the pair is one tagged union split across the two

@@ -1,16 +1,17 @@
 ---
-title: Checking a real Android phone appears as a machine
+title: Checking a real Android phone registers and connects
 ---
 
-# Checking a real Android phone appears as a machine
+# Checking a real Android phone registers and connects
 
-Ten minutes, one phone, no cable.
-It answers one question: does a phone that installs Teachouse and signs in appear under "Your machines" with its own name beside it?
+Twenty minutes, one phone, no cable.
+It answers two questions: does a phone that installs Teachouse and signs in appear under "Your machines" with its own name beside it, and can that phone connect a marketplace of its own?
 Everything the Android client does has been exercised on an x86_64 emulator and on no real handset, so this is the first evidence that any of it works where it has to.
+The second exercise below cannot be emulated at all, for a reason worth knowing rather than working around: the Connect button only exists on a signed-in Marketplaces page, and the application accepts commands from one origin — the control plane's own — so there is no stand-in console to drive it from without widening the grant that keeps a marketplace page from reaching our commands.
 
 - date: 2026-09-06
 - applies to: an arm64 Android phone, which is every current handset
-- prerequisite: a Teachouse account you can sign in to
+- prerequisite: a Teachouse account you can sign in to, and — for the second exercise — a TPT or Tes account of your own
 
 ## Before you start
 
@@ -48,9 +49,51 @@ Two labels are worth sending back and neither is a failure of registration.
 A row reading `localhost` means the phone's own name could not be read and the host name was used instead.
 A row reading "Android phone" means the phone reported neither a manufacturer nor a model.
 
+While you are here, open a resource that is listed somewhere and tap its marketplace tile: the phone's own browser should open the listing, rather than the marketplace appearing inside Teachouse.
+A listing that opens inside the app instead has lost the seller their way back, and is worth sending back with the marketplace's name.
+
+## Connect a marketplace, and stop at the sign-in page
+
+This is the second exercise and the one nothing but a handset can answer.
+Everything above proves the phone is a machine we can see; this proves it is a machine that can hold a marketplace login.
+Two passes, and the first deliberately signs in to nothing.
+
+Still on Marketplaces, the TPT and TES cards should each carry a "Connect TPT" or "Connect TES" button.
+A card reading "Connect TPT from the Teachouse app on your computer or phone" instead is the browser copy, and on a phone inside the app it is wrong: it means the app did not recognise itself, and that is worth stopping for.
+
+Press Connect TPT.
+The console should be replaced, in the same window, by TPT's own sign-in page — there is no second window on a phone, which is why it takes over rather than opening beside.
+Do not sign in yet.
+
+Press back.
+Within about a second the app should return you to Marketplaces with one line at the top reading "The TPT sign-in did not finish, so nothing was saved. Press Connect TPT to try again."
+That sentence is the whole point of this pass: it is the difference between a seller who knows the sign-in did not take and one who is returned to the console in silence and has to guess.
+Back walks the pages you have been through rather than closing the app, so if you moved through more than one of TPT's own pages before changing your mind, press it once per page until Marketplaces comes back.
+If the app closes instead of returning you, stop and send that back: it is the one behaviour this exercise cannot work without, it has never been observed on a real handset either way, and it is the single most useful thing you can tell us.
+Four other sentences can appear in place of the one above, and each says something different — "was not finished in time" is the ten-minute deadline, "page did not open" is the sign-in never appearing at all, "could not be saved on this device" is a sign-in that finished while this phone was signed out of Teachouse, and "TPT is connected on this device" is a success you did not intend.
+
+Then the real pass, which is yours as the account holder and is the only evidence that any of this works.
+Press Connect TPT again, sign in to TPT as you would in any browser, and answer any captcha or second factor exactly as you would there — it is your sign-in, on your phone, in TPT's own page, and nothing about it reaches us but the session cookie the app files on the device.
+You should be returned to Marketplaces with "TPT is connected on this device", and the TPT card should read connected with the phone named under "Your machines" as the machine holding it.
+
+Repeat for TES if you want both.
+
+What to send back if either pass goes wrong: the sentence you actually read, and a screenshot of the Marketplaces page.
+A sign-in that appears to work on the phone but leaves the card disconnected is the case worth the most detail, because it means the capture ran and the cookie the adapter needs was not in the jar.
+
+## Disconnect, and what it can and cannot remove
+
+Press Disconnect on a connected card.
+The confirmation on a phone carries one sentence a computer's does not: that your marketplace sign-in stays in the phone's browser, where we cannot remove it, so connecting again may not ask for your password.
+
+That is true rather than a hedge, and it is worth confirming once.
+Disconnect, then press Connect again: if the marketplace signs you straight back in without asking for a password, that is the behaviour the sentence describes, and it is the platform's rather than ours — Android gives an app no way to remove one origin's cookies, and the only lever that clears any of them clears every origin the app has visited, ours included, which would sign you out of Teachouse as a side effect of disconnecting TPT.
+Our own copy of the session is gone either way, and the card and "Your machines" should both say so.
+
 ## Confirm it is one machine and not two
 
 Close the app fully — from the recent-apps list, not by pressing back — reopen it, and reload Marketplaces.
+Back is not a substitute here even now that it leaves the app once the pages behind you run out: an Activity that finishes leaves the process, and everything the app is holding, alive.
 
 There must still be one phone row.
 A second row means the device identity did not survive the restart, and every token bound to the first row is stranded.

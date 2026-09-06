@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE notification SET read_at = $4 WHERE org_id = $1 AND read_at IS NULL AND (created_at, id) <= ($2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "246e21d82ba5f7dd150294740558d69956cacdf6c7ce1fe4bedd137ef5f4eb51"
+}

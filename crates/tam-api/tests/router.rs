@@ -180,6 +180,35 @@ async fn a_protected_route_without_a_session_is_a_structured_401() {
     );
 }
 
+/// Every notification route is behind the session, which is the whole of how
+/// the inbox is org-scoped and how the preference write cannot name another
+/// user: there is no route here a caller reaches without one.
+#[tokio::test]
+async fn every_notification_route_is_behind_the_session() {
+    for (method, path) in [
+        ("GET", "/v1/notifications"),
+        ("POST", "/v1/notifications/read"),
+        ("GET", "/v1/notifications/preferences"),
+        ("PATCH", "/v1/notifications/preferences"),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .expect("the probe request builds");
+        let response = router(test_state())
+            .oneshot(request)
+            .await
+            .expect("the router serves");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} must refuse before it reads anything"
+        );
+    }
+}
+
 /// The structural half of the OpenAPI parity: every documented operation must
 /// be mounted. (The reverse — every mounted route documented — has no
 /// introspection hook in axum and is held by review plus the one-constant

@@ -383,8 +383,63 @@ async fn run_schedule<W: scheduler::WorkSource>(app: AppHandle, work: W) {
 ///
 /// Shared by start-up and the retry command so the two cannot diverge on what
 /// "reachable" means or on where the fallback lives.
-async fn open_console(
-    app: &tauri::AppHandle,
+/// Whether replacing the page the window is showing leaves it in history.
+///
+/// A value rather than a `cfg` for the reason `ConnectSurface` is one: both
+/// arms compile on every target, so a host test can ask for the phone's
+/// without being on a phone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartUpNav {
+    /// Leave it behind, which is what `navigate` does everywhere.
+    Push,
+    /// Replace it. Android alone, because it is the only surface where
+    /// anything reads the history: `MainActivity` turns wry's back handling
+    /// on, so back walks the webview's history, and the bundled start page
+    /// would otherwise sit one entry behind the console's first screen — a
+    /// seller pressing back at the console root would meet a page they never
+    /// asked for instead of leaving the app.
+    Replace,
+}
+
+/// Which of the two this build does.
+pub(crate) const fn start_up_nav() -> StartUpNav {
+    if cfg!(target_os = "android") {
+        StartUpNav::Replace
+    } else {
+        StartUpNav::Push
+    }
+}
+
+/// The script that goes somewhere without leaving here in history.
+///
+/// `location.replace` because Tauri exposes `navigate`, which always pushes,
+/// and no replacing form. The address is written as a JSON string rather than
+/// interpolated: it comes from `TAM_CONTROL_PLANE` or the compiled constant
+/// rather than from any page, but a quote or a backslash in it would otherwise
+/// end the literal, and the page this runs in is ours.
+pub(crate) fn replacing(url: &str) -> String {
+    format!(
+        "location.replace({})",
+        serde_json::Value::String(url.to_owned())
+    )
+}
+
+/// Put the window on `url`, leaving the page it was showing in history or not.
+pub(crate) fn show_console<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    url: tauri::Url,
+    how: StartUpNav,
+) -> Result<(), String> {
+    match how {
+        StartUpNav::Push => window.navigate(url).map_err(|why| why.to_string()),
+        StartUpNav::Replace => window
+            .eval(replacing(url.as_str()))
+            .map_err(|why| why.to_string()),
+    }
+}
+
+async fn open_console<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     plane: &dyn crate::heartbeat::ControlPlane,
     origin: &str,
 ) -> Result<(), String> {
@@ -394,7 +449,7 @@ async fn open_console(
     match plane.reachable().await {
         Ok(()) => {
             let url = tauri::Url::parse(origin).map_err(|why| why.to_string())?;
-            window.navigate(url).map_err(|why| why.to_string())?;
+            show_console(&window, url, start_up_nav())?;
             Ok(())
         }
         Err(why) => {
@@ -417,7 +472,7 @@ async fn open_console(
                     .map_err(tauri::Error::InvalidUrl)
             }) {
                 Ok(url) => {
-                    window.navigate(url).ok();
+                    show_console(&window, url, start_up_nav()).ok();
                 }
                 Err(error) => eprintln!("the fallback page could not be resolved: {error}"),
             }
@@ -442,7 +497,7 @@ pub(crate) async fn retry_console_from<R: tauri::Runtime>(
         .await
         .map_err(|why| why.to_string())?;
     let url = tauri::Url::parse(&origin).map_err(|why| why.to_string())?;
-    window.navigate(url).map_err(|why| why.to_string())
+    show_console(&window, url, start_up_nav())
 }
 
 /// The same cycle on a phone, with no timer behind it.
@@ -495,5 +550,109 @@ async fn run_schedule<W: scheduler::WorkSource>(
         {
             last_tick = Some(now);
         }
+    }
+}
+
+#[cfg(test)]
+mod start_up_tests {
+    use super::{replacing, show_console, StartUpNav};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    /// The bundled page the window is showing before the console is reached.
+    const START: &str = "http://tauri.localhost/";
+
+    fn a_window(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        label: &str,
+    ) -> tauri::WebviewWindow<tauri::test::MockRuntime> {
+        WebviewWindowBuilder::new(
+            app,
+            label,
+            WebviewUrl::External(START.parse().expect("the start page is a url")),
+        )
+        .build()
+        .expect("the window builds")
+    }
+
+    /// The address is a JSON string rather than an interpolation.
+    ///
+    /// It comes from `TAM_CONTROL_PLANE` or the compiled constant rather than
+    /// from a page, so this is not a defence against a marketplace; it is a
+    /// defence against a developer's override with a quote in it silently
+    /// ending the literal and leaving a syntax error that fails as a window
+    /// which never leaves the start page.
+    #[test]
+    fn the_address_cannot_end_the_string_it_travels_in() {
+        assert_eq!(
+            replacing("https://teachouse.stowiq.io"),
+            r#"location.replace("https://teachouse.stowiq.io")"#
+        );
+        // Read back rather than pattern-matched: the property is that the
+        // argument is one JSON string carrying exactly the address, which is
+        // the same thing as saying nothing in the address escaped it.
+        let awkward = r#"https://x/");alert("1"#;
+        let script = replacing(awkward);
+        let argument = script
+            .strip_prefix("location.replace(")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .expect("the script calls location.replace with one argument");
+        let read_back: String =
+            serde_json::from_str(argument).expect("the argument is one JSON string");
+        assert_eq!(
+            read_back, awkward,
+            "a quote in the address must survive as part of the address rather than ending the \
+             literal and starting a statement. Script was: {script}"
+        );
+    }
+
+    /// A computer leaves the start page in history and a phone does not.
+    ///
+    /// The whole point, and it is asserted through the window's own address
+    /// rather than through the script, because that is what a back press
+    /// reads: `navigate` moves the address and pushes an entry, while the
+    /// replacing arm moves the page from inside it and leaves no entry for
+    /// back to find. On a phone the difference is a seller pressing back at
+    /// the console root meeting the bundled start page instead of leaving the
+    /// app, which is the one thing turning back handling on made possible.
+    #[test]
+    fn only_the_computer_leaves_the_start_page_behind() {
+        let app = mock_builder()
+            .build(mock_context(noop_assets()))
+            .expect("the mock application builds");
+        let console: tauri::Url = "https://teachouse.stowiq.io/"
+            .parse()
+            .expect("the console origin is a url");
+
+        let pushed = a_window(&app, "pushed");
+        show_console(&pushed, console.clone(), StartUpNav::Push).expect("a computer navigates");
+        assert_eq!(
+            pushed.url().expect("the window has a url").as_str(),
+            console.as_str(),
+            "a computer navigates, which is what leaves the start page one entry behind"
+        );
+
+        let replaced = a_window(&app, "replaced");
+        show_console(&replaced, console, StartUpNav::Replace).expect("a phone replaces");
+        assert_eq!(
+            replaced.url().expect("the window has a url").as_str(),
+            START,
+            "a phone must not navigate: `navigate` is the call that pushes, so reaching the \
+             console has to happen from inside the page instead"
+        );
+        drop(app);
+    }
+
+    /// The surface is chosen by the platform rather than by a caller.
+    #[test]
+    fn a_phone_replaces_and_everything_else_pushes() {
+        assert_eq!(
+            super::start_up_nav(),
+            if cfg!(target_os = "android") {
+                StartUpNav::Replace
+            } else {
+                StartUpNav::Push
+            }
+        );
     }
 }

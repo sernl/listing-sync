@@ -28,6 +28,7 @@ pub mod import;
 pub mod import_batch;
 pub mod jobs;
 pub mod marketplace_requests;
+pub mod notifications;
 pub mod openapi;
 pub mod org;
 pub mod paddle;
@@ -430,6 +431,15 @@ pub fn router(state: AppState) -> Router {
             get(analytics::read_order).post(analytics::record_capture),
         )
         .route("/{version}/status", get(resources::status))
+        .route("/{version}/notifications", get(notifications::list))
+        .route(
+            "/{version}/notifications/read",
+            post(notifications::mark_read),
+        )
+        .route(
+            "/{version}/notifications/preferences",
+            get(notifications::preferences).patch(notifications::update_preferences),
+        )
         .route("/{version}/admin/signups", get(admin::signups))
         .route("/{version}/admin/orgs", get(admin::list_orgs))
         .route("/{version}/admin/orgs/{org}", get(admin::org_detail))

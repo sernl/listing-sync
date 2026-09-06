@@ -3,6 +3,7 @@ import Base from '../layouts/Base.astro';
 import Faq from '../components/Faq.astro';
 import Migrations from '../components/Migrations.astro';
 import MarketplaceBand from '../components/MarketplaceBand.astro';
+import PlatformRow from '../components/PlatformRow.astro';
 import Pricing from '../components/Pricing.astro';
 import { availability, downloadUrl, loginUrl } from '../site.js';
 
@@ -114,6 +115,10 @@ const steps = [
 					)
 				}
 			</p>
+			{/* The row sits after the sentence rather than inside it: the aside is a
+			    paragraph, and a list nested in a `p` is closed by the parser before
+			    it is drawn. */}
+			<PlatformRow />
 		</div>
 	</section>
 

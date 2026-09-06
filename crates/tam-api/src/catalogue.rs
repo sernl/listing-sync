@@ -1796,7 +1796,15 @@ pub(crate) async fn delete_product(
                 // Derived rather than taken from a header: a repeated delete
                 // must replay the first removal job rather than enqueue a
                 // second write against a listing the first one removed.
-                tam_storage::job_request_key(product.0, &format!("{DELETE_LEG}:{inventory:?}")),
+                tam_storage::JobOrigin {
+                    request_key: tam_storage::job_request_key(
+                        product.0,
+                        &format!("{DELETE_LEG}:{inventory:?}"),
+                    ),
+                    // A delete is the seller acting on one listing, not a run
+                    // a `sync_request` asked for.
+                    run: None,
+                },
                 &NewJob {
                     job,
                     inventory,

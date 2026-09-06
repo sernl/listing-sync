@@ -13,11 +13,12 @@ use serde::Serialize;
 use tam_types::Marketplace;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::connect::login_target;
+use crate::connect::{login_target, return_url, ConnectVerdict, LoginTarget};
 use crate::heartbeat::{check_in, first_run, CheckInError};
 use crate::run::wall_now;
 use crate::session::{Cookie, CookieJar, SessionRecord, SessionStatus};
 use crate::state::{DesktopState, DeviceActivity, WorkEvent};
+use crate::webview_session::CONSOLE_WINDOW;
 
 /// How often the login window's cookie store is read while waiting.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -25,6 +26,22 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a login may take before the window is abandoned. Generous: a
 /// seller may have to fetch a second factor from another device.
 const LOGIN_DEADLINE: Duration = Duration::from_mins(10);
+
+/// How long the marketplace's own page has to replace the console before the
+/// attempt is given up on. Generous, because a phone on mobile data is slow to
+/// commit a first load, and bounded, because a navigation the platform dropped
+/// would otherwise wait out the whole login deadline saying nothing.
+const SIGN_IN_ARRIVAL: Duration = Duration::from_secs(30);
+
+/// How long the phone's navigation waits before replacing the console.
+///
+/// Tauri delivers a command's answer by evaluating a callback in whatever page
+/// the webview is showing, and offers no hook for when that has happened. On
+/// the one-window surface the navigation would otherwise race it and run our
+/// callback inside the marketplace's own page — the single thing this module's
+/// fence exists to prevent. A quarter of a second is far longer than an eval
+/// on the same thread and far shorter than a seller notices.
+const CONSOLE_HANDOVER: Duration = Duration::from_millis(250);
 
 /// Every command failure, as one string the interface can show.
 ///
@@ -84,19 +101,113 @@ pub struct DeviceState {
     pub detail: Option<String>,
 }
 
-/// Opens the marketplace's own login page in a window on this device, waits
-/// for the session to appear in that window's cookie store, and files it in
-/// the keychain.
+/// What a connect did, which is not the same question on the two surfaces.
+///
+/// On a computer the login runs in a second window, this call waits for it,
+/// and the answer is the session. On a phone there is one window and it is
+/// about to become the marketplace's own page, so the page that asked is gone
+/// before there is anything to answer: this call says only that the sign-in is
+/// opening, and the verdict comes back in the address the console is resumed
+/// at. Two variants rather than an optional field, because "no session yet"
+/// and "no session" are different facts and a nullable one would collapse
+/// them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ConnectOutcome {
+    /// The login completed in a window of its own and the session is filed.
+    Captured { session: SessionStatus },
+    /// The sign-in is replacing this page. Nothing is filed yet, and the
+    /// verdict arrives as `crate::connect::RETURN_PARAM` on the way back.
+    Opening,
+}
+
+/// Which shape a login takes here, decided by the surface rather than by the
+/// marketplace.
+///
+/// A value rather than a `cfg`, and that is what makes the phone's arm
+/// testable on a host: both bodies compile everywhere and only the selection
+/// is platform-dependent, so a test can ask for the one-window arm on a
+/// developer's machine instead of on a handset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectSurface {
+    /// A second window this application owns, which leaves the console
+    /// standing behind it. Every desktop platform.
+    SecondWindow,
+    /// The one window, navigated to the marketplace and navigated back.
+    ///
+    /// Android has a single Activity, and tao's `Window::new` takes the next
+    /// Android context with no window created, so a second window answers
+    /// `OsError::NoAvailableActivity` (tao 0.35.3,
+    /// `src/platform_impl/android/mod.rs`) rather than opening. Reading the jar
+    /// is unaffected: `CookieManager` is process-global on Android, so the same
+    /// store answers whichever webview asks.
+    OneWindow,
+}
+
+/// The surface this build runs on.
+#[must_use]
+pub const fn connect_surface() -> ConnectSurface {
+    if cfg!(target_os = "android") {
+        ConnectSurface::OneWindow
+    } else {
+        ConnectSurface::SecondWindow
+    }
+}
+
+/// Opens the marketplace's own login page on this device, waits for the
+/// session to appear in the webview's cookie store, and files it in this
+/// platform's session store.
 ///
 /// Refuses outright for a marketplace with an official API: that branch's
 /// automation runs server-side under a sanctioned token and never logs in
 /// here.
+///
+/// Generic over the runtime for the reason [`forget_session`] is: the mock
+/// runtime a host test builds cannot hand an `AppHandle<Wry>` to a command
+/// that names one, and the one-window arm is a body that has never run on a
+/// handset in this tree.
 #[tauri::command]
-pub async fn connect_marketplace(
-    app: AppHandle,
+pub async fn connect_marketplace<R: tauri::Runtime>(
+    app: AppHandle<R>,
     marketplace: Marketplace,
+) -> Result<ConnectOutcome, CommandError> {
+    connect_on(app, marketplace, connect_surface()).await
+}
+
+/// The command's body with the surface handed to it.
+async fn connect_on<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    marketplace: Marketplace,
+    surface: ConnectSurface,
+) -> Result<ConnectOutcome, CommandError> {
+    connect_on_target(app, login_target(marketplace)?, surface).await
+}
+
+/// The dispatch, with the marketplace already resolved to a login page.
+///
+/// Split from [`connect_on`] so a host test can name a target this crate does
+/// not export: the two real ones are marketplace sign-in pages, and a test
+/// that reached one would be making the request D1 says only a seller's own
+/// device makes, on a machine that is not a seller's.
+pub(crate) async fn connect_on_target<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    target: LoginTarget,
+    surface: ConnectSurface,
+) -> Result<ConnectOutcome, CommandError> {
+    match surface {
+        ConnectSurface::SecondWindow => in_a_second_window(app, target)
+            .await
+            .map(|session| ConnectOutcome::Captured { session }),
+        ConnectSurface::OneWindow => in_this_window(&app, target).map(|()| ConnectOutcome::Opening),
+    }
+}
+
+/// The computer's login: a window of its own, awaited by the caller.
+async fn in_a_second_window<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    target: LoginTarget,
 ) -> Result<SessionStatus, CommandError> {
-    let target = login_target(marketplace)?;
+    let marketplace = target.marketplace;
     let label = format!("login-{marketplace:?}");
 
     if let Some(existing) = app.get_webview_window(&label) {
@@ -114,31 +225,251 @@ pub async fn connect_marketplace(
         .inner_size(1_040.0, 800.0)
         .build()?;
 
-    let deadline = tokio::time::Instant::now() + LOGIN_DEADLINE;
-    let jar = loop {
-        tokio::time::sleep(POLL_INTERVAL).await;
-
-        if app.get_webview_window(&label).is_none() {
+    let watched = app.clone();
+    let closed = label.clone();
+    let mut capture = Capture::of(&window, &origin);
+    let jar = match await_session(&target, &mut capture, move || {
+        watched.get_webview_window(&closed).is_none()
+    })
+    .await
+    {
+        Ok(jar) => jar,
+        Err(Waited::Left) => {
             return Err(CommandError(
                 "the login window was closed before the sign-in completed".to_owned(),
-            ));
+            ))
         }
-        // Read from Rust rather than from the page: `document.cookie` cannot
-        // see the HttpOnly session cookie, which is the only one that matters.
-        let jar = read_jar(&window, &origin)?;
-        if target.is_logged_in(&jar) {
-            break jar;
-        }
-        if tokio::time::Instant::now() >= deadline {
+        Err(Waited::Deadline) => {
             window.destroy().ok();
             return Err(CommandError(
                 "the sign-in did not complete before the window's deadline".to_owned(),
             ));
         }
+        // The webview's own diagnostic, unaltered. It is what a seller saw
+        // before the two surfaces were split and it names the failure; a
+        // verdict code in its place would say "refused" and nothing else.
+        Err(Waited::Unreadable(why)) => return Err(why),
     };
 
     window.destroy().ok();
+    file_session(&app, marketplace, jar).await
+}
 
+/// The phone's login: the console's own window, navigated away and navigated
+/// back with the verdict.
+///
+/// Answers before the navigation rather than after it, and the whole shape
+/// follows from that: an invoke promise cannot survive the unload of the page
+/// holding it, so nothing this returns can carry a result, and the capture
+/// runs on the runtime with no caller waiting on it.
+fn in_this_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    target: LoginTarget,
+) -> Result<(), CommandError> {
+    let Some(window) = app.get_webview_window(CONSOLE_WINDOW) else {
+        return Err(CommandError(
+            "this application has no console window to sign in from".to_owned(),
+        ));
+    };
+    let origin =
+        tauri::Url::parse(target.cookie_origin).map_err(|why| CommandError(why.to_string()))?;
+    let capture = Capture::of(&window, &origin);
+    capture_here(app, target, window, capture)
+}
+
+/// The same login with the capture handed to it, which is the seam a host test
+/// enters through: the mock runtime's cookie store is empty by construction, so
+/// a capture and a deadline are unreachable without substituting the read and
+/// shortening the wait.
+fn capture_here<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    target: LoginTarget,
+    window: tauri::WebviewWindow<R>,
+    mut capture: Capture,
+) -> Result<(), CommandError> {
+    let login = tauri::Url::parse(target.login_url).map_err(|why| CommandError(why.to_string()))?;
+    let base = crate::control_plane::base_url();
+    let console = tauri::Url::parse(&base).map_err(|why| CommandError(why.to_string()))?;
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(CONSOLE_HANDOVER).await;
+        let verdict = if window.navigate(login).is_ok() {
+            capture_in_place(&app, &window, &target, &console, &mut capture).await
+        } else {
+            ConnectVerdict::Refused
+        };
+        if let Ok(back) = tauri::Url::parse(&return_url(&base, target.marketplace, verdict)) {
+            window.navigate(back).ok();
+        }
+    });
+    Ok(())
+}
+
+/// Wait out the phone's sign-in and file whatever it produced, as one verdict.
+async fn capture_in_place<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+    target: &LoginTarget,
+    console: &tauri::Url,
+    capture: &mut Capture,
+) -> ConnectVerdict {
+    // A phone's abandon is the back gesture, which walks the webview's history
+    // and so lands it back at our own origin rather than closing anything —
+    // `MainActivity.kt` turns that handling on, against the default Tauri's
+    // generated activity sets. So "at our own origin" cannot mean abandoned
+    // until the sign-in has actually replaced us.
+    // Waiting for that here rather than carrying a flag through the poll is
+    // what makes the check exact: `navigate` is a message to the platform's
+    // main thread and the address only changes when the load commits, so a
+    // poll that ran first would read the console's own address and report the
+    // sign-in abandoned half a second after the seller asked for it.
+    if !sign_in_showing(window, console).await {
+        return ConnectVerdict::Refused;
+    }
+    let console = console.clone();
+    let watched = window.clone();
+    let gone = move || {
+        watched
+            .url()
+            .is_ok_and(|at| at.origin() == console.origin())
+    };
+    match await_session(target, capture, gone).await {
+        Ok(jar) => {
+            if file_session(app, target.marketplace, jar).await.is_ok() {
+                ConnectVerdict::Captured
+            } else {
+                // Not `Refused`: the sign-in opened and the seller finished it.
+                // The cause the seller can act on is a device signed out from
+                // the console, which `file_session`'s own check-in learns of
+                // and which wipes the store — and telling them the sign-in
+                // could not be opened would name the one thing that did happen.
+                ConnectVerdict::NotKept
+            }
+        }
+        Err(Waited::Left) => ConnectVerdict::Abandoned,
+        Err(Waited::Deadline) => ConnectVerdict::Deadline,
+        // The diagnostic has nowhere to go on this surface: there is no caller
+        // left to hand a sentence to, and the return leg carries a verdict
+        // rather than prose. `NotKept` rather than `Refused` for the same
+        // reason as above — the sign-in was showing when the read failed, so
+        // nothing was saved and nothing failed to open.
+        Err(Waited::Unreadable(_)) => ConnectVerdict::NotKept,
+    }
+}
+
+/// Whether the marketplace's page replaced the console within
+/// [`SIGN_IN_ARRIVAL`].
+///
+/// False is a sign-in that never opened at all, which is a different thing
+/// from one the seller did not complete and is told as such: a navigation the
+/// platform dropped, or a page that could not begin to load.
+///
+/// Polled at [`POLL_INTERVAL`] rather than faster, and the reason is the cost
+/// of the question rather than the value of the answer: on Android
+/// `WebviewWindow::url` is a message to the platform's main thread and a
+/// blocking wait on its reply, aimed at the one thread that is at this moment
+/// committing a first remote page load. The only consumer of this is a loop
+/// that then polls at that interval anyway.
+async fn sign_in_showing<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    console: &tauri::Url,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + SIGN_IN_ARRIVAL;
+    loop {
+        if window.url().is_ok_and(|at| at.origin() != console.origin()) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// One reading of a webview's cookie store.
+///
+/// Read from Rust rather than from the page: `document.cookie` cannot see the
+/// HttpOnly session cookie, which is the only one that matters.
+type ReadJar = Box<dyn FnMut() -> Result<CookieJar, CommandError> + Send>;
+
+/// What a login capture reads, and how long it is given to read it.
+///
+/// The reader is a value rather than a call to [`read_jar`] in place, and that
+/// is what puts the success path under test at all:
+/// `tauri::test::MockRuntime::cookies_for_url` answers every read with an empty
+/// jar, so on the mock runtime `LoginTarget::is_logged_in` is false forever and
+/// neither a capture nor a deadline can be reached. Without the seam the one
+/// outcome the whole surface exists to produce would ship with no test at any
+/// level.
+struct Capture {
+    poll: Duration,
+    deadline: Duration,
+    read: ReadJar,
+}
+
+impl Capture {
+    /// The capture a seller's sign-in gets: this window's own cookie store, on
+    /// the intervals both surfaces share.
+    fn of<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, origin: &tauri::Url) -> Self {
+        let window = window.clone();
+        let origin = origin.clone();
+        Self {
+            poll: POLL_INTERVAL,
+            deadline: LOGIN_DEADLINE,
+            read: Box::new(move || read_jar(&window, &origin)),
+        }
+    }
+}
+
+/// Read the jar every [`Capture::poll`] until the marketplace's own session is
+/// in it, and answer why not when it never is.
+///
+/// The one wait both surfaces take, so the logged-in condition, the interval
+/// and the deadline cannot come to differ between a computer and a phone.
+/// `left` is the surface's own way of saying the seller has gone: a closed
+/// window on one, a return to our own origin on the other.
+async fn await_session(
+    target: &LoginTarget,
+    capture: &mut Capture,
+    mut left: impl FnMut() -> bool + Send,
+) -> Result<CookieJar, Waited> {
+    let deadline = tokio::time::Instant::now() + capture.deadline;
+    loop {
+        tokio::time::sleep(capture.poll).await;
+        if left() {
+            return Err(Waited::Left);
+        }
+        let jar = (capture.read)().map_err(Waited::Unreadable)?;
+        if target.is_logged_in(&jar) {
+            return Ok(jar);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Waited::Deadline);
+        }
+    }
+}
+
+/// Why a wait ended without a session.
+///
+/// Not [`ConnectVerdict`] itself, and the difference is the third arm: a jar
+/// that could not be read carries the webview's own diagnostic, which a
+/// computer shows the seller verbatim and a phone has nowhere to put. Mapping
+/// to a verdict here would throw that sentence away for both.
+enum Waited {
+    /// The seller went: a window closed on one surface, a return to our own
+    /// origin on the other.
+    Left,
+    Deadline,
+    Unreadable(CommandError),
+}
+
+/// File a captured jar, and tell the server before calling it a success.
+async fn file_session<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    marketplace: Marketplace,
+    jar: CookieJar,
+) -> Result<SessionStatus, CommandError> {
     let state = app.state::<DesktopState>();
     let record = SessionRecord {
         marketplace,
@@ -248,7 +579,10 @@ pub async fn forget_session<R: tauri::Runtime>(
     Ok(SessionStatus::disconnected(marketplace))
 }
 
-fn read_jar(window: &tauri::WebviewWindow, origin: &tauri::Url) -> Result<CookieJar, CommandError> {
+fn read_jar<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    origin: &tauri::Url,
+) -> Result<CookieJar, CommandError> {
     let cookies = window.cookies_for_url(origin.clone())?;
     Ok(CookieJar::new(
         cookies
@@ -877,6 +1211,525 @@ mod session_command_tests {
                 "and the revocation wiped every marketplace, {marketplace:?} included"
             );
         }
+        drop(app);
+    }
+
+    /// A stub sign-in the mock runtime never loads and the host never fetches.
+    ///
+    /// A `LoginTarget` this crate does not export, so no test reaches a
+    /// marketplace: the discard port answers nothing by definition, and the
+    /// mock webview records a navigation rather than performing one.
+    fn a_stub_target() -> crate::connect::LoginTarget {
+        crate::connect::LoginTarget {
+            marketplace: Marketplace::Tpt,
+            login_url: "http://127.0.0.1:9/stub-sign-in",
+            cookie_origin: "http://127.0.0.1:9",
+            required: &["stubSession"],
+            required_any: &[],
+        }
+    }
+
+    /// The console's own window, at the origin the console is served from.
+    fn a_console_window(
+        app: &tauri::App<tauri::test::MockRuntime>,
+    ) -> tauri::WebviewWindow<tauri::test::MockRuntime> {
+        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+            .parse()
+            .expect("the compiled origin is a url");
+        tauri::WebviewWindowBuilder::new(
+            app,
+            super::CONSOLE_WINDOW,
+            tauri::WebviewUrl::External(origin),
+        )
+        .build()
+        .expect("the console window builds")
+    }
+
+    /// Wait for the one window to arrive somewhere, or say where it stopped.
+    async fn settles_at(
+        window: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+        wanted: impl Fn(&str) -> bool,
+    ) -> String {
+        let deadline = tokio::time::Instant::now() + core::time::Duration::from_secs(20);
+        loop {
+            let at = window.url().map(|url| url.to_string()).unwrap_or_default();
+            if wanted(&at) {
+                return at;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the window never got there; it is at {at}"
+            );
+            tokio::time::sleep(core::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// The phone's arm answers before it navigates, and files nothing.
+    ///
+    /// Both halves matter and they are the same half of D1 read twice. The
+    /// answer has to precede the navigation because Tauri delivers it by
+    /// evaluating a callback in whatever page the webview is showing, and the
+    /// page it would otherwise show is the marketplace's — the one page this
+    /// module's fence exists to keep our own code out of. And nothing may be
+    /// filed at this point because no sign-in has happened yet: a store
+    /// written here would be a session claimed on the strength of a button
+    /// press.
+    #[tokio::test]
+    async fn the_one_window_arm_opens_the_sign_in_and_files_nothing() {
+        let store = Arc::new(MemorySessionStore::new());
+        let app = app_holding(Arc::clone(&store), Recorder::allowing());
+        let window = a_console_window(&app);
+
+        let answer = super::connect_on_target(
+            app.handle().clone(),
+            a_stub_target(),
+            super::ConnectSurface::OneWindow,
+        )
+        .await
+        .expect("the phone's arm opens rather than refusing");
+        assert!(
+            matches!(answer, super::ConnectOutcome::Opening),
+            "a phone answers that the sign-in is opening; the verdict cannot come back this \
+             way, because the page holding the promise is about to be unloaded"
+        );
+        assert_eq!(
+            window.url().expect("the window has a url").as_str(),
+            "https://teachouse.stowiq.io/",
+            "and it has not navigated yet, so the answer above is evaluated in the console's \
+             own page rather than in the marketplace's"
+        );
+
+        let arrived = settles_at(&window, |at| at.starts_with("http://127.0.0.1:9/")).await;
+        assert_eq!(arrived, "http://127.0.0.1:9/stub-sign-in");
+        for marketplace in Marketplace::ALL {
+            assert!(
+                store
+                    .get(marketplace)
+                    .await
+                    .expect("the store reads")
+                    .is_none(),
+                "nothing is filed for {marketplace:?} by opening a sign-in"
+            );
+        }
+        drop(app);
+    }
+
+    /// A sign-in the seller walks away from returns the console with the
+    /// verdict in the address.
+    ///
+    /// The whole return leg in one test, and it is the leg that has no
+    /// counterpart on a computer: there the seller closes a window and the
+    /// command that opened it is still there to answer. Here the caller is
+    /// gone, the seller's back gesture walks the webview's history onto our own
+    /// origin, and the only thing left to tell them with is the address it is
+    /// navigated to next. Without this a phone would come back to the console
+    /// in silence on every outcome but success.
+    ///
+    /// The gesture reaching our origin at all is `MainActivity.kt`'s doing and
+    /// is not provable here: the mock runtime has no back gesture, so this
+    /// stands in for it by navigating. What that file's one line buys is
+    /// recorded in `docs/notes/design/android-client.md` and checked on a
+    /// handset by `docs/notes/runbooks/android-phone-check.md`.
+    #[tokio::test]
+    async fn a_sign_in_the_seller_leaves_returns_the_console_with_the_verdict() {
+        let store = Arc::new(MemorySessionStore::new());
+        let app = app_holding(Arc::clone(&store), Recorder::allowing());
+        let window = a_console_window(&app);
+        let console: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+            .parse()
+            .expect("the compiled origin is a url");
+
+        super::connect_on_target(
+            app.handle().clone(),
+            a_stub_target(),
+            super::ConnectSurface::OneWindow,
+        )
+        .await
+        .expect("the phone's arm opens");
+
+        settles_at(&window, |at| at.starts_with("http://127.0.0.1:9/")).await;
+        // Long enough for the arrival check to have seen the sign-in showing.
+        // Without it this test could navigate back inside that window and prove
+        // the arrival timeout rather than the abandon it is about.
+        tokio::time::sleep(core::time::Duration::from_millis(700)).await;
+        // The back gesture: the one webview is at our origin again, with no
+        // window having closed and nothing having been signed in to.
+        window.navigate(console).expect("the window navigates back");
+
+        let back = settles_at(&window, |at| at.contains("connect=")).await;
+        assert_eq!(
+            back, "https://teachouse.stowiq.io/marketplaces?connect=abandoned&marketplace=Tpt",
+            "the seller is returned to the page they pressed Connect on, and it is told which \
+             marketplace ended how"
+        );
+        assert!(
+            store
+                .get(Marketplace::Tpt)
+                .await
+                .expect("the store reads")
+                .is_none(),
+            "and an abandoned sign-in files nothing"
+        );
+        drop(app);
+    }
+
+    /// A capture is not a success until the server has been told, and a
+    /// revoked device keeps nothing.
+    ///
+    /// D14, on the half both surfaces now share. It matters more on a phone
+    /// than on a computer: the phone's capture runs with no caller waiting on
+    /// it, so this check is the only thing standing between a device the
+    /// seller signed out and a marketplace session sealed on it.
+    #[tokio::test]
+    async fn a_capture_on_a_revoked_device_is_refused_after_the_check_in() {
+        let store = Arc::new(MemorySessionStore::new());
+        let plane = Recorder::answering(Ok(CheckIn {
+            revoked: true,
+            entitlement: None,
+        }));
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+
+        let refusal = super::file_session(
+            app.handle(),
+            Marketplace::Tpt,
+            CookieJar::new(vec![Cookie {
+                name: "sessionKey".to_owned(),
+                value: "s3cr3t".to_owned(),
+            }]),
+        )
+        .await
+        .expect_err("a device signed out from the console does not keep what it just captured");
+        assert!(
+            refusal.0.contains("signed out from the console"),
+            "and the seller is told which of the two things went wrong. Got: {}",
+            refusal.0
+        );
+        assert_eq!(
+            plane.beats().await.len(),
+            1,
+            "the check-in happened, which is what makes the refusal above evidence rather than \
+             a guess"
+        );
+        assert!(
+            store
+                .get(Marketplace::Tpt)
+                .await
+                .expect("the store reads")
+                .is_none(),
+            "and the wipe the revocation triggers took the capture with it"
+        );
+        drop(app);
+    }
+
+    /// The application answers `connect_marketplace` at the origin the console
+    /// runs at, and refuses the sanctioned branch by name.
+    ///
+    /// Here for the reason the disconnect test above is here: this command's
+    /// signature changed, from a concrete runtime to a generic one and from
+    /// `SessionStatus` to `ConnectOutcome`, and `generate_handler!` expands a
+    /// generic command differently. A registration that silently stopped would
+    /// reach a seller as `Command connect_marketplace not found` rendered as a
+    /// considered refusal.
+    ///
+    /// Etsy rather than a device-branch marketplace deliberately: it is the one
+    /// argument that reaches the body and comes back without touching a
+    /// webview, so this proves the name, the grant and the two-branch rule at
+    /// once and opens nothing.
+    #[test]
+    fn the_application_answers_the_connect_the_console_sends() {
+        use tauri::test::{get_ipc_response, INVOKE_KEY};
+        use tauri::webview::InvokeRequest;
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+        #[expect(
+            clippy::exit,
+            reason = "the generated context's own expansion, not a call this test makes"
+        )]
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![super::connect_marketplace])
+            .build(tauri::generate_context!())
+            .expect("the application builds");
+        app.manage(DesktopState::new(
+            identity(),
+            Arc::new(MemorySessionStore::default()),
+        ));
+        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+            .parse()
+            .expect("the compiled origin is a url");
+        let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(origin.clone()))
+            .build()
+            .expect("the console window builds");
+
+        let refusal = format!(
+            "{:?}",
+            get_ipc_response(
+                &webview,
+                InvokeRequest {
+                    cmd: "connect_marketplace".to_owned(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: origin,
+                    body: serde_json::json!({ "marketplace": "Etsy" }).into(),
+                    headers: tauri::http::HeaderMap::default(),
+                    invoke_key: INVOKE_KEY.to_owned(),
+                },
+            )
+            .err()
+        );
+        assert!(
+            refusal.contains("publishes an official API"),
+            "the console's string must reach the handler and come back with the two-branch \
+             rule's own refusal: neither unregistered nor ungranted at the origin the console \
+             runs at. Got: {refusal}"
+        );
+        drop(app);
+    }
+
+    /// A capture with the jar substituted and the wait shortened.
+    ///
+    /// `tauri::test::MockRuntime::cookies_for_url` answers every read with an
+    /// empty jar, so without this the two verdicts that matter most are
+    /// unreachable on a host: `is_logged_in` is false forever, so a capture
+    /// never happens, and a deadline is ten minutes away.
+    fn a_capture(
+        poll: core::time::Duration,
+        deadline: core::time::Duration,
+        read: impl FnMut() -> Result<CookieJar, super::CommandError> + Send + 'static,
+    ) -> super::Capture {
+        super::Capture {
+            poll,
+            deadline,
+            read: Box::new(read),
+        }
+    }
+
+    /// The jar a completed stub sign-in leaves behind.
+    fn a_signed_in_jar() -> CookieJar {
+        CookieJar::new(vec![Cookie {
+            name: "stubSession".to_owned(),
+            value: "s3cr3t".to_owned(),
+        }])
+    }
+
+    /// A sign-in that completes is filed, reported to the server, and the
+    /// console is returned saying so.
+    ///
+    /// The success path, which is the entire point of the surface and which no
+    /// test reached before: the mock runtime's cookie store is empty by
+    /// construction, so `Captured` was produced by nothing at any level and the
+    /// first seller to press Connect on a phone would have been the first
+    /// execution of it.
+    ///
+    /// Three assertions rather than one, because three different wrong
+    /// implementations reach the same address. One that answers `Captured`
+    /// without writing the store leaves a phone claiming a login it does not
+    /// hold, and the store assertion catches it. One that reports success
+    /// before the check-in — dropping the D14 guard the desktop arm has — files
+    /// a session on a device the seller may have signed out, and the single
+    /// heartbeat catches it. One that maps the outcome to any other verdict, or
+    /// never navigates back at all, leaves the seller on the marketplace's page
+    /// or reading a failure, and the address catches both.
+    #[tokio::test]
+    async fn a_sign_in_that_completes_is_filed_and_the_console_is_told() {
+        let store = Arc::new(MemorySessionStore::new());
+        let plane = Recorder::allowing();
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+        let window = a_console_window(&app);
+
+        super::capture_here(
+            app.handle(),
+            a_stub_target(),
+            window.clone(),
+            a_capture(
+                core::time::Duration::from_millis(50),
+                core::time::Duration::from_secs(30),
+                || Ok(a_signed_in_jar()),
+            ),
+        )
+        .expect("the phone's arm opens");
+
+        let back = settles_at(&window, |at| at.contains("connect=")).await;
+        assert_eq!(
+            back, "https://teachouse.stowiq.io/marketplaces?connect=captured&marketplace=Tpt",
+            "a completed sign-in returns the console to the page it left, saying which \
+             marketplace was connected"
+        );
+        assert!(
+            store
+                .get(Marketplace::Tpt)
+                .await
+                .expect("the store reads")
+                .is_some(),
+            "and the session it captured is on the device, or the sentence above is a claim \
+             about nothing"
+        );
+        assert_eq!(
+            plane.beats().await.len(),
+            1,
+            "and the server was told before the capture was called a success, which is the \
+             only thing standing between a device the seller signed out and a marketplace \
+             session sealed on it"
+        );
+        drop(app);
+    }
+
+    /// A sign-in the seller never completes ends at the deadline, files
+    /// nothing, and says which of the failures it was.
+    ///
+    /// The other verdict the mock runtime's empty jar made unreachable, and it
+    /// is reachable here only because the wait is a value: ten minutes is not a
+    /// test. Three wrong implementations it catches. One that maps a deadline
+    /// to `abandoned` or `refused` tells a seller who waited too long either
+    /// that they walked away or that the page never opened, and the address
+    /// catches it. One whose poll never notices the deadline — reading the
+    /// production constant rather than the wait it was given, say — never
+    /// returns the console at all, and the twenty-second settle catches it. One
+    /// that files whatever the last read produced writes an empty jar as a
+    /// session, and the store catches it.
+    #[tokio::test]
+    async fn a_sign_in_that_runs_out_of_time_files_nothing_and_says_so() {
+        let store = Arc::new(MemorySessionStore::new());
+        let plane = Recorder::allowing();
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+        let window = a_console_window(&app);
+
+        super::capture_here(
+            app.handle(),
+            a_stub_target(),
+            window.clone(),
+            a_capture(
+                core::time::Duration::from_millis(20),
+                core::time::Duration::from_millis(100),
+                || Ok(CookieJar::new(Vec::new())),
+            ),
+        )
+        .expect("the phone's arm opens");
+
+        let back = settles_at(&window, |at| at.contains("connect=")).await;
+        assert_eq!(
+            back, "https://teachouse.stowiq.io/marketplaces?connect=deadline&marketplace=Tpt",
+            "the seller is returned to the console and told the sign-in ran out of time, which \
+             is a different thing from leaving it and a different thing from it never opening"
+        );
+        assert!(
+            store
+                .get(Marketplace::Tpt)
+                .await
+                .expect("the store reads")
+                .is_none(),
+            "and a sign-in that never produced a session files none"
+        );
+        assert!(
+            plane.beats().await.is_empty(),
+            "and nothing is reported to the server, because nothing was captured"
+        );
+        drop(app);
+    }
+
+    /// A page at a marketplace's own origin reaches none of our commands, in
+    /// the one window every capability names.
+    ///
+    /// The fence this surface creates, and the one it has that a computer does
+    /// not need. On a computer the marketplace page sits in a window labelled
+    /// `login-<Marketplace>`, absent from every capability, and that absence
+    /// refuses it. On a phone it sits in window `main` — the label every
+    /// capability here names — and the only thing left refusing it is the
+    /// per-invoke remote-origin check against the one origin `console.json`
+    /// grants.
+    ///
+    /// Nothing tested that check. `the_capability_grants_the_origin_this_build_uses`
+    /// parses the JSON, and the two tests above invoke from the console's own
+    /// origin, so both pass unchanged if a second entry is added to
+    /// `remote.urls`, if the pattern is widened to a wildcard host, or if
+    /// `default.json` gains a `remote` block. Any of those hands a marketplace
+    /// page `start_import` and the seller's catalogue.
+    ///
+    /// Asserted as a pair rather than on the refusal alone: each command has a
+    /// refusal of its own that only the body produces, so a call that reached
+    /// the body is distinguishable here from one the ACL stopped.
+    #[test]
+    fn a_marketplace_page_in_the_console_window_reaches_no_command() {
+        use tauri::test::{get_ipc_response, INVOKE_KEY};
+        use tauri::webview::InvokeRequest;
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+        #[expect(
+            clippy::exit,
+            reason = "the generated context's own expansion, not a call this test makes"
+        )]
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![
+                super::connect_marketplace,
+                super::start_import
+            ])
+            .build(tauri::generate_context!())
+            .expect("the application builds");
+        app.manage(DesktopState::new(
+            identity(),
+            Arc::new(MemorySessionStore::default()),
+        ));
+        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+            .parse()
+            .expect("the compiled origin is a url");
+        let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(origin))
+            .build()
+            .expect("the console window builds");
+        // Where a marketplace sign-in leaves this window on a phone. Not a
+        // real host: `InvokeRequest.url` is what the ACL matches on, and on
+        // Android it is tracked in Kotlin at `onPageStarted` rather than
+        // supplied by the page, so a page cannot claim a different one.
+        let marketplace_page: tauri::Url = "https://www.example.invalid/login"
+            .parse()
+            .expect("the marketplace page is a url");
+
+        let ask = |cmd: &str, body: serde_json::Value| {
+            format!(
+                "{:?}",
+                get_ipc_response(
+                    &webview,
+                    InvokeRequest {
+                        cmd: cmd.to_owned(),
+                        callback: tauri::ipc::CallbackFn(0),
+                        error: tauri::ipc::CallbackFn(1),
+                        url: marketplace_page.clone(),
+                        body: body.into(),
+                        headers: tauri::http::HeaderMap::default(),
+                        invoke_key: INVOKE_KEY.to_owned(),
+                    },
+                )
+                .err()
+            )
+        };
+
+        let connect = ask(
+            "connect_marketplace",
+            serde_json::json!({ "marketplace": "Etsy" }),
+        );
+        assert!(
+            connect.contains("not allowed"),
+            "a page at a marketplace's origin must be refused `connect_marketplace` outright. \
+             Got: {connect}"
+        );
+        assert!(
+            !connect.contains("publishes an official API"),
+            "and refused before the body, or the refusal above is the two-branch rule speaking \
+             and not the fence. Got: {connect}"
+        );
+
+        let import = ask(
+            crate::import::START_IMPORT_COMMAND,
+            serde_json::json!({ "request": "71717171-7171-7171-7171-717171717171" }),
+        );
+        assert!(
+            import.contains("not allowed"),
+            "and `start_import`, which is the one that would hand it the seller's catalogue. \
+             Got: {import}"
+        );
+        assert!(
+            !import.contains("no way to reach the server"),
+            "and refused before the body, or this build's missing ledger transport is what \
+             stopped it rather than the origin. Got: {import}"
+        );
         drop(app);
     }
 }

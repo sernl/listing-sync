@@ -25,6 +25,7 @@ pub mod labels;
 pub mod lowering;
 mod mapping;
 pub mod marketplace_requests;
+pub mod notifications;
 pub mod operators;
 pub mod org;
 pub mod overrides;
@@ -69,8 +70,8 @@ pub use jobs::{
     append_event, append_event_asserted, revive_by_gap, revive_counterparts, revive_on,
     settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
     Charged, ClaimPolicy, CreatedJob, DeviceClaim, DeviceRef, EventScope, HaltCause, HaltRepo,
-    InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobRepo, LandingEffect, LeaseRef,
-    LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
+    InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobOrigin, JobRepo, LandingEffect,
+    LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
     OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, Revived, WriteAttemptRepo, ALL_GATES,
     AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
     REAUTH_REQUIRED, REVIVABLE_GATES,
@@ -87,6 +88,9 @@ pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
     MarketplaceRequestWrite, NewMarketplaceRequest, PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX,
     REQUESTS_PER_ORG_MAX,
+};
+pub use notifications::{
+    NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,
 };
 pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};

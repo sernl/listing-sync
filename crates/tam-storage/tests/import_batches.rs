@@ -1083,7 +1083,8 @@ async fn a_settle_writes_imported_with_no_failed_row_and_failed_with_one(pool: P
                 RowAddress {
                     sheet: "Teachouse",
                     ordinal
-                }
+                },
+                false
             )
             .await
             .expect("the breadcrumb writes"),
@@ -1116,6 +1117,7 @@ async fn a_settle_writes_imported_with_no_failed_row_and_failed_with_one(pool: P
             sheet: "Teachouse",
             ordinal: 4,
         },
+        false,
     )
     .await
     .expect("the breadcrumb writes");

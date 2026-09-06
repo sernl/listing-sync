@@ -18,6 +18,12 @@ export interface Env {
   readonly resendApiKey: string | undefined;
   readonly emailFrom: string | undefined;
   readonly turnstileSecretKey: string | undefined;
+  /**
+   * The shared secret the internal address route is fenced by. Absent, that
+   * route does not exist: the path answers the same 404 every unknown path
+   * does, so a deployment that has not opted in has nothing to reach.
+   */
+  readonly internalSecret: string | undefined;
   readonly google: OAuthCredentials | undefined;
   readonly microsoft: (OAuthCredentials & { readonly tenantId: string }) | undefined;
 }
@@ -172,6 +178,7 @@ const load = (): Env => {
     resendApiKey,
     emailFrom,
     turnstileSecretKey: readRequiredInProduction(mode, 'TURNSTILE_SECRET_KEY'),
+    internalSecret: read('TAM_AUTH_INTERNAL_SECRET'),
     google: readOAuthPair('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'),
     microsoft:
       microsoft === undefined
