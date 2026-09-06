@@ -76,33 +76,44 @@ export const CARD_NAME: Record<Marketplace, string> = {
  * console can do: `app` means a marketplace login can be opened from here, and
  * `browser` means it cannot and the seller has to be told where it can.
  *
- * Android is `browser` even though it is the application, and deliberately.
- * `connect_marketplace` builds a second window unconditionally
- * (`apps/desktop/src-tauri/src/commands.rs`), Tauri's mobile surface is a
- * single Activity, and `docs/notes/design/android-client.md` records that the
- * phone path has to navigate the one webview and navigate back instead. Until
- * that lands, a phone offering the button would offer one that does nothing,
- * which is worse than a sentence saying where to connect.
+ * A phone is `app`. It was `browser` until the application gained a login path
+ * that does not need a second window: `connect_marketplace` now navigates the
+ * one webview to the marketplace's own sign-in and navigates back with the
+ * verdict, which is what `signsInPlace` below distinguishes. What a phone can
+ * do with a login is what a computer can — hold it, run the seller's queued
+ * work against it, and be signed out from the console — so the two are one host
+ * here and differ only in how the sign-in is presented.
  */
 export type ConnectHost = 'app' | 'browser';
 
 /**
- * Which host this copy of the console is, from the two facts that decide it.
+ * Which host this copy of the console is.
  *
- * The invoker is the only honest test of whether a marketplace login can be
- * opened from here: it is present exactly where the console is running inside
- * the application, and absent in every browser and in the dev server opened
- * directly. The user agent then takes Android back out, for the reason
- * `ConnectHost` states.
- *
- * Both inputs are read by the caller rather than here, so this stays a pure
- * function of two values and does not need a window to be tested.
+ * The invoker is the whole test, and the only honest one: it is present exactly
+ * where the console is running inside the application, and absent in every
+ * browser and in the dev server opened directly. It used to take the user agent
+ * as well, to take Android back out; nothing takes Android out any more, so the
+ * parameter went with the reason for it. Which surface the sign-in takes is
+ * `signsInPlace`'s question, not this one's.
  */
-export function hostOf(invoker: unknown, userAgent: string | null): ConnectHost {
-	if (invoker === null || invoker === undefined) {
-		return 'browser';
-	}
-	return platformOf(userAgent) === 'android' ? 'browser' : 'app';
+export function hostOf(invoker: unknown): ConnectHost {
+	return invoker === null || invoker === undefined ? 'browser' : 'app';
+}
+
+/**
+ * Whether a sign-in started here replaces this page rather than opening a
+ * window beside it.
+ *
+ * True on a phone alone, and it is a fact about the application rather than
+ * about the screen: Android has one Activity, so tao answers
+ * `NoAvailableActivity` for a second window and the login has to happen in the
+ * one webview the console itself is in. Two things follow that a computer never
+ * has to say — the connect's answer arrives in the address rather than in the
+ * promise, and a disconnect leaves the marketplace's own cookie in the phone's
+ * shared browser store, which `delete_cookie` cannot reach on Android.
+ */
+export function signsInPlace(invoker: unknown, userAgent: string | null): boolean {
+	return hostOf(invoker) === 'app' && platformOf(userAgent) === 'android';
 }
 
 /** What a card's foot offers: a place to go, or an act to perform here.
@@ -140,7 +151,7 @@ export function footerAction(row: MarketplaceRow, host: ConnectHost): CardAction
 		? { kind: 'command', label: `Connect ${name}`, marketplace: row.marketplace }
 		: {
 				kind: 'link',
-				label: `Connect ${name} from the Teachouse app on your computer`,
+				label: `Connect ${name} from the Teachouse app on your computer or phone`,
 				href: DOWNLOADS_ANCHOR
 			};
 }
@@ -185,7 +196,8 @@ export function disconnectLabel(marketplace: Marketplace): string {
 export function disconnectPrompt(
 	marketplace: Marketplace,
 	host: ConnectHost,
-	heldOnAMachine: boolean
+	heldOnAMachine: boolean,
+	inPlace = false
 ): string {
 	const name = CARD_NAME[marketplace];
 	const shared =
@@ -195,7 +207,8 @@ export function disconnectPrompt(
 		return (
 			`Disconnect ${name}?\n\n` +
 			`The ${name} login is removed from this machine first. ` +
-			shared
+			shared +
+			(inPlace ? `\n\n${STAYS_IN_THE_PHONES_BROWSER(name)}` : '')
 		);
 	}
 	if (!heldOnAMachine) {
@@ -225,10 +238,29 @@ export function disconnectPrompt(
 export function disconnectAsk(
 	marketplace: Marketplace,
 	host: ConnectHost,
-	connection: { state: string } | null | undefined
+	connection: { state: string } | null | undefined,
+	inPlace = false
 ): string {
-	return disconnectPrompt(marketplace, host, connectionIsLinked(connection));
+	return disconnectPrompt(marketplace, host, connectionIsLinked(connection), inPlace);
 }
+
+/**
+ * What a phone's disconnect has to say that a computer's does not.
+ *
+ * Our own copy of the session is gone either way. What is left on Android is
+ * the marketplace's own cookie, in the WebView's process-global store, and we
+ * cannot remove it: `delete_cookie` is a no-op there, and the one lever that
+ * works — `clear_all_browsing_data` — is all-or-nothing across every origin the
+ * application has visited, which includes ours, so calling it would sign the
+ * seller out of Teachouse as a side effect of disconnecting a marketplace.
+ *
+ * Said rather than silently accepted, because the alternative is a seller who
+ * disconnects, presses Connect again, is signed straight in with no password,
+ * and reasonably concludes the disconnect did nothing.
+ */
+const STAYS_IN_THE_PHONES_BROWSER = (name: string) =>
+	`Your ${name} sign-in stays in this phone's browser, where we cannot remove it, so ` +
+	`connecting ${name} again may not ask for your password.`;
 
 /** What the control plane answered when asked to disconnect.
  *
@@ -290,6 +322,141 @@ export function disconnectSay(
 				tone: 'info',
 				message: `${name} is disconnected. Connecting again is the same button.`
 			};
+}
+
+/** The query parameter the application returns a phone's sign-in verdict in,
+ *  and the one naming which marketplace it was about.
+ *
+ *  Spelled here as `apps/desktop/src-tauri/src/connect.rs` spells them; the
+ *  address is the only channel between the two, because the page that asked for
+ *  the sign-in was unloaded by it. */
+export const CONNECT_RETURN_PARAM = 'connect';
+export const CONNECT_RETURN_MARKETPLACE_PARAM = 'marketplace';
+
+/** What a returning sign-in is told, in the shape `disconnectSay` already
+ *  uses. */
+export type ConnectReturn = DisconnectSay;
+
+/**
+ * The verdicts a phone's sign-in can end on.
+ *
+ * Listed as values rather than only as a type, because `view.test.ts` reads
+ * `ConnectVerdict::code` out of `apps/desktop/src-tauri/src/connect.rs` and
+ * compares the two sets: the address is the whole channel between the
+ * application and this page, and a code the application sends that this file
+ * does not word is a seller returned to the console in silence.
+ */
+export const CONNECT_VERDICT_CODES = [
+	'captured',
+	'deadline',
+	'abandoned',
+	'refused',
+	'notkept'
+] as const;
+
+export type ConnectVerdictCode = (typeof CONNECT_VERDICT_CODES)[number];
+
+/**
+ * What each verdict says, where the marketplace is one this console knows.
+ *
+ * A total map rather than a switch with a default, so a verdict added in
+ * `ConnectVerdict` is worded here or fails to compile — and the failure mode it
+ * prevents is the one this whole return leg exists to fix: a seller returned to
+ * the console with nothing said.
+ *
+ * `refused` and `notkept` are two different failures and were one code until a
+ * review found what that cost: a seller whose device had been signed out of
+ * Teachouse mid-sign-in was told the sign-in could not be opened, which is the
+ * opposite of what happened and names nothing they can act on. `refused` is now
+ * only the page never appearing, and `notkept` is a sign-in that got no further
+ * than this device.
+ *
+ * Only `captured` is good news, and it is deliberately not the one that decides
+ * the card. Whether a marketplace is connected is read from the server's own
+ * connection list, so this sentence can be wrong about nothing: a hand-typed
+ * parameter changes the line at the top of the page and changes no state at
+ * all.
+ */
+const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> = {
+	captured: (name) => ({ tone: 'info', message: `${name} is connected on this device.` }),
+	deadline: (name) => ({
+		tone: 'error',
+		message: `The ${name} sign-in was not finished in time, so nothing was saved. Press Connect ${name} to try again.`
+	}),
+	abandoned: (name) => ({
+		tone: 'error',
+		message: `The ${name} sign-in did not finish, so nothing was saved. Press Connect ${name} to try again.`
+	}),
+	refused: (name) => ({
+		tone: 'error',
+		message: `The ${name} sign-in page did not open, so nothing was saved. Press Connect ${name} to try again.`
+	}),
+	notkept: (name) => ({
+		tone: 'error',
+		message: `The ${name} sign-in could not be saved on this device. If this device was signed out of Teachouse, sign in again here and then press Connect ${name}.`
+	})
+};
+
+/**
+ * The same verdicts where the marketplace is one this console does not know,
+ * which is an application newer than the page or an address somebody typed.
+ *
+ * Worded separately rather than by substituting a stand-in name into the
+ * sentences above, because those are shaped around a name: the substitution
+ * produced "marketplace is connected on this device." — a sentence starting
+ * lower case — and "Press Connect marketplace to try again."
+ */
+const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
+	captured: { tone: 'info', message: 'Your marketplace sign-in is saved on this device.' },
+	deadline: {
+		tone: 'error',
+		message:
+			'Your marketplace sign-in was not finished in time, so nothing was saved. Press Connect on the card to try again.'
+	},
+	abandoned: {
+		tone: 'error',
+		message:
+			'Your marketplace sign-in did not finish, so nothing was saved. Press Connect on the card to try again.'
+	},
+	refused: {
+		tone: 'error',
+		message:
+			'Your marketplace sign-in page did not open, so nothing was saved. Press Connect on the card to try again.'
+	},
+	notkept: {
+		tone: 'error',
+		message:
+			'Your marketplace sign-in could not be saved on this device. If this device was signed out of Teachouse, sign in again here and then press Connect on the card.'
+	}
+};
+
+/**
+ * What the page says when a phone's sign-in has just returned it, or null when
+ * this is an ordinary visit.
+ *
+ * Null on an unrecognised verdict, which is what makes reading an address safe:
+ * a parameter nobody wrote and a code from a newer application both say nothing
+ * rather than guessing. A marketplace name this console does not know is not a
+ * reason to withhold the sentence — the verdict is still true — so it takes the
+ * unnamed wording instead.
+ */
+export function connectReturn(params: URLSearchParams): ConnectReturn | null {
+	const code = params.get(CONNECT_RETURN_PARAM) ?? '';
+	if (!isVerdictCode(code)) {
+		return null;
+	}
+	const named = params.get(CONNECT_RETURN_MARKETPLACE_PARAM) ?? '';
+	return Object.hasOwn(CARD_NAME, named)
+		? CONNECT_SAID[code](CARD_NAME[named as Marketplace])
+		: CONNECT_SAID_UNNAMED[code];
+}
+
+/** Whether a string off the address is one of the verdicts we word.
+ *
+ * Read off `CONNECT_SAID`'s own keys rather than listed a second time, so the
+ * set that is recognised and the set that has a sentence cannot come apart. */
+function isVerdictCode(code: string): code is ConnectVerdictCode {
+	return Object.hasOwn(CONNECT_SAID, code);
 }
 
 /** Which card is mid-flight, and at what. A record rather than one slot,

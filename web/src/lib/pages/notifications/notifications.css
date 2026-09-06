@@ -1,0 +1,175 @@
+/* The Notifications page's own rules, scoped under `.ntf-page` so a class this
+ * page names cannot reach another page's markup: these rules are loaded
+ * globally, as every page-level stylesheet in this console is. Every colour is
+ * a token.
+ */
+
+/* --- the four read states ------------------------------------------------ */
+
+/* Two of the four are drawn from the shared catalogue and have no rule here:
+   a failed read is `Banner` in its bad tone and an empty one is `Placeholder`,
+   both already styled for every page that uses them. What is page-local is the
+   pending sentence and the list of rows below it. Restating the other two here
+   would be a second place for the console to decide what a failed read looks
+   like. */
+
+/* The pending sentence carries the page's card gap because nothing follows it,
+   so without one the page would end at the text. */
+.ntf-page .ntf-said {
+	margin: 4px 0 24px;
+	font-size: 13.5px;
+	color: var(--muted);
+}
+
+/* The eyebrow over the list, counting what is unread on the pages loaded. The
+   rail carries no badge, by ruling, so this is the only figure the console
+   states for it. */
+.ntf-page .ntf-total {
+	margin: 4px 0 12px;
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+/* --- the list ------------------------------------------------------------ */
+
+.ntf-page .ntf-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.ntf-page .ntf-row {
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-1);
+	min-width: 0;
+}
+
+/* The whole row is the link, so the target is the card rather than the words
+   in it: a run finished on a phone is opened with a thumb. */
+.ntf-page .ntf-open {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	padding: 14px 16px;
+	min-height: var(--control-h);
+	color: inherit;
+	text-decoration: none;
+	min-width: 0;
+}
+
+.ntf-page .ntf-open:hover {
+	background: var(--hover);
+	border-radius: var(--r-card);
+}
+
+.ntf-page .ntf-open:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+	border-radius: var(--r-card);
+}
+
+/* Unread is carried by a mark rather than by weight alone, because a list
+   where every second row is bold reads as emphasis rather than as state. The
+   mark holds its column on a read row too, so marking one read does not shift
+   every line of text left. */
+.ntf-page .ntf-unread {
+	width: 8px;
+	height: 8px;
+	margin-top: 6px;
+	border-radius: var(--r-pill);
+	background: var(--accent);
+	flex: none;
+}
+
+.ntf-page .ntf-read {
+	visibility: hidden;
+}
+
+.ntf-page .ntf-main {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	margin-right: auto;
+}
+
+.ntf-page .ntf-title {
+	font-size: 14.5px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ntf-page .ntf-row.is-unread .ntf-title {
+	color: var(--accent-ink);
+}
+
+/* --- the counts, in the outcome bar's own words and colours -------------- */
+
+.ntf-page .ntf-counts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.ntf-page .ntf-count {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+/* The swatch takes its colour from the outcome bar's own segment class, so a
+   count drawn here and the same count drawn in a run's bar cannot disagree
+   about which colour it is. */
+.ntf-page .ntf-count i {
+	width: 8px;
+	height: 8px;
+	border-radius: var(--r-pill);
+	flex: none;
+}
+
+/* A run that changed nothing has no counts to draw, so the line says so in
+   words rather than rendering as an empty strip. */
+.ntf-page .ntf-quiet {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.ntf-page .ntf-when {
+	font-size: 12px;
+	color: var(--faint);
+	white-space: nowrap;
+	flex: none;
+	padding-top: 2px;
+}
+
+.ntf-page .ntf-more {
+	display: flex;
+	justify-content: center;
+	margin-top: 16px;
+}
+
+@media (max-width: 620px) {
+	/* The age moves under the counts rather than staying in its own column:
+	   at phone width the title wraps to two lines against it, and a right
+	   column of one short line beside three left ones reads as a stray. */
+	.ntf-page .ntf-open {
+		flex-wrap: wrap;
+	}
+
+	.ntf-page .ntf-when {
+		padding-top: 0;
+		padding-left: 20px;
+		flex-basis: 100%;
+	}
+}

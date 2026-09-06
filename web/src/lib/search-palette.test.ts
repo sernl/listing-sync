@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { MappingHead, ProductHead } from '$lib/api';
 import {
@@ -7,6 +8,7 @@ import {
 	isStale,
 	keyAction,
 	opensPalette,
+	paletteAnchor,
 	paletteView,
 	rankMatches,
 	resultCount,
@@ -404,5 +406,94 @@ describe('which marketplaces show a resource', () => {
 			mapping({ product: 'a', inventory: 'Tpt' })
 		]);
 		expect(showing.get('a')).toEqual(['TPT', 'TES US']);
+	});
+});
+
+describe('where the phone sheet is anchored', () => {
+	// The stylesheet's own numbers, read out of it rather than restated, the way
+	// `styles/tokens.test.ts` reads its colours: `paletteAnchor` centres the
+	// head `shell.css` draws and hangs the sheet at the gutter `shell.css`
+	// falls back to, so a change to either that does not change the other has to
+	// fail here rather than drift. The degenerate case below is where the
+	// coupling bites, because it asserts both numbers exactly.
+	const SHEET = readFileSync(new URL('./styles/shell.css', import.meta.url), 'utf8');
+
+	function declared(what: string, pattern: RegExp): number {
+		const found = SHEET.match(pattern);
+		if (found === null) throw new Error(`shell.css declares no ${what}`);
+		return Number(found[1]);
+	}
+
+	const HEAD = declared('.pal-head height', /\.pal-head\s*\{[^}]*?height:\s*([\d.]+)px/);
+	const GUTTER = declared(
+		'--pal-top fallback',
+		/margin:\s*var\(--pal-top,\s*max\(([\d.]+)px/
+	);
+
+	/** The invariants every answer owes, whatever the band. Asserted from the
+	 *  band rather than from a remembered number, so an implementation that
+	 *  returned constants would fail here rather than pass. */
+	function holds(band: { height: number; offsetTop: number }) {
+		const { top, maxHeight } = paletteAnchor(band);
+		const within = top - band.offsetTop;
+		expect(top).toBeGreaterThanOrEqual(0);
+		expect(within).toBeGreaterThanOrEqual(GUTTER);
+		expect(maxHeight).toBeGreaterThanOrEqual(HEAD);
+		return { top, maxHeight, within };
+	}
+
+	it('puts the head a third of the way down the band the keyboard has left', () => {
+		// A 390x844 phone with a portrait keyboard up: the band is the 508px
+		// above it, which is the case the founder is looking at.
+		const { within, maxHeight } = holds({ height: 508, offsetTop: 0 });
+		expect(within + HEAD / 2).toBeCloseTo(508 / 3, 0);
+		// The foot stays inside the band rather than under the keyboard, which
+		// is the whole reason the band is measured instead of assumed.
+		expect(within + maxHeight).toBeLessThanOrEqual(508 - GUTTER);
+	});
+
+	it('drops the head further down and grows the sheet when the keyboard closes', () => {
+		const up = holds({ height: 508, offsetTop: 0 });
+		const down = holds({ height: 844, offsetTop: 0 });
+		expect(down.within).toBeGreaterThan(up.within);
+		expect(down.maxHeight).toBeGreaterThan(up.maxHeight);
+		expect(down.within + down.maxHeight).toBeLessThanOrEqual(844 - GUTTER);
+	});
+
+	it('answers against the layout viewport, not the visual one', () => {
+		// A pinch-zoomed page reports the same band offset down the layout
+		// viewport. The dialog is positioned against the layout viewport, so the
+		// offset belongs in the answer; only the placement inside the band is
+		// the same.
+		const flat = paletteAnchor({ height: 508, offsetTop: 0 });
+		const scrolled = paletteAnchor({ height: 508, offsetTop: 96 });
+		expect(scrolled.top).toBe(flat.top + 96);
+		expect(scrolled.maxHeight).toBe(flat.maxHeight);
+	});
+
+	it('still answers a band too short to hold the head and two gutters', () => {
+		// Shorter than HEAD + 2 * GUTTER, which is what a landscape phone with a
+		// keyboard up can report. A negative top would put the input off the top
+		// of the screen and a sub-head cap would clip the field being typed in.
+		const { top, maxHeight } = holds({ height: 60, offsetTop: 0 });
+		expect(top).toBe(GUTTER);
+		expect(maxHeight).toBe(HEAD);
+	});
+
+	it('keeps the foot inside a band a device reports to the digit', () => {
+		// The height an Android device reported at rest, unrounded. Every band a
+		// browser measures is fractional, so an integer case cannot tell the
+		// floor on `maxHeight` from a round or a ceiling: at this height a
+		// ceiling puts the foot one pixel past the gutter it was placed against
+		// and nothing else in this file would say so.
+		const height = 786.2857055664062;
+		const { within, maxHeight } = holds({ height, offsetTop: 0 });
+		expect(within + maxHeight).toBeLessThanOrEqual(height - GUTTER);
+	});
+
+	it('is total rather than phone-shaped', () => {
+		const { within, maxHeight } = holds({ height: 1024, offsetTop: 0 });
+		expect(within + HEAD / 2).toBeCloseTo(1024 / 3, 0);
+		expect(within + maxHeight).toBeLessThanOrEqual(1024 - GUTTER);
 	});
 });

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
-	import { ApiFailure, api, type OrgView } from '$lib/api';
+	import { ApiFailure, api, type NotifyPreferences, type OrgView } from '$lib/api';
 	import {
 		currentSessionToken,
 		listBrowserSessions,
@@ -33,6 +33,7 @@
 	import { queryKeys } from '$lib/query';
 	import { signOut } from '$lib/sign-out';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import Toggle from '$lib/Toggle.svelte';
 	import { toast } from '$lib/toast';
 	import '$lib/pages/account/account.css';
 
@@ -109,6 +110,41 @@
 		orgRefusal = null;
 		renaming.mutate(orgVerdict.name);
 	}
+
+	// -------------------------------------------------------- notifications
+
+	// Per user rather than per organisation, because the address the mail goes
+	// to is the user's own. There is no field with which either call could name
+	// another user.
+	const notifyPrefs = createQuery(() => ({
+		queryKey: queryKeys.notifyPreferences,
+		queryFn: () => api.notifyPreferences()
+	}));
+
+	/** The pending setting while a write is in flight, so the switch moves
+	 *  under the thumb rather than after the round trip, and null the rest of
+	 *  the time, when the stored value is what the switch shows. No default:
+	 *  the switch is drawn only where the read succeeded, so there is no state
+	 *  in which this page would have to guess which way it is set. */
+	let notifyDraft = $state<boolean | null>(null);
+
+	const settingNotifyEmail = createMutation(() => ({
+		mutationFn: (value: boolean) => api.setNotifyPreferences(value),
+		onMutate: (value: boolean) => {
+			notifyDraft = value;
+		},
+		onSuccess: (stored: NotifyPreferences) => {
+			// The stored value rather than the submitted one, so the switch
+			// shows what the server holds.
+			queryClient.setQueryData(queryKeys.notifyPreferences, stored);
+			notifyDraft = null;
+			toast('info', stored.notify_email ? 'Emails on.' : 'Emails off.');
+		},
+		onError: () => {
+			notifyDraft = null;
+			toast('error', 'That setting was not saved.');
+		}
+	}));
 
 	// ------------------------------------------------------- the org's name
 
@@ -482,6 +518,37 @@
 					</Button>
 				</div>
 			</form>
+		{/if}
+	</Panel>
+
+	<Panel
+		title="Notifications"
+		description="What we send you when one of your runs finishes."
+	>
+		{#if notifyPrefs.isPending}
+			<p class="quiet">Loading…</p>
+		{:else if notifyPrefs.isError || !notifyPrefs.data}
+			<p class="quiet">Your notification settings could not be read.</p>
+		{:else}
+			<Toggle
+				label="Email me when a run finishes"
+				checked={notifyDraft ?? notifyPrefs.data.notify_email}
+				disabled={settingNotifyEmail.isPending}
+				onchange={(value) => settingNotifyEmail.mutate(value)}
+			/>
+			<p class="foot-note">
+				<!-- The address comes from the profile read above rather than from
+				     this setting's own answer: the domain database holds no seller
+				     address by design, so the identity service is the only thing
+				     that knows one. -->
+				{#if profile.data}
+					Mail goes to {profile.data.email}, the address you signed up with.
+				{:else}
+					Mail goes to the address you signed up with.
+				{/if}
+				One email for each run that changed something, and none for a run that
+				changed nothing.
+			</p>
 		{/if}
 	</Panel>
 

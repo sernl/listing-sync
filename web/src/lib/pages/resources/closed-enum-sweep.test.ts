@@ -32,6 +32,7 @@ import {
 	type MarketplaceChip,
 	type WorkItem
 } from '$lib/inventory';
+import { tileFor } from './marketplace-tile';
 import {
 	NO_RESOURCE_FILTERS,
 	listedOn,
@@ -161,6 +162,41 @@ function faultsIn(chip: MarketplaceChip, where: string): string[] {
 	if (chip.action !== null && chip.action.href.length === 0) {
 		faults.push(`${where}: an action with nowhere to go`);
 	}
+	// A seller sent to the Marketplaces page arrives at a grid of twenty-three
+	// cards, so every verdict that sends them there names the marketplace it
+	// sent them for. Held over the whole space rather than at the four sites
+	// that reach it today, because the gate router has a fifth arm that no gate
+	// currently routes to and a gate added in Rust could.
+	if (chip.action !== null && chip.action.href === '/marketplaces') {
+		faults.push(`${where}: sent to the Marketplaces page with no marketplace named`);
+	}
+	return faults;
+}
+
+/** What is wrong with the tile that chip draws, or nothing.
+ *
+ * The same weak oracle and for the same reason: the resource page builds every
+ * tile from one derived expression, so a single state `tileFor` has no arm for
+ * empties the panel rather than one tile. It is not coverage of whether a tile
+ * says a true thing; `marketplace-tile.test.ts` does that. */
+function tileFaultsIn(chip: MarketplaceChip, mapping: MappingHead | undefined, where: string): string[] {
+	const tile = tileFor({ chip, mapping, product: 'p1', now: 20, readiness: undefined });
+	const faults: string[] = [];
+	if (tile.label.length === 0) {
+		faults.push(`${where}: a tile with no status word`);
+	}
+	if (tile.detail.trim().length === 0) {
+		faults.push(`${where}: a tile with no clause under the word`);
+	}
+	if (tile.markSrc.length === 0) {
+		faults.push(`${where}: a tile with no mark`);
+	}
+	if (tile.name.trim().length === 0) {
+		faults.push(`${where}: a tile with no accessible name`);
+	}
+	if (tile.href !== null && tile.href === '/resources/p1') {
+		faults.push(`${where}: a tile linking back to the page it is drawn on`);
+	}
 	return faults;
 }
 
@@ -216,23 +252,34 @@ describe('every chip the closed enums can produce', () => {
 		const wrong = chips.filter(({ chip, where }) => !where.includes(`/${chip.inventory}/`));
 		expect(wrong.map(({ where }) => where)).toEqual([]);
 	});
+
+	it('draws a well-formed tile from every one of them', () => {
+		expect(
+			chips.flatMap(({ chip, where }) =>
+				tileFaultsIn(chip, mappingOf(chip.inventory, live), where)
+			)
+		).toEqual([]);
+	});
 });
 
 describe('every chip the stored standings can produce', () => {
-	const chips: { chip: MarketplaceChip; where: string }[] = [];
+	const chips: { chip: MarketplaceChip; mapping: MappingHead | undefined; where: string }[] = [];
 	for (const standing of [...STANDINGS, undefined]) {
 		for (const inventory of INVENTORY_IDS) {
 			for (const status of STATUSES) {
 				for (const halted of [false, true]) {
+					const mapping =
+						standing === undefined ? undefined : mappingOf(inventory, standing);
 					chips.push({
 						chip: chipFor({
 							product: 'p1',
 							inventory,
-							mapping: standing === undefined ? undefined : mappingOf(inventory, standing),
+							mapping,
 							work: undefined,
 							connection: connectionOf(inventory, status),
 							status: statusOf(inventory, halted)
 						}),
+						mapping,
 						where: `${standing?.name ?? 'unmapped'}/${inventory}/${String(status)}/halted=${halted}`
 					});
 				}
@@ -247,6 +294,12 @@ describe('every chip the stored standings can produce', () => {
 
 	it('answers with a well-formed chip for every one of them', () => {
 		expect(chips.flatMap(({ chip, where }) => faultsIn(chip, where))).toEqual([]);
+	});
+
+	it('draws a well-formed tile from every one of them, mapped or not', () => {
+		expect(chips.flatMap(({ chip, mapping, where }) => tileFaultsIn(chip, mapping, where))).toEqual(
+			[]
+		);
 	});
 });
 

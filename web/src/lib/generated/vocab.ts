@@ -145,6 +145,17 @@ export const TRANSPORT_CLASSES: readonly TransportClass[] = [
   "SellerDevice",
 ];
 
+export type NotificationKind =
+  | "sync"
+  | "migration"
+  | "import";
+
+export const NOTIFICATION_KINDS: readonly NotificationKind[] = [
+  "sync",
+  "migration",
+  "import",
+];
+
 export type LabelColour =
   | "slate"
   | "red"

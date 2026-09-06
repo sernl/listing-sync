@@ -17,7 +17,7 @@ import type {
 } from '$lib/api';
 import { gateLabel } from '$lib/gates';
 import { INVENTORY_ORDER, MARKETPLACE_OF } from '$lib/listings-view';
-import { AUTHORABLE_PLATFORMS } from '$lib/platforms';
+import { AUTHORABLE_PLATFORMS, marketplacesHref } from '$lib/platforms';
 import { standingOf } from '$lib/tes-portfolio';
 import type {
 	BlockedGate,
@@ -224,6 +224,7 @@ interface Verdict {
 
 function gateAction(
 	gate: string | undefined,
+	inventory: InventoryId,
 	product: string,
 	job: string
 ): ChipAction {
@@ -235,7 +236,7 @@ function gateAction(
 		case 'queue':
 			return { label: 'Answer in Reconciliation', href: '/reconciliation' };
 		case 'connections':
-			return { label: 'Open Marketplaces', href: '/marketplaces' };
+			return { label: 'Open Marketplaces', href: marketplacesHref(inventory) };
 		case 'listing':
 			return { label: 'Open the item', href: `/resources/${product}` };
 		default:
@@ -277,8 +278,8 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 						? 'We sent the listing, did not get an answer we could trust, and are going back to look for it.'
 						: `A send reached this marketplace and was interrupted, so it is held rather than retried blind. It is waiting on ${waitingOn(gate)}.`,
 				action: signInGate(gate)
-					? { label: 'Open Marketplaces', href: '/marketplaces' }
-					: gateAction(gate, input.product, entry.job)
+					? { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
+					: gateAction(gate, input.inventory, input.product, entry.job)
 			};
 		case 'blocked':
 			if (signInGate(gate)) {
@@ -287,13 +288,13 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 					detail: onSellerDevice(input.inventory)
 						? 'This is waiting on you signing in to the marketplace on your own device.'
 						: 'This is waiting on you signing in to the marketplace again.',
-					action: { label: 'Open Marketplaces', href: '/marketplaces' }
+					action: { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
 				};
 			}
 			return {
 				state: 'blocked',
 				detail: `Nothing is being sent while this waits on ${waitingOn(gate)}.`,
-				action: gateAction(gate, input.product, entry.job)
+				action: gateAction(gate, input.inventory, input.product, entry.job)
 			};
 		case 'settled':
 			if (entry.item.outcome !== 'failed') {
@@ -445,7 +446,7 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 			detail: `No account is linked for this marketplace yet.${
 				standing.state === 'listed' ? ' The listing itself is still up.' : ''
 			}`,
-			action: { label: 'Open Marketplaces', href: '/marketplaces' }
+			action: { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
 		});
 	}
 	if (input.connection.status === 'disconnected') {
@@ -456,7 +457,7 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 						standing.state === 'listed' ? ' The listing itself is still up.' : ''
 					}`
 				: 'Nothing usable is stored for this marketplace; re-link it to let queued work continue.',
-			action: { label: 'Open Marketplaces', href: '/marketplaces' }
+			action: { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
 		});
 	}
 	return dressed(standing);

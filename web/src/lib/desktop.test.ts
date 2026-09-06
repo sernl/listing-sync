@@ -546,3 +546,63 @@ describe('the grant behind the opener command', () => {
 		expect(capability('updater').platforms).toEqual(['linux', 'macOS', 'windows']);
 	});
 });
+
+describe('reading what a connect answered', () => {
+	// The whole of the phone's connect path, and the case a computer never
+	// produces: the application says the sign-in is replacing this page, and
+	// the caller has to know not to say anything, because the page it would say
+	// it on is about to unload.
+	it('reads the opening answer a phone gives', async () => {
+		const invoke = vi.fn().mockResolvedValue({ outcome: 'opening' });
+		expect(await connectHere(invoke, 'Tpt')).toEqual({ kind: 'opening' });
+		expect(invoke).toHaveBeenCalledWith(CONNECT_MARKETPLACE, { marketplace: 'Tpt' });
+	});
+
+	it('reads the captured answer a computer gives as done', async () => {
+		const invoke = vi.fn().mockResolvedValue({
+			outcome: 'captured',
+			session: { marketplace: 'Tpt', connected: true }
+		});
+		expect(await connectHere(invoke, 'Tpt')).toEqual({ kind: 'done' });
+	});
+
+	// The compatibility arm, and it is the one that must not be an oversight:
+	// before `ConnectOutcome` existed the command answered a bare session
+	// status, which carries no `outcome` at all and meant a completed capture.
+	// An application older than this console has to read as the success it was,
+	// not as a state the console then waits in forever.
+	it('reads an older application answer as done rather than as opening', async () => {
+		for (const answer of [
+			{ marketplace: 'Tpt', connected: true, cookie_count: 2 },
+			{},
+			null,
+			undefined,
+			'anything at all'
+		]) {
+			const invoke = vi.fn().mockResolvedValue(answer);
+			expect(await connectHere(invoke, 'Tpt'), JSON.stringify(answer)).toEqual({
+				kind: 'done'
+			});
+		}
+	});
+
+	it('still classifies every refusal the way a forget does', async () => {
+		const refused = vi.fn().mockRejectedValue('this device has been signed out');
+		expect(await connectHere(refused, 'Tpt')).toEqual({
+			kind: 'refused',
+			detail: 'this device has been signed out'
+		});
+		const missing = vi
+			.fn()
+			.mockRejectedValue('connect_marketplace not allowed. Command not found');
+		expect(await connectHere(missing, 'Tpt')).toEqual({ kind: 'unsupported' });
+		const ungranted = vi
+			.fn()
+			.mockRejectedValue('connect_marketplace not allowed on window "main", webview "main"');
+		expect(await connectHere(ungranted, 'Tpt')).toEqual({
+			kind: 'refused',
+			detail: ORIGIN_NOT_GRANTED
+		});
+		expect(await connectHere(null, 'Tpt')).toEqual({ kind: 'unavailable' });
+	});
+});

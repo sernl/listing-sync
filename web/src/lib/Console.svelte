@@ -279,25 +279,12 @@
 				<kbd>ctrl K</kbd>
 			</button>
 			<a class="cta" href={CREATE_TAB.href}>{CREATE_TAB.label}</a>
-			<!-- Named here rather than by its contents. Below the phone breakpoint
-			     `.account .who` is `display: none`, which takes its text out of the
-			     accessibility tree as well as off the screen, and the avatar beside
-			     it is `aria-hidden` because the initials are decoration. Without
-			     this label the one surviving route to Account on a phone announces
-			     as a link with no name at all.
-
-			     `aria-current` for the same reason: Account is the one section with
-			     no cell on the tab bar, so on the width where this is the whole of
-			     it, the state every other section gets from its lit tab has to come
-			     from here. -->
-			<a
-				class="account"
-				href="/settings"
-				aria-label={accountSection?.label ?? 'Account'}
-				aria-current={accountSection !== undefined && accountSection.id === section?.id
-					? 'page'
-					: undefined}
-			>
+			<!-- Named here rather than by its contents: the avatar is `aria-hidden`
+			     because the initials are decoration, so without this label the link
+			     announces as the organisation's name rather than as Account. It
+			     claims no `aria-current` -- the rail entry beside it already claims
+			     the section, and this strip is not drawn on a phone at all. -->
+			<a class="account" href="/settings" aria-label={accountSection?.label ?? 'Account'}>
 				<span class="avatar" aria-hidden="true">{initials}</span>
 				<span class="who">
 					<span class="org" title={orgName}>
@@ -368,6 +355,28 @@
 			{:else if tab.create}
 				<a class="tab-create" href={tab.href}>
 					<span class="ring"><Icon name={tab.icon} size={18} /></span>
+					<span>{tab.label}</span>
+				</a>
+			{:else if tab.account}
+				<!-- The initials tile in place of a glyph. The tile is the thing the
+				     founder asked to move off the top strip, and this cell is where
+				     it went. The section's own glyph stands in while `initialsOf`
+				     answers nothing, which is every frame before the organisation
+				     has been read: an empty accent tile would read as a loading
+				     state that never resolves, and the glyph reads as Account,
+				     which is true in both states. -->
+				<a
+					class="tab-item"
+					href={tab.href}
+					aria-current={tab.href === section?.href ? 'page' : undefined}
+				>
+					<span class="ico">
+						{#if initials === ''}
+							<Icon name={tab.icon} size={19} />
+						{:else}
+							<span class="tab-avatar" aria-hidden="true">{initials}</span>
+						{/if}
+					</span>
 					<span>{tab.label}</span>
 				</a>
 			{:else}

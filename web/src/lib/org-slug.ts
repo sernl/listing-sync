@@ -75,6 +75,7 @@ export const RESERVED_SLUGS: readonly string[] = [
 	'teachouse',
 	'templates',
 	'terms',
+	'vendors',
 	'webmaster',
 	'www',
 ];

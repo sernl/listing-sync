@@ -1,16 +1,18 @@
 <script lang="ts">
 	import { external } from '$lib/external';
 	import type { MarketplaceChip } from '$lib/inventory';
-	import { SHORT_NAME, platformTitle } from '$lib/platforms';
+	import { MARK_SRC, REGION_TAG, platformTitle } from '$lib/platforms';
+	import { MARKETPLACE_OF } from '$lib/listings-view';
 
 	let { chips }: { chips: MarketplaceChip[] } = $props();
 
-	/** How many chips a phone shows before the marker. Two rather than three
-	 *  because a chip is as wide as its state word: four ghost chips fit 194px
-	 *  at 390, but "TES GB Sending" beside "TES US Blocked" does not, and a cap
-	 *  that holds only for the narrow states is not a cap. It is a density
-	 *  decision rather than a measurement — the strip still wraps, so a pair of
-	 *  wide chips takes a second row inside the card rather than leaving it. */
+	/** How many chips a phone shows before the marker. Two rather than three,
+	 *  and the mark did not buy back the third: a chip is as wide as its state
+	 *  word, and at 390 the widest pair measured 66 and 94 pixels, which with
+	 *  the marker fills the strip. Four ghost chips are 28 each and fit easily,
+	 *  but a cap that holds only for the narrow states is not a cap. The strip
+	 *  still wraps, so a third chip takes a second row inside the card rather
+	 *  than leaving it. */
 	const PHONE_CAP = 2;
 
 	// Expanding is one way on purpose: the seller asked to see the rest, and
@@ -41,7 +43,13 @@
 				aria-label={described(chip)}
 				use:external
 			>
-				<b>{SHORT_NAME[chip.inventory]}</b>
+				<img
+					class="mark"
+					src={MARK_SRC[MARKETPLACE_OF[chip.inventory]]}
+					alt=""
+					width="14"
+					height="14"
+				/>{#if REGION_TAG[chip.inventory] !== null}<b>{REGION_TAG[chip.inventory]}</b>{/if}
 				<i>{chip.label}</i>
 			</a>
 		{:else}
@@ -53,7 +61,13 @@
 				title={described(chip)}
 				aria-label={described(chip)}
 			>
-				<b>{SHORT_NAME[chip.inventory]}</b>
+				<img
+					class="mark"
+					src={MARK_SRC[MARKETPLACE_OF[chip.inventory]]}
+					alt=""
+					width="14"
+					height="14"
+				/>{#if REGION_TAG[chip.inventory] !== null}<b>{REGION_TAG[chip.inventory]}</b>{/if}
 				{#if chip.state !== 'not_listed'}<i>{chip.label}</i>{/if}
 			</span>
 		{/if}
@@ -133,7 +147,7 @@
 
 	.mk {
 		display: inline-flex;
-		align-items: baseline;
+		align-items: center;
 		gap: 5px;
 		font-size: 10.5px;
 		font-weight: 600;
@@ -156,6 +170,20 @@
 		border-color: color-mix(in srgb, currentcolor 45%, var(--line));
 	}
 
+	/* The marketplace's own mark in place of the acronym, which is the
+	   founder's "icons instead of typing out the names". It carries no
+	   alternative text because the chip's accessible name already spells the
+	   platform out in words, and a second reading of the same fact is noise to
+	   anyone listening rather than looking. */
+	.mk .mark {
+		width: 14px;
+		height: 14px;
+		object-fit: contain;
+		border-radius: 3px;
+		flex: none;
+	}
+
+	/* The region, and only where three sites of one marketplace share a mark. */
 	.mk b {
 		font-weight: 700;
 		letter-spacing: 0.02em;

@@ -168,9 +168,21 @@ describe('closing a notification with the keyboard', () => {
 	// on the notification's own element, it runs the call the click runs, and
 	// no listener is fitted to the window or the document, which is what would
 	// take Escape away from a dialog open over the page.
+	//
+	// The picker's needle is the statement run rather than the verb. It closes
+	// from four places, so a window wide enough to hold the Escape path also
+	// reaches one of the others, and `closes(` contains the verb as well;
+	// either would let an inlined `open = false` pass. The run opens with the
+	// default prevented: Escape in a search box holding text clears it, and
+	// the `input` that clearing dispatches would reopen the picker.
 	const SURFACES: [string, string, string][] = [
 		['lib/Banner.svelte', 'banner', 'close'],
-		['routes/+layout.svelte', 'toast', 'closeToast']
+		['routes/+layout.svelte', 'toast', 'closeToast'],
+		[
+			'lib/FacetPicker.svelte',
+			'field fp',
+			'event.preventDefault();\n\t\tevent.stopPropagation();\n\t\tvoid close();'
+		]
 	];
 
 	for (const [file, marker, dismisses] of SURFACES) {
@@ -189,7 +201,11 @@ describe('closing a notification with the keyboard', () => {
 		});
 
 		it(`leaves every other Escape to whatever is over the ${marker}`, () => {
-			expect(source).not.toContain('svelte:window onkeydown');
+			// The tag rather than the adjacency: a surface that fits a second
+			// window handler puts the key one attribute away from the first. The
+			// scan runs to the tag's own `/>` rather than to the first `>`, which
+			// an arrow function in an earlier attribute supplies early.
+			expect(/<svelte:window(?:(?!\/>)[\s\S])*onkeydown/.test(source)).toBe(false);
 			expect(source).not.toContain("addEventListener('keydown'");
 		});
 	}

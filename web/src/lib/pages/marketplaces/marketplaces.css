@@ -148,19 +148,21 @@
 	object-fit: contain;
 }
 
-/* A neutral drawing of our own, for a tile whose owner's mark we do not show.
-   Muted rather than inked, the same weight the wordmark takes, so a tile with
-   no logo in it does not read as the loudest thing in the row.
-   `docs/notes/design/marketplace-logo-sources.md` has the reason there is no
-   logo to draw. */
+/* A neutral drawing of our own, for a tile whose owner's mark we may not show:
+   Windows, whose symbol needs a licence we have not applied for and whose
+   request is drafted for the founder to send, and Apple, which forbids
+   third-party use of its logo outright. Muted rather than inked, and
+   deliberately not tinted toward either owner's palette, because a drawing of
+   ours coloured to look like a vendor's mark is the closer imitation of it.
+   `docs/notes/design/marketplace-logo-sources.md` has each owner's terms. */
 .mp-mark svg {
 	color: var(--muted);
 }
 
 /* One marketplace's rule cannot be met truthfully, so its name in our own
-   typeface is the mark; the two browser tiles draw their name for a different
-   reason, that neither vendor publishes a logo we can fetch the terms for.
-   `docs/notes/design/marketplace-logo-sources.md` has both reasons. */
+   typeface is the mark; the Chrome tile draws its name for a different reason,
+   that Google routes its product icons through an approval we have not been
+   granted. `docs/notes/design/marketplace-logo-sources.md` has both reasons. */
 .mp-mark .word {
 	font-family: var(--display);
 	font-weight: 600;
@@ -513,6 +515,17 @@ a.mp-mark:hover {
 	color: var(--muted);
 	line-height: 1.55;
 	max-width: 88ch;
+}
+
+/* The attribution sentences under the disclaimer are five paragraphs of one
+   block of fine print, not five blocks of it: the rule above opens each with a
+   hairline and 40px of air, which drawn five more times reads as five separated
+   footers rather than as the licence conditions belonging to the sentence above
+   them. */
+.mp-disclaimer.mp-attribution {
+	margin-top: 8px;
+	padding-top: 0;
+	border-top: 0;
 }
 
 /* --- responsive ---------------------------------------------------------- */

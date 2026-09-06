@@ -112,7 +112,7 @@ export const SECTIONS: readonly NavSection[] = [
 		items: [
 			{ href: '/settings', label: 'Preferences', icon: 'sliders-horizontal' },
 			{ href: '/settings/subscription', label: 'Subscription', icon: 'credit-card' },
-			{ href: '/notifications', label: 'Notifications', icon: 'bell', soon: true },
+			{ href: '/notifications', label: 'Notifications', icon: 'bell' },
 			{ href: '/status', label: 'Status', icon: 'activity' },
 			{ href: '/guides', label: 'Help and guides', icon: 'book-open', soon: true }
 		]
@@ -271,9 +271,14 @@ export interface PhoneTab extends Omit<NavItem, 'href'> {
 	 *  because it is the one thing on the bar that is not a place to go. */
 	create?: true;
 	/** The search action. Opens the command palette in place, which on a phone
-	 *  is a full-width sheet rather than a control competing for the top
-	 *  strip. */
+	 *  is a sheet placed against the band the keyboard has left rather than a
+	 *  control competing for the top strip. */
 	search?: true;
+	/** The account cell. Drawn as the organisation's initials tile rather than
+	 *  as a glyph, because the tile is the thing the founder asked to move off
+	 *  the top strip. It navigates and takes `aria-current` exactly as the
+	 *  section tabs beside it do. */
+	account?: true;
 }
 
 /** The create action the phone bar carries, taken from the Crosslist section's
@@ -297,39 +302,60 @@ export const CREATE_TAB: PhoneTab & { href: string } = {
 	create: true
 };
 
-/** The search action the phone bar carries, in the cell Account used to hold.
- *
- * Account leaves the bar and is reached by the avatar in the top strip, which
- * is the phone equivalent of where the rail already puts it: `Console.svelte`
- * filters Account out of the rail proper and re-renders it at the foot beside
- * Help, so the bar is not disagreeing with the rail about a peer section. A
- * founder decision, pinned in `nav.test.ts` so it cannot drift back. */
+/** The search action the phone bar carries, in the fifth cell. A cell rather
+ *  than the top strip's pill, because on a phone the strip is not drawn. */
 export const SEARCH_TAB: PhoneTab = {
 	label: 'Search',
 	icon: 'search',
 	search: true
 };
 
-const ACCOUNT_HREF = SECTIONS.find((section) => section.id === 'account')?.href;
+const accountSection = SECTIONS.find((section) => section.id === 'account');
+if (accountSection === undefined) {
+	throw new Error('the phone bar carries the Account section, which the rail has none of');
+}
 
-/** The rail's sections minus Account, dropped by id rather than by position so
- *  a reordered `SECTIONS` cannot silently drop a different one instead. */
-const PHONE_SECTION_TABS: readonly NavItem[] = SECTION_TABS.filter(
-	(tab) => tab.href !== ACCOUNT_HREF
+/** The account cell, last on the bar, where a phone application puts a profile.
+ *
+ * Built from the Account section's own href, label and icon rather than written
+ * again, so a renamed section renames the cell.
+ *
+ * Account was deliberately kept off this bar in wave 3 and reached by the
+ * avatar in the top strip instead. The founder reversed that on 2026-09-06:
+ * "The placing of the organization at the top right on the mobile takes up a
+ * lot of screen, maybe add it to the bar? I'm not sure where to put it, but
+ * right now it's not user friendly and takes up a lot of space." So the strip
+ * is not drawn on a phone at all, and this cell is the only route to Settings
+ * and to logging out. `nav.test.ts` pins the reversal. */
+export const ACCOUNT_TAB: PhoneTab & { href: string } = {
+	href: accountSection.href,
+	label: accountSection.label,
+	icon: accountSection.icon,
+	account: true
+};
+
+/** The section tabs drawn before Search, which is every section but Account --
+ *  Account is drawn after it, last. Selected by href rather than by position,
+ *  so a section added to the rail reaches the bar instead of being dropped by
+ *  a slice that no test would notice. */
+const LEADING_SECTION_TABS: readonly NavItem[] = SECTION_TABS.filter(
+	(tab) => tab.href !== ACCOUNT_TAB.href
 );
 
-/** The phone bar: the three remaining section tabs, the create action in the
- * middle, and search in the fifth cell.
+/** The phone bar: three section tabs with the create action in the middle,
+ * search fifth, and the account cell sixth.
  *
  * Composed from `SECTION_TABS` rather than listed again, so the navigating tabs
- * stay exactly what the rail says they are and only their spacing changes.
- * Five cells at about 78px on a 390px screen, which is what keeps
- * "Marketplaces" and "New resource" from being renamed for the bar. */
+ * stay exactly what the rail says they are and only their spacing changes. Every
+ * cell a seller has already learned keeps the position it had in 0.3.2 and the
+ * new one is appended. Five labelled cells at about 67px on a 390px screen,
+ * beside the fixed 56px column `shell.css` gives the account cell. */
 export const PHONE_BAR: readonly PhoneTab[] = [
-	...PHONE_SECTION_TABS.slice(0, 2),
+	...LEADING_SECTION_TABS.slice(0, 2),
 	CREATE_TAB,
-	...PHONE_SECTION_TABS.slice(2),
-	SEARCH_TAB
+	...LEADING_SECTION_TABS.slice(2),
+	SEARCH_TAB,
+	ACCOUNT_TAB
 ];
 
 /** Whether a nav destination is the one the browser is on.

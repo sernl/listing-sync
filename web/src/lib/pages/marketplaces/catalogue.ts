@@ -30,11 +30,12 @@ import type { IconName } from '$lib/icons';
  *  `docs/notes/design/marketplace-logo-sources.md` records every file, where it
  *  came from, and why the one exception is one.
  *
- *  A `glyph` is a mark of our own for the three download tiles, whose owners
- *  license a store badge only to link to a store listing we do not have. It is
- *  a neutral drawing rather than a logo, so it claims nothing and needs no
- *  provenance row; substituting a real badge the day a listing exists is a
- *  change of this one field. */
+ *  A `glyph` is a mark of our own for the two download tiles whose owner permits
+ *  us nothing we can use: Microsoft licenses its symbol and Apple forbids its
+ *  logo outright, and all three store badges are licensed only to link to a
+ *  store listing we do not have. It is a neutral drawing rather than a logo, so
+ *  it claims nothing and needs no provenance row; substituting a real mark the
+ *  day permission arrives is a change of this one field. */
 export type Mark =
 	| { kind: 'image'; src: string; shape: Shape }
 	| { kind: 'wordmark'; text: string }
@@ -68,8 +69,11 @@ export interface ProspectTile {
 	mark: Mark;
 	/** One sentence, from the catalogue's tile-ordering copy. */
 	body: string;
-	/** The marketplace's own front page, as the catalogue recorded it. Absent
-	 *  only on the two browser tiles, which are not marketplaces. */
+	/** The marketplace's own front page, as the catalogue recorded it. On the
+	 *  Firefox tile it is Mozilla's own page instead, because Mozilla's policy
+	 *  permits its logo in a visual that refers to or links to the program and the
+	 *  link is that condition met. Absent on the Chrome tile, which draws no
+	 *  vendor mark and so carries no such condition. */
 	home?: string;
 	marketplace?: Marketplace;
 }
@@ -372,29 +376,53 @@ export const LISTED: readonly MarketplaceTile[] = [
 
 /** The two browsers an extension would ship for.
  *
- *  Neither vendor's mark is shown, and the reason is that neither publishes one
- *  we can fetch: Google gates Chrome's logo and its usage terms behind a partner
- *  login, and Mozilla's brand portal serves an application rather than a file.
- *  Licence terms that cannot be read cannot be recorded, so neither logo can be
- *  landed under the rule every mark on this page is held to.
- *  `docs/notes/design/marketplace-logo-sources.md` has the addresses checked.
+ *  The two vendors do not permit alike, so the two tiles do not draw alike.
+ *  Mozilla's trademark policy, at
+ *  https://www.mozilla.org/en-US/foundation/trademarks/policy/, permits without
+ *  prior permission the use of "Mozilla logos in visuals to truthfully refer to
+ *  and/or to link to the applicable programs", asks for a visible attribution
+ *  notice, and forbids modifying or abbreviating the mark. So Firefox draws
+ *  Mozilla's own published file unaltered, and `home` is the "link to" half of
+ *  that permission rather than decoration.
  *
- *  So the tile stays the browser's name in our own typeface. A glyph was the
- *  alternative and is not taken: Lucide carries no brand marks, so the nearest
- *  it offers is a generic browser drawing, and a circular one would resemble
- *  Chrome's own logo more closely than the word `Chrome` does -- which would
- *  make a mark adopted to avoid using a logo the closer imitation of it. */
+ *  The same policy settles the heading. It asks that a wordmark be used "only
+ *  as an adjective, never as a noun or verb" and that "the generic term for the
+ *  Mozilla product or service" follow it, so the tile is headed "Firefox
+ *  browser" rather than "Firefox". The file is Mozilla's horizontal
+ *  logo-and-wordmark lockup, which already draws the word, and a bare "Firefox"
+ *  beside it repeated the wordmark as the noun the policy names.
+ *
+ *  Google publishes no such allowance for the Chrome icon. Its guidance routes
+ *  every product icon through a Partner Marketing Hub approval we have not
+ *  applied for, so this tile draws the name, and Google's Chrome branding page
+ *  settles how the name is written: "make reference to that Google product by
+ *  using the text 'for', 'for use with', or 'compatible with', and be sure to
+ *  include the ™ symbol with the Google trademark. Example: 'for Google
+ *  Chrome™'". That sentence governs the reference rather than the mark, so the
+ *  heading takes Google's full product name and the mark box keeps the short
+ *  form: the mark box is `aria-hidden` artwork standing in for a logo we may
+ *  not draw, and it is sized by `wordmarkSize`, which sets fourteen characters
+ *  below the size this page calls readable. The sentence that goes with it is
+ *  in `MARK_ATTRIBUTION`.
+ *
+ *  A glyph is still not the alternative for Chrome. Lucide carries no brand
+ *  marks, so the nearest it offers is a generic browser drawing, and a circular
+ *  one would resemble Chrome's own logo more closely than the word does -- which
+ *  would make a mark adopted to avoid using a logo the closer imitation of it.
+ *  `docs/notes/design/marketplace-logo-sources.md` carries both vendors' terms,
+ *  the addresses they were read at and the digest of every file landed. */
 export const EXTENSIONS: readonly ProspectTile[] = [
 	{
 		slug: 'chrome',
-		name: 'Chrome',
-		mark: { kind: 'wordmark', text: 'Chrome' },
+		name: 'Google Chrome™',
+		mark: { kind: 'wordmark', text: 'Chrome™' },
 		body: 'Not available yet.'
 	},
 	{
 		slug: 'firefox',
-		name: 'Firefox',
-		mark: { kind: 'wordmark', text: 'Firefox' },
+		name: 'Firefox browser',
+		mark: { kind: 'image', shape: 'wordmark', src: '/vendors/firefox.svg' },
+		home: 'https://www.mozilla.org/firefox/',
 		body: 'Not available yet.'
 	}
 ];
@@ -408,7 +436,8 @@ const TILE_INNER_PX = 78;
  *
  *  An average is what the tile had, and it clipped. Measured at 22px in the
  *  rendered page, `Boom` runs 0.700 of its point size per character, `Chrome`
- *  0.636 and `Firefox` 0.483 — a spread wide enough that the mean sized
+ *  0.636 and `Firefox` 0.483, measured while Firefox still drew a wordmark — a
+ *  spread wide enough that the mean sized
  *  `Chrome` to 84px across a 78px tile, and `overflow: hidden` took the rest
  *  silently. Only a bound at the widest word makes the function's own promise
  *  true, so 0.700 it is: a word of narrow letters is then set smaller than it
@@ -428,11 +457,12 @@ const GLYPH_WIDTH_RATIO = 0.7;
  * none of the words we draw gets near it.
  *
  * The ceiling binds only at five characters or fewer, since 78 / (5 * 0.7) is
- * 22.3 and a sixth character puts the fitted size under the cap. Of the three
- * words this page draws, that is Boom alone: Boom sets at 22, Chrome at 19 and
- * Firefox at 16. The three wordmark tiles therefore read at three sizes, not
- * one, which is the price of a bound that no word can overflow rather than an
- * average that Chrome overflowed by six pixels.
+ * 22.3 and a sixth character puts the fitted size under the cap. Of the two
+ * words this page draws, that is Boom alone: Boom sets at 22 and Chrome™, whose
+ * trademark symbol is a seventh character, at 16. The two wordmark tiles
+ * therefore read at two sizes, not one, which is the price of a bound that no
+ * word can overflow rather than an average that Chrome overflowed by six
+ * pixels.
  */
 export function wordmarkSize(text: string): number {
 	const fitted = TILE_INNER_PX / (text.length * GLYPH_WIDTH_RATIO);
@@ -445,6 +475,30 @@ export function wordmarkSize(text: string): number {
  *  claim no relationship we do not have. One line under the whole grid rather
  *  than one per tile, which is the catalogue's own recommendation. */
 export const DISCLAIMER =
-	'The marketplace names and logos shown on this page belong to their respective owners. ' +
-	'Teachouse is not affiliated with or endorsed by them, and shows their names and logos ' +
-	'only to identify which marketplace each entry refers to.';
+	'The marketplace, browser and platform names and logos shown on this page belong to their ' +
+	'respective owners. Teachouse is not affiliated with or endorsed by them, and shows their ' +
+	'names and logos only to identify which product each entry refers to.';
+
+/** The sentences the licences this page relies on require, printed under the
+ *  grid beside the disclaimer.
+ *
+ *  An array rather than a paragraph, so each is a row a test can hold against
+ *  the mark that obliges it. The first is the grant the Android robot is drawn
+ *  under and the third is the notice Mozilla's policy attaches to its logo, so a
+ *  sentence dropped in an edit is a licence condition dropped. The other two are
+ *  for names set in our own type, which Google requires for its trademarks and
+ *  which costs one sentence for Microsoft's.
+ *
+ *  Verbatim, because a paraphrase of a licence condition is not the condition.
+ *  Google asks that its line appear "in the creative", and the page drawing the
+ *  robot is the creative, so it sits here rather than in a document a reader
+ *  would have to find. `docs/notes/design/marketplace-logo-sources.md` carries
+ *  each sentence's source address and the date it was read. */
+export const MARK_ATTRIBUTION: readonly string[] = [
+	'The Android robot is reproduced or modified from work created and shared by Google and used ' +
+		'according to terms described in the Creative Commons 3.0 Attribution License.',
+	'Android is a trademark of Google LLC.',
+	'Firefox is a trademark of the Mozilla Foundation in the US and other countries.',
+	'Google Chrome is a trademark of Google LLC.',
+	'Windows is a trademark of the Microsoft group of companies.'
+];

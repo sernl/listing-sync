@@ -25,6 +25,7 @@ import type {
 	NativeDirection,
 	NativeVocabularyKind,
 	NonDelegableReason,
+	NotificationKind,
 	PayloadFileRule,
 	FormGroup,
 	SlugPrompt,
@@ -321,6 +322,59 @@ export interface EventView {
 }
 
 export type ItemDetail = ItemView & { events: EventView[] };
+
+/** What one finished run did, counted by settled outcome.
+ *
+ *  Six keys and only six, spelled as the ledger's `JobSettled` spells them: a
+ *  notification exists only for a run that has finished, so there is no
+ *  in-flight, queued or parked count to carry. `blocked` is the settled
+ *  outcome, which the outcome bar draws through `outcome_blocked`. Every key
+ *  is present including a zero, so a run that changed nothing is a row of
+ *  zeros rather than a row of absences. */
+export interface NotificationCounts {
+	succeeded: number;
+	degraded: number;
+	failed: number;
+	ambiguous: number;
+	skipped: number;
+	blocked: number;
+}
+
+/** One finished run, as the inbox lists it.
+ *
+ *  `inventory` and `marketplace` are null for an import, which commits to the
+ *  catalogue and writes to no marketplace, and never null otherwise; both are
+ *  always present, so this type is total and the page needs no optional-field
+ *  branch. `read_at` is null while the row is unread. */
+export interface NotificationView {
+	id: string;
+	kind: NotificationKind;
+	subject_id: string;
+	inventory: InventoryId | null;
+	marketplace: Marketplace | null;
+	counts: NotificationCounts;
+	created_at: number;
+	read_at: number | null;
+}
+
+export interface NotificationsPage {
+	notifications: NotificationView[];
+	next_cursor: string | null;
+}
+
+/** How many rows the read mark moved. Zero is the ordinary answer to marking
+ *  a page that was already read, rather than a refusal. */
+export interface NotificationsRead {
+	marked: number;
+}
+
+/** Whether this seller is emailed when one of their runs finishes. Per user
+ *  rather than per organisation: the address the mail goes to is the user's.
+ *  The address itself is not here -- the console reads it from the identity
+ *  service, and the domain database holds none. */
+export interface NotifyPreferences {
+	notify_email: boolean;
+}
 
 /** The term counters one measurement against the canonical taxonomy produced.
  *
@@ -1804,6 +1858,24 @@ export const api = {
 	noCounterpart: (item: string) =>
 		post<void>(`/v1/reconciliation/items/${item}/no-counterpart`, {}),
 	drainStats: () => request<DrainStats>('/v1/reconciliation/stats'),
+
+	/** The inbox: every run of this organisation's that has finished, newest
+	 *  first, a page at a time. The server clamps `limit`, so the console asks
+	 *  for none and takes the default. */
+	notifications: (cursor?: string | null) =>
+		request<NotificationsPage>(
+			`/v1/notifications${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
+		),
+	/** Mark everything at or before one row read, in the same order the list
+	 *  is served in. Idempotent: a second post of the same id answers zero
+	 *  rather than refusing. */
+	markNotificationsRead: (through: string) =>
+		post<NotificationsRead>('/v1/notifications/read', { through }),
+	/** Whether this seller is emailed when a run finishes. The session's own
+	 *  user, which is the only user either call can name. */
+	notifyPreferences: () => request<NotifyPreferences>('/v1/notifications/preferences'),
+	setNotifyPreferences: (notifyEmail: boolean) =>
+		patch<NotifyPreferences>('/v1/notifications/preferences', { notify_email: notifyEmail }),
 
 	status: () => request<{ inventories: InventoryStatus[] }>('/v1/status'),
 

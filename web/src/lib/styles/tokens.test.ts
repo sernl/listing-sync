@@ -151,6 +151,8 @@ function expand(value: string): string {
 const STATIC_DIRS: Record<string, string> = {
 	'marketplaces/':
 		"Each marketplace's own logo, drawn in colours that are the marketplace's and not ours to move.",
+	'vendors/':
+		"Mozilla's Firefox logo and Google's Android robot, each the vendor's published file unaltered. Both licences forbid modifying the mark, so its colours are the vendor's and not ours to move.",
 	'email/':
 		'Two of the drawings here, `teachouse-mark.svg` and `teachouse-delivery.svg`, are still in the retired Kauri palette: a mail client composes from them rather than from `tokens.css`, so recolouring them is a founder decision that has not been taken. `teachouse-mark-small.svg` is already on the current palette, because `favicon-16.png` is rendered from it, and is inside the exception only because it lives beside the other two.'
 };
@@ -358,5 +360,45 @@ describe('the offline page', () => {
 		});
 		expect(marks[0].length).toBe(4);
 		expect(marks[0]).toEqual(marks[1]);
+	});
+});
+
+/** No box in the client is grounded on the ink.
+ *
+ *  The ink names a colour dark enough to be read as black, and a card painted
+ *  with it is the one surface in this console that stopped looking like the
+ *  console. The tokens are derived rather than listed, because the ink already
+ *  answers to two names -- `--text` and the `--ink` alias -- and a third would
+ *  otherwise walk past a hand-written pair. The comparison goes through
+ *  `expand` for the same reason every other value comparison in this file
+ *  does: the same ink written `#17231C` is the same ink. Only a direct
+ *  resolution counts: a `color-mix` holding the ink is a tint or a scrim, and
+ *  several are drawn deliberately. The pin below is the emptiness guard rather
+ *  than a second hand-written list -- a derivation that returned nothing would
+ *  leave the sweep with no token to look for and pass vacuously -- so a
+ *  palette event that adds or renames an ink fails there to be acknowledged
+ *  rather than silently widening the sweep. */
+describe('no surface is painted with the ink', () => {
+	const inks = [...TOKENS.keys()].filter(
+		(name) => expand(colour(name)) === expand(colour('text'))
+	);
+
+	it('names the ink and its alias', () => {
+		expect([...inks].sort()).toEqual(['ink', 'text']);
+	});
+
+	it('no rule under web/src grounds a box on one of them', () => {
+		const painted: string[] = [];
+		for (const file of filesUnder(WEB_SRC, ['.css', '.svelte'])) {
+			const body = readFileSync(file, 'utf8')
+				.replace(/\/\*[\s\S]*?\*\//g, '')
+				.replace(/<!--[\s\S]*?-->/g, '');
+			for (const [rule] of body.matchAll(
+				new RegExp(`background(?:-color)?:\\s*var\\(--(?:${inks.join('|')})\\)`, 'g')
+			)) {
+				painted.push(`${file.slice(REPO.length)}: ${rule}`);
+			}
+		}
+		expect(painted).toEqual([]);
 	});
 });

@@ -41,6 +41,13 @@ The server prints the snapshot path it is serving on its first line, so grep its
 Reading the background process's exit status is not a substitute, because the shell reports the status of the pipeline the log was tee'd through rather than of the server.
 Picking an unlikely port is not a substitute either — it lengthens the odds and changes nothing about what happens when they come in.
 
+That grep was itself vacuous until the readiness line was moved, and the reason defeats the whole check.
+The server printed the line before it bound, so a server that lost the port announced itself and then died on `EADDRINUSE`, leaving the traceback below the line the grep was looking for.
+Eight renders were taken of another slice's build before that was noticed, and every one of them reported success.
+The server now constructs the listener first and announces the port it actually bound, and it takes port 0 by default so the kernel hands out one nothing else holds.
+A shoot script reads the port back from that line rather than choosing a number, and then confirms ownership with `ss -ltnp`, comparing the pid listening on that port against the pid it started.
+An announcement is evidence only when nothing between it and the bind can fail.
+
 ## A snapshot copied during someone else's build is two builds
 
 The rule above says to copy `web/build` before serving it, and the readiness check says to prove the server is yours.
@@ -58,6 +65,22 @@ The check that does is to compare the two: extract `__sveltekit_<id>` from the s
 It is one pass over the snapshot and it is the difference between a blank page you can explain and one you cannot.
 
 The same evidence tells a mixed snapshot from a real failure after the fact, which is worth knowing when a blank render has already happened: a page that failed for its own reasons still boots, so its errors carry component names and its probe carries a drawn shell, while a mixed one throws inside the framework's own entry before any of that exists.
+
+## A killed capture writes a blank page and reports success
+
+The two rules above are about photographing the wrong tree.
+This one is about photographing the right tree and getting nothing, which looks the same in the output and has a different cause.
+`firefox --headless --screenshot` under `timeout 200` writes a file whether or not the page ever drew: killed at the limit, it leaves a screenshot that exists, is not empty, and returns to a shell that reports the capture as taken.
+The picture is the ground colour and nothing else.
+
+It happened here to one of twelve shots, on a machine whose load average was near ninety, and only to that one — the shot beside it from the same run and the same snapshot was correct, which is what makes this a timing failure rather than a build or a snapshot one.
+It was caught by size: the blank file was 45 KB where its sibling at the same width was 255 KB, and opening it settled the question.
+Nothing else in the run said so, because every check the harness had at that point was about which tree was served rather than about whether the shutter caught anything.
+
+The repair is to time the capture rather than to trust its exit.
+The shoot script records the seconds each capture took and names any that reached the timeout, because a capture that settles takes a few seconds and one that is killed takes all two hundred, and that gap is the whole of the signal.
+A named capture is retaken rather than reported.
+The mtime of the probe beside the picture is not the check it looks like: the probe posts before the load event the shutter fires on, so it is older than its own picture in a run that went perfectly.
 
 ## Only one `npm run check` in the tree at a time
 
@@ -125,6 +148,15 @@ A local workaround in the component that was noticed is the thing that hides the
 The general form: when a framework reset is in play, a native element's user-agent defaults are not a safe baseline, and the ones that position rather than paint are the ones whose loss does not look like a style bug.
 The same file had the fault twice over — a `max-width: 620px` block sitting *earlier* than the base `dialog` rule, so the phone sheet's `width`, `max-height` and corners were overridden by the desktop rule beneath it and had never once applied.
 A media query adds no specificity, so ordering is the whole of it.
+
+## `adb reverse` reaches whatever holds 127.0.0.1, which may not be the dev server
+
+A device check points the app at the host with `adb reverse tcp:5173 tcp:5173`, and the reverse resolves on the host side to `127.0.0.1`.
+Vite's dev server binds `localhost`, which resolves here to `::1` alone, so the port it holds is `[::1]:5173` and there is nothing on `127.0.0.1:5173` for the reverse to reach.
+That is not an error either: another session's fixture harness held `127.0.0.1:5173`, so the reverse connected to it, the console rendered, and the device photographed a different slice's snapshot.
+What gave it away was a `PATCH` answered `501` with Python's own error page, from a fixture server that implements no such method.
+The repair is to reverse onto a port you own rather than onto the number the app expects, since `adb reverse tcp:5173 tcp:<your port>` maps the device's 5173 to your server and leaves the app's URL untouched.
+Then read your server's log for the requests the device made, because a device shot is worth only as much as the line in that log proving the device reached you.
 
 ## The fixtures are checked against nothing
 

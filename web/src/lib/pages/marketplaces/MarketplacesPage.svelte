@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { api } from '$lib/api';
 	import AddCard from '$lib/AddCard.svelte';
 	import Banner from '$lib/Banner.svelte';
@@ -24,14 +26,17 @@
 	import MarketplaceCard from './MarketplaceCard.svelte';
 	import RequestCard from './RequestCard.svelte';
 	import { fetchManifest } from './api';
-	import { DISCLAIMER, EXTENSIONS, LISTED, LIVE, PLANNED } from './catalogue';
+	import { DISCLAIMER, EXTENSIONS, LISTED, LIVE, MARK_ATTRIBUTION, PLANNED } from './catalogue';
 	import {
 		type Busy,
 		CARD_NAME,
+		CONNECT_RETURN_MARKETPLACE_PARAM,
+		CONNECT_RETURN_PARAM,
 		type DisconnectServer,
 		type LiveRead,
 		TRANSPORT_BADGE,
 		busyAt,
+		connectReturn,
 		deviceBranchInTileOrder,
 		disconnectAsk,
 		disconnectLabel,
@@ -40,6 +45,7 @@
 		headerAction,
 		hostOf,
 		liveFace,
+		signsInPlace,
 		transportLine,
 		withBusy
 	} from './view';
@@ -70,8 +76,14 @@
 	// Read once as well: whether this console is running inside the application,
 	// and on what, does not change while the page is open.
 	const invoke = desktopInvoker();
-	const host = hostOf(invoke, typeof navigator === 'undefined' ? null : navigator.userAgent);
+	const userAgent = typeof navigator === 'undefined' ? null : navigator.userAgent;
+	const host = hostOf(invoke);
 	const header = headerAction(host);
+	// Whether a sign-in started here replaces this page rather than opening a
+	// window beside it, which is true on a phone alone. Two sentences depend on
+	// it: what a connect says while the page is going away, and what a
+	// disconnect admits it cannot remove.
+	const inPlace = signsInPlace(invoke, userAgent);
 
 	const queryClient = useQueryClient();
 
@@ -137,6 +149,15 @@
 		mutationFn: (marketplace: Marketplace) => connectHere(invoke, marketplace),
 		onSuccess: async (outcome: SessionOutcome, marketplace: Marketplace) => {
 			const name = CARD_NAME[marketplace];
+			if (outcome.kind === 'opening') {
+				// Deliberately silent, and the card is left busy. The sign-in is
+				// replacing this page within the quarter-second the application
+				// waits before navigating, so a toast here would be shown to
+				// nobody, and clearing the busy state would offer a button that
+				// is about to disappear. What the seller is told arrives on the
+				// way back, through `connectReturn` below.
+				return;
+			}
 			if (outcome.kind === 'done') {
 				toast('info', `${name} is connected on this machine.`);
 			} else if (outcome.kind === 'unsupported') {
@@ -154,7 +175,15 @@
 		onError: () => {
 			toast('error', 'The sign-in could not be opened on this machine.');
 		},
-		onSettled: (_data, _error, marketplace: Marketplace) => {
+		onSettled: (outcome: SessionOutcome | undefined, _error, marketplace: Marketplace) => {
+			// Left busy on `opening`, which is the one outcome where the page
+			// does not survive to show anything: a card that went idle would
+			// offer its button again for the instant before the marketplace's
+			// sign-in replaces it, and a seller who pressed it twice would have
+			// asked for two navigations.
+			if (outcome?.kind === 'opening') {
+				return;
+			}
 			busy = withBusy(busy, marketplace, null);
 		}
 	}));
@@ -216,13 +245,43 @@
 		]);
 	}
 
+	/** Say what a sign-in that replaced this page ended up doing.
+	 *
+	 *  The other half of the phone's connect, and the only half a seller sees:
+	 *  the page that pressed the button was unloaded by the navigation to the
+	 *  marketplace, so the application returns here with the verdict in the
+	 *  address rather than resolving a promise that no longer exists.
+	 *
+	 *  Cleared with a replace rather than left standing, because a reload would
+	 *  otherwise repeat a sentence about a sign-in that finished minutes ago,
+	 *  and because a verdict is not a place to go back to. The card itself is
+	 *  not rendered from this: whether a marketplace is connected is read from
+	 *  the server's connection list, so a parameter typed by hand changes one
+	 *  line of copy and no state at all. */
+	$effect(() => {
+		const said = connectReturn(page.url.searchParams);
+		if (said === null) {
+			return;
+		}
+		toast(said.tone, said.message);
+		const rest = new URLSearchParams(page.url.searchParams);
+		rest.delete(CONNECT_RETURN_PARAM);
+		rest.delete(CONNECT_RETURN_MARKETPLACE_PARAM);
+		const search = rest.toString();
+		void goto(search.length === 0 ? page.url.pathname : `${page.url.pathname}?${search}`, {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
+	});
+
 	function connect(marketplace: Marketplace) {
 		busy = withBusy(busy, marketplace, 'action');
 		connecting.mutate(marketplace);
 	}
 
 	function disconnect(marketplace: Marketplace) {
-		if (!confirm(disconnectAsk(marketplace, host, connectionFor(marketplace)))) {
+		if (!confirm(disconnectAsk(marketplace, host, connectionFor(marketplace), inPlace))) {
 			return;
 		}
 		busy = withBusy(busy, marketplace, 'disconnect');
@@ -391,6 +450,7 @@
 				<MarketplaceCard
 					mark={tile.mark}
 					name={tile.name}
+					home={tile.home}
 					status={{ tone: 'soon', label: 'Coming soon' }}
 					body={tile.body}
 					pending
@@ -418,6 +478,12 @@
 	</div>
 
 	<p class="mp-disclaimer">{DISCLAIMER}</p>
+	<!-- The licence conditions themselves, each its own line rather than run into
+	     the paragraph above: Google asks for its Creative Commons line "in the
+	     creative", and the creative is the page drawing the robot. -->
+	{#each MARK_ATTRIBUTION as sentence (sentence)}
+		<p class="mp-disclaimer mp-attribution">{sentence}</p>
+	{/each}
 </div>
 
 {#snippet toCopyright()}

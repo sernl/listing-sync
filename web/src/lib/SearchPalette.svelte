@@ -10,6 +10,7 @@
 		coverToDraw,
 		isStale,
 		keyAction,
+		paletteAnchor,
 		paletteView,
 		resultCount,
 		type PaletteResult
@@ -95,6 +96,40 @@
 		} else if (!open) {
 			element?.close();
 		}
+	});
+
+	// Where the phone sheet sits, measured rather than assumed. `visualViewport`
+	// reports the band an on-screen keyboard has left visible, which is the one
+	// measurement that is right whether or not the browser honours
+	// `interactive-widget=resizes-content`; the stylesheet reads the answer
+	// through `--pal-top` and `--pal-max` and only below its own phone
+	// breakpoint, so the properties are written at every width and read at one.
+	// Absent the API -- `undefined` on a browser that never implemented it,
+	// which is why the guard below tests for both -- nothing is written and the
+	// fallbacks in `shell.css` place the sheet instead.
+	$effect(() => {
+		const sheet = element;
+		const band = window.visualViewport;
+		if (!open || sheet === null || band == null) {
+			return;
+		}
+		const place = () => {
+			const { top, maxHeight } = paletteAnchor({ height: band.height, offsetTop: band.offsetTop });
+			sheet.style.setProperty('--pal-top', `${top}px`);
+			sheet.style.setProperty('--pal-max', `${maxHeight}px`);
+		};
+		place();
+		// The visual viewport's own events rather than the window's: the window
+		// does not resize when the keyboard opens on a browser that shrinks only
+		// the visual viewport, which is the case this exists for.
+		band.addEventListener('resize', place);
+		band.addEventListener('scroll', place);
+		return () => {
+			band.removeEventListener('resize', place);
+			band.removeEventListener('scroll', place);
+			sheet.style.removeProperty('--pal-top');
+			sheet.style.removeProperty('--pal-max');
+		};
 	});
 
 	// The list scrolls, so arrowing past its foot would otherwise leave the

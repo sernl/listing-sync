@@ -447,9 +447,10 @@
 		padding: 6px 6px 0;
 		/* The top half of what `viewport-fit=cover` in `app.html` opts into: the
 		   activity is edge-to-edge from Android 15 (API 35) up and this app's
-		   `targetSdk` is 36 (Android 16), so without this the compacted top strip
-		   draws under the status bar. Added to the 6px rather than replacing it,
-		   so a browser with no inset keeps the gap it has.
+		   `targetSdk` is 36 (Android 16), so without this the region's own top
+		   edge, and the page header now sitting at it, draw under the status
+		   bar. Added to the 6px rather than replacing it, so a browser with no
+		   inset keeps the gap it has.
 
 		   Measured on the Android 16 emulator, where the meta itself turned out
 		   to be a no-op: the top inset already resolved there (49px) and this
@@ -472,41 +473,16 @@
 		border-radius: var(--r-card);
 	}
 
+	/* The strip goes, rather than being emptied and kept. Every control on it
+	   has somewhere better to be: the dots read on the Marketplaces tab, the
+	   search and the create action are cells on the tab bar, and the account
+	   tile is the last cell on it. What was left once the rest was hidden was
+	   10px, a tile, 10px and a rule -- about sixty-five pixels of screen, most
+	   of it empty, spent before the page began, which is what the founder was
+	   looking at. The page's own `PageHead` names the page, so nothing here is
+	   lost by removing the band above it. */
 	.top {
-		padding: 10px 12px;
-		gap: 10px;
-	}
-
-	/* The strip keeps one control on a phone, and it is the account one.
-	   Everything else here has somewhere better to be: the dots read on the
-	   Marketplaces tab, the search and the create action are cells on the tab
-	   bar, and the organisation caption decides nothing a seller can act on.
-	   Leaving them cost three rows of a phone screen before any page began. */
-	.top .conn,
-	.top .search,
-	.top .cta,
-	.account .who {
 		display: none;
-	}
-
-	/* The one control left is the one a thumb has to hit, so it takes the 44px
-	   the tiles and the row card's kebab already take rather than the 30px it
-	   has beside a name that is no longer beside it. */
-	.avatar {
-		width: 44px;
-		height: 44px;
-		border-radius: 12px;
-		font-size: 14px;
-	}
-
-	/* Account is the one section with no cell on the bar, so the avatar carries
-	   the state a lit tab carries everywhere else. A ring rather than the tab's
-	   colour change, because the avatar is already drawn in the accent and a
-	   second accent on top of it would not read; `box-shadow` rather than
-	   `outline`, which belongs to the focus ring and has to stay tellable from
-	   this. */
-	.account[aria-current='page'] .avatar {
-		box-shadow: 0 0 0 2px var(--accent-ink);
 	}
 
 	/* The foot clears the fixed tab bar rather than sitting under it. */
@@ -514,9 +490,15 @@
 		padding: 18px 14px 96px;
 	}
 
+	/* Five equal cells and a sixth fixed one. Account is the narrowest thing on
+	   the bar -- a 26px tile over the shortest of the six labels -- so an equal
+	   sixth column would take a sixth of the width from the five cells carrying
+	   longer words. 56px takes about eleven pixels from each of them instead,
+	   leaving 66.8px at 390px and 60.8px at 360px, the narrower of which is
+	   what the label size below is sized against. */
 	.tabbar {
 		display: grid;
-		grid-template-columns: repeat(5, 1fr);
+		grid-template-columns: repeat(5, 1fr) 56px;
 		position: fixed;
 		inset: auto 0 0;
 		z-index: 20;
@@ -525,10 +507,14 @@
 		padding-bottom: env(safe-area-inset-bottom);
 	}
 
-	/* 9.5px rather than 10px, and a hair of negative tracking: a fifth column
-	   leaves about 78px per cell at 390px, and "Marketplaces" and "New
-	   resource" both clip at 10px. Shrinking the label is the smaller loss
-	   than ellipsing it. */
+	/* 9px, and a hair of negative tracking, sized against 360px rather than
+	   390px: 360 is a common Android width, and raising Display size a step
+	   takes a handset below whatever it reports at its own default density.
+	   There a labelled cell is 60.8px around a 58.8px content box, and at 9.5px
+	   "New resource" and "Marketplaces" both overflow it and draw ellipsed.
+	   Shrinking the label is the smaller loss than ellipsing it, so the gate is
+	   a 360 render with no label ellipsed; 320 is not clean at this size, and
+	   clearing it would take the account column down as well. */
 	.tab-item {
 		display: flex;
 		flex-direction: column;
@@ -537,7 +523,7 @@
 		gap: 3px;
 		padding: 8px 1px 7px;
 		min-height: 52px;
-		font-size: 9.5px;
+		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: -0.01em;
 		color: var(--muted);
@@ -569,12 +555,28 @@
 		color: var(--accent-ink);
 	}
 
+	/* The organisation's initials, in the cell the founder asked to have them
+	   moved to. The same tile the top strip draws above 620px, at the size a
+	   bar cell has room for. The 44px a thumb needs is the cell around it --
+	   56 by at least 52 -- rather than the tile, which is what is seen; the
+	   same split `.tab-create` below records for its disc. */
+	.tab-avatar {
+		width: 26px;
+		height: 26px;
+		border-radius: 8px;
+		background: var(--accent-soft);
+		color: var(--accent-deep);
+		display: grid;
+		place-items: center;
+		font: 600 10.5px var(--sans);
+	}
+
 	/* The create action, in the middle. It is the one item on the bar that goes
 	   nowhere in the navigation, so it is drawn as a filled disc rather than a
-	   glyph: the fill is what separates it from the four tabs, which carry no
-	   fill in any state. It takes no `aria-current`, because it is never
-	   "the page you are on". The cell is the target, about 78 by 52 at 390px,
-	   so the 30px disc is what is seen rather than what is pressed. */
+	   glyph: the fill is what separates it from the five cells beside it, which
+	   carry no fill in any state. It takes no `aria-current`, because it is
+	   never "the page you are on". The cell is the target, 66.8 by 59.1 at
+	   390px, so the 30px disc is what is seen rather than what is pressed. */
 	.tab-create {
 		display: flex;
 		flex-direction: column;
@@ -583,7 +585,7 @@
 		gap: 3px;
 		padding: 6px 1px 7px;
 		min-height: 52px;
-		font-size: 9.5px;
+		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: -0.01em;
 		color: var(--accent-ink);
@@ -802,10 +804,10 @@ dialog.pal-box[open] {
 }
 
 @media (max-width: 620px) {
-	/* The full-width sheet every dialog in this console becomes on a phone,
-	   restated because `dialog.pal-box` outranks the element rule that sets it
-	   -- and hung from the top edge rather than the bottom, which is where this
-	   one has to differ from the rest.
+	/* The sheet the palette becomes on a phone, restated because
+	   `dialog.pal-box` outranks the element rule that makes every other dialog
+	   here a bottom sheet -- and placed against the band the browser reports as
+	   visible rather than against either edge.
 
 	   A modal dialog is positioned against the layout viewport, and no phone
 	   browser shrinks that when the keyboard opens: Chrome for Android defaults
@@ -813,21 +815,37 @@ dialog.pal-box[open] {
 	   focuses its input as it opens, so the keyboard is always up, and a
 	   bottom-anchored sheet therefore opened underneath it -- with the foot,
 	   which carries every one of the five answers, the first thing covered.
+	   That is still true, and it is why this sheet is placed from the top.
 
-	   `interactive-widget=resizes-content` in `app.html` makes the viewport
-	   shrink where it is honoured, which repairs Android. The height cap is
-	   what repairs iOS, which honours nothing here: 58vh is the band left above
-	   a portrait keyboard of roughly 336 of 844 CSS pixels, so the foot stays
-	   on screen and the list scrolls inside instead. It is conservative on a
-	   browser that does shrink the viewport, and that trade runs the safe way
-	   -- a list that scrolls sooner against a failure sentence nobody can read.
-	   Raise it when iOS honours the viewport property. */
+	   What has changed is that the band is measured instead of guessed at:
+	   `SearchPalette.svelte` reads `window.visualViewport` and writes
+	   `--pal-top` and `--pal-max` from `paletteAnchor`, so the head lands a
+	   third of the way down whatever the keyboard has left and the foot stays
+	   inside it -- on a browser that shrinks the layout viewport and on one
+	   that does not. The founder asked for the search term at the top of the
+	   screen and easy for the eye to follow; a measured third is that, and it
+	   holds the input still as matches arrive, which the top edge did and a
+	   centred box would not.
+
+	   The fallbacks are what a browser exposing no `visualViewport` gets: the
+	   same floating sheet, hung a gutter below the top under the 58vh cap that
+	   repairs an iOS keyboard of roughly 336 of 844 CSS pixels. The `max()`
+	   sits inside the fallback rather than around the whole margin, so the
+	   inset keeps an unmeasured sheet clear of the status bar the way `.app`
+	   above does, without raising a measured top past the cap that was computed
+	   for it -- which would push the foot out of the band by the difference.
+
+	   `border-bottom` is restored because `app.css` removes it: every other
+	   dialog on a phone is a sheet sitting on the bottom edge, where a bottom
+	   border would draw a line across the screen. This one floats, so all four
+	   sides are seen. */
 	dialog.pal-box[open] {
-		width: 100vw;
-		max-width: 100vw;
-		max-height: 58vh;
-		margin: 0 auto auto;
-		border-radius: 0 0 14px 14px;
+		width: calc(100vw - 24px);
+		max-width: calc(100vw - 24px);
+		max-height: var(--pal-max, 58vh);
+		margin: var(--pal-top, max(12px, env(safe-area-inset-top))) auto auto;
+		border-radius: 14px;
+		border-bottom: 1px solid var(--line);
 	}
 
 	/* There is no Escape key to name, and the sheet is closed by the backdrop

@@ -10,17 +10,18 @@
 	} from '$lib/api';
 	import { editBlockedBy } from '$lib/authoring';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
+	import { DISCLAIMER } from '$lib/pages/marketplaces/catalogue';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
 	import { agoLabel } from '$lib/elapsed';
-	import { external } from '$lib/external';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import {
 		WORK_RUNS,
 		chipFor,
 		newestWork,
 		runsFor,
+		stripFor,
 		type MarketplaceChip,
 		type RunRow,
 		type WorkItem
@@ -30,6 +31,8 @@
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
+	import MarketplaceTile from './MarketplaceTile.svelte';
+	import { tileFor } from './marketplace-tile';
 	import ResourceForm from './ResourceForm.svelte';
 	import PublishDialog from '$lib/PublishDialog.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
@@ -37,7 +40,7 @@
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
 	import type { InventoryId } from '$lib/generated/vocab';
-	import { PILL_TONE, fullStop } from './list';
+	import { PILL_TONE } from './list';
 	import { sentenceFor } from './refusal';
 	import './resources.css';
 
@@ -106,8 +109,9 @@
 	//
 	// The query list is the fixed authorable set rather than this resource's own
 	// inventories, so it no longer depends on `mappings`: four entries, each
-	// cached for the session and shared with the create form, and the unmapped
-	// rows offer to cross-list onto exactly these.
+	// cached for the session and shared with the create form, and the tiles for
+	// marketplaces this resource does not reach offer to cross-list onto
+	// exactly these.
 	const vocabulary = createQueries(() => ({
 		queries: AUTHORABLE_PLATFORMS.map((inventory: InventoryId) => ({
 			queryKey: queryKeys.vocabulary(inventory),
@@ -166,22 +170,66 @@
 	// otherwise vanish between starting it and the refetch landing.
 	let justStarted = $state<{ inventory: InventoryId; job: string }[]>([]);
 
+	// One strip rather than two loops. `stripFor` answers every marketplace this
+	// console authors for plus any this resource is already mapped onto, which
+	// is exactly the union the page used to build from a loop over the mappings
+	// and a second over what was left; a marketplace with no mapping reaches
+	// `chipFor` as an absent one and gets its own "not listed" chip there.
 	const chips = $derived.by(() => {
-		const found = new Map<InventoryId, MarketplaceChip>();
-		for (const mapping of mappings) {
-			found.set(
-				mapping.inventory,
-				chipFor({
-					product: id,
-					inventory: mapping.inventory,
-					mapping,
-					work: (work.data ?? new Map()).get(mapping.id),
-					connection: connectionFor(mapping.inventory, connections.data ?? []),
-					status: (statuses.data ?? []).find((one) => one.inventory === mapping.inventory)
-				})
-			);
+		const mapped = new Map(mappings.map((mapping: MappingHead) => [mapping.inventory, mapping]));
+		return stripFor(mappings).map((inventory: InventoryId) => {
+			const mapping = mapped.get(inventory);
+			return chipFor({
+				product: id,
+				inventory,
+				mapping,
+				work: mapping === undefined ? undefined : (work.data ?? new Map()).get(mapping.id),
+				connection: connectionFor(inventory, connections.data ?? []),
+				status: (statuses.data ?? []).find((one) => one.inventory === inventory)
+			});
+		});
+	});
+
+	// The tiles the panel draws. The readiness verdict is passed only for a
+	// marketplace this resource actually reaches: for one it does not, the
+	// verdict is the sentence saying so, which the tile already says in its own
+	// words.
+	const tiles = $derived.by(() => {
+		const mapped = new Map(mappings.map((mapping: MappingHead) => [mapping.inventory, mapping]));
+		const now = Date.now();
+		return chips.map((chip: MarketplaceChip) => {
+			const mapping = mapped.get(chip.inventory);
+			return tileFor({
+				chip,
+				mapping,
+				product: id,
+				now,
+				readiness:
+					mapping === undefined
+						? undefined
+						: readinessOf({
+								inventory: chip.inventory,
+								intent: 'draft',
+								mapping,
+								connection: connectionFor(chip.inventory, connections.data ?? []),
+								status: (statuses.data ?? []).find((one) => one.inventory === chip.inventory),
+								vocabulary: vocabularies.get(chip.inventory),
+								payloadFiles,
+								hasRights
+							})
+			});
+		});
+	});
+
+	/** The mapping whose attach form is open and the marketplace it reaches, so
+	 *  the one form the page draws names what it writes against. */
+	const attachingTo = $derived.by(() => {
+		const open = attaching;
+		if (open === null) {
+			return undefined;
 		}
-		return found;
+		const tile = tiles.find((one) => one.mapping === open);
+		return tile === undefined ? undefined : { mapping: open, inventory: tile.inventory };
 	});
 
 	// The runs the bounded read knows about, and any this page started since,
@@ -198,17 +246,9 @@
 		];
 	});
 
-	// The marketplaces this console authors for that this resource is not mapped
-	// onto. Rendered as a disabled control rather than omitted, so the one thing
-	// a seller most wants to do next is visible and the reason it cannot be done
-	// is stated where they look for it.
-	const unmapped = $derived(
-		AUTHORABLE_PLATFORMS.filter(
-			(inventory: InventoryId) => !inventories.includes(inventory)
-		)
+	const needing = $derived(
+		chips.filter((chip: MarketplaceChip) => chip.action !== null && chip.tone === 'bad')
 	);
-
-	const needing = $derived([...chips.values()].filter((chip) => chip.action !== null && chip.tone === 'bad'));
 
 	const blockedBy = $derived(editBlockedBy(mappings));
 	const payloadFiles = $derived(
@@ -255,6 +295,21 @@
 		attaching = mapping;
 		attachUrl = '';
 		attachRefusal = null;
+	}
+
+	/** Opens the attach form on this mapping, or closes the one already open on
+	 *  it. Only a tile carrying a mapping offers the control at all, so the
+	 *  absent case is unreachable from the panel and refuses rather than
+	 *  guessing which mapping was meant. */
+	function toggleAttach(mapping: string | null) {
+		if (mapping === null) {
+			return;
+		}
+		if (attaching === mapping) {
+			attaching = null;
+			return;
+		}
+		openAttach(mapping);
 	}
 
 	/** Attaches a listing that already exists on the marketplace to this resource.
@@ -390,128 +445,63 @@
 					<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'connected' : 'reconnecting'} />
 				</span>
 			{/snippet}
-			{#each mappings as mapping (mapping.id)}
-				{@const chip = chips.get(mapping.inventory)}
-				{@const verdict = readinessOf({
-					inventory: mapping.inventory,
-					intent: 'draft',
-					mapping,
-					connection: connectionFor(mapping.inventory, connections.data ?? []),
-					status: (statuses.data ?? []).find((one) => one.inventory === mapping.inventory),
-					vocabulary: vocabularies.get(mapping.inventory),
-					payloadFiles,
-					hasRights
-				})}
-				<div class="mk-row">
-					<div class="mk-head">
-						<span class="mk-name">{verdict.title}</span>
-						{#if chip}
-							<StatusPill tone={PILL_TONE[chip.tone]} label={chip.label} />
-						{:else}
-							<StatusPill tone={PILL_TONE[verdict.tone]} label={verdict.line} />
-						{/if}
-					</div>
-					<p class="mk-say">
-						{chip?.detail ?? `${mapping.binding_state} · ${mapping.lifecycle_state}`}
-					</p>
-					{#if chip?.paused}
-						<p class="mk-say">Sending is paused here: {chip.paused}</p>
-					{/if}
-					<p class="mk-say">
-						<!-- `verdict.line` ends in its own punctuation for some verdicts and
-						     not others, so the sentence is closed only when it is open. -->
-						Next send: {verdict.line}{fullStop(verdict.line)}
-						{#if chip?.onDevice}
-							Work for this marketplace runs on your own device.
-						{/if}
-					</p>
-					<div class="mk-acts">
-						{#if chip?.action}
-							<!-- An anchor rather than the button tier, because a listed chip's
-							     action leaves the console and has to carry `rel` with it. -->
-							<a
-								class="res-out"
-								href={chip.action.href}
-								target={chip.action.external ? '_blank' : undefined}
-								rel={chip.action.external ? 'noopener noreferrer' : undefined}
-								use:external
-							>{chip.action.label}</a>
-						{/if}
-						{#if mapping.binding_state === 'unbound'}
-							<Button
-								small
-								disabled={attachSending}
-								reason={attachSending ? 'A listing is being attached.' : undefined}
-								onclick={() =>
-									attaching === mapping.id ? (attaching = null) : openAttach(mapping.id)}
-							>
-								{attaching === mapping.id ? 'Cancel' : 'Mark as listed'}
-							</Button>
-						{/if}
-					</div>
+			<div class="res-mk-grid">
+				{#each tiles as tile (tile.inventory)}
+					<MarketplaceTile
+						{tile}
+						adding={adding !== null}
+						addingHere={adding === tile.inventory}
+						attachOpen={tile.mapping !== null && attaching === tile.mapping}
+						{attachSending}
+						oncrosslist={() => void crossListTo(tile.inventory)}
+						onattach={() => toggleAttach(tile.mapping)}
+					/>
+				{/each}
+			</div>
 
-					{#if attaching === mapping.id}
-						<div class="mk-attach">
-							<Field
-								label="The listing's address"
-								id={`attach-${mapping.id}`}
-								hint={`Nothing is sent to ${platformTitle(mapping.inventory)}; this records where the listing already is, so later edits reach it.`}
-							>
-								<input
-									id={`attach-${mapping.id}`}
-									type="url"
-									placeholder="https://…"
-									disabled={attachSending}
-									bind:value={attachUrl}
-								/>
-							</Field>
-							<Button
-								tier="primary"
-								disabled={attachSending || attachUrl.trim().length === 0}
-								reason={attachUrl.trim().length === 0
-									? 'Paste the listing address first.'
-									: undefined}
-								onclick={() => void attach(mapping.id)}
-							>
-								{attachSending ? 'Attaching…' : 'Attach'}
-							</Button>
-						</div>
-						{#if attachRefusal !== null}
-							<Banner tone="bad">{attachRefusal}</Banner>
-						{/if}
-					{/if}
+			<!-- One form below the grid rather than one inside each tile. The page
+			     already allowed only one at a time, so the second and third were
+			     never drawn; putting it here keeps every tile the same height and
+			     names the marketplace it writes against, which the tile it used to
+			     open under no longer does. -->
+			{#if attachingTo !== undefined}
+				<div class="mk-attach">
+					<Field
+						label="The listing's address"
+						id={`attach-${attachingTo.mapping}`}
+						hint={`Nothing is sent to ${platformTitle(attachingTo.inventory)}; this records where the listing already is, so later edits reach it.`}
+					>
+						<input
+							id={`attach-${attachingTo.mapping}`}
+							type="url"
+							placeholder="https://…"
+							disabled={attachSending}
+							bind:value={attachUrl}
+						/>
+					</Field>
+					<Button
+						tier="primary"
+						disabled={attachSending || attachUrl.trim().length === 0}
+						reason={attachUrl.trim().length === 0 ? 'Paste the listing address first.' : undefined}
+						onclick={() => void attach(attachingTo.mapping)}
+					>
+						{attachSending ? 'Attaching…' : 'Attach'}
+					</Button>
 				</div>
-			{:else}
-				<p class="res-note">This resource carries no marketplace mapping.</p>
-			{/each}
-			{#each unmapped as inventory (inventory)}
-				<div class="mk-row">
-					<div class="mk-head">
-						<span class="mk-name">{platformTitle(inventory)}</span>
-						<StatusPill label="Not listed" />
-					</div>
-					<p class="mk-say">Not listed here, and this resource has no mapping onto it.</p>
-					<div class="mk-acts">
-						<Button
-							small
-							disabled={adding !== null}
-							reason={adding !== null ? 'A marketplace is being added.' : undefined}
-							onclick={() => void crossListTo(inventory)}
-						>
-							{adding === inventory ? 'Adding…' : 'Cross-list here'}
-						</Button>
-					</div>
-				</div>
-			{/each}
+				{#if attachRefusal !== null}
+					<Banner tone="bad">{attachRefusal}</Banner>
+				{/if}
+			{/if}
 			{#if addRefusal !== null}
 				<Banner tone="bad">{addRefusal}</Banner>
 			{/if}
 			<p class="res-foot">
 				Cross-listing here adds the marketplace to this resource and opens the send; the add writes
 				your own catalogue and contacts nobody, and nothing reaches the marketplace until that
-				send runs. Etsy is not listed here, because this console has no create path for it at
-				all.
+				send runs. Etsy cannot be added here, because this console has no create path for it
+				at all.
 			</p>
+			<p class="res-foot">{DISCLAIMER}</p>
 		</Panel>
 
 		{#if runs.length > 0}

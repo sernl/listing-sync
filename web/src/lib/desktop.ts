@@ -219,13 +219,21 @@ export async function startImportHere(
 /** What asking this computer to connect or forget one marketplace produced.
  *
  * The same four answers `StartOutcome` carries, with `done` where that one has
- * `started`: a connect either completed on this machine or it did not, and
- * there is no third thing running afterwards for a seller to wait on.
+ * `started`, plus one a phone alone can give.
+ *
+ * `opening` is the sign-in replacing this very page, which is what a connect
+ * does where the application has one window: there is no second window for the
+ * marketplace to open in, so the console goes away and the answer cannot come
+ * back through the promise that asked for it. It arrives instead in the address
+ * the application returns to, read by `connectReturn` in
+ * `$lib/pages/marketplaces/view`. A caller seeing `opening` says nothing and
+ * leaves the card busy, because the page it would say it on is about to unload.
  *
  * `unavailable` is the ordinary browser answer and is not a failure. The
  * caller shows the seller where the act can be performed instead. */
 export type SessionOutcome =
 	| { kind: 'done' }
+	| { kind: 'opening' }
 	| { kind: 'refused'; detail: string }
 	| { kind: 'unsupported' }
 	| { kind: 'unavailable' };
@@ -262,7 +270,29 @@ export async function connectHere(
 	invoke: Invoke | null,
 	marketplace: Marketplace
 ): Promise<SessionOutcome> {
-	return ranHere(invoke, CONNECT_MARKETPLACE, marketplace, CONNECT_REFUSED_SILENTLY);
+	if (invoke === null) {
+		return { kind: 'unavailable' };
+	}
+	try {
+		return opening(await invoke(CONNECT_MARKETPLACE, { marketplace }));
+	} catch (caught) {
+		return refusal(caught, CONNECT_MARKETPLACE, CONNECT_REFUSED_SILENTLY);
+	}
+}
+
+/** Whether the application said the sign-in is replacing this page.
+ *
+ * `done` on anything else, and that default is what keeps an older application
+ * working: before `ConnectOutcome` existed the command answered a bare session
+ * status, which carries no `outcome` at all and meant a completed capture. So
+ * an unrecognised answer reads as the success it used to be rather than as a
+ * state this console would then wait forever in. */
+function opening(answer: unknown): SessionOutcome {
+	const said =
+		typeof answer === 'object' && answer !== null
+			? (answer as { outcome?: unknown }).outcome
+			: undefined;
+	return said === 'opening' ? { kind: 'opening' } : { kind: 'done' };
 }
 
 /** Ask this computer to forget the session it holds for one marketplace.
@@ -338,12 +368,19 @@ async function ranHere(
 		await invoke(command, { marketplace });
 		return { kind: 'done' };
 	} catch (caught) {
-		const detail = refusalText(caught, fallback);
-		if (originNotGranted(detail, command)) {
-			return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
-		}
-		return unknownCommand(detail) ? { kind: 'unsupported' } : { kind: 'refused', detail };
+		return refusal(caught, command, fallback);
 	}
+}
+
+/** How a rejected marketplace command is classified, wherever one is called
+ *  from. One place, so a connect and a forget cannot come to read the
+ *  application's refusals differently. */
+function refusal(caught: unknown, command: string, fallback: string): SessionOutcome {
+	const detail = refusalText(caught, fallback);
+	if (originNotGranted(detail, command)) {
+		return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
+	}
+	return unknownCommand(detail) ? { kind: 'unsupported' } : { kind: 'refused', detail };
 }
 
 /** Whether the application rejected the call because it registers no such

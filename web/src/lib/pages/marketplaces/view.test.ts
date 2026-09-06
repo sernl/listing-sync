@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SIGN_IN_LABEL } from '$lib/devices-view';
 import type { MarketplaceRow, MarketplaceSignIn, SignInState } from '$lib/devices-view';
@@ -6,6 +8,9 @@ import type { Marketplace } from '$lib/generated/vocab';
 import { osLabel, sessionLabel, sessionTone, sessionWords } from './machines';
 import {
 	CARD_NAME,
+	CONNECT_RETURN_MARKETPLACE_PARAM,
+	CONNECT_RETURN_PARAM,
+	CONNECT_VERDICT_CODES,
 	DOWNLOADS_ANCHOR,
 	MACHINES_ANCHOR,
 	TRANSPORT_BADGE,
@@ -22,6 +27,8 @@ import {
 	hostOf,
 	liveFace,
 	pillTone,
+	connectReturn,
+	signsInPlace,
 	transportLine,
 	withBusy
 } from './view';
@@ -76,23 +83,114 @@ describe('whether a marketplace is carrying work', () => {
 
 describe('which host the console is', () => {
 	it('is a browser wherever there is no invoker, which is every web page', () => {
-		expect(hostOf(null, WINDOWS)).toBe('browser');
-		expect(hostOf(undefined, WINDOWS)).toBe('browser');
+		expect(hostOf(null)).toBe('browser');
+		expect(hostOf(undefined)).toBe('browser');
 	});
 
-	it('is the app on a computer holding an invoker', () => {
-		expect(hostOf(() => undefined, WINDOWS)).toBe('app');
-		// A user agent we do not recognise is still not Android, and the
-		// application is still the application.
-		expect(hostOf(() => undefined, null)).toBe('app');
+	// This inverted with the navigate-and-return path, and the inversion is what
+	// removed the second parameter. A phone used to read the browser copy
+	// because `connect_marketplace` built a second window unconditionally and
+	// Tauri's mobile surface is one Activity, so the button would have done
+	// nothing. The command now navigates the one webview instead, and a phone
+	// that can hold a login is a machine like any other — so no platform is
+	// taken back out, and the user agent is no longer part of this question.
+	it('is the app wherever an invoker is, on any platform', () => {
+		expect(hostOf(() => undefined)).toBe('app');
+	});
+});
+
+describe('whether the sign-in replaces this page', () => {
+	// The one thing the two surfaces do differently, and the reason it is a
+	// separate question from `hostOf`: what a phone can DO with a login is what
+	// a computer can, and the only difference is that its sign-in has nowhere
+	// else to happen.
+	it('is true in the app on a phone and false everywhere else', () => {
+		expect(signsInPlace(() => undefined, ANDROID)).toBe(true);
+		expect(signsInPlace(() => undefined, WINDOWS)).toBe(false);
+		expect(signsInPlace(() => undefined, null)).toBe(false);
 	});
 
-	// R2: `connect_marketplace` builds a second window unconditionally and
-	// Tauri's mobile surface is one Activity, so the phone would press a button
-	// that does nothing. Until the navigate-and-return path lands it reads the
-	// browser copy, which at least names where the login can be made.
-	it('is a browser on Android even though Android is the app', () => {
-		expect(hostOf(() => undefined, ANDROID)).toBe('browser');
+	it('is false in a browser on a phone, which opens no sign-in at all', () => {
+		expect(signsInPlace(null, ANDROID)).toBe(false);
+		expect(signsInPlace(undefined, ANDROID)).toBe(false);
+	});
+});
+
+describe('what a returning sign-in tells the seller', () => {
+	const said = (query: string) => connectReturn(new URLSearchParams(query));
+
+	// Total over every verdict `ConnectVerdict` carries, because this is the
+	// whole channel: the page that pressed Connect was unloaded by the
+	// navigation to the marketplace, so a verdict with no sentence here is a
+	// seller returned to the console with nothing said at all.
+	it('has a sentence for every verdict the application sends', () => {
+		for (const verdict of CONNECT_VERDICT_CODES) {
+			const answer = said(`connect=${verdict}&marketplace=Tpt`);
+			expect(answer, verdict).not.toBeNull();
+			expect(answer?.message, verdict).toContain('TPT');
+		}
+	});
+
+	it('is the only good news on the success verdict', () => {
+		expect(said('connect=captured&marketplace=Tes')?.tone).toBe('info');
+		for (const verdict of CONNECT_VERDICT_CODES.filter((code) => code !== 'captured')) {
+			expect(said(`connect=${verdict}&marketplace=Tes`)?.tone, verdict).toBe('error');
+		}
+	});
+
+	// Every failure says what became of the sign-in and what to press next.
+	it('says what was not saved and how to try again on every failure', () => {
+		for (const verdict of CONNECT_VERDICT_CODES.filter((code) => code !== 'captured')) {
+			const answer = said(`connect=${verdict}&marketplace=Tpt`);
+			expect(answer?.message, verdict).toContain('saved');
+			expect(answer?.message, verdict).toContain('Connect TPT');
+		}
+	});
+
+	// The split these two codes exist for. They were one code, `refused`, worded
+	// only as the first: a seller who signed this phone out from a laptop
+	// part-way through a TPT sign-in completed it, had the capture wiped by the
+	// check-in that learned of the revocation, and was told the sign-in could
+	// not be opened — the opposite of what happened, naming nothing they could
+	// act on. Each must now say its own thing and neither may say the other's.
+	it('tells a sign-in that never opened apart from one that was not saved', () => {
+		const refused = said('connect=refused&marketplace=Tpt')?.message ?? '';
+		const notkept = said('connect=notkept&marketplace=Tpt')?.message ?? '';
+		expect(refused).toContain('did not open');
+		expect(refused).not.toContain('signed out');
+		expect(notkept).toContain('could not be saved');
+		expect(notkept).toContain('signed out of Teachouse');
+		expect(notkept).not.toContain('did not open');
+	});
+
+	// Reading the address is only safe while an address nobody wrote says
+	// nothing. A code from a newer application, a parameter a seller typed, and
+	// an ordinary visit must all be indistinguishable here.
+	it('says nothing at all about an address it does not recognise', () => {
+		expect(said('')).toBeNull();
+		expect(said('connect=')).toBeNull();
+		expect(said('connect=something-else&marketplace=Tpt')).toBeNull();
+		expect(said('marketplace=Tpt')).toBeNull();
+	});
+
+	// A marketplace name we do not know is not a reason to withhold the
+	// sentence: the verdict is still true. What it must not do is substitute a
+	// stand-in into a sentence shaped around a name, which produced "marketplace
+	// is connected on this device." and "Press Connect marketplace to try
+	// again."
+	it('still speaks when it cannot name the marketplace, and speaks English', () => {
+		for (const code of CONNECT_VERDICT_CODES) {
+			const answer = said(`connect=${code}&marketplace=Somewhere`);
+			expect(answer, code).not.toBeNull();
+			const message = answer?.message ?? '';
+			expect(message, code).toMatch(/^[A-Z]/);
+			expect(message, code).not.toContain('Connect marketplace');
+			expect(message, code).not.toContain('The marketplace sign-in');
+		}
+		expect(said('connect=abandoned&marketplace=Somewhere')?.message).toContain(
+			'Your marketplace sign-in did not finish'
+		);
+		expect(said('connect=captured')?.message).toContain('Your marketplace sign-in is saved');
 	});
 });
 
@@ -127,7 +225,7 @@ describe('the card footer action', () => {
 			expect(action.kind).toBe('link');
 			expect(action).toEqual({
 				kind: 'link',
-				label: `Connect ${CARD_NAME[marketplace]} from the Teachouse app on your computer`,
+				label: `Connect ${CARD_NAME[marketplace]} from the Teachouse app on your computer or phone`,
 				href: DOWNLOADS_ANCHOR
 			});
 		}
@@ -203,6 +301,26 @@ describe('disconnecting a marketplace', () => {
 		expect(prompt).not.toContain('reconnects TES by itself');
 		expect(prompt).toContain('Scheduled work for TES stops');
 	});
+
+	// The failure this prevents: a seller disconnects on a phone, presses
+	// Connect again, is signed straight back in with no password, and concludes
+	// the disconnect did nothing. Our copy of the session IS gone; what is left
+	// is the marketplace's own cookie in the WebView's process-global store,
+	// which `delete_cookie` cannot touch on Android and which the one lever that
+	// could — `clear_all_browsing_data` — would only clear by signing the seller
+	// out of Teachouse as well.
+	it('warns on a phone that the marketplace keeps its own sign-in', () => {
+		const prompt = disconnectPrompt('Tpt', 'app', true, true);
+		expect(prompt).toContain('removed from this machine');
+		expect(prompt).toContain("stays in this phone's browser");
+		expect(prompt).toContain('may not ask for your password');
+	});
+
+	it('says none of that on a computer, where the login window is our own', () => {
+		const prompt = disconnectPrompt('Tpt', 'app', true);
+		expect(prompt).not.toContain("this phone's browser");
+		expect(prompt).not.toContain('may not ask for your password');
+	});
 });
 
 describe('what a card asks before disconnecting', () => {
@@ -230,6 +348,15 @@ describe('what a card asks before disconnecting', () => {
 	it('says the machine loses the login when the app is the one asking', () => {
 		expect(disconnectAsk('Tes', 'app', { state: 'linked' })).toContain(
 			'removed from this machine'
+		);
+	});
+
+	it('carries the phone warning through from the page that knows the surface', () => {
+		expect(disconnectAsk('Tes', 'app', { state: 'linked' }, true)).toContain(
+			"stays in this phone's browser"
+		);
+		expect(disconnectAsk('Tes', 'app', { state: 'linked' })).not.toContain(
+			"stays in this phone's browser"
 		);
 	});
 });
@@ -523,6 +650,45 @@ describe('what a finished disconnect says', () => {
 				expect(say.message.length, `${forgotten.kind}/${server.kind}`).toBeGreaterThan(0);
 				expect(['info', 'error'], `${forgotten.kind}/${server.kind}`).toContain(say.tone);
 			}
+		}
+	});
+});
+
+describe('the address the application and this page share', () => {
+	const connectRs = readFileSync(
+		fileURLToPath(
+			new URL('../../../../../apps/desktop/src-tauri/src/connect.rs', import.meta.url)
+		),
+		'utf8'
+	);
+
+	// Both parameter names are written twice, once in each language, and nothing
+	// but this holds them together. The address is the only channel between the
+	// application and this page, because the page that pressed Connect was
+	// unloaded by the sign-in it started — so a rename on either side loses
+	// every verdict sentence, which is the one failure the return leg exists to
+	// prevent, and no other test anywhere goes red.
+	it('names the two parameters the way the application spells them', () => {
+		expect(connectRs).toContain(`RETURN_PARAM: &str = "${CONNECT_RETURN_PARAM}"`);
+		expect(connectRs).toContain(
+			`RETURN_MARKETPLACE_PARAM: &str = "${CONNECT_RETURN_MARKETPLACE_PARAM}"`
+		);
+	});
+
+	// And the verdicts themselves, in both directions. A code the application
+	// can send that this page does not word returns a seller to the console in
+	// silence; a code worded here that the application never sends is copy
+	// nobody will read. `ConnectVerdict::code` is an exhaustive match, so this
+	// reads the whole set rather than a sample of it.
+	it('words exactly the verdicts the application can send', () => {
+		const sent = [...connectRs.matchAll(/Self::[A-Za-z]+ => "([a-z]+)"/g)].map(([, code]) => code);
+		expect(sent.length).toBeGreaterThan(0);
+		expect([...sent].sort()).toEqual([...CONNECT_VERDICT_CODES].sort());
+		for (const code of sent) {
+			expect(
+				connectReturn(new URLSearchParams(`connect=${code}&marketplace=Tpt`)),
+				code
+			).not.toBeNull();
 		}
 	});
 });

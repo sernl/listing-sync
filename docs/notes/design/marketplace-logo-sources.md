@@ -3,7 +3,7 @@
 Where every logo on the Marketplaces page came from, so a later reader can check a mark against its source rather than trusting the file.
 
 - date: 2026-09-05
-- status: twenty marks land and are shown, every one with a source row; two more were fetched and are deliberately not landed; no browser or platform vendor's mark is landed at all, and the closing section records why; amended 2026-09-06, when eighteen of these files were copied to the public marketing site as well, which "On the public marketing page" below records
+- status: twenty marks land and are shown, every one with a source row; two more were fetched and are deliberately not landed; amended 2026-09-06 twice, first when eighteen of these files were copied to the public marketing site and then when the founder reversed both exclusions that amendment carried — Etsy and Shopify joined the public band, and two vendor marks landed under their owners' published terms, which "Browser and platform marks" below records
 - decisions it implements: the founder's 2026-09-05 decision to show every marketplace's logo under a disclaimer, recorded in `docs/design/decisions.md`
 - research it rests on: `marketplace-catalogue-1.md` and `marketplace-catalogue-2.md` in this directory
 
@@ -37,14 +37,16 @@ The copies sit under `marks/` rather than under `marketplaces/`, which is what t
 That is a wider exposure than the 2026-09-05 decision this note implements, which was taken for the Marketplaces page and reasoned about a reader who has already signed up.
 A marketing page is the surface a rights holder actually looks at, so it is written down here rather than left as a consequence of a decision about a different page.
 
-Two of the twenty are deliberately not copied.
-`etsy.png` and `shopify.png` stay in `web/static/marketplaces/` and reach the login-gated page only; the landing build holds no file for either, so the exclusion is a fact about the bytes that ship rather than only about the markup.
-Both owners require written permission for logo use, quoted above, and each becomes a real mark on the public page on the day permission is reported.
-Boom Learning is drawn as its initial and name there for the reason it is a wordmark here.
+Two of the twenty were deliberately not copied, and on 2026-09-06 the founder reversed that.
+`etsy.png` and `shopify.png` are now copied to `apps/landing/public/marks/` as well, byte for byte, and drawn on the public band beside every other mark.
+Both owners still require written permission for logo use, quoted above, and neither has given it; what changed is that the founder took the same accepted risk on this surface that was taken on the console page on 2026-09-05, having read the same policies, and asked for every mark we may lawfully show to be shown.
+The amended decision is in `../../design/decisions.md`.
+Boom Learning is still drawn as its initial and name there, for the reason it is a wordmark here: its rule cannot be met truthfully rather than merely at some risk, which is a difference in kind and not in degree.
 
-The band draws every mark greyscale at rest and in colour on hover.
-The file is the owner's published bytes unaltered and a CSS filter changes the drawing rather than the file, which is the same distinction the render harness draws between changing a page and changing the moment it is photographed.
-A rights holder could nonetheless read a greyscale rendering as alteration of their mark, so it is recorded rather than treated as a styling detail.
+The band draws every mark in its owner's own colours, at rest, on every page load.
+It drew them greyscale until 2026-09-06, restored to colour on hover, on the reasoning that twenty brand palettes at full strength fight the page and each other; the founder reversed that the same day, and the deeper reason to prefer the reversal is the one the greyscale paragraph itself recorded and then accepted.
+A CSS filter changes the drawing rather than the file, and a rights holder could read a greyscale rendering as an alteration of their mark; drawing the owner's published bytes unaltered removes that reading instead of accepting it.
+`just landing-style-gate` is not what holds this — `landing-band.test.ts` asserts the stylesheet contains no `grayscale(` at all, because a filter reintroduced for looks is the one edit that would quietly undo it.
 
 The copies are copies rather than links for the reason `apps/landing/public/favicon.svg` is a copy of `web/static/email/teachouse-mark.svg`: the two trees build separately, so a path that resolved through the console's `ServeDir` fallthrough under `tam-server` would 404 under `just landing-dev`, and the development render would disagree with the production one on exactly the thing the band adds.
 
@@ -190,53 +192,153 @@ Each of these three publishes a square mark, and each publishes it only far belo
 Upscaling one would invent detail its owner never published, and cropping the wide wordmark already landed would alter the mark, so all three keep the wordmark they have.
 Whichever way the tiles handle a marketplace with no square icon, it is these three that meet it.
 
-## Browser and platform marks, sought and not taken
+## Browser and platform marks, and what each owner permits
 
-Added 2026-09-06, after everything above.
-The founder asked for two more things on this page: a store badge on each of the three download tiles, and the vendor's own logo on the Chrome and Firefox tiles.
-Neither landed, no file was added to `web/static/`, and this section is the record of why, so the question is not reopened from memory.
+Added 2026-09-06 and rewritten the same day, after everything above.
+The founder asked for two things on this page: a store badge on each of the three download tiles, and the vendor's own logo on the Chrome and Firefox tiles.
+The first answer, that no store badge may be used, stands unchanged and its reasoning is below.
+The second answer was "neither logo is available", and that answer was wrong about availability rather than about permission, so this section replaces it.
+
+The correction, stated plainly rather than left as a contradiction between two dated notes.
+The earlier finding was that Google's and Mozilla's terms could not be read because both sit behind a partner portal.
+That was true of the addresses checked on 2026-09-06 and recorded in the paragraphs it replaced: `about.google/brand-resource-center/` does redirect into a partner login, and `mozilla.design/firefox/` does redirect to a Frontify application with no asset address in its markup.
+It was not true of the addresses checked later the same day.
+Mozilla's trademark policy has always been public at `mozilla.org`, and its own product page serves the Firefox logo as a plain file; Google publishes the Android robot, its licence and its hex colour on a developer page that needs no login.
+So the earlier note was a fact about two addresses rather than about two companies, and generalising it into "neither vendor publishes a fetchable mark" is the error being corrected.
 
 Nothing in this section was fetched from a marketplace.
-The only hosts contacted were the two browser vendors' own brand addresses named below.
+The hosts contacted while landing this change were `mozilla.org`, `firefox.com`, `developer.android.com` and `developer.chrome.com`, each the owner's own address, and every sentence quoted from those four was read there on 2026-09-06 and matched character for character against the page.
+The Mozilla, Android and Chrome sentences were read again at the same three addresses on 2026-09-07, when the rows below dated that day were added, and each still matched character for character.
+Three rows in the table below — the Chrome product icon, the Windows symbol and the Apple logo — carry sentences read earlier the same day, during this wave's research, and were not refetched here; nothing was landed on their strength, since all three are refusals.
 
-### The three store badges
+### What each owner permits
+
+| Mark | Permitted? | The sentence that decides it | Read at | On |
+|---|---|---|---|---|
+| Firefox logo | Yes, without prior permission | "Use Mozilla logos in visuals to truthfully refer to and/or to link to the applicable programs, products, services and technologies hosted on Mozilla servers." | https://www.mozilla.org/en-US/foundation/trademarks/policy/ | 2026-09-06 |
+| Android robot | Yes, under Creative Commons, on one condition | "The green Android robot can be reproduced and/or modified as long as the following Creative Commons attribution line is included in the creative." | https://developer.android.com/distribute/marketing-tools/brand-guidelines | 2026-09-06 |
+| Android wordmark | No | "Unless expressly authorized by Google through written agreement, the Android wordmark and custom typeface may not be used." | https://developer.android.com/distribute/marketing-tools/brand-guidelines | 2026-09-06 |
+| Chrome product icon | No, without an approval we do not hold | "To use a Google product icon in your work, create a Partner Marketing Hub account." | https://partnermarketinghub.withgoogle.com/brands/google/branding-guidelines/how-to-show-googles-brand/ | 2026-09-06 |
+| Chrome Web Store badge | Usable in principle, unusable here | "Make sure that clicking the badge always links to your page in the Chrome Web Store." | https://developer.chrome.com/docs/webstore/branding | 2026-09-06 |
+| Windows symbol | No, without a licence | "A trademark use license is required to: Use any Windows logo, symbol or icon." | https://cdn-dynmedia-1.microsoft.com/is/content/microsoftcorp/microsoft/mscle/documents/presentations/Windows_Trademark_Guidelines_2026.pdf | 2026-09-06 |
+| Apple logo | No, outright | "Never use the Apple logo in place of the word *Apple*. Don't use the standalone Apple logo." | https://developer.apple.com/app-store/marketing/guidelines/ | 2026-09-06 |
+| Google Play badge and icon | No | "Use of the 'Google Play' name and the Google Play Store icon is allowed only in association with devices licensed to access Google Play." | https://developer.android.com/distribute/marketing-tools/brand-guidelines | 2026-09-06 |
+| Firefox attribution notice | Required, not optional, wherever the mark is shown | "Include a trademark attribution notice. Use a clearly visible notice to provide attribution to Mozilla, such as: '[Mozilla trademark] is a trademark of the Mozilla Foundation in the US and other countries.'" | https://www.mozilla.org/en-US/foundation/trademarks/policy/ | 2026-09-07 |
+| Firefox name in text | Yes, as an adjective before a generic term | "Use Mozilla wordmarks only as an adjective, never as a noun or verb. Do not use them in plural or possessive forms. Instead, use the generic term for the Mozilla product or service following the trademark. For example: Firefox web browser, Pocket app." | https://www.mozilla.org/en-US/foundation/trademarks/policy/ | 2026-09-07 |
+| Android name in text | Yes, carrying the symbol at its first appearance | "Android™ should have a trademark symbol the first time it appears in a creative." | https://developer.android.com/distribute/marketing-tools/brand-guidelines | 2026-09-07 |
+
+The first three rows above were added on 2026-09-07, after a review found three marks drawn on conditions this table did not record.
+Mozilla's attribution notice was being printed as a courtesy and is a requirement, so `MARK_ATTRIBUTION` carrying the Firefox sentence is a licence condition discharged rather than a nicety a later edit may trim for length.
+Mozilla's adjective rule is why the console tile is headed "Firefox browser" rather than "Firefox": the file we draw is Mozilla's horizontal logo-and-wordmark lockup, which already contains the word, so a bare "Firefox" beside it both repeated the wordmark and used it as the noun the policy names.
+Google's symbol rule is why both the console download card and the landing platform row are headed `Android™`; the same page's attribution line, which this note already recorded, is the second of Google's two name conditions and was the only one the first build carried.
+The address the earlier drafting cited for Mozilla's terms, `https://www.mozilla.org/en-US/foundation/trademarks/faq/`, returns `301` to the policy URL above, checked on 2026-09-07, so the policy URL is the one recorded here.
+
+Three names are permitted in text where the mark is not.
+Microsoft's general guidelines allow that wordmarks "can be used to truthfully convey information about your product or service", without alteration, and less prominently than our own brand, which is what the Windows row on the platform strip does.
+Google's Chrome branding page settles how its name is written, under the heading "Describing your extension": "make reference to that Google product by using the text 'for', 'for use with', or 'compatible with', and be sure to include the ™ symbol with the Google trademark. Example: 'for Google Chrome™'".
+That sentence governs the reference rather than the mark, so the tile is headed with Google's full product name, `Google Chrome™`, and the mark box keeps `Chrome™`: the box is `aria-hidden` artwork standing in for a logo we may not draw, and `wordmarkSize` sets a fourteen-character word below the size `catalogue.test.ts` calls readable.
+Mozilla's policy settles the third, above.
+
+### The two files landed
+
+| Mark | Source URL | Retrieved | File | SHA-256 |
+|---|---|---|---|---|
+| Firefox | https://www.firefox.com/media/img/logos/firefox/logo-word-hor-2026.svg | 2026-09-06 | `web/static/vendors/firefox.svg` | `c3ce0c77cf5c57961db3ac3b48991f23c6adc5cbf51d37c58e11d4aa0d92dda3` |
+| Android robot | https://developer.android.com/static/images/brand/android-head_flat.svg | 2026-09-06 | `web/static/vendors/android-robot.svg`, copied to `apps/landing/public/vendors/android-robot.svg` | `5f05dae657da9f31e5d4a09b7976f39881617f6b3e4d4562d9ee16295d250bdb` |
+
+Both are the owner's published bytes, unaltered, and both licences forbid modifying the mark, so neither may be recoloured, cropped or filtered.
+The Firefox file is the horizontal logo-and-wordmark lockup that `firefox.com` itself loads, which is why the tile is the wide one; Mozilla also publishes a bare browser glyph at `https://www.firefox.com/media/img/logos/firefox/firefox-logo.svg`, and taking that instead would be a new provenance row rather than a crop of this one.
+The robot file writes `#34A853` and `#202124` rather than the `#3ddc84` the same page names as the online hex, which is a fact about Google's published file and not a licence question; `tokens.test.ts` exempts `web/static/vendors/` from the palette sweep for exactly this reason.
+
+`web/static/vendors/` is a second served directory rather than a corner of `web/static/marketplaces/`.
+The guard that a marketplace mark is named for its marketplace is worth keeping exactly as strong as it is, and a browser and an operating system are not marketplaces — which is the distinction the superseded decision drew correctly even though its conclusion is reversed.
+It is `vendors/` rather than `platforms/` because `web/src/lib/platforms.ts` already uses "platform" to mean a marketplace; no console route in `web/src/lib/nav.ts` is named `vendors`, and `checks.served-artefacts` fails if that ever stops being true.
+
+### The two requests the founder is asked to make
+
+Neither is speculative: each is the owner's own published route to the permission, and each would land as a change to one table.
+Neither has been sent, and nothing has been requested from either owner, which is what the shipped comments now say.
+
+Each request is below as a covering note, saying where it goes and what it rests on, and then as a letter to send as it stands.
+The letters name the current public host, `teachouse.stowiq.io`; replace it with `teachouse.io` after the cutover recorded in `landing-page.md`.
+
+Request 1, to Google, for the Chrome product icon.
+
+The covering note.
+The route is a form rather than an address: create a Partner Marketing Hub account at https://partnermarketinghub.withgoogle.com/ and open a request for approval to use the Chrome product icon.
+The letter below is the body of that request.
+Google's own guidance asks that our brand be more prominent than its product icon and that the icon not be used out of context; both hold as the page is drawn, which is why the letter says so rather than leaving it to be asked.
+The page is behind a sign-in, so the letter offers a screenshot rather than a link a reviewer cannot open.
+On approval, `EXTENSIONS` in `web/src/lib/pages/marketplaces/catalogue.ts` changes from a wordmark to an image and a provenance row is added here.
+
+The letter.
+
+> Subject: Request to use the Google Chrome product icon on a product page
+>
+> Hello,
+>
+> I am the founder of Teachouse, a bulk-listing and cross-listing tool for teachers who sell their own teaching resources. Our public site is https://teachouse.stowiq.io/.
+>
+> I am asking for approval to use the Google Chrome product icon in one place: a tile on the Marketplaces page inside our signed-in console, in a group headed as the two browsers a planned Teachouse extension would ship for. The tile sits beside a Firefox tile, states "Not available yet", and links nowhere. The icon would identify the browser and nothing else. I am glad to send a screenshot of the page, which is behind a sign-in.
+>
+> Until an approval, the tile draws the name "Google Chrome™" set in our own typeface, with "Google Chrome is a trademark of Google LLC." printed beneath the page's grid, and no Google logo of any kind.
+>
+> Our own brand is the more prominent on the page, the icon would not be altered, recoloured or combined with anything, and it would not be used to suggest any relationship between Teachouse and Google; the page carries a disclaimer saying we are not affiliated with or endorsed by the owners whose names it shows.
+>
+> Please tell me if you need anything further, or if a different asset or size is the right one for this use.
+>
+> Thank you,
+> [name]
+> Teachouse
+
+Request 2, to Microsoft, for the Windows symbol.
+
+The covering note.
+The address is trademarks@microsoft.com.
+The request is narrow by construction: Microsoft's Windows trademark guidelines of February 2026 name an exception covering this exact row, and the row this change already builds satisfies it — the name beside the symbol, complete compatibility information in plain text beneath, and a size above the stated minimum.
+The letter quotes that exception so the reviewer is reading their own words rather than our summary of them.
+On a licence, `PLATFORM_MARK` in `web/src/lib/pages/marketplaces/downloads.ts` and `apps/landing/src/platforms.js` each change one row.
+
+The letter.
+
+> Subject: Trademark use licence request — Windows symbol in a platform-availability row
+>
+> Hello,
+>
+> I am the founder of Teachouse, a bulk-listing and cross-listing tool for teachers who sell their own teaching resources. Our public site is https://teachouse.stowiq.io/.
+>
+> I am asking for a trademark use licence for the Windows symbol in one place: a platform-availability row that tells a reader which platforms our downloadable app is published for. The row is on our public home page at https://teachouse.stowiq.io/ and in the downloads section of the Marketplaces page inside our signed-in console. It names Windows and Android, and it says that no macOS build is published.
+>
+> The use is the one your own guidelines name as an exception. The Windows Trademark Guidelines of February 2026 say the symbol "may be used when Windows is called out next to other platforms (e.g., macOS or Android) being compatible with a product, provided the name 'Windows' is in direct proximity to the symbol", with complete compatibility information in plain text and a minimum size of 15.5 px. The row is built that way: the name "Windows" sits directly beside the mark, a caption beneath carries the compatibility information in plain text, and the mark is drawn above the minimum size.
+>
+> Until a licence, the row draws the name "Windows" in text with a neutral icon of our own that is deliberately not tinted toward Microsoft's palette, and "Windows is a trademark of the Microsoft group of companies." is printed beneath. No Windows logo, symbol or icon appears anywhere on our site or in our product.
+>
+> The symbol would not be altered, recoloured or combined with anything, it would be less prominent than our own brand, and the page carries a disclaimer saying we are not affiliated with or endorsed by the owners whose names it shows.
+>
+> Please tell me what you need from us — a screenshot, the exact placement, or a signed agreement.
+>
+> Thank you,
+> [name]
+> Teachouse
+
+A third approach is recorded and deliberately not made a blocker.
+Google's Android page also says every creative that includes or references Android or Google trademarks must be reviewed and approved by the Android brand team, which sits in tension with the Creative Commons grant on the robot on the same page.
+The grant is what we rely on and its attribution line is carried verbatim; submitting Google's brand request form after this ships is the guideline's own route, and the tension is recorded here rather than resolved silently.
+
+### The three store badges, unchanged
 
 Google Play, the App Store and the Microsoft Store each publish a badge and each license it for one purpose: to link to that product's listing on that store.
 None of the three download tiles links to a listing.
 The Windows and Android cards offer a file the release manifest names, installed by hand, and the Apple card offers nothing at all, because no macOS build is published.
 A "Get it on Google Play" badge over a sideloaded `.apk` is outside the licence that grants the badge, and it tells the reader something untrue about where the file came from.
-That is a different thing from the brand-guideline risk the founder knowingly accepted on 2026-09-05 for the marketplace logos: there the mark identifies a marketplace correctly and breaches a guideline, here the mark would state a fact that is not so.
+That is a different thing from the brand-guideline risk the founder knowingly accepted for the marketplace logos: there the mark identifies a marketplace correctly and breaches a guideline, here the mark would state a fact that is not so.
+The Chrome Web Store badge fails the same test for the same reason — it needs no pre-approval, and it requires that clicking it reach a listing we do not have.
 
-So the three tiles draw a neutral glyph of our own instead, from the Lucide set already approved as a dependency: `monitor`, `smartphone` and `laptop`.
-A glyph is a drawing rather than a logo, claims no relationship, and needs no provenance row, which is why this section has no table.
-`PLATFORM_MARK` in `web/src/lib/pages/marketplaces/downloads.ts` is typed as a `Mark` rather than as a glyph name, so the day a store listing exists the badge lands as a change to that table and to nothing else, and `downloads.test.ts` fails on a change from a glyph to an image, which is the point at which somebody has to have read the badge licence.
-
-### The two browser logos
-
-Neither vendor publishes its browser logo at an address that can be fetched, which is a fact about the sources rather than a decision of ours.
-
-`https://about.google/brand-resource-center/` redirects to `partnermarketinghub.withgoogle.com/brands/google/overview/`, whose own navigation links `/brands/chrome/overview/brand-introduction/`.
-That address, and `/brands/chrome/` with it, redirect to a login, so Chrome's logo and its published usage terms are both behind a Google partner account.
-`https://www.google.com/chrome/branding/`, the other address on record for Chrome brand assets, is a 404.
-All three were checked on 2026-09-06.
-
-`https://mozilla.design/firefox/` redirects to `https://brand.mozilla.com/all-brands`, a Frontify portal that serves the same JavaScript shell at every path under it, `/firefox` and `/sitemap.xml` included, with no asset address anywhere in the markup.
-The Firefox logo is reachable only by driving that application in a browser.
-Checked the same day.
-
-Mozilla's trademark policy expressly permits nominative use of its marks to refer to Mozilla products without prior permission, which makes Firefox the least exposed of the five marks in this section and the only one whose owner publishes such an allowance.
-That is a fact about permission rather than about availability, and it does not make the file any easier to obtain.
-
-So both browser tiles keep the name set in our own typeface, which is what they already drew.
-A mark whose licence terms cannot be read cannot be landed under the rule the rest of this note holds every file to, and a partner portal is what makes them unreadable.
-
-A glyph of ours was the alternative, as the download tiles take, and it is not the right answer here.
-Lucide carries no brand marks at all, so the nearest it offers either browser is a generic drawing, and a circular one resembles Chrome's own logo more closely than the word "Chrome" does.
-A mark adopted to avoid using a logo must not be the closer imitation of it, and that asymmetry is the whole reason the glyph is right on the download tiles and wrong on these two: a monitor, a phone and a laptop resemble no store badge.
+The Windows and Apple tiles therefore keep a neutral drawing of ours, from the Lucide set, and it is deliberately not tinted toward either owner's palette: a drawing of ours coloured to look like a vendor's mark is a closer imitation than the plain drawing is.
+The same asymmetry is why a glyph is still wrong on the Chrome tile, where a circular browser drawing would resemble Chrome's own logo more closely than the word does, and right on the download tiles, where a monitor and a laptop resemble no store badge.
+`downloads.test.ts` fails on a change to any of the three rows and on any file arriving in `web/static/vendors/` named for a badge, which is the point at which somebody has to have read a licence.
 
 ### What this leaves unchanged, deliberately
 
-`web/static/` gains no file, so nothing new is published unauthenticated by `ServeDir` and the rule at the top of this note still holds.
-The guard in `catalogue.test.ts` requiring every mark to be served from `/marketplaces/` on our own origin is untouched and stays exactly as strong as it was; there is no second directory to admit.
-The disclaimer beneath the grid still says "marketplace names and logos", and still says only that, because no browser or platform vendor's mark appears under it.
-Every mark on this page that is not a marketplace's is a drawing of ours, so extending that sentence to browser and platform vendors would have claimed we show something we do not.
+The rule at the top of this note still holds: `web/static/` gains two image files and no prose, so no address, retrieval date or digest on this page is published unauthenticated, and `catalogue.test.ts` asserts that neither the disclaimer nor the attribution block contains a URL, a date or a digest.
+The disclaimer beneath the grid was widened from "marketplace names and logos" to name browser and platform marks too, in the same change that landed the first of them, because the old sentence became untrue the moment a mark that is not a marketplace's appeared under it.

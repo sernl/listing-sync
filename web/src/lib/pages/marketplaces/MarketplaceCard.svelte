@@ -1,6 +1,7 @@
 <script lang="ts">
 	import StatusPill, { type Tone } from '$lib/StatusPill.svelte';
 	import { external } from '$lib/external';
+	import { cardAnchor } from '$lib/platforms';
 	import type { Marketplace } from '$lib/generated/vocab';
 	import TileMark from './TileMark.svelte';
 	import type { Mark } from './catalogue';
@@ -33,8 +34,9 @@
 		/** The marketplace's own front page. The mark and the name both open it,
 		 *  which is what makes each tile identify a marketplace rather than
 		 *  merely name it, and what satisfies Shopify's condition that its
-		 *  brand assets be shown with a link to its homepage. Absent on the two
-		 *  browser tiles, which are not marketplaces. */
+		 *  brand assets be shown with a link to its homepage, and Mozilla's that
+		 *  its logo be shown in a visual referring or linking to the program.
+		 *  Absent on the Chrome tile, which draws no vendor mark. */
 		home?: string;
 		/** The account the marketplace shows the seller, where it reported one.
 		 *  An em dash where it did not, which is the specification's own
@@ -62,9 +64,10 @@
 		 *  to remove. Separate from `action` because a card can offer both, and
 		 *  because this one is destructive and the other is not. */
 		disconnect?: { label: string; marketplace: Marketplace };
-		/** Which control on this card is mid-flight. A connect opens a login
-		 *  window and can stand for a minute, so a card with no busy state
-		 *  reads as a button that did nothing. */
+		/** Which control on this card is mid-flight. A connect opens the
+		 *  marketplace's own sign-in — beside the console on a computer, in
+		 *  place of it on a phone — and can stand for a minute either way, so a
+		 *  card with no busy state reads as a button that did nothing. */
 		running?: 'action' | 'disconnect';
 		onrun?: (marketplace: Marketplace) => void;
 		ondisconnect?: (marketplace: Marketplace) => void;
@@ -74,7 +77,12 @@
 	} = $props();
 </script>
 
-<article class="mp-card" class:pending>
+<!-- The id is derived here rather than passed in, because the card is handed
+     the name and not the list entry it came from, and every caller would
+     otherwise have to remember to pass an anchor for a link it does not itself
+     write. `platforms.test.ts` holds the three marketplaces the console links
+     into to the ids it links at. -->
+<article id={cardAnchor(name)} class="mp-card" class:pending>
 	<div class="mp-cap">
 		<!-- The mark and the name lead to the same place, so only the name is a
 		     tab stop and only the name is announced: a second link saying the
@@ -164,3 +172,18 @@
 		</div>
 	{/if}
 </article>
+
+<style>
+	/* A card arrived at by a link from somewhere else says so for a moment, and
+	   clears the header band that would otherwise sit over it. Nothing moves
+	   focus: the browser's own hash navigation scrolls, and a scripted focus
+	   move would be behaviour with no way to test it here. */
+	.mp-card {
+		scroll-margin-top: 90px;
+	}
+
+	.mp-card:target {
+		outline: 2px solid var(--accent);
+		outline-offset: 3px;
+	}
+</style>

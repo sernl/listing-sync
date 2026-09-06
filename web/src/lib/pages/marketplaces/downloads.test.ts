@@ -1,6 +1,9 @@
+import { readdirSync } from 'node:fs';
+import { basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { type DownloadsManifest, readManifest } from './api';
-import { PLATFORM_MARK, PLATFORM_ORDER, downloadCards } from './downloads';
+import { PLATFORM_MARK, PLATFORM_NAME, PLATFORM_ORDER, downloadCards } from './downloads';
 
 /** The producer's own shape, from `nix/module.nix`: a channel version at the
  *  top, and an Android entry carrying its own version beside its digest because
@@ -43,16 +46,59 @@ describe('the download cards', () => {
 		}
 	});
 
-	it('marks each platform with a glyph of our own, never a store badge', () => {
-		// The rule this holds: all three badge programmes license the badge to
-		// link to a listing on that store, and none of these cards links to one.
-		// A change from a glyph to an image here is the moment someone has to
-		// have read that licence, so it fails until they have.
-		expect(PLATFORM_ORDER.map((platform) => PLATFORM_MARK[platform].kind)).toEqual([
-			'glyph',
-			'glyph',
-			'glyph'
-		]);
+	it('draws each platform the mark its owner permits, and no other', () => {
+		// Three owners, three answers, so one assertion over all three would say
+		// less than it looks like it says. Google licenses the robot under
+		// Creative Commons with an attribution line the page carries; Microsoft
+		// requires an express licence for the Windows symbol, which we have not
+		// applied for; Apple forbids third-party use of its logo outright. A
+		// change on any row is the moment somebody has to have read a permission,
+		// and it fails here until they have.
+		expect(PLATFORM_MARK.android).toEqual({
+			kind: 'image',
+			shape: 'icon',
+			src: '/vendors/android-robot.svg'
+		});
+		expect(PLATFORM_MARK.windows.kind).toBe('glyph');
+		expect(PLATFORM_MARK.apple.kind).toBe('glyph');
+	});
+
+	it("writes Android's name the way Google requires its trademark to be written", () => {
+		// "Android™ should have a trademark symbol the first time it appears in a
+		// creative", at
+		// https://developer.android.com/distribute/marketing-tools/brand-guidelines --
+		// two lines above the attribution line the same page requires, and on the
+		// same page whose Creative Commons grant is why the robot may be drawn at
+		// all. This is the card heading, which is that first appearance. Dropping
+		// the symbol is a one-character edit that reads as a tidy-up and leaves the
+		// page carrying the second of Google's two name conditions and not the
+		// first, which is the shape `catalogue.test.ts` already refuses for Chrome.
+		expect(PLATFORM_NAME.android).toBe('Android™');
+		expect(downloadCards(null).map((card) => card.name)).toContain('Android™');
+	});
+
+	it('names a platform mark after the platform it stands for', () => {
+		// The mutation this closes: pointing Android at `/vendors/firefox.svg`
+		// passes every other assertion here and on the catalogue side -- the file
+		// exists, it is under `/vendors/`, it is an image -- and puts one
+		// vendor's logo on another vendor's card, which is the single failure a
+		// page carrying five owners' marks can least afford.
+		for (const platform of PLATFORM_ORDER) {
+			const mark = PLATFORM_MARK[platform];
+			if (mark.kind === 'image') {
+				expect(basename(mark.src), platform).toContain(platform);
+			}
+		}
+	});
+
+	it('ships no store badge in the directory a badge would arrive in', () => {
+		// All three badge programmes license the badge for one purpose, to link
+		// to a listing on that store, and none of these cards links to one. The
+		// mark table above refuses the badge on the card; this refuses the file,
+		// because `web/static/` is served unauthenticated and a badge sitting
+		// there is published whether a card draws it or not.
+		const held = readdirSync(fileURLToPath(new URL('../../../../static/vendors', import.meta.url)));
+		expect(held.filter((name) => /play|app-?store|microsoft-store|badge/i.test(name))).toEqual([]);
 	});
 
 	it('offers nothing for a platform whose entry is null', () => {

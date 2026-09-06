@@ -317,3 +317,41 @@ export function opensPalette(press: {
 }): boolean {
 	return (press.ctrlKey || press.metaKey) && press.key.toLowerCase() === 'k';
 }
+
+/** The head the seller reads and types into, which `shell.css` draws at 52px.
+ *  Named here because the placement below is arithmetic about that band and a
+ *  height guessed at would place the input somewhere the stylesheet does not
+ *  draw it. */
+const HEAD_HEIGHT = 52;
+
+/** The margin kept between the sheet and both ends of the visible band. */
+const GUTTER = 12;
+
+/** Where the phone sheet sits, against the band the browser reports as visible.
+ *
+ * The head's middle sits a third of the way down that band, and never above
+ * the gutter. `maxHeight` is what is left down to the far gutter, floored at a
+ * head: that floor is the whole of the guarantee that a band too short to hold
+ * the sheet still answers with one whose field can be read and typed into.
+ *
+ * A third rather than the middle because with the keyboard up the band is
+ * roughly the top 60% of the screen, and the exact middle of that leaves room
+ * for about two result rows. Fixing the top and letting the sheet grow
+ * downwards is also what keeps the input still as matches arrive, which a
+ * vertically centred box cannot do.
+ *
+ * `offsetTop` is added to the answer because a modal dialog is positioned
+ * against the layout viewport while the band is reported against the visual
+ * one; on an unzoomed page those agree and on a pinch-zoomed one they do not. */
+export function paletteAnchor(band: { height: number; offsetTop: number }): {
+	top: number;
+	maxHeight: number;
+} {
+	const within = Math.round(Math.max(GUTTER, band.height / 3 - HEAD_HEIGHT / 2));
+	return {
+		top: within + Math.round(band.offsetTop),
+		// Floored, so the rounding cannot push the foot past the gutter it was
+		// placed against: every band a browser reports is fractional.
+		maxHeight: Math.max(HEAD_HEIGHT, Math.floor(band.height - within - GUTTER))
+	};
+}

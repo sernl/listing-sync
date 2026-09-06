@@ -3,7 +3,7 @@
 // publish dialog and the product page name platforms without composing a
 // create. Pure, so it tests without a component.
 
-import { INVENTORY_ORDER } from '$lib/listings-view';
+import { INVENTORY_ORDER, MARKETPLACE_OF } from '$lib/listings-view';
 import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 
 /** How one marketplace is named to a seller.
@@ -89,3 +89,66 @@ export const AUTHORABLE: Record<InventoryId, boolean> = {
 export const AUTHORABLE_PLATFORMS: readonly InventoryId[] = INVENTORY_ORDER.filter(
 	(inventory) => AUTHORABLE[inventory]
 );
+
+/** The file each marketplace's own mark is served from, under `web/static`.
+ *
+ * Held here rather than reached for through the Marketplaces catalogue,
+ * because the resource page and the board's chips draw marks without
+ * composing a tile, and a page-to-page import for three string constants
+ * would put a catalogue of twenty-three marketplaces behind two of them.
+ * `platforms.test.ts` asserts these are the same three paths the catalogue
+ * holds, so the two cannot drift apart unnoticed. */
+export const MARK_SRC: Record<Marketplace, string> = {
+	Tes: '/marketplaces/tes-mark.png',
+	Tpt: '/marketplaces/tpt-mark.png',
+	Etsy: '/marketplaces/etsy.png'
+};
+
+/** The two letters that tell the three Tes sites apart beside a mark, and
+ *  nothing where the mark already identifies the marketplace on its own.
+ *
+ * A total map rather than a slice of `PLATFORMS[inventory].region`, because
+ * the region there is the country written out and this is what fits beside a
+ * 28px logo. Null exactly where that region is null, which is what
+ * `platforms.test.ts` holds it to. */
+export const REGION_TAG: Record<InventoryId, string | null> = {
+	Tpt: null,
+	TesGb: 'GB',
+	TesUs: 'US',
+	TesNz: 'NZ',
+	Etsy: null
+};
+
+/** The id of one marketplace's card on the Marketplaces page.
+ *
+ * A total map over the generated union, so a marketplace added in Rust stops
+ * this file type-checking rather than linking at a card that is not there. */
+export const CARD_ANCHOR: Record<Marketplace, string> = {
+	Tes: 'mp-tes',
+	Tpt: 'mp-tpt',
+	Etsy: 'mp-etsy'
+};
+
+/** The id a Marketplaces card takes, from the name it draws.
+ *
+ * Derived from the name rather than passed down from the page's own lists,
+ * because the card is handed a name and not the tile it came from. The three
+ * marketplaces this console links into are held to `CARD_ANCHOR` by
+ * `platforms.test.ts`, and every other tile only needs an id that is its own. */
+export function cardAnchor(name: string): string {
+	const slug = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return `mp-${slug}`;
+}
+
+/** The Marketplaces page, scrolled to the marketplace this inventory belongs
+ *  to.
+ *
+ * The page names no marketplace on its own, so a seller sent there to sign in
+ * arrives at a grid of twenty-three cards and has to find the one they were
+ * sent for. */
+export function marketplacesHref(inventory: InventoryId): string {
+	return `/marketplaces#${CARD_ANCHOR[MARKETPLACE_OF[inventory]]}`;
+}

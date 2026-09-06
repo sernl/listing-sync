@@ -14,6 +14,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { PLATFORM_NAME, PLATFORM_ORDER } from './downloads';
 
 const REPO = new URL('../../../../../', import.meta.url).pathname;
 
@@ -45,12 +46,103 @@ describe('the landing hero band', () => {
 		expect(entries.filter((entry) => !/home: 'https:\/\//.test(entry))).toEqual([]);
 	});
 
-	it('no file is copied for a marketplace whose owner requires written permission', () => {
-		// Etsy and Shopify are drawn as an initial and their name until the
-		// founder reports permission (`docs/design/decisions.md`, 2026-09-06).
-		// The exclusion has to be a fact about the bytes that ship, not only
-		// about the markup, or the file is fetchable by name from a public
-		// build.
-		expect(readdirSync(MARKS_DIR).filter((f) => /etsy|shopify/i.test(f))).toEqual([]);
+	it('ships the console\'s own bytes for every mark it copies, never a second fetch', () => {
+		// Every file here is a copy of one under `web/static/marketplaces/`,
+		// whose provenance row in `docs/notes/design/marketplace-logo-sources.md`
+		// records where it came from. A copy that has drifted -- refetched,
+		// re-exported, optimised -- is a mark with no provenance behind it, and
+		// nothing else in either tree would say so.
+		const console_ = `${REPO}web/static/marketplaces`;
+		const drifted = readdirSync(MARKS_DIR).filter(
+			(file) =>
+				!existsSync(`${console_}/${file}`) ||
+				!readFileSync(`${MARKS_DIR}/${file}`).equals(readFileSync(`${console_}/${file}`))
+		);
+		expect(drifted).toEqual([]);
+	});
+
+	it('draws only the marketplace whose rule cannot be met truthfully as an initial', () => {
+		// Etsy and Shopify joined the band on 2026-09-06, when the founder
+		// reversed that half of the decision at `docs/design/decisions.md` and
+		// took the same accepted risk here as on the console page. Boom Learning
+		// did not, and is different in kind rather than a smaller version of the
+		// same thing: its guidelines make "used with permission" mandatory
+		// wherever its mark appears, so drawing it means breaching the rule or
+		// printing something untrue. The mutation this closes is a later copy of
+		// `boom-learning.svg` into this directory on the reasoning that every
+		// other exclusion was lifted.
+		const fileless = entries
+			.filter((entry) => !/file: '/.test(entry))
+			.map((entry) => entry.match(/name: '([^']+)'/)?.[1]);
+		expect(fileless).toEqual(['Boom Learning']);
+		expect(readdirSync(MARKS_DIR).filter((f) => /boom/i.test(f))).toEqual([]);
+	});
+
+	it('draws every mark in its owner\'s colours, with no filter anywhere in the sheet', () => {
+		// The enforceable form of the founder's "in colour all the time", and
+		// the one thing a later edit made for looks would quietly undo: the band
+		// was greyscale at rest and coloured on hover, which is a state a reader
+		// on a phone cannot produce at all.
+		const sheet = readFileSync(`${REPO}apps/landing/src/styles/site.css`, 'utf8');
+		expect(sheet).not.toContain('grayscale(');
+	});
+});
+
+describe('the landing platform row', () => {
+	const VENDORS_DIR = `${REPO}apps/landing/public/vendors`;
+	const source = readFileSync(`${REPO}apps/landing/src/platforms.js`, 'utf8');
+
+	it('accounts for every platform the release manifest can carry a build for', () => {
+		// Both directions. A platform the app starts publishing must appear on
+		// the row or be recorded as deliberately absent, so a macOS build cannot
+		// ship while the public page still implies there is none; and a platform
+		// dropped from the row without a reason fails here rather than reading
+		// as unsupported.
+		const named = [...source.matchAll(/name: '([^']+)'/g)].map((m) => m[1]);
+		expect([...named].sort()).toEqual(
+			PLATFORM_ORDER.map((platform) => PLATFORM_NAME[platform]).sort()
+		);
+	});
+
+	it('gives a row with no mark the reason it has none', () => {
+		// A null file is a permission fact, not a missing asset, and the reason
+		// is the thing a later reader needs in order not to "fix" it by fetching
+		// the logo.
+		const rows = [...source.matchAll(/\{[^}]*name: '[^']+'[^}]*\}/g)].map((m) => m[0]);
+		for (const row of rows.filter((row) => /file: null/.test(row))) {
+			expect(/why: '[^']{20,}'/.test(row), row).toBe(true);
+		}
+	});
+
+	it('ships every mark it declares and declares every mark it ships', () => {
+		const declared = [...source.matchAll(/file: '([^']+)'/g)].map((m) => m[1]);
+		expect(declared.filter((file) => !existsSync(`${VENDORS_DIR}/${file}`))).toEqual([]);
+		expect(readdirSync(VENDORS_DIR).filter((file) => !declared.includes(file))).toEqual([]);
+	});
+
+	it("copies the console's own vendor file rather than fetching a second one", () => {
+		// The same rule the marks directory is held to, and it matters more
+		// here: the console's copy is the one whose digest the provenance note
+		// records, so a second fetch of "the Android robot" is a file no row in
+		// that note describes.
+		const drifted = readdirSync(VENDORS_DIR).filter(
+			(file) =>
+				!readFileSync(`${VENDORS_DIR}/${file}`).equals(
+					readFileSync(`${REPO}web/static/vendors/${file}`)
+				)
+		);
+		expect(drifted).toEqual([]);
+	});
+
+	it("carries Google's licence line verbatim wherever the robot is drawn", () => {
+		// Google's grant for the robot is conditional on this sentence appearing
+		// in the creative, and this row is a second creative drawing it. A
+		// paraphrase is not the condition, and a row that drew the mark without
+		// the line would be outside the licence.
+		expect(source).toContain(
+			'The Android robot is reproduced or modified from work created and shared by Google and used according to terms described in the Creative Commons 3.0 Attribution License.'
+		);
+		expect(source).toContain('Android is a trademark of Google LLC.');
+		expect(source).toContain('Windows is a trademark of the Microsoft group of companies.');
 	});
 });

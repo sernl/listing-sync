@@ -78,6 +78,10 @@ export const queryKeys = {
 	org: ['org'] as const,
 	orgSlug: (slug: string) => ['org-slug', slug] as const,
 	identity: ['identity'] as const,
+	/** Whether this seller takes email when a run finishes. Read on the
+	 *  preferences screen alone; the rail carries no unread badge, so
+	 *  nothing else asks. */
+	notifyPreferences: ['notify-preferences'] as const,
 	passkeys: ['passkeys'] as const,
 	billing: ['billing'] as const,
 	/** The newest runs read in full, which the jobs list alone cannot give:

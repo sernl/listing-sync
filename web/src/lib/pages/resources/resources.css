@@ -303,69 +303,20 @@
 
 /* --- the resource page --------------------------------------------------- */
 
-/* One card per marketplace rather than a hairline row, so the resource page
-   reads as the same console as the board it is opened from. */
-.resources-page .mk-row {
-	background: var(--surface);
-	border: 1px solid var(--line);
-	border-radius: var(--r-panel);
-	box-shadow: var(--sh-1);
-	padding: 14px 16px;
-}
+/* One small tile per marketplace, in a grid that wraps, rather than one tall
+   card per marketplace in a stack that does not. Four across inside the panel
+   at 1280 and two at 390, from one declaration: the column floor is what
+   decides the count, so no width is named twice and the Windows app, whose
+   window floor is 960px, takes the desktop count without a code path of its
+   own.
 
-.resources-page .mk-row + .mk-row {
-	margin-top: 10px;
-}
-
-.resources-page .mk-head {
-	display: flex;
-	align-items: center;
+   The floor is 130px because the panel's content column is 284px at 390, and
+   two tracks plus the gap have to fit inside it: at 140 they did not, and the
+   phone drew one tile per row, which is the stack the tiles replaced. */
+.resources-page .res-mk-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
 	gap: 10px;
-	flex-wrap: wrap;
-}
-
-.resources-page .mk-name {
-	font-size: 15.5px;
-	font-weight: 600;
-	line-height: 1.25;
-	overflow-wrap: anywhere;
-}
-
-.resources-page .mk-say {
-	margin: 5px 0 0;
-	font-size: 12.5px;
-	color: var(--muted);
-}
-
-.resources-page .mk-acts {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-wrap: wrap;
-	margin-top: 10px;
-}
-
-.resources-page .mk-acts:empty {
-	display: none;
-}
-
-/* The one control that leaves the console. It keeps the outline tier's shape
-   and is an anchor rather than a button, because it carries `target` and `rel`
-   and the shared button takes neither. */
-.resources-page .res-out {
-	display: inline-flex;
-	align-items: center;
-	border: 1px solid var(--line);
-	background: var(--surface);
-	border-radius: var(--r-pill);
-	padding: 5px 12px;
-	font-size: 12px;
-	font-weight: 600;
-	color: var(--text);
-}
-
-.resources-page .res-out:hover {
-	background: var(--hover);
 }
 
 .resources-page .mk-attach {

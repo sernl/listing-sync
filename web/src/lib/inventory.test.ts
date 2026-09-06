@@ -181,7 +181,7 @@ describe('a chip the newest run speaks for', () => {
 		});
 		expect(held.state).toBe('stranded');
 		expect(held.detail).toContain('you signing in again');
-		expect(held.action?.href).toBe('/marketplaces');
+		expect(held.action?.href).toBe('/marketplaces#mp-tpt');
 	});
 
 	// A park whose gate is an unanswered write is not an interruption: the
@@ -225,7 +225,7 @@ describe('a chip the newest run speaks for', () => {
 			work: work({ state: 'blocked', blocked_on: 'awaiting_seller_signin' })
 		});
 		expect(signIn.state).toBe('needs_signin');
-		expect(signIn.action?.href).toBe('/marketplaces');
+		expect(signIn.action?.href).toBe('/marketplaces#mp-tpt');
 
 		const question = chip('Tpt', {
 			mapping: bound,
@@ -297,6 +297,63 @@ describe('a dropped connection', () => {
 			status: undefined
 		});
 		expect(none.state).toBe('needs_signin');
+	});
+});
+
+// The verdicts that send a seller to the Marketplaces page, asserted at each
+// site rather than once. The failure guarded is a later edit returning one of
+// them to a bare `/marketplaces`, which lands a seller on a grid of
+// twenty-three cards with nothing saying which one they were sent for; three
+// of the four would still pass a test that checked only one. The fifth site,
+// the gate router's own `connections` arm, is unreachable while every gate
+// routed there is also a sign-in gate, and `closed-enum-sweep.test.ts` holds
+// the whole space to the same rule so it cannot arrive unanchored.
+describe('every verdict that sends a seller to a marketplace names it', () => {
+	const bound = mapping({ inventory: 'TesGb' });
+
+	it('anchors all four on the card for that marketplace', () => {
+		const sites = [
+			// `chipFor` directly, because the helper above substitutes a linked
+			// connection for an absent one and this is the arm for having none.
+			chipFor({
+				product: 'p1',
+				inventory: 'TesGb',
+				mapping: bound,
+				work: undefined,
+				connection: undefined,
+				status: undefined
+			}),
+			chip('TesGb', { mapping: bound, connection: connection('Tes', 'disconnected') }),
+			chip('TesGb', {
+				mapping: bound,
+				work: work({ state: 'blocked', blocked_on: 'awaiting_seller_signin' })
+			}),
+			chip('TesGb', {
+				mapping: bound,
+				work: work({ state: 'parked_live', blocked_on: 'ReauthRequired' })
+			})
+		];
+		expect(sites.map((one) => one.state)).toEqual([
+			'needs_signin',
+			'needs_signin',
+			'needs_signin',
+			'stranded'
+		]);
+		expect(sites.map((one) => one.action?.href)).toEqual([
+			'/marketplaces#mp-tes',
+			'/marketplaces#mp-tes',
+			'/marketplaces#mp-tes',
+			'/marketplaces#mp-tes'
+		]);
+	});
+
+	it('anchors each marketplace on its own card and not on another', () => {
+		expect(
+			chip('Tpt', {
+				mapping: mapping({ inventory: 'Tpt' }),
+				connection: connection('Tpt', 'disconnected')
+			}).action?.href
+		).toBe('/marketplaces#mp-tpt');
 	});
 });
 

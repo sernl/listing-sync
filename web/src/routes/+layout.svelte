@@ -17,7 +17,8 @@
 	import { createQueryClient, queryKeys } from '$lib/query';
 	import { signOut } from '$lib/sign-out';
 	import { afterToastDismissed, captureSlots, focusRegion } from '$lib/focus-return';
-	import { dismiss, sweep, toastStore } from '$lib/toast';
+	import type { IconName } from '$lib/icons';
+	import { dismiss, sweep, toastStore, type Toast } from '$lib/toast';
 
 	let { data, children } = $props();
 
@@ -76,6 +77,16 @@
 	async function logout() {
 		await signOut(queryClient);
 	}
+
+	// The console's notice glyph for each tone, as `Banner` holds its own.
+	// Here rather than in `toast.ts`, which is a pure store with no view in
+	// it, and read through the record rather than written as a ternary in the
+	// markup: `icons.test.ts` sweeps the quoted arms of an `Icon name={...}`
+	// expression, so a tone compared inline reads to it as an icon name.
+	const TOAST_GLYPH: Record<Toast['tone'], IconName> = {
+		info: 'circle-check',
+		error: 'circle-alert'
+	};
 
 	// The toast stack's clock lives here rather than in the store, because what
 	// pauses it is a pointer and a focus ring, and only the element knows about
@@ -221,6 +232,9 @@
 				class="toast {entry.tone === 'error' ? 'error' : ''}"
 				onkeydown={(event) => keyedToast(event, entry.id)}
 			>
+				<span class="toast-mark">
+					<Icon name={TOAST_GLYPH[entry.tone]} size={18} />
+				</span>
 				<span class="toast-say">{entry.message}</span>
 				<button
 					type="button"
