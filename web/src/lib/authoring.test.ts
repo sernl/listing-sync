@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-	axisControls,
 	formatBytes,
 	licenceElections,
 	licenceGated,
@@ -284,41 +283,6 @@ describe('the licence, which is the one required field anywhere', () => {
 	it('names the grant against a platform that actually holds a licence field', () => {
 		const draft = draftWith({ inventories: ['Tpt', 'TesGb'], licence: 'CC-BY' });
 		expect(rightsOf(draft, VOCABULARIES)?.inventory).toBe('TesGb');
-	});
-});
-
-describe('the platform field controls', () => {
-	it('drops the licence axis, which the price-gated selector owns', () => {
-		expect(axisControls(TES_GB).map((control) => control.axis)).toEqual([
-			'resource_type',
-			'phase'
-		]);
-	});
-
-	it('drops a read-only native, which nothing this form writes reaches', () => {
-		expect(axisControls(TES_GB).some((control) => control.native === 'curriculum')).toBe(false);
-	});
-
-	it('discloses a many-valued axis outside phase rather than collecting a dead answer', () => {
-		const tags = axisControls(TPT)[0];
-		expect(tags.unwritableReason).toMatch(/carries no field for this axis/);
-		expect(tags.values).toBeNull();
-		expect(tags.vocabulary).toBe('closed_uncaptured');
-	});
-
-	it('carries the words a seller reads beside each platform token', () => {
-		const phase = axisControls(TES_GB).find((control) => control.axis === 'phase');
-		expect(phase?.values?.map((value) => `${value.id}:${value.label}`)).toEqual([
-			'1:3-5',
-			'2:5-7',
-			'3:7-11',
-			'4:11-14',
-			'5:14-16',
-			'6:16+',
-			'7:Age not applicable'
-		]);
-		const type = axisControls(TES_GB).find((control) => control.axis === 'resource_type');
-		expect(type?.values?.[0]).toEqual({ id: '99001', label: 'Assembly' });
 	});
 
 	it('states why the licence refuses delegation', () => {

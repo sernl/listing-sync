@@ -3,7 +3,7 @@
 // compares across the first ten migrations. Pure, so it tests without a
 // component and without a stream.
 
-import type { InventoryId } from '$lib/generated/vocab';
+import { INVENTORY_IDS, type InventoryId } from '$lib/generated/vocab';
 
 export interface DrainMeasurement {
 	source: InventoryId;
@@ -34,6 +34,18 @@ const COUNTS = [
 	'items_already_open'
 ] as const;
 
+/** Whether a value is one of the inventories this bundle knows.
+ *
+ *  Membership rather than `typeof value === 'string'`, because the declared
+ *  type is `InventoryId` and a string is not one. A row written by a build
+ *  that knows an inventory this one does not would otherwise be typed as an
+ *  `InventoryId` while being none of them, and every total map keyed on the
+ *  union -- `SHORT_NAME` among them -- would answer `undefined` and draw a
+ *  blank cell. Checked here instead, the row is refused and counted. */
+function isInventory(value: unknown): value is InventoryId {
+	return typeof value === 'string' && (INVENTORY_IDS as readonly string[]).includes(value);
+}
+
 /** Narrows one stream payload, or null for anything that is not a drain
  *  measurement this client understands. */
 export function readMeasurement(payload: unknown): DrainMeasurement | null {
@@ -41,7 +53,7 @@ export function readMeasurement(payload: unknown): DrainMeasurement | null {
 		return null;
 	}
 	const body = payload as Record<string, unknown>;
-	if (typeof body.source !== 'string' || typeof body.target !== 'string') {
+	if (!isInventory(body.source) || !isInventory(body.target)) {
 		return null;
 	}
 	for (const key of COUNTS) {
@@ -63,12 +75,25 @@ export function toRun(seq: number, measurement: DrainMeasurement): DrainRun {
 	};
 }
 
+/** Why the window reports no fall.
+ *
+ *  Two opposite facts arrived as the same null before this existed, and the
+ *  page stated only the first of them: a tenant with twelve runs whose first
+ *  projected no canonical term read as "12 of 10 migrations recorded", which
+ *  is not merely vague but arithmetically false. `short` is the window still
+ *  filling; `unmeasurable` is a window that closed over an end with no share
+ *  to compare. */
+export type GateGap = 'short' | 'unmeasurable';
+
 export interface GateWindow {
 	first: DrainRun | null;
 	tenth: DrainRun | null;
-	/** first.share - tenth.share; positive means the queue is draining.
-	 *  null until ten runs with a measurable share exist. */
+	/** first.share - tenth.share, in shares rather than percent; positive
+	 *  means the queue is draining. null exactly when `gap` says why. */
 	fall: number | null;
+	/** null exactly when `fall` is a number, so the page branches on one of
+	 *  the two and never has to invent copy for a state that cannot arise. */
+	gap: GateGap | null;
 }
 
 /** The kill gate reads the first ten migrations: the share of canonical terms
@@ -76,13 +101,22 @@ export interface GateWindow {
 export function gateWindow(runs: DrainRun[]): GateWindow {
 	const first = runs[0] ?? null;
 	const tenth = runs.length >= 10 ? (runs[9] ?? null) : null;
-	const fall =
-		first?.share != null && tenth?.share != null ? first.share - tenth.share : null;
-	return { first, tenth, fall };
+	if (first?.share == null || tenth?.share == null) {
+		return { first, tenth, fall: null, gap: tenth === null ? 'short' : 'unmeasurable' };
+	}
+	return { first, tenth, fall: first.share - tenth.share, gap: null };
 }
 
 export function formatShare(share: number | null): string {
 	return share === null ? '—' : `${(share * 100).toFixed(1)}%`;
+}
+
+/** The difference between two shares, which is points and not a percentage.
+ *
+ *  12.5% minus 4.0% is 8.5 percentage points; rendering it as "8.5%" states a
+ *  different quantity, and one an operator reading a kill gate would act on. */
+export function formatPoints(difference: number | null): string {
+	return difference === null ? '—' : `${(difference * 100).toFixed(1)} percentage points`;
 }
 
 /** One row of the operator route: an organisation, the ledger position the

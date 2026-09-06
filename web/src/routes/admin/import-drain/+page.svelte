@@ -1,20 +1,23 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { api } from '$lib/api';
-	import { emptyState, formatShare, seriesByOrg } from '$lib/drain';
+	import { emptyState, formatPoints, formatShare, seriesByOrg } from '$lib/drain';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
+	import { SHORT_NAME } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { queryKeys } from '$lib/query';
 	import '$lib/pages/admin/admin.css';
 
+	// The whole view rather than its rows: `truncated` is the half of the
+	// answer that says whether the rows are the whole platform.
 	const drain = createQuery(() => ({
 		queryKey: queryKeys.adminImportDrain,
-		queryFn: () => api.adminImportDrain().then((view) => view.rows)
+		queryFn: () => api.adminImportDrain()
 	}));
 
-	const readout = $derived(seriesByOrg(drain.data ?? []));
+	const readout = $derived(seriesByOrg(drain.data?.rows ?? []));
 </script>
 
 <div class="page">
@@ -41,12 +44,15 @@
 		{#each readout.series as entry (entry.org)}
 			<Panel title={entry.org_name}>
 				<p class="s">
-					{#if entry.gate.fall === null}
+					{#if entry.gate.gap === 'short'}
 						{entry.runs.length} of 10 migrations recorded; the gate compares the first against the
 						tenth.
+					{:else if entry.gate.gap === 'unmeasurable'}
+						{entry.runs.length} migrations recorded, but the first or the tenth projected no
+						canonical term, so the gate has no share at that end to compare.
 					{:else}
 						First {formatShare(entry.gate.first?.share ?? null)} → tenth
-						{formatShare(entry.gate.tenth?.share ?? null)}: a fall of {formatShare(
+						{formatShare(entry.gate.tenth?.share ?? null)}: a fall of {formatPoints(
 							entry.gate.fall
 						)}.
 					{/if}
@@ -71,7 +77,9 @@
 							{#each entry.runs as run, index (run.seq)}
 								<tr class={index === 0 || index === 9 ? 'op-gate-row' : ''}>
 									<td class="num" data-label="#">{index + 1}</td>
-									<td data-label="Direction">{run.source} → {run.target}</td>
+									<td data-label="Direction"
+										>{SHORT_NAME[run.source]} → {SHORT_NAME[run.target]}</td
+									>
 									<td class="num" data-label="Rows">{run.rows}</td>
 									<td class="num" data-label="Terms seen">{run.terms_seen}</td>
 									<td
@@ -98,9 +106,19 @@
 			The ledger is pruned past the 30-day window, so runs older than it are not shown and
 			the first row above may not be that organisation's first migration.
 		</p>
+		{#if drain.data?.truncated}
+			<p class="foot-note op-unreadable">
+				The read stops at 500 measurements and this one filled it. Rows are ordered by
+				organisation name, so a tenant late in the alphabet may be shown short or missing
+				from this page entirely.
+			</p>
+		{/if}
 	{/if}
 
-	{#if readout.unreadable > 0}
+	<!-- The mixed case only: with no series at all the placeholder above is
+	     already the report of this fault, and two lines saying it is one too
+	     many. -->
+	{#if readout.series.length > 0 && readout.unreadable > 0}
 		<p class="foot-note op-unreadable">
 			{readout.unreadable === 1
 				? '1 row could not be read and is not shown.'

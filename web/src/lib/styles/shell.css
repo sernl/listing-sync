@@ -445,6 +445,20 @@
 		grid-template-columns: minmax(0, 1fr);
 		gap: 8px;
 		padding: 6px 6px 0;
+		/* The top half of what `viewport-fit=cover` in `app.html` opts into: the
+		   activity is edge-to-edge from Android 15 (API 35) up and this app's
+		   `targetSdk` is 36 (Android 16), so without this the compacted top strip
+		   draws under the status bar. Added to the 6px rather than replacing it,
+		   so a browser with no inset keeps the gap it has.
+
+		   Measured on the Android 16 emulator, where the meta itself turned out
+		   to be a no-op: the top inset already resolved there (49px) and this
+		   rule is what spends it, so the status-bar clearance is real. The bottom
+		   inset reports zero under gesture navigation, so `.tabbar`'s
+		   `env(safe-area-inset-bottom)` below adds nothing and the tab bar still
+		   sits under the gesture pill until a platform-side WindowInsets change
+		   lands. */
+		padding-top: calc(6px + env(safe-area-inset-top));
 	}
 
 	/* The rail and the card both go: the tab bar is the navigation, and the

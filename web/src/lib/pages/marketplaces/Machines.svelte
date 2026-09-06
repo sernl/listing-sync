@@ -3,6 +3,7 @@
 	import { api, type DeviceView } from '$lib/api';
 	import { revokeBrowserSession } from '$lib/browser-sessions';
 	import Button from '$lib/Button.svelte';
+	import { type CheckInHere, checkInHere, desktopInvoker } from '$lib/desktop';
 	import { type BrowserSession, matchNote, type Merged } from '$lib/device-merge';
 	import { deviceFootnote, deviceRows, deviceSummary } from '$lib/devices-view';
 	import { agoLabel } from '$lib/elapsed';
@@ -10,7 +11,14 @@
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
-	import { osLabel, sessionLabel, sessionTone, sessionWords } from './machines';
+	import {
+		checkInControl,
+		checkInNote,
+		osLabel,
+		sessionLabel,
+		sessionTone,
+		sessionWords
+	} from './machines';
 
 	let {
 		devices,
@@ -28,6 +36,47 @@
 
 	const queryClient = useQueryClient();
 	const summary = $derived(deviceSummary(deviceRows(devices, now)));
+
+	// Read once: whether this console is running inside the application does not
+	// change while the page is open.
+	const invoke = desktopInvoker();
+
+	/** The last check-in this panel asked for, or null before any was asked.
+	 *
+	 *  Only this panel's own: the console registers the machine once per load
+	 *  from `Console.svelte`, and that answer is deliberately not shown, because
+	 *  a seller who did not ask is owed nothing. A seller who pressed the button
+	 *  did ask. */
+	let asked = $state<CheckInHere | null>(null);
+
+	/** A machine has no other way to make the seller's list current.
+	 *
+	 *  On a computer the application checks in hourly, so after signing a
+	 *  machine out from here an hour is the honest wait. On a phone there is no
+	 *  timer at all — Android's Doze stops one — so between resumes the list
+	 *  cannot become current by waiting. The command already exists, is already
+	 *  granted, and is already what the console calls on load; this is the same
+	 *  call with a seller behind it.
+	 *
+	 *  Idempotent on the server's own upsert, so pressing it twice is a refresh
+	 *  rather than a second machine. */
+	const checkingIn = createMutation(() => ({
+		mutationFn: () => checkInHere(invoke),
+		onSuccess: async (answer: CheckInHere) => {
+			asked = answer;
+			// The same pair the disconnect invalidates: a check-in replaces this
+			// machine's reported session list on the server, and `derive_link`
+			// re-decides the connection from it in the same transaction, so the
+			// tiles above and the rows below are both answered by this call.
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
+				queryClient.invalidateQueries({ queryKey: queryKeys.connections })
+			]);
+		}
+	}));
+
+	const control = $derived(checkInControl(checkingIn.isPending));
+	const note = $derived(asked === null ? null : checkInNote(asked));
 
 	/** Signing a machine out is two acts, and the page performs both: our
 	 *  registry marks the device revoked, and the identity service ends the
@@ -93,12 +142,28 @@
 
 <section id="machines">
 	<div class="mp-sect">
-		<h2>Your machines</h2>
+		<div class="head">
+			<h2>Your machines</h2>
+			{#if invoke !== null}
+				<Button
+					tier="outline"
+					small
+					disabled={control.disabled}
+					reason={control.reason}
+					onclick={() => checkingIn.mutate()}
+				>
+					{control.label}
+				</Button>
+			{/if}
+		</div>
 		<p>
 			Each computer and phone running the Teachouse app appears here. Your marketplace logins
 			stay on that machine and never reach our servers, so this list only says what each one
 			reports holding.
 		</p>
+		{#if note !== null}
+			<p class="mp-warned">{note}</p>
+		{/if}
 	</div>
 
 	{#if pending}
@@ -176,3 +241,17 @@
 		</div>
 	{/if}
 </section>
+
+<style>
+	/* The heading and its one control on a line, wrapping at 390 rather than
+	   squeezing the button. Here rather than in `marketplaces.css` because the
+	   panel is the only section on the page that carries a control beside its
+	   heading. */
+	.head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+</style>

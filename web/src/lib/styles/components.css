@@ -496,6 +496,21 @@
 	cursor: not-allowed;
 }
 
+/* The items the kebab opens, raised to 44px with the trigger that opens them:
+   a 44px control revealing a 38px list moves the mis-tap one press later
+   rather than removing it. `--control-h` itself stays where it is — it is a
+   shared gate, and a phone override is the shape the kebab above already
+   takes.
+
+   Below the base rule rather than in the phone block beside the kebab: a media
+   query adds no specificity, so `.menu button` there would be overridden by
+   `.menu button` here and never once apply. */
+@media (max-width: 620px) {
+	.menu button {
+		min-height: 44px;
+	}
+}
+
 /* --- dashed add card ----------------------------------------------------- */
 
 .add-card {

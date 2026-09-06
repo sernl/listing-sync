@@ -407,6 +407,40 @@ export function legacyDestination(pathname: string): string | null {
 	return null;
 }
 
+/** The pages a browser with no API session may be shown. `/status` is
+ *  deliberately among them: it matters most when signing in is what is broken.
+ *
+ * Route knowledge, so it lives with the rest of it rather than as an array
+ * inside the layout that reads it. That is not tidying: the layout renders the
+ * signed-out branch on the session alone, and a console page's markup therefore
+ * mounts and fires its queries for a frame before the redirect lands. The
+ * branch could not ask whether the route was public because the answer was a
+ * local `const` — and being local, nothing tested it either.
+ *
+ * Whole paths rather than prefixes, which is why `/reset/confirm` is named
+ * beside `/reset`: a prefix here would make every path under a public one
+ * public too, and `/status` is one segment away from paths that are not.
+ */
+export const PUBLIC_ROUTES: readonly string[] = [
+	'/login',
+	'/signup',
+	'/reset',
+	'/reset/confirm',
+	'/status'
+];
+
+/** What a signed-out browser is shown at this path.
+ *
+ * `redirecting` is a screen rather than the absence of one. The layout's effect
+ * navigates to `/login`, and a render is what stands in the meantime: without
+ * it the console's own page mounts behind the navigation, and with a bare
+ * fallback it is the browser's error template that appears instead. */
+export type SignedOutView = 'public' | 'redirecting';
+
+export function signedOutView(pathname: string): SignedOutView {
+	return PUBLIC_ROUTES.includes(pathname) ? 'public' : 'redirecting';
+}
+
 /** The account card's avatar: up to two initials from the organisation name.
  *
  * Empty for a name that carries no letter or digit, which the card renders as

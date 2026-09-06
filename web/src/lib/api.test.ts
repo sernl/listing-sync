@@ -220,6 +220,23 @@ describe('the upload', () => {
 		expect(landed.storage_bytes_max).toBe(2);
 	});
 
+	it('binds the upload to a slot only when one is asked for', async () => {
+		// The thumbnail slots post `slot=image`, which is what lets the server
+		// answer 422 `upload_rejected` for a worksheet dropped into one instead
+		// of storing it. Every other upload sends no slot and takes any type the
+		// plan allows, so the absence has to stay absent rather than become a
+		// default.
+		FakeUpload.reply = {
+			status: 201,
+			body: { payload: [], cover: {}, previews: [], stored_bytes: 1, storage_bytes_max: 2 }
+		};
+		vi.stubGlobal('XMLHttpRequest', FakeUpload);
+		await api.upload(new File(['bytes'], 'cover.png'), 'keep_whole', undefined, 'image');
+		expect(FakeUpload.last?.url).toBe('/v1/uploads?archive=keep_whole&slot=image');
+		await api.upload(new File(['bytes'], 'pack.zip'), 'explode');
+		expect(FakeUpload.last?.url).toBe('/v1/uploads?archive=explode');
+	});
+
 	it('throws the structured refusal, so a quota answer keeps its detail', async () => {
 		FakeUpload.reply = {
 			status: 422,

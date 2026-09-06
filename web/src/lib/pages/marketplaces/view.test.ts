@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SIGN_IN_LABEL } from '$lib/devices-view';
 import type { MarketplaceRow, MarketplaceSignIn, SignInState } from '$lib/devices-view';
+import { APP_CANNOT_FORGET, type SessionOutcome } from '$lib/desktop';
 import type { Marketplace } from '$lib/generated/vocab';
 import { osLabel, sessionLabel, sessionTone, sessionWords } from './machines';
 import {
@@ -14,6 +15,7 @@ import {
 	disconnectAsk,
 	disconnectLabel,
 	disconnectPrompt,
+	disconnectSay,
 	disconnectable,
 	footerAction,
 	headerAction,
@@ -425,5 +427,102 @@ describe('one machine and the logins on it', () => {
 		expect(sessionWords({ status: 'wiped', account_label: null } as never)).toBe(
 			'forgotten when this device was signed out'
 		);
+	});
+});
+
+describe('what a finished disconnect says', () => {
+	const REFUSAL = 'The window would not close.';
+	const REFUSED: SessionOutcome = { kind: 'refused', detail: REFUSAL };
+	const HALVES: readonly SessionOutcome[] = [
+		{ kind: 'done' },
+		REFUSED,
+		{ kind: 'unsupported' },
+		{ kind: 'unavailable' }
+	];
+
+	it('names both halves when the machine forgot and the server refused', () => {
+		// The case the whole change exists for. A single sentence saying the
+		// disconnect failed is false about the half that ran, and false in the
+		// direction that matters: the cookies are gone and the leases are not.
+		const say = disconnectSay('Tpt', { kind: 'done' }, { kind: 'refused' });
+		expect(say.tone).toBe('error');
+		expect(say.message).toContain('login has been removed from this machine');
+		expect(say.message).toContain('TPT is still connected here');
+		expect(say.message).toContain('scheduled work has not stopped');
+	});
+
+	it('says only that nothing happened when nothing was forgotten either', () => {
+		// A browser has no local login to forget, so a server refusal there did
+		// leave everything as it was. Naming the marketplace is the only thing
+		// this gains over the sentence it replaces.
+		const say = disconnectSay('Tes', { kind: 'unavailable' }, { kind: 'refused' });
+		expect(say).toEqual({ tone: 'error', message: 'TES could not be disconnected.' });
+	});
+
+	it('treats every server refusal as an error, whatever the machine answered', () => {
+		// An implementation that let the device half decide the tone would call
+		// a standing connection an `info`.
+		for (const forgotten of HALVES) {
+			expect(disconnectSay('Tpt', forgotten, { kind: 'refused' }).tone, forgotten.kind).toBe(
+				'error'
+			);
+		}
+	});
+
+	it('never claims a disconnect the server refused', () => {
+		// The specific regression this guards: the success wording reaching a
+		// seller whose connection still stands.
+		for (const forgotten of HALVES) {
+			const { message } = disconnectSay('Tpt', forgotten, { kind: 'refused' });
+			expect(message, forgotten.kind).not.toContain('is disconnected');
+			expect(message, forgotten.kind).not.toContain('was already disconnected');
+		}
+	});
+
+	it('reports an app that cannot forget, once the server half has landed', () => {
+		expect(disconnectSay('Tpt', { kind: 'unsupported' }, { kind: 'moved', moved: 1 })).toEqual({
+			tone: 'error',
+			message: APP_CANNOT_FORGET
+		});
+	});
+
+	it('passes the machine’s own refusal through', () => {
+		expect(disconnectSay('Tpt', REFUSED, { kind: 'moved', moved: 1 })).toEqual({
+			tone: 'error',
+			message: REFUSAL
+		});
+	});
+
+	it('tells a seller nothing was standing when the server moved none', () => {
+		for (const forgotten of [{ kind: 'done' } as const, { kind: 'unavailable' } as const]) {
+			expect(disconnectSay('Etsy', forgotten, { kind: 'moved', moved: 0 })).toEqual({
+				tone: 'info',
+				message: 'Etsy was already disconnected.'
+			});
+		}
+	});
+
+	it('confirms a disconnect that both halves completed', () => {
+		const say = disconnectSay('Tes', { kind: 'done' }, { kind: 'moved', moved: 1 });
+		expect(say.tone).toBe('info');
+		expect(say.message).toBe('TES is disconnected. Connecting again is the same button.');
+	});
+
+	it('answers every pairing of the two halves', () => {
+		// Totality, checked rather than asserted: `SessionOutcome`'s four kinds
+		// against the server's two. A branch that fell through would return
+		// undefined here rather than a sentence.
+		const servers = [
+			{ kind: 'refused' } as const,
+			{ kind: 'moved', moved: 0 } as const,
+			{ kind: 'moved', moved: 2 } as const
+		];
+		for (const forgotten of HALVES) {
+			for (const server of servers) {
+				const say = disconnectSay('Tpt', forgotten, server);
+				expect(say.message.length, `${forgotten.kind}/${server.kind}`).toBeGreaterThan(0);
+				expect(['info', 'error'], `${forgotten.kind}/${server.kind}`).toContain(say.tone);
+			}
+		}
 	});
 });

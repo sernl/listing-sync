@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { tick, type Snippet } from 'svelte';
-	import { afterBannerDismissed } from '$lib/focus-return';
+	import { afterBannerDismissed, focusRegion } from '$lib/focus-return';
 	import Icon from '$lib/Icon.svelte';
 	import type { IconName } from '$lib/icons';
 
@@ -56,12 +56,7 @@
 			return;
 		}
 		if (region !== null) {
-			// `-1` keeps it out of the tab sequence while making it a legal
-			// destination for a programmatic move.
-			if (!region.hasAttribute('tabindex')) {
-				region.setAttribute('tabindex', '-1');
-			}
-			region.focus();
+			focusRegion(region);
 		}
 	}
 

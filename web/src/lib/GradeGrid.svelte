@@ -27,8 +27,7 @@
      overflowing one column. -->
 <div class="field">
 	<span id="grades-label">
-		Grade Level<span class="req" aria-hidden="true">*</span>
-		<span class="sr-only">Required</span>
+		Grade Level<span class="req">Required</span>
 		<span class="gg-count" class:over={counter.over}>{counter.text}</span>
 	</span>
 	<span class="hint">

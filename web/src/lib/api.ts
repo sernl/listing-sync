@@ -661,8 +661,15 @@ export interface ImportDrainRowView {
 	payload: unknown;
 }
 
+/** The measurements one read carried, and whether it carried them all.
+ *
+ *  The read is ordered by organisation name, so one that fills the server's
+ *  limit drops whole tenants off the end of the alphabet and leaves rows that
+ *  look exactly like the complete platform. `truncated` is what lets the page
+ *  say so rather than claim a completeness it does not have. */
 export interface ImportDrainView {
 	rows: ImportDrainRowView[];
+	truncated: boolean;
 }
 
 export interface FailedWriteView {
@@ -743,6 +750,14 @@ export interface UploadedView {
 /** How an archive upload is treated. `keep_whole` is the mode a bundle bound
  *  for TPT needs, because a TPT create takes exactly one file. */
 export type ArchiveMode = 'explode' | 'keep_whole';
+
+/** What the bytes are being uploaded to be, where the server can refuse them
+ *  on that ground alone. `image` is the thumbnail slots: the upload answers
+ *  422 `upload_rejected` for bytes that are not a picture, so a worksheet
+ *  dropped into a slot is refused before it is stored rather than kept and
+ *  discovered later. Omitted means the upload is not slot-bound and any
+ *  accepted type may land. */
+export type UploadSlot = 'image';
 
 /** One vocabulary value as a create or an edit names it, matching the shape
  *  `PathView` reads back. */
@@ -1330,6 +1345,163 @@ export interface TermsView {
 	terms: TermView[];
 }
 
+// -------------------------------------------------------- spreadsheet import
+
+/** Where a whole batch stands (`crates/tam-api/src/import_batch/mod.rs`).
+ *
+ *  The first three are open and the last three are settled. `attaching` never
+ *  walks back to `parsed`: a batch that has begun taking files has begun. */
+export type BatchStateView =
+	| 'parsed'
+	| 'attaching'
+	| 'importing'
+	| 'imported'
+	| 'failed'
+	| 'abandoned';
+
+/** Where one row of a batch stands.
+ *
+ *  `creating` is the commit's own reservation — identifiers minted and the
+ *  create not yet run — so a resumed commit finishes the row it left rather
+ *  than minting a second product for it. */
+export type RowStateView =
+	| 'parsed'
+	| 'attached'
+	| 'creating'
+	| 'created'
+	| 'published'
+	| 'failed'
+	| 'skipped';
+
+/** What one row asked to become. Named apart from `PublishIntent`, which says
+ *  the same two words about a mapping rather than about a spreadsheet row. */
+export type ImportIntentView = 'draft' | 'live';
+
+/** One refusal against one cell, carrying the column header as the seller
+ *  reads it in row one of their own sheet. */
+export interface ImportProblem {
+	column: string;
+	problem: string;
+}
+
+/** One batch as the listing and the batch page read it. */
+export interface ImportBatchView {
+	id: string;
+	source_name: string;
+	state: BatchStateView;
+	row_count: number;
+	live_count: number;
+	failed_count: number;
+	created_at: number;
+	/** When an unfinished batch is swept and the files attached to it deleted.
+	 *  Carried rather than recomputed from `created_at`, so this client holds
+	 *  no second copy of the server's expiry constant. */
+	expires_at: number;
+	settled_at: number | null;
+	failure_detail: string | null;
+}
+
+/** One row of the report. */
+export interface ImportRowView {
+	sheet: string;
+	/** The seller's own spreadsheet row number, so the report cites what they
+	 *  see in the margin. Never an index. */
+	ordinal: number;
+	inventory: InventoryId | null;
+	intent: ImportIntentView;
+	state: RowStateView;
+	problems: ImportProblem[];
+	/** The filename the seller's `File` column named, where they named one. */
+	file_name: string | null;
+	/** Whether the bytes for this row are held. */
+	file_attached: boolean;
+	failure_detail: string | null;
+	/** What the row's title parsed to. Optional because the phase-1 view does
+	 *  not carry it: the batch page names a row by sheet and row number and
+	 *  renders this only when a server sends it. */
+	title?: string;
+	/** The resource this row created, once one exists. Null until the commit
+	 *  reserves the identifier, and always sent: the finished report states
+	 *  each row's outcome and offers a link only where one was read, rather
+	 *  than addressing a resource by an identifier it never had. */
+	product: string | null;
+}
+
+/** Something worth saying that does not refuse a row.
+ *
+ *  Named `ImportWarning` rather than the server's bare `Warning`, which is a
+ *  name this shared module could not keep. */
+export type ImportWarning =
+	| { kind: 'new_label'; name: string; rows: number }
+	| { kind: 'no_connection'; marketplace: Marketplace; rows: number };
+
+/** The listing, with the open batch named beside it. */
+export interface ImportsView {
+	imports: ImportBatchView[];
+	/** The open batch, where one exists. Answered beside the listing because
+	 *  the Import page's upload action is enabled or disabled on exactly this,
+	 *  and searching the list for an open state would put the server's own
+	 *  predicate in a second place. */
+	open: string | null;
+}
+
+/** One batch with its report. The batch's own fields are flattened into this
+ *  object on the wire, so this extends rather than nests. */
+export interface ImportBatchDetailView extends ImportBatchView {
+	rows: ImportRowView[];
+	warnings: ImportWarning[];
+}
+
+/** What an upload answered. */
+export interface UploadedBatchView extends ImportBatchDetailView {
+	/** Whether this upload created the batch, or found the idempotency key
+	 *  already used. A re-posted upload reports `false`, which is how a client
+	 *  tells a retry from a first delivery. */
+	created: boolean;
+}
+
+/** The two handles one bind names. Both come from one `POST /v1/uploads`,
+ *  which generates the cover during the upload; a create built without one
+ *  would leave every imported resource with no thumbnail. */
+export interface BindFileBody {
+	payload: FileHandle;
+	cover: FileHandle;
+}
+
+/** What a bind answered: the row as it now stands, and the two counts the
+ *  panel would otherwise re-read the whole batch after every file to get. */
+export interface BoundRowView {
+	row: ImportRowView;
+	batch_state: BatchStateView;
+	attached: number;
+	awaiting: number;
+}
+
+/** What one chunk of a commit applied, in the shape `ImportAck` established.
+ *
+ *  `applied`, `skipped` and `failed` are one chunk's figures, following
+ *  `ImportAck`, whose own doc calls them what "this page added". `total` is
+ *  every row the parse accepted and does not move as rows are created;
+ *  `remaining` is what is still to do, and the batch page draws its bar from
+ *  those two rather than by summing chunks, because a seller who reloads
+ *  mid-import has no sum to resume from. */
+export interface CommitAck {
+	applied: number;
+	skipped: number;
+	failed: number;
+	total: number;
+	remaining: number;
+	complete: boolean;
+	batch_state: BatchStateView;
+}
+
+/** One row's file, addressed by the sheet name and the seller's own row
+ *  number. The sheet is a tab title with spaces in it, so it is encoded. */
+function rowFilePath(batch: string, sheet: string, ordinal: number): string {
+	const tab = encodeURIComponent(sheet);
+	return `/v1/imports/${encodeURIComponent(batch)}/rows/${tab}/${ordinal}/file`;
+}
+
 /** Bytes to `POST /v1/uploads`, with the fraction sent reported as it goes.
  *
  *  XMLHttpRequest rather than `fetch` for one reason: a payload file is up to
@@ -1341,11 +1513,13 @@ export interface TermsView {
 export function upload(
 	file: File,
 	archive: ArchiveMode,
-	onProgress?: (fraction: number) => void
+	onProgress?: (fraction: number) => void,
+	slot?: UploadSlot
 ): Promise<UploadedView> {
 	return new Promise((resolve, reject) => {
 		const request = new XMLHttpRequest();
-		request.open('POST', `/v1/uploads?archive=${archive}`);
+		const bound = slot === undefined ? '' : `&slot=${slot}`;
+		request.open('POST', `/v1/uploads?archive=${archive}${bound}`);
 		request.setRequestHeader('accept', 'application/json');
 		request.upload.addEventListener('progress', (event) => {
 			if (onProgress && event.lengthComputable && event.total > 0) {
@@ -1544,6 +1718,34 @@ export const api = {
 	 *  while it is pending, so until it does there is nothing else in the
 	 *  console that names it. */
 	syncRequests: () => request<SyncRequestsView>('/v1/sync'),
+
+	/** Every spreadsheet import this organisation has made, newest first, with
+	 *  the open one named. Deliberately apart from `syncRequests` above: the
+	 *  two lists address different identifier spaces and say different
+	 *  things. */
+	imports: () => request<ImportsView>('/v1/imports'),
+	/** One batch with its per-row report and the warnings its rows raise. */
+	importBatch: (batch: string) =>
+		request<ImportBatchDetailView>(`/v1/imports/${encodeURIComponent(batch)}`),
+	/** Give up on an open batch. Answers 204 whether or not it was still open,
+	 *  so a double-pressed button is one action. */
+	abandonImport: (batch: string) =>
+		request<void>(`/v1/imports/${encodeURIComponent(batch)}`, { method: 'DELETE' }),
+	/** Bind uploaded bytes to one row, replacing whatever it held. Answers the
+	 *  row and the two counts, so a drop of many files costs no re-read. */
+	bindImportFile: (batch: string, sheet: string, ordinal: number, files: BindFileBody) =>
+		post<BoundRowView>(rowFilePath(batch, sheet, ordinal), files),
+	/** Clear one row's file. 204 whether or not there was one to clear; 404
+	 *  for a row this import does not hold. */
+	unbindImportFile: (batch: string, sheet: string, ordinal: number) =>
+		request<void>(rowFilePath(batch, sheet, ordinal), { method: 'DELETE' }),
+	/** Commit the next chunk. No idempotency key: resumability is the row
+	 *  breadcrumb rather than a request key, so a closed browser loses only
+	 *  the chunk in flight. Bodiless rather than `post(path, {})`, because the
+	 *  route declares no body extractor and an empty JSON object would be a
+	 *  payload nothing reads. */
+	commitImport: (batch: string) =>
+		request<CommitAck>(`/v1/imports/${encodeURIComponent(batch)}/commit`, { method: 'POST' }),
 
 	/** The seller's own machines. Registration and heartbeat are the desktop
 	 *  client's calls, not the console's, so they are deliberately absent

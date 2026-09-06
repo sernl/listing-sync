@@ -124,12 +124,20 @@
 	cursor: not-allowed;
 }
 
-/* On a phone a tile takes a share of the row and 44px of height, because a
-   36px target beside four others is a mis-tap. */
+/* On a phone the tiles are a grid rather than a wrapping flex row, and 44px
+   tall, because a 36px target beside four others is a mis-tap. Grid because
+   there are five tiles and four fit across at 390: growing flex items share
+   out each line separately, so the fifth took the whole of the second line.
+   Column widths belong to the container, so the last row matches every other
+   row. */
 @media (max-width: 620px) {
+	.resources-page .mk-tiles {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(66px, 1fr));
+	}
+
 	.resources-page .mk-tile {
 		height: 44px;
-		flex: 1 0 auto;
 	}
 }
 
@@ -435,23 +443,84 @@
 	display: block;
 }
 
-.resources-page .res-form .field + .field,
-.resources-page .res-form .field + .res-choices,
-.resources-page .res-form .res-choices + .field,
-.resources-page .res-form .field + .res-row,
-.resources-page .res-form .res-choices + .res-row,
-.resources-page .res-form .res-row + .field,
-.resources-page .res-form .res-foot + .res-choices {
+/* One surface holding every section, rather than one card per section. Nine
+   cards abutting inside a form draw no ground between them, so the radius is
+   invisible and all the eye finds between two sections is a shadow smear;
+   `overflow: hidden` is what lets a band's own hairline reach this radius. The
+   top margin is stated here rather than inherited from the page rhythm because
+   in neither mode is this a `.page >` child: create nests it inside the form,
+   edit inside the detail page's own panels. */
+.resources-page .res-card {
+	background: var(--surface);
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-2);
+	margin-top: 24px;
+	overflow: hidden;
+	min-width: 0;
+}
+
+/* The destination tabs as the card's head strip: the bar already draws the
+   hairline under itself, so it only needs the band's gutters and none of its
+   own trailing space. */
+.resources-page .res-card > .tab-bar {
+	padding-inline: 24px;
+	margin-bottom: 0;
+}
+
+/* One section of the form. A hairline separates it from the next and nothing
+   else does; the scroll margin is what keeps a refusal's anchor landing below
+   the console's head rather than under it. */
+.resources-page .res-sec {
+	padding: 20px 24px;
+	scroll-margin-top: 24px;
+}
+
+.resources-page .res-sec + .res-sec {
+	border-top: 1px solid var(--line);
+}
+
+/* One rule over the band's own children rather than a list of adjacency pairs.
+   The list it replaces named seven pairs and nothing else, which is why the
+   file-size sentence sat flush against the Thumbnails legend under it. */
+.resources-page .res-sec > * + * {
 	margin-top: 14px;
 }
 
-/* The stacking margin above is for fields in column flow. `.field + .field`
-   also matches adjacent grid items inside `.res-row`, where `gap` already
-   supplies the space, and there the margin drops every field after the first
-   by 14px and shortens it by the same — equal bottoms, staggered controls. */
-.resources-page .res-form .res-row > .field + .field,
-.resources-page .res-form .res-row > .res-choices + .field,
-.resources-page .res-form .res-row > .field + .res-choices {
+.resources-page .res-sec-h {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+/* The sans face at the band's own size, page-locally. `.panel h2` sets the
+   display serif at 24px, which is the page title's size, so at 390 the title
+   and the first heading under it competed directly. */
+.resources-page .res-sec-h h2 {
+	margin: 0;
+	font-family: var(--sans);
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.3;
+	letter-spacing: 0;
+}
+
+.resources-page .res-sec-ico {
+	display: inline-flex;
+	flex: none;
+	color: var(--muted);
+}
+
+.resources-page .res-sec-help {
+	margin: 4px 0 14px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+/* The stacking margin above is for a band's children in column flow. Grid
+   items inside `.res-row` are spaced by the row's own `gap`, and a stacking
+   margin reaching in there drops every field after the first by 14px and
+   shortens it by the same — equal bottoms, staggered controls. */
+.resources-page .res-sec .res-row > * + * {
 	margin-top: 0;
 }
 
@@ -459,13 +528,90 @@
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 	gap: 14px;
+	/* A hint wrapping under one of three controls otherwise stretches its
+	   field to the row's height and leaves the three controls at three
+	   different baselines. */
+	align-items: start;
+}
+
+/* The card's last band: what the two actions mean at the left, and the actions
+   themselves at the right. In flow rather than fixed — the reference pins its
+   footer to a modal, and a bar fixed here would float over the whole resource
+   page while the seller reads the panels above the form. */
+.resources-page .res-actbar {
+	border-top: 1px solid var(--line);
+	padding: 16px 24px;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex-wrap: wrap;
+}
+
+.resources-page .res-actbar .res-note {
+	margin-right: auto;
+}
+
+/* The upload target inside a band rather than inside a card of its own. Radius
+   and padding only: its colours and its border style are the idle state the
+   capture set is read against. */
+.resources-page .drop {
+	border-radius: var(--r-panel);
+	padding: 20px 16px;
+}
+
+/* The per-marketplace tab renders a `Panel`, and inside the surface a panel is
+   a band like every other rather than a card drawn inside a card. */
+.resources-page .res-card .panel {
+	background: none;
+	border-radius: 0;
+	box-shadow: none;
+	padding: 20px 24px;
+}
+
+/* The figure under the action band's sentence: the same muted grey on its own
+   line rather than a second sentence competing for the left of the bar. */
+.resources-page .res-note .block {
+	display: block;
+	margin-top: 4px;
+}
+
+@media (max-width: 620px) {
+	.resources-page .res-card > .tab-bar {
+		padding-inline: 18px;
+	}
+
+	.resources-page .res-sec,
+	.resources-page .res-card .panel {
+		padding: 16px 18px;
+	}
+
+	.resources-page .res-actbar {
+		padding: 16px 18px;
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	/* The sentence first and the two actions filling the row: `margin-right`
+	   is what ordered them across, and it orders nothing in a column. */
+	.resources-page .res-actbar .res-note {
+		margin-right: 0;
+		order: -1;
+	}
+
+	.resources-page .res-row {
+		grid-template-columns: 1fr;
+	}
 }
 
 /* A radio or checkbox group. A fieldset rather than a div, so the legend names
-   the group for a screen reader rather than a `span` beside it doing so. */
+   the group for a screen reader rather than a `span` beside it doing so.
+   `margin-inline` rather than `margin`: the user agent's own fieldset margin is
+   inline only, and resetting the block margin as well cancelled the band's
+   stacking rhythm, which is what left the file-size sentence flush against the
+   Thumbnails legend under it. */
 .resources-page .res-choices {
 	border: 0;
-	margin: 0;
+	margin-inline: 0;
 	padding: 0;
 	display: flex;
 	align-items: center;
@@ -574,11 +720,12 @@
 
 /* A choice that carries a consequence under its label — a copyright
    attestation, a marketplace and what it will do with the files — so each is a
-   panel of its own rather than a line in a row. */
+   row of its own rather than a line in a row. Hairline-separated rather than
+   bordered: inside a band a bordered tile is a card drawn inside a card, which
+   is the shape the form no longer has anywhere else. */
 .resources-page .res-picks {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
 }
 
 .resources-page .res-pick {
@@ -586,15 +733,16 @@
 	grid-template-columns: auto minmax(0, 1fr);
 	align-items: start;
 	gap: 4px 10px;
-	border: 1px solid var(--line);
-	border-radius: var(--r-panel);
-	background: var(--surface);
-	padding: 12px 14px;
+	padding: 12px 2px;
 	cursor: pointer;
 }
 
+.resources-page .res-pick + .res-pick {
+	border-top: 1px solid var(--line);
+}
+
 .resources-page .res-pick:hover:not(.off) {
-	border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+	background: var(--hover);
 }
 
 .resources-page .res-pick input {
@@ -617,9 +765,12 @@
 }
 
 /* Offered and refused, with the reason in place: the fill says it cannot be
-   chosen, and the sentence beneath says why. */
+   chosen, and the sentence beneath says why. It keeps the inset the bordered
+   tile had, so the fill reads as belonging to the row rather than to the band. */
 .resources-page .res-pick.off {
 	background: var(--soon-soft);
+	border-radius: var(--r-panel);
+	padding-inline: 12px;
 	cursor: not-allowed;
 }
 
@@ -948,9 +1099,9 @@
 }
 
 /* The stored files, inside the form's own Files section rather than in a panel
-   of their own: the section already carries the heading, so this only needs the
-   rule that separates the rows from the upload copy above them. */
-.resources-page .res-files {
-	margin-top: 10px;
-	border-top: 1px solid var(--line);
+   of their own. The rows draw the hairlines between themselves and the band
+   draws the one above the heading, so no third one is wanted here; without it
+   the first row's own top padding is a gap on top of the band's rhythm. */
+.resources-page .res-files .res-line:first-of-type {
+	padding-top: 0;
 }

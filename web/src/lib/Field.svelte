@@ -20,7 +20,7 @@
 
 <div class="field">
 	<label for={id}>
-		{label}{#if required}<span class="req" aria-hidden="true">*</span>{/if}
+		{label}{#if required}<span class="req">Required</span>{/if}
 	</label>
 	{@render children()}
 	{#if hint}<span class="hint">{hint}</span>{/if}

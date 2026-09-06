@@ -7,14 +7,16 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { impersonationState } from '$lib/admin';
 	import { impersonatedSession } from '$lib/auth-client';
+	import Button from '$lib/Button.svelte';
 	import Console from '$lib/Console.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import ClaimBanner from '$lib/pages/account/claim/ClaimBanner.svelte';
 	import ClaimScreen from '$lib/pages/account/claim/ClaimScreen.svelte';
 	import { consoleGate } from '$lib/pages/account/claim/state';
+	import { PUBLIC_ROUTES, signedOutView } from '$lib/nav';
 	import { createQueryClient, queryKeys } from '$lib/query';
 	import { signOut } from '$lib/sign-out';
-	import { afterToastDismissed } from '$lib/focus-return';
+	import { afterToastDismissed, captureSlots, focusRegion } from '$lib/focus-return';
 	import { dismiss, sweep, toastStore } from '$lib/toast';
 
 	let { data, children } = $props();
@@ -23,11 +25,14 @@
 	// so the cache does too.
 	const queryClient = createQueryClient();
 
-	// The pages reachable without an API session. `/status` is deliberately
-	// among them: it matters most when signing in is what is broken.
-	const PUBLIC = ['/login', '/signup', '/reset', '/reset/confirm', '/status'];
+	// What a browser with no API session is shown here, from `$lib/nav`, which is
+	// where the rest of this console's route knowledge lives. The branch below
+	// reads it as well as this effect: rendering a console page while the
+	// navigation is still in flight mounts its markup and fires its queries for
+	// a frame, against a session that is not there.
+	const signedOut = $derived(signedOutView(page.url.pathname));
 	$effect(() => {
-		if (!data.session && !PUBLIC.includes(page.url.pathname)) {
+		if (!data.session && signedOut === 'redirecting') {
 			goto('/login');
 		}
 	});
@@ -59,7 +64,7 @@
 		consoleGate({
 			prompt: data.session?.slug_prompt,
 			impersonating: impersonationState(identity.data ?? null) !== null,
-			publicRoute: PUBLIC.includes(page.url.pathname),
+			publicRoute: PUBLIC_ROUTES.includes(page.url.pathname),
 			bannerDismissed
 		})
 	);
@@ -90,23 +95,35 @@
 		return () => clearInterval(timer);
 	});
 
-	// Who was working when the stack arrived. Captured as the stack fills rather
-	// than as a toast is closed, because by then the close control itself holds
-	// focus and the answer is gone. Not `$state`: nothing renders from it, and a
-	// reactive read here would re-run the effect that writes it.
-	let interrupted: HTMLElement | null = null;
+	// Who was working when each toast arrived, keyed by that toast's id.
+	// Captured as the toast appears rather than as it is closed, because by then
+	// the close control itself holds focus and the answer is gone. Per toast
+	// rather than one slot for the stack: two overlapping toasts interrupted two
+	// different controls, and a single slot sent the second one's closer back to
+	// whatever the first had interrupted.
+	//
+	// Held here rather than on the toast record, so `toast.ts` stays a pure
+	// store with no element references in it. Not `$state`: nothing renders from
+	// it, and a reactive read here would re-run the effect that writes it.
+	const interrupted = new Map<number, HTMLElement | null>();
 
 	$effect(() => {
-		if ($toastStore.length === 0) {
-			interrupted = null;
-			return;
+		const { add, drop } = captureSlots(
+			$toastStore.map((entry) => entry.id),
+			[...interrupted.keys()]
+		);
+		for (const id of drop) {
+			interrupted.delete(id);
 		}
-		if (interrupted !== null) {
+		if (add.length === 0) {
 			return;
 		}
 		const active = document.activeElement;
-		interrupted =
+		const opener =
 			active instanceof HTMLElement && active.closest('.toasts') === null ? active : null;
+		for (const id of add) {
+			interrupted.set(id, opener);
+		}
 	});
 
 	function keyedToast(event: KeyboardEvent, id: number) {
@@ -118,7 +135,7 @@
 	}
 
 	async function closeToast(id: number) {
-		const previous = interrupted;
+		const previous = interrupted.get(id) ?? null;
 		dismiss(id);
 		await tick();
 		const region = document.querySelector('main');
@@ -133,10 +150,7 @@
 				break;
 			case 'region':
 				if (region !== null) {
-					if (!region.hasAttribute('tabindex')) {
-						region.setAttribute('tabindex', '-1');
-					}
-					region.focus();
+					focusRegion(region);
 				}
 				break;
 			case 'none':
@@ -164,12 +178,27 @@
 			{/if}
 			{@render children()}
 		</Console>
-	{:else}
+	{:else if signedOut === 'public'}
 		<div class="auth">
 			<div class="wordmark">
 				<img class="leaf" src="/favicon.svg" alt="" width="28" height="28" /> Teachouse
 			</div>
 			{@render children()}
+		</div>
+	{:else}
+		<!-- A console address reached without a session. The effect above is
+		     already navigating to `/login`; this is what stands while it does,
+		     in place of the page's own markup, which would otherwise mount and
+		     fire every query on it against a session that is not there. -->
+		<div class="auth">
+			<div class="wordmark">
+				<img class="leaf" src="/favicon.svg" alt="" width="28" height="28" /> Teachouse
+			</div>
+			<div class="auth-card">
+				<h1>Signing you in</h1>
+				<p>This page needs a Teachouse account. Taking you to the sign-in screen.</p>
+				<Button href="/login" tier="primary">Sign in</Button>
+			</div>
 		</div>
 	{/if}
 	<div

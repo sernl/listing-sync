@@ -45,8 +45,7 @@
      than inventing a ceiling. -->
 <div class="field fp">
 	<span id="{base}-label">
-		{label}{#if required}<span class="req" aria-hidden="true">*</span>
-			<span class="sr-only">Required</span>{/if}
+		{label}{#if required}<span class="req">Required</span>{/if}
 		<span class="fp-count" class:over={counter.over}>{counter.text}</span>
 	</span>
 	{#if hint}<span class="hint">{hint}</span>{/if}

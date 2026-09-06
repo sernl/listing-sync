@@ -46,6 +46,19 @@
 		exactly as they do on TPT.
 	</p>
 
+	<div class="res-choices">
+		{#each form.thumbnail_modes as option (option.id)}
+			<label>
+				<input
+					type="radio"
+					name="thumbnail-mode"
+					checked={mode === option.id}
+					onchange={() => onMode(option.id)}
+				/>
+				{option.label}
+			</label>
+		{/each}
+	</div>
 	<!-- What the seller can actually be shown, and nothing else. The cover is
 	     made on our server from the file and served back by its own route, so
 	     it is the thing itself rather than a stand-in: a box captioned
@@ -70,19 +83,6 @@
 			</div>
 			<p class="res-note">Upload a file and the thumbnail appears here.</p>
 		{/if}
-	</div>
-	<div class="res-choices">
-		{#each form.thumbnail_modes as option (option.id)}
-			<label>
-				<input
-					type="radio"
-					name="thumbnail-mode"
-					checked={mode === option.id}
-					onchange={() => onMode(option.id)}
-				/>
-				{option.label}
-			</label>
-		{/each}
 	</div>
 	{#if mode === '2'}
 		<div class="res-slots">

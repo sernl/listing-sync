@@ -77,31 +77,71 @@ export const DEVICE_CHECK_IN = 'device_check_in';
  * rejection, and a list refetched over the same dead connection would only fail
  * twice. */
 export async function registerThisMachine(invoke: Invoke | null): Promise<boolean> {
+	return (await checkInHere(invoke)).reached;
+}
+
+/** What one check-in answered, for a caller that asked for it.
+ *
+ * `reached` is what `registerThisMachine` returns and is the only fact a
+ * caller who did not ask needs. `detail` is the application's own sentence for
+ * why the check-in did not reach us, and is null on every other path: a
+ * success, a browser, and an application too old to carry the field. */
+export interface CheckInHere {
+	reached: boolean;
+	detail: string | null;
+}
+
+/** Ask this machine to register itself and check in, and read why if it could
+ *  not.
+ *
+ * The same command `registerThisMachine` sends, with the answer's reason kept
+ * rather than flattened. It exists for the one caller who pressed a button:
+ * they asked, so they are owed the reason, whereas the console's own load-time
+ * registration did not and is not.
+ *
+ * A rejection is `reached: false` with no detail. The three causes — an
+ * application too old to know the command, a page it takes no commands from,
+ * and a genuine refusal — mean the same thing here, which is that no row was
+ * added, and none of them is worded for a seller. */
+export async function checkInHere(invoke: Invoke | null): Promise<CheckInHere> {
 	if (invoke === null) {
-		return false;
+		return { reached: false, detail: null };
 	}
 	try {
-		return reachedServer(await invoke(DEVICE_CHECK_IN, {}));
+		const answer = await invoke(DEVICE_CHECK_IN, {});
+		return { reached: reachedServer(answer), detail: checkInDetail(answer) };
 	} catch {
-		// Every rejection alike: an application too old to know the command, a
-		// page the application takes no commands from, and a genuine refusal all
-		// mean the same thing here, which is that no row was added. There is
-		// nothing to tell the seller, because they did not ask for this.
-		return false;
+		return { reached: false, detail: null };
 	}
 }
 
 /** Whether a check-in answer says the application reached the server.
  *
  * `reached_server` is one field of the application's `DeviceState`, and the only
- * one this caller reads: `revoked` and `signed_in` are shown by the machine list
- * itself, out of the registry, which is the copy the seller can act on. */
+ * one `registerThisMachine` reads: `revoked` and `signed_in` are shown by the
+ * machine list itself, out of the registry, which is the copy the seller can
+ * act on. */
 function reachedServer(answer: unknown): boolean {
 	return (
 		typeof answer === 'object' &&
 		answer !== null &&
 		(answer as { reached_server?: unknown }).reached_server === true
 	);
+}
+
+/** The application's own sentence for why a check-in did not reach us, or null.
+ *
+ * Null rather than a substituted phrase when the field is missing, because an
+ * application older than the field is the case that must not read as a named
+ * cause: it says nothing, and a caller shows its own words instead. The four
+ * sentences the field does carry are `ControlPlaneError`'s, which name no
+ * credential, no jar and no host but our own control plane. */
+function checkInDetail(answer: unknown): string | null {
+	if (typeof answer !== 'object' || answer === null) {
+		return null;
+	}
+	const detail = (answer as { detail?: unknown }).detail;
+	return typeof detail === 'string' && detail.length > 0 ? detail : null;
 }
 
 /** What asking this computer to run an import produced.

@@ -278,8 +278,8 @@ button {
    the far right whether or not the page gave the band any actions. */
 .page-help {
 	margin-left: auto;
-	width: 32px;
-	height: 32px;
+	width: var(--control-h);
+	height: var(--control-h);
 	border-radius: 50%;
 	border: 1px solid var(--line);
 	display: grid;
@@ -842,6 +842,14 @@ input:focus-visible {
 		grid-template-columns: 1fr;
 	}
 
+	/* 44px, alongside the kebab in `components.css`: the help control is the
+	   one thing in the header band a thumb has to hit, and `--control-h` is a
+	   shared gate rather than a phone measurement. */
+	.page-help {
+		width: 44px;
+		height: 44px;
+	}
+
 	/* An item's per-marketplace actions stack to the full width under the row
 	   they belong to, rather than crowding its right edge. */
 	.row {
@@ -1232,10 +1240,6 @@ dialog::backdrop {
    type per field, plus the three things that cost nothing and TPT does not
    do — a counter against each measured cap, a search over the long pickers,
    and an inline message that names the control rather than the request. */
-
-.form-group {
-	scroll-margin-top: 24px;
-}
 
 /* The "Required" marker TPT renders beside a label, in its own right rather
    than as an asterisk a screen reader reads as punctuation. */

@@ -115,6 +115,19 @@
 			color: var(--muted);
 			cursor: pointer;
 			white-space: nowrap;
+			position: relative;
+		}
+
+		/* The marker paints at chip size and is pressed at thumb size. It draws
+		   about 26 by 19, which is under WCAG 2.2 SC 2.5.8's 24px on one axis,
+		   and the spacing exemption does not reach it because a listed chip
+		   beside it is a real target 4px away. Painting it larger instead would
+		   push the strip out of the row card's text column, so the hit area is
+		   what grows. */
+		.more::after {
+			content: '';
+			position: absolute;
+			inset: -12px -9px;
 		}
 	}
 

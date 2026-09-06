@@ -177,8 +177,11 @@
 		slots[index] = { local, handle: null, sending: true, refusal: null };
 		try {
 			// Kept whole: a thumbnail is one image and exploding it would answer
-			// with a list this slot has no way to name.
-			const landed = await api.upload(file, 'keep_whole');
+			// with a list this slot has no way to name. Slot-bound, so the server
+			// refuses bytes that are not a picture rather than storing a
+			// worksheet a seller dropped here; no progress is reported because a
+			// thumbnail is small enough that a meter would only flicker.
+			const landed = await api.upload(file, 'keep_whole', undefined, 'image');
 			const handle = landed.payload[0]?.hash ?? null;
 			slots[index] = {
 				local,
@@ -296,6 +299,17 @@
 		}
 		return canCreate ? undefined : 'Some groups above are still refusing.';
 	});
+	/** Whether the band above the action bar has anything to say. A band with
+	 *  nothing in it still draws its hairline and its padding, so an empty one
+	 *  would read as a rule of the layout rather than as an absence. */
+	const saying = $derived(
+		(editing !== null && editing.blockedBy.length > 0) ||
+			draft.inventories.length === 0 ||
+			refusals.length > 0 ||
+			(serverCheck !== null && !serverCheck.submittable) ||
+			serverRefusal !== null ||
+			UNCOLLECTED_FIELDS.length > 0
+	);
 	const selected = $derived(
 		AUTHORABLE_PLATFORMS.filter((inventory) => draft.inventories.includes(inventory))
 	);
@@ -603,9 +617,14 @@
 	     marketplace is how many of its values the seller has changed away from
 	     the listing's own, which is the figure a dot used to stand for; the
 	     listing itself carries no count, and the bar prints the bare label. -->
-	<TabBar {tabs} bind:current={tab} />
-
 	<form class="res-form" onsubmit={submit}>
+		<!-- One surface rather than nine cards: the tabs are its head strip, the
+		     sections are hairline-separated bands inside it, and the actions are
+		     the band at its foot. The tabs sit outside the lock deliberately —
+		     a published listing holds the fields back, and a seller who cannot
+		     edit can still read what each marketplace carries. -->
+		<div class="res-card">
+		<TabBar {tabs} bind:current={tab} />
 		<!-- One `disabled` for the whole form rather than one per control. A
 		     published listing on a platform whose edit transition we have not
 		     captured cannot be edited through us, and the server refuses the
@@ -614,13 +633,8 @@
 		     rule, which is why this is the wrapper rather than a class. -->
 		<fieldset class="res-lock" disabled={locked}>
 		{#if tab === 'canonical'}
-			<FormSection group="name" {refusals}>
+			<FormSection group="name" icon="tag" {refusals}>
 				<Field label="Title" id="draft-title" required>
-					{#if form}
-						<span class="res-count" class:over={draft.name.length > form.limits.title_max_utf16_units}>
-							{draft.name.length} of {form.limits.title_max_utf16_units}
-						</span>
-					{/if}
 					<input
 						id="draft-title"
 						type="text"
@@ -630,10 +644,18 @@
 						value={draft.name}
 						oninput={(event) => set('name', event.currentTarget.value)}
 					/>
+					<!-- After the control rather than before it: read in order this is
+					     label, field, count, which is the order a screen reader and a
+					     tab both take it in. -->
+					{#if form}
+						<span class="res-count" class:over={draft.name.length > form.limits.title_max_utf16_units}>
+							{draft.name.length} of {form.limits.title_max_utf16_units}
+						</span>
+					{/if}
 				</Field>
 			</FormSection>
 
-			<FormSection group="files" help={GROUP_HELP.files} {refusals}>
+			<FormSection group="files" icon="package" help={GROUP_HELP.files} {refusals}>
 				{#if editing === null}
 					<UploadField
 						{uploaded}
@@ -672,11 +694,20 @@
 						onPick={(index, file) => void takeThumbnail(index, file)}
 						onClear={clearThumbnail}
 					/>
+				{:else}
+					<p class="res-note">The file limits and the thumbnail slots are still being read.</p>
 				{/if}
 			</FormSection>
 
-			<FormSection group="description" {refusals}>
+			<FormSection group="description" icon="book-open" {refusals}>
 				<Field label="Description" id="draft-description" required>
+					<textarea
+						id="draft-description"
+						aria-required="true"
+						placeholder="Describe your product and how it can be helpful to another educator"
+						value={draft.description}
+						oninput={(event) => set('description', event.currentTarget.value)}
+					></textarea>
 					{#if form}
 						<span
 							class="res-count"
@@ -685,20 +716,15 @@
 							{draft.description.length} of {form.limits.description_max_length}
 						</span>
 					{/if}
-					<textarea
-						id="draft-description"
-						placeholder="Describe your product and how it can be helpful to another educator"
-						value={draft.description}
-						oninput={(event) => set('description', event.currentTarget.value)}
-					></textarea>
 				</Field>
 				<p class="res-foot">
 					Write it as plain text. Every marketplace gets it in the form you wrote it in.
 				</p>
 			</FormSection>
 
-			<FormSection group="price" help={GROUP_HELP.price} {refusals} {advisories}>
-				<div class="res-choices">
+			<FormSection group="price" icon="credit-card" help={GROUP_HELP.price} {refusals} {advisories}>
+				<fieldset class="res-choices">
+					<legend>Free or paid</legend>
 					<label>
 						<input
 							type="checkbox"
@@ -711,8 +737,10 @@
 						<span class="res-note">
 							Free resources should be {form.limits.free_resource_page_guidance} pages or fewer.
 						</span>
+					{:else}
+						<span class="res-note">The page guidance is still being read.</span>
 					{/if}
-				</div>
+				</fieldset>
 
 				{#if !draft.free}
 					<div class="res-row">
@@ -721,6 +749,7 @@
 								id="draft-price"
 								type="text"
 								inputmode="decimal"
+								aria-required="true"
 								placeholder="0.00"
 								value={draft.price}
 								oninput={(event) => set('price', event.currentTarget.value)}
@@ -741,6 +770,7 @@
 								id="draft-additional-licence"
 								type="text"
 								inputmode="decimal"
+								aria-required="true"
 								placeholder="0.00"
 								value={draft.additionalLicence}
 								oninput={(event) => set('additionalLicence', event.currentTarget.value)}
@@ -766,6 +796,7 @@
 					>
 						<select
 							id="draft-tax-code"
+							aria-required="true"
 							value={draft.taxCode ?? ''}
 							onchange={(event) =>
 								set('taxCode', event.currentTarget.value === '' ? null : event.currentTarget.value)}
@@ -784,7 +815,7 @@
 				{/if}
 			</FormSection>
 
-			<FormSection group="categories" help={GROUP_HELP.categories} {refusals}>
+			<FormSection group="categories" icon="layout-template" help={GROUP_HELP.categories} {refusals}>
 				{#if form}
 					<GradeGrid vocabulary={form} chosen={draft.grades} onChange={(grades) => set('grades', grades)} />
 
@@ -859,10 +890,15 @@
 							</div>
 						{/if}
 					</Field>
+				{:else}
+					<p class="res-note">
+						The grade, subject, tag and format lists are still being read.
+					</p>
 				{/if}
 
 				{#if form}
-					<div class="res-choices">
+					<fieldset class="res-choices">
+						<legend>Localisation</legend>
 						<label>
 							<!-- Three states, because the sidecar holds three. A product
 							     that was never asked draws the box indeterminate rather
@@ -884,12 +920,15 @@
 								Not answered yet. It stays unanswered until you tick or untick it.
 							</span>
 						{/if}
-					</div>
+					</fieldset>
+				{:else}
+					<p class="res-note">The localisation question is still being read.</p>
 				{/if}
 			</FormSection>
 
 			<FormSection
 				group="education_standards"
+				icon="shield-check"
 				help={standardsHelp(form?.standards_frameworks.length ?? 0)}
 				{refusals}
 			>
@@ -899,10 +938,12 @@
 						chosen={draft.standards}
 						onChange={(standards) => set('standards', standards)}
 					/>
+				{:else}
+					<p class="res-note">The standards frameworks are still being read.</p>
 				{/if}
 			</FormSection>
 
-			<FormSection group="details" help={GROUP_HELP.details} {refusals}>
+			<FormSection group="details" icon="sliders-horizontal" help={GROUP_HELP.details} {refusals}>
 				<div class="res-row">
 					<Field label="Teaching Duration" id="draft-teaching-duration">
 						<select
@@ -950,7 +991,7 @@
 				</div>
 			</FormSection>
 
-			<FormSection group="copyright" {refusals}>
+			<FormSection group="copyright" icon="shield-check" {refusals}>
 				{#if form}
 					<p class="res-lede">{form.copyright.preamble}</p>
 					<div class="res-picks" role="radiogroup" aria-label="Copyright">
@@ -971,10 +1012,12 @@
 						default here would make the attestation ours rather than yours, so the draft cannot be
 						created until you choose.
 					</p>
+				{:else}
+					<p class="res-note">The copyright declarations are still being read.</p>
 				{/if}
 			</FormSection>
 
-			<FormSection group="product_status" help={GROUP_HELP.product_status} {refusals}>
+			<FormSection group="product_status" icon="store" help={GROUP_HELP.product_status} {refusals}>
 				<div class="res-choices" role="radiogroup" aria-label="Product status">
 					{#each form?.statuses ?? [] as status (status.id)}
 						<label>
@@ -1117,67 +1160,65 @@
 			</Panel>
 		{/if}
 
-		<Panel
-			title={editing === null ? 'Create the draft' : 'Save the changes'}
-			description={editing === null
-				? 'Nothing is sent to a marketplace yet.'
-				: 'Saving writes your catalogue. It reaches a marketplace on the next send.'}
-		>
-			{#if editing !== null && editing.blockedBy.length > 0}
-				<Banner tone="warn" title="This resource is live and cannot be edited through us">
-					{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, and neither
-					editing a published listing nor taking one back to draft is a transition we have
-					captured there. The fields above are shown as stored and the edit is held back rather
-					than sent and refused.
-				</Banner>
-			{:else if draft.inventories.length === 0}
-				<p class="res-note">
-					{editing === null
-						? 'This will be saved here as a draft. Nobody else sees it, and no file is needed until you send it to a marketplace.'
-						: 'This resource is on no marketplace. Saving writes your own catalogue and contacts nobody.'}
-				</p>
-			{/if}
+		{#if saying}
+			<section class="res-sec">
+				{#if editing !== null && editing.blockedBy.length > 0}
+					<Banner tone="warn" title="This resource is live and cannot be edited through us">
+						{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, and neither
+						editing a published listing nor taking one back to draft is a transition we have
+						captured there. The fields above are shown as stored and the edit is held back
+						rather than sent and refused.
+					</Banner>
+				{:else if draft.inventories.length === 0}
+					<p class="res-note">
+						{editing === null
+							? 'This will be saved here as a draft. Nobody else sees it, and no file is needed until you send it to a marketplace.'
+							: 'This resource is on no marketplace. Saving writes your own catalogue and contacts nobody.'}
+					</p>
+				{/if}
 
-			{#if refusals.length > 0}
-				<ul class="res-refusals">
-					{#each refusals as refusal, index (`${refusal.group}-${index}`)}
-						<li class="res-refusal">
-							<a href="#group-{refusal.group}">{refusal.message}</a>
-						</li>
-					{/each}
-				</ul>
-			{/if}
+				{#if refusals.length > 0}
+					<ul class="res-refusals">
+						{#each refusals as refusal, index (`${refusal.group}-${index}`)}
+							<li class="res-refusal">
+								<a href="#group-{refusal.group}">{refusal.message}</a>
+							</li>
+						{/each}
+					</ul>
+				{/if}
 
-			{#if serverCheck !== null && !serverCheck.submittable}
-				<ul class="res-refusals">
-					{#each serverCheck.refusals as refusal, index (`server-${index}`)}
-						<li class="res-refusal">{refusal.message}</li>
-					{/each}
-				</ul>
-			{/if}
+				{#if serverCheck !== null && !serverCheck.submittable}
+					<ul class="res-refusals">
+						{#each serverCheck.refusals as refusal, index (`server-${index}`)}
+							<li class="res-refusal">{refusal.message}</li>
+						{/each}
+					</ul>
+				{/if}
 
-			{#if serverRefusal !== null}
-				<Banner tone="bad">{serverRefusal}</Banner>
-			{/if}
+				{#if serverRefusal !== null}
+					<Banner tone="bad">{serverRefusal}</Banner>
+				{/if}
 
-			{#if UNCOLLECTED_FIELDS.length > 0}
-				<p class="res-foot">
-					Everything above is saved when you {editing === null ? 'create the draft' : 'save'},
-					apart from
-					{UNCOLLECTED_FIELDS.join('; ')}. It is said here so nothing reads as saved that was not.
-				</p>
-			{/if}
+				{#if UNCOLLECTED_FIELDS.length > 0}
+					<p class="res-foot">
+						Everything above is saved when you {editing === null ? 'create the draft' : 'save'},
+						apart from
+						{UNCOLLECTED_FIELDS.join('; ')}. It is said here so nothing reads as saved that was
+						not.
+					</p>
+				{/if}
+			</section>
+		{/if}
 
-			<div class="res-acts">
-				<Button tier="primary" type="submit" disabled={!canCreate} reason={blocking}>
-					{#if creating}
-						{editing === null ? 'Creating…' : 'Saving…'}
-					{:else}
-						{editing === null ? 'Create draft' : 'Save changes'}
-					{/if}
-				</Button>
-				<Button href="/resources">Cancel</Button>
-				<span class="res-note">
+		<!-- The action band, in flow at the foot of the card: what the two
+		     choices mean at the left, then Cancel and the primary at the right,
+		     in the order a tab takes them. -->
+		<div class="res-actbar">
+			<p class="res-note">
+				{editing === null
+					? 'Nothing is sent to a marketplace yet.'
+					: 'Saving writes your catalogue. It reaches a marketplace on the next send.'}
+				<span class="block">
 					{draft.payload.length}
 					{draft.payload.length === 1 ? 'file' : 'files'} ·
 					{draft.inventories.length === 0
@@ -1187,9 +1228,18 @@
 						· some marketplace values differ
 					{/if}
 				</span>
-			</div>
-		</Panel>
+			</p>
+			<Button href="/resources">Cancel</Button>
+			<Button tier="primary" type="submit" disabled={!canCreate} reason={blocking}>
+				{#if creating}
+					{editing === null ? 'Creating…' : 'Saving…'}
+				{:else}
+					{editing === null ? 'Create draft' : 'Save changes'}
+				{/if}
+			</Button>
+		</div>
 		</fieldset>
+		</div>
 	</form>
 
 	<!-- Centred, and a modal rather than a banner, because it answers an action

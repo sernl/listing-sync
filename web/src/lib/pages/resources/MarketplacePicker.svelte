@@ -83,6 +83,7 @@
 		>
 			<select
 				id="draft-licence"
+				aria-required="true"
 				value={licence ?? ''}
 				onchange={(event) =>
 					onLicence(event.currentTarget.value === '' ? null : event.currentTarget.value)}

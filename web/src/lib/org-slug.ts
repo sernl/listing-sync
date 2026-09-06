@@ -45,6 +45,7 @@ export const RESERVED_SLUGS: readonly string[] = [
 	'guides',
 	'help',
 	'import',
+	'imports',
 	'inventory',
 	'jobs',
 	'labels',

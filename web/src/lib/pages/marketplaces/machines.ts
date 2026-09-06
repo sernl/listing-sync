@@ -2,6 +2,7 @@
 // tests without a component.
 
 import type { DeviceSessionView, DeviceView } from '$lib/api';
+import type { CheckInHere } from '$lib/desktop';
 import type { Tone } from '$lib/StatusPill.svelte';
 import type { DeviceSessionStatus } from '$lib/generated/vocab';
 
@@ -69,4 +70,50 @@ export function sessionWords(session: DeviceSessionView): string {
 		case 'wiped':
 			return 'forgotten when this device was signed out';
 	}
+}
+
+
+/** What the panel says about a check-in that did not reach us, or null where
+ *  there is nothing to say.
+ *
+ *  The sentence is the application's own, unaltered: `ControlPlaneError` writes
+ *  four of them and each is already worded for a person — no transport in this
+ *  build, the plane refused, this device is not registered, nobody is signed in
+ *  here. They name no credential, no jar and no host but our own control plane.
+ *
+ *  Without this line a machine that could not register is indistinguishable
+ *  from one that was never installed: both are an absence in a list. That is
+ *  the difference between "nothing appeared" and a cause somebody can act on,
+ *  and on a phone it is the only difference available — its log is private
+ *  storage and its stdout needs a cable.
+ *
+ *  An application too old to carry the field says nothing rather than a
+ *  substituted cause, because a named cause that was never reported would be
+ *  worse than none. */
+export function checkInNote(answer: CheckInHere): string | null {
+	if (answer.reached) {
+		return null;
+	}
+	if (answer.detail === null) {
+		return 'This machine could not tell us it is here, and did not say why.';
+	}
+	const stop = /[.!?]$/.test(answer.detail) ? '' : '.';
+	return `This machine could not tell us it is here: ${answer.detail}${stop}`;
+}
+
+/** How the check-in control reads, pressed and unpressed.
+ *
+ *  `reason` is undefined unless the control is disabled, which is what `Button`
+ *  requires: a disabled control with no stated reason reads as a fault rather
+ *  than as one act at a time. */
+export interface CheckInControl {
+	label: string;
+	reason: string | undefined;
+	disabled: boolean;
+}
+
+export function checkInControl(pending: boolean): CheckInControl {
+	return pending
+		? { label: 'Checking in…', reason: 'The check-in is running.', disabled: true }
+		: { label: 'Check in now', reason: undefined, disabled: false };
 }

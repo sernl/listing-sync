@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Teachouse Console</title>
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+  </head>
+  <!--
+    The one failure `src/routes/+error.svelte` cannot catch: a root-layout load
+    that threw. The layout that would render that component is what failed, so
+    the boundary has to be a document rather than a component.
+
+    Every colour and face is spelled out, and every rule is inline. This
+    document is served in place of the application, so `app.css` has not
+    loaded and no token is reachable; the hexes are copies of `--ground`,
+    `--surface`, `--line`, `--text`, `--muted` and `--primary` from
+    `lib/styles/tokens.css`, and `tokens.test.ts` does not sweep `.html` under
+    `src/`, so nothing keeps them in step. They are the fallback's fallback:
+    wrong-but-close here costs a slightly stale-looking error page, and that is
+    the trade this file exists to make.
+  -->
+  <body
+    style="
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 40px 20px;
+      background: #f6f4f1;
+      color: #17231c;
+      font-family: 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+    "
+  >
+    <div style="display: inline-flex; align-items: center; gap: 9px; font-size: 19px; font-weight: 600">
+      <img src="/favicon.svg" alt="" width="28" height="28" style="display: block" /> Teachouse
+    </div>
+    <div
+      style="
+        background: #fdfdfc;
+        border: 1px solid #dde3df;
+        border-radius: 12px;
+        padding: 26px;
+        width: 100%;
+        max-width: 400px;
+        box-sizing: border-box;
+      "
+    >
+      <h1 style="margin: 0 0 4px; font-size: 19px; font-weight: 600">The console could not start</h1>
+      <p style="margin: 0 0 16px; color: #5a6560; font-size: 13px">
+        %sveltekit.error.message% (%sveltekit.status%). Reloading is the first thing to try; if it
+        keeps happening, signing in again usually clears it.
+      </p>
+      <a
+        href="/login"
+        style="
+          display: block;
+          width: 100%;
+          box-sizing: border-box;
+          text-align: center;
+          padding: 10px 14px;
+          border-radius: 10px;
+          background: #1f4a38;
+          color: #fdfdfc;
+          text-decoration: none;
+          font-weight: 600;
+        "
+        >Sign in</a
+      >
+    </div>
+  </body>
+</html>

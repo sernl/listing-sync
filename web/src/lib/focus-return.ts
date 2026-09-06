@@ -40,3 +40,53 @@ export function afterBannerDismissed(offer: FocusOffer): FocusTarget {
 	// them to the control they just used.
 	return offer.region ? 'region' : 'none';
 }
+
+/** Which toasts need their interrupted control recorded, and which recordings
+ *  have outlived the toast they belong to.
+ *
+ * One slot for the whole stack was wrong in one specific way: a second toast
+ * arriving while the first still stood found the slot occupied and left it, so
+ * closing the second returned focus to whatever the *first* had interrupted.
+ * Keying by toast id is what makes the two answers separate, and this is the
+ * part of that which can be wrong, so it is a function rather than a condition
+ * inside an effect.
+ *
+ * `add` names the ids that have never been asked, not the ids whose answer was
+ * empty: a toast raised while focus was already inside the stack has no control
+ * to return to, and asking again later would answer with whichever control had
+ * since taken focus. The caller therefore records the empty answer too. */
+export function captureSlots(
+	live: readonly number[],
+	held: readonly number[]
+): { add: number[]; drop: number[] } {
+	const standing = new Set(live);
+	const recorded = new Set(held);
+	return {
+		add: live.filter((id) => !recorded.has(id)),
+		drop: held.filter((id) => !standing.has(id))
+	};
+}
+
+/** The element a programmatic focus move can land on, which is narrower than
+ *  `HTMLElement` on purpose: these three members are the whole of what the move
+ *  needs, so the sequence tests against a stub in the node lane rather than
+ *  needing a DOM. */
+export interface FocusableRegion {
+	hasAttribute(name: string): boolean;
+	setAttribute(name: string, value: string): void;
+	focus(): void;
+}
+
+/** Make a region a legal destination for a programmatic focus move, then move
+ *  focus there.
+ *
+ * `-1` keeps the region out of the tab sequence while making it focusable, and
+ * it is set only when the region carries no `tabindex` of its own: a page that
+ * deliberately made its region tabbable with `0` would be taken back out of the
+ * tab order by an unconditional stamp. */
+export function focusRegion(region: FocusableRegion): void {
+	if (!region.hasAttribute('tabindex')) {
+		region.setAttribute('tabindex', '-1');
+	}
+	region.focus();
+}

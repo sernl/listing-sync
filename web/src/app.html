@@ -2,7 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, interactive-widget=resizes-content, viewport-fit=cover"
+    />
+    <!-- `viewport-fit=cover` is what makes `env(safe-area-inset-*)` resolve to
+         anything but zero. Three clearances already spend it — the tab bar, the
+         bulk bar and the bottom sheet — and edge-to-edge is mandatory from
+         Android 15 (API 35) up, which this app's `targetSdk = 36` (Android 16)
+         is above, so without this a browser draws under both system bars and
+         the written clearances are inert. `shell.css` carries the matching top
+         inset on `.app`, and records what the Android 16 build measured: there
+         the meta itself changes nothing. -->
     <title>Teachouse Console</title>
     <!-- No font link and no preconnect: both faces are served from
          `static/fonts` and declared in `app.css`. The desktop and Android

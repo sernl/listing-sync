@@ -25,7 +25,6 @@ import type {
 	CopyFormat,
 	InventoryId,
 	LengthUnit,
-	NativeVocabularyKind,
 	PayloadFileRule,
 	TermKind
 } from '$lib/generated/vocab';
@@ -159,87 +158,6 @@ export function licenceOptions(
 	const named = view.natives.find((native) => native.name === gate.native);
 	const labels = new Map((named?.values ?? []).map((value) => [value.id, value.label]));
 	return licenceValues(gate, branch).map((id) => ({ id, label: labels.get(id) ?? id }));
-}
-
-// --------------------------------------------------------------- the subjects
-
-// ------------------------------------------------------------ platform fields
-
-/** One control a platform's section renders, read off the vocabulary rather
- *  than named here. */
-export interface AxisControl {
-	axis: TermKind;
-	/** The platform's own field name, which is what its API calls it. */
-	native: string;
-	multiple: boolean;
-	/** The platform's measured selection limit, where one is measured. */
-	cap: number | null;
-	required: boolean;
-	/** Present only for a captured closed set, each value carrying the words the
-	 *  capture holds for it. Absent means the form renders a disclosure rather
-	 *  than a select with no options. */
-	values: readonly NativeValueView[] | null;
-	vocabulary: NativeVocabularyKind;
-	/** Why the seller may not hand this axis to a best-fit computation, or
-	 *  `null` where the registry permits delegation. */
-	nonDelegableReason: string | null;
-	/** Why an answer here would reach nothing, or `null` where the create body
-	 *  carries it. Stated rather than hidden: an axis with no control and no
-	 *  reason reads as an axis the platform does not have. */
-	unwritableReason: string | null;
-}
-
-/** Whether a create can carry an answer to this axis at all.
- *
- * Two shapes reach the wire: the phase axis, which lands in the create's own
- * `grades`, and a cardinality-one axis, which lands as an `elect_one` answer
- * against this product. A many-valued axis outside phase has no field in the
- * create body and no election shape that describes it honestly — `over_cap`
- * asserts a cap was exceeded — so the form discloses it rather than
- * collecting an answer nothing would carry. */
-function unwritableReason(axis: TermKind, multiple: boolean): string | null {
-	if (axis === 'phase' || !multiple) {
-		return null;
-	}
-	return 'a create carries no field for this axis, so the projection fills it from your taxonomy';
-}
-
-const NON_DELEGABLE_REASON: Record<'legal_content', string> = {
-	legal_content: 'issuing a rights grant is the seller’s to make, never ours'
-};
-
-/** Every axis a seller can answer on this platform.
- *
- * A read-only native is excluded because nothing this form writes reaches it.
- * The licence axis is excluded too: it is answered once for the whole product
- * through the price-gated selector, not per axis alongside the others. */
-export function axisControls(view: VocabularyView): AxisControl[] {
-	const byName = new Map(view.natives.map((native) => [native.name, native]));
-	return view.axes
-		.filter((axis) => axis.axis !== 'licence')
-		.flatMap((axis) => {
-			const native = byName.get(axis.native);
-			if (native === undefined || native.direction === 'read_only') {
-				return [];
-			}
-			const multiple = axis.cardinality === 'many';
-			return [
-				{
-					axis: axis.axis,
-					native: axis.native,
-					multiple,
-					cap: axis.cap ?? null,
-					required: axis.required,
-					values: native.values ?? null,
-					vocabulary: native.vocabulary,
-					nonDelegableReason:
-						native.delegation.reason === undefined
-							? null
-							: NON_DELEGABLE_REASON[native.delegation.reason],
-					unwritableReason: unwritableReason(axis.axis, multiple)
-				}
-			];
-		});
 }
 
 // ------------------------------------------------------------------ the draft

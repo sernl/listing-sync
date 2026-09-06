@@ -7,6 +7,7 @@ import {
 	LEGACY_REDIRECTS,
 	OPEN_QUESTIONS_ITEM,
 	PHONE_BAR,
+	PUBLIC_ROUTES,
 	SEARCH_TAB,
 	SECTION_TABS,
 	SECTIONS,
@@ -16,7 +17,8 @@ import {
 	isCurrent,
 	legacyDestination,
 	searchHref,
-	sectionFor
+	sectionFor,
+	signedOutView
 } from './nav';
 
 // Read from the model rather than composed again here: a second composition is
@@ -487,5 +489,55 @@ describe('the search destination', () => {
 	it('carries the trimmed query, encoded', () => {
 		expect(searchHref('  poetry unit  ')).toBe('/resources?q=poetry%20unit');
 		expect(searchHref('a&b')).toBe('/resources?q=a%26b');
+	});
+});
+
+describe('what a signed-out browser is shown', () => {
+	it('renders a public page as itself', () => {
+		for (const route of PUBLIC_ROUTES) {
+			expect(signedOutView(route), route).toBe('public');
+		}
+	});
+
+	it('stands in front of a console page instead of mounting it', () => {
+		// The defect: the layout branched on the session alone, so a console
+		// page's markup mounted and fired its queries for a frame before the
+		// redirect landed. An implementation that answered `public` here would
+		// put that frame back.
+		for (const route of ['/resources', '/marketplaces', '/settings', '/admin', '/app']) {
+			expect(signedOutView(route), route).toBe('redirecting');
+		}
+	});
+
+	it('treats the root as a console address', () => {
+		// `/` is not in the public list and must not become public by being
+		// short: it is the console's own home.
+		expect(signedOutView('/')).toBe('redirecting');
+	});
+
+	it('does not make a path public for sitting under a public one', () => {
+		// Whole paths rather than prefixes. A prefix match would hand
+		// `/status/anything` and `/login/anything` out unauthenticated.
+		expect(signedOutView('/status/internals')).toBe('redirecting');
+		expect(signedOutView('/login/callback')).toBe('redirecting');
+	});
+
+	it('names the confirm step separately, which is why it is reachable', () => {
+		// `/reset/confirm` is a distinct entry precisely because the match is
+		// exact; dropping it would send a seller following a reset link to the
+		// sign-in screen instead.
+		expect(signedOutView('/reset/confirm')).toBe('public');
+	});
+
+	it('offers no console destination without a session', () => {
+		// The two lists are kept apart on purpose: a destination the rail
+		// carries is a destination that needs a session, and a public route
+		// appearing in both would be reachable from a signed-in shell that has
+		// no card for it.
+		const publicSet = new Set(PUBLIC_ROUTES);
+		const overlap = ALL_DESTINATIONS.filter((item) => publicSet.has(item.href)).map(
+			(item) => item.href
+		);
+		expect(overlap).toEqual(['/status']);
 	});
 });

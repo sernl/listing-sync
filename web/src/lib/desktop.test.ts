@@ -11,6 +11,7 @@ import {
 	OPEN_URL,
 	ORIGIN_NOT_GRANTED,
 	START_IMPORT,
+	checkInHere,
 	connectHere,
 	desktopInvoker,
 	forgetHere,
@@ -75,6 +76,62 @@ describe('putting this machine in the registry', () => {
 
 	it('does nothing at all in a browser, which is not a failure', async () => {
 		expect(await registerThisMachine(null)).toBe(false);
+	});
+});
+
+describe('reading why a check-in did not reach us', () => {
+	it('carries no reason when it did reach', async () => {
+		const invoke: Invoke = async () => ({
+			revoked: false,
+			reached_server: true,
+			signed_in: true,
+			detail: null
+		});
+		expect(await checkInHere(invoke)).toEqual({ reached: true, detail: null });
+	});
+
+	it("carries the application's own sentence when it did not", async () => {
+		const invoke: Invoke = async () => ({
+			revoked: false,
+			reached_server: false,
+			signed_in: false,
+			detail: 'this device is not registered'
+		});
+		expect(await checkInHere(invoke)).toEqual({
+			reached: false,
+			detail: 'this device is not registered'
+		});
+	});
+
+	it('carries no reason from an application too old to send one', async () => {
+		// The console is served from the control plane and updates when we
+		// deploy; the application updates when the seller takes an update. The
+		// console is therefore the newer of the two, and this is that arm: the
+		// field is simply absent, and absent must not read as a named cause.
+		const invoke: Invoke = async () => ({
+			revoked: false,
+			reached_server: false,
+			signed_in: false
+		});
+		expect(await checkInHere(invoke)).toEqual({ reached: false, detail: null });
+	});
+
+	it('carries no reason when the application rejects the command', async () => {
+		const invoke: Invoke = async (command) => {
+			throw `${command} not allowed. Command not found`;
+		};
+		expect(await checkInHere(invoke)).toEqual({ reached: false, detail: null });
+	});
+
+	it('sends the same command registerThisMachine does, and nothing in a browser', async () => {
+		const calls: string[] = [];
+		const invoke: Invoke = async (command) => {
+			calls.push(command);
+			return { reached_server: true };
+		};
+		await checkInHere(invoke);
+		expect(calls).toEqual([DEVICE_CHECK_IN]);
+		expect(await checkInHere(null)).toEqual({ reached: false, detail: null });
 	});
 });
 

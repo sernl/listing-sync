@@ -1,5 +1,12 @@
 <script lang="ts">
-	import { api, type ConnectionView, type SyncRequestHead } from '$lib/api';
+	import { goto } from '$app/navigation';
+	import {
+		ApiFailure,
+		api,
+		type ConnectionView,
+		type ImportBatchView,
+		type SyncRequestHead
+	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import Button from '$lib/Button.svelte';
@@ -8,6 +15,8 @@
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
+	import { readState } from '$lib/pages/automations/read-state';
+	import { saveDocument } from '$lib/pages/export/download';
 	import { SHORT_NAME, platformTitle } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import {
@@ -35,7 +44,10 @@
 		standingBadge,
 		type ImportCard
 	} from './import-view';
+	import { fetchTemplate, openBatchFrom, uploadSheet } from './api';
+	import { IMPORT_ALREADY_OPEN, batchHref, batchRows, listCopy } from './sheet-view';
 	import './import.css';
+	import './sheet.css';
 
 	// Null until the list has actually been read. An empty array is a seller
 	// with no marketplace, which is a claim; not having read the list is not.
@@ -47,6 +59,23 @@
 	let requestsUnread = $state(false);
 
 	let chosen = $state<Record<string, InventoryId>>({});
+
+	// The spreadsheet import, which is a second way in rather than a second
+	// view of the same thing: these batches and the migrate requests below
+	// address different identifier spaces and settle in different words.
+	let batches = $state<ImportBatchView[]>([]);
+	let batchesLoaded = $state(false);
+	let batchesUnread = $state(false);
+	// Null until the listing has been read. `open` is the server's own answer
+	// rather than a search of the list, so the card's reason and the index's
+	// predicate stay one thing.
+	let openBatch = $state<string | null>(null);
+	let sheetRefusal = $state<string | null>(null);
+	let sending = $state(false);
+	let downloading = $state(false);
+
+	const base = $props.id();
+	const sheetInputId = `${base}-sheet`;
 
 	const cards = $derived(importCards(connections));
 
@@ -64,6 +93,8 @@
 		!connectionsUnread && connections !== null && !anyConnectionStands(connections)
 	);
 	const rows = $derived(importRows(requests, (inventory) => SHORT_NAME[inventory]));
+	const sheets = $derived(readState(batchesLoaded, batchesUnread, batchRows(batches)));
+	const sheetsSay = $derived(listCopy(sheets));
 
 	$effect(() => {
 		void api
@@ -77,6 +108,7 @@
 				connectionsUnread = true;
 			});
 		void loadRequests();
+		void loadBatches();
 	});
 
 	async function loadRequests() {
@@ -92,6 +124,68 @@
 
 	function siteOf(card: ImportCard): InventoryId | null {
 		return chosen[card.marketplace] ?? card.preselected;
+	}
+
+	async function loadBatches() {
+		try {
+			const held = await api.imports();
+			batches = held.imports;
+			openBatch = held.open;
+			batchesUnread = false;
+		} catch {
+			batches = [];
+			openBatch = null;
+			batchesUnread = true;
+		}
+		batchesLoaded = true;
+	}
+
+	function sheetRefusalOf(failure: unknown): string {
+		if (!(failure instanceof ApiFailure)) {
+			return 'That did not reach us. Nothing was uploaded.';
+		}
+		return failure.message;
+	}
+
+	async function downloadTemplate() {
+		if (downloading) {
+			return;
+		}
+		downloading = true;
+		sheetRefusal = null;
+		try {
+			saveDocument(await fetchTemplate());
+		} catch (failure) {
+			sheetRefusal = sheetRefusalOf(failure);
+		} finally {
+			downloading = false;
+		}
+	}
+
+	async function sheetChosen(event: Event & { currentTarget: HTMLInputElement }) {
+		const file = event.currentTarget.files?.[0];
+		event.currentTarget.value = '';
+		if (file === undefined || sending) {
+			return;
+		}
+		sending = true;
+		sheetRefusal = null;
+		try {
+			// The key is the batch's identity on the server rather than a token
+			// beside it. One is minted per submit, so a second submit is a
+			// second batch — which the server refuses while one is open, and
+			// the refusal names the one that is.
+			const parsed = await uploadSheet(file, crypto.randomUUID());
+			await goto(batchHref(parsed.id));
+		} catch (failure) {
+			// A refusal naming the batch already open is the ordinary case, and
+			// the card takes the seller to it rather than telling them to look.
+			openBatch = openBatchFrom(failure) ?? openBatch;
+			sheetRefusal = sheetRefusalOf(failure);
+		} finally {
+			sending = false;
+			await loadBatches();
+		}
 	}
 </script>
 
@@ -112,6 +206,55 @@
 			{NOTHING_CONNECTED}
 		</Banner>
 	{/if}
+
+	<section class="sh-card">
+		<div class="head">
+			<h2>Import from a spreadsheet</h2>
+			<span class="badges"><StatusPill tone="flat" label="Read on our server" /></span>
+		</div>
+		<p>
+			One row per resource in our template. We read the sheet here and show you what every row
+			said before anything is created; no marketplace login is involved and none is asked for.
+		</p>
+		<ol class="sh-steps">
+			<li>Download the template and fill one row for each resource.</li>
+			<li>Upload it. Every row is checked, and you read the report before anything is created.</li>
+			<li>Add the files your rows named, then import.</li>
+		</ol>
+
+		{#if sheetRefusal !== null}
+			<Banner tone="bad" title="Your sheet was not accepted">{sheetRefusal}</Banner>
+		{/if}
+
+		<div class="sh-acts">
+			<Button
+				icon="file-down"
+				disabled={downloading}
+				reason={downloading ? 'Building the template.' : undefined}
+				onclick={() => void downloadTemplate()}
+			>
+				{downloading ? 'Building the template…' : 'Download the template'}
+			</Button>
+			{#if openBatch === null}
+				<!-- A label rather than a Button, because the control has to be the
+				     file input's own: a button that then clicks a hidden input is a
+				     second control the keyboard reaches separately. -->
+				<label class="btn sh-pick" for={sheetInputId}>
+					{sending ? 'Reading your sheet…' : 'Upload a filled sheet'}
+					<input
+						id={sheetInputId}
+						type="file"
+						accept=".xlsx,.csv"
+						disabled={sending}
+						onchange={sheetChosen}
+					/>
+				</label>
+			{:else}
+				<Button disabled reason={IMPORT_ALREADY_OPEN}>Upload a filled sheet</Button>
+				<Button tier="primary" href={batchHref(openBatch)}>Open the import you have</Button>
+			{/if}
+		</div>
+	</section>
 
 	<div class="import-cards">
 		{#each cards as card (card.marketplace)}
@@ -187,6 +330,30 @@
 	</div>
 
 	<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+
+	<Panel
+		title="Spreadsheet imports"
+		description="Every sheet you have uploaded, newest first."
+	>
+		{#if sheetsSay !== null}
+			<p class="quiet">{sheetsSay.title}</p>
+			{#if sheetsSay.body !== ''}<p class="quiet">{sheetsSay.body}</p>{/if}
+		{:else if sheets.kind === 'rows'}
+			{#each sheets.rows as sheet (sheet.id)}
+				<!-- The badge and the line stay inside one link, for the reason the
+				     migrate list beside this one states: two of the labels are told
+				     apart by the sentence that follows them. -->
+				<a class="sh-listed" href={sheet.href}>
+					<span class="mark"><StatusPill tone={sheet.tone} label={sheet.label} /></span>
+					<span class="who">
+						<span class="t">{sheet.name}</span>
+						<span class="w">{sheet.line}</span>
+					</span>
+					<span class="at">{agoLabel(sheet.createdAt, Date.now())}</span>
+				</a>
+			{/each}
+		{/if}
+	</Panel>
 
 	<Panel
 		title="Your imports"

@@ -7,7 +7,6 @@
 	import { currentSessionToken, listBrowserSessions } from '$lib/browser-sessions';
 	import {
 		APP_CANNOT_CONNECT,
-		APP_CANNOT_FORGET,
 		connectHere,
 		desktopInvoker,
 		forgetHere,
@@ -29,12 +28,14 @@
 	import {
 		type Busy,
 		CARD_NAME,
+		type DisconnectServer,
 		type LiveRead,
 		TRANSPORT_BADGE,
 		busyAt,
 		deviceBranchInTileOrder,
 		disconnectAsk,
 		disconnectLabel,
+		disconnectSay,
 		disconnectable,
 		headerAction,
 		hostOf,
@@ -174,26 +175,32 @@
 					? await forgetHere(invoke, marketplace)
 					: { kind: 'unavailable' };
 			const connection = connectionFor(marketplace);
-			const moved =
-				connection === undefined ? 0 : (await api.disconnect(connection.id)).connections;
-			return { forgotten, moved };
+			// Caught rather than thrown, because the sentence depends on what
+			// the device half already did and `onError` is not given it. A
+			// server refusal after a machine has forgotten its login is the one
+			// disconnect that half-happened, and it is `disconnectSay` that has
+			// both facts to say so with.
+			let server: DisconnectServer = { kind: 'moved', moved: 0 };
+			if (connection !== undefined) {
+				try {
+					server = { kind: 'moved', moved: (await api.disconnect(connection.id)).connections };
+				} catch {
+					server = { kind: 'refused' };
+				}
+			}
+			return { forgotten, server };
 		},
 		onSuccess: async (
-			done: { forgotten: SessionOutcome; moved: number },
+			done: { forgotten: SessionOutcome; server: DisconnectServer },
 			marketplace: Marketplace
 		) => {
-			const name = CARD_NAME[marketplace];
-			if (done.forgotten.kind === 'unsupported') {
-				toast('error', APP_CANNOT_FORGET);
-			} else if (done.forgotten.kind === 'refused') {
-				toast('error', done.forgotten.detail);
-			} else if (done.moved === 0) {
-				toast('info', `${name} was already disconnected.`);
-			} else {
-				toast('info', `${name} is disconnected. Connecting again is the same button.`);
-			}
+			const say = disconnectSay(marketplace, done.forgotten, done.server);
+			toast(say.tone, say.message);
 			await refetchConnections();
 		},
+		// The server half no longer throws, so this is left for a genuinely
+		// unexpected one -- the device call itself failing outside its own four
+		// answers.
 		onError: () => {
 			toast('error', 'The marketplace could not be disconnected.');
 		},

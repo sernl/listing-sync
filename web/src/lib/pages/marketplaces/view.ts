@@ -2,6 +2,7 @@
 // already builds. Pure, so it tests without a component.
 
 import { connectionIsLinked, connectionStands } from '$lib/connection-standing';
+import { APP_CANNOT_FORGET, type SessionOutcome } from '$lib/desktop';
 import { platformOf } from '$lib/device-merge';
 import { SIGN_IN_LABEL } from '$lib/devices-view';
 import type { MarketplaceRow, MarketplaceSignIn, SignInState } from '$lib/devices-view';
@@ -227,6 +228,68 @@ export function disconnectAsk(
 	connection: { state: string } | null | undefined
 ): string {
 	return disconnectPrompt(marketplace, host, connectionIsLinked(connection));
+}
+
+/** What the control plane answered when asked to disconnect.
+ *
+ * As total as `SessionOutcome` already makes the device half, and for the same
+ * reason: the sentence a seller reads depends on both halves, and a half that
+ * throws out of the mutation cannot be one of the inputs to it. `moved` is the
+ * number of connections the route reported disconnected, which is zero where
+ * there was nothing standing to disconnect. */
+export type DisconnectServer = { kind: 'moved'; moved: number } | { kind: 'refused' };
+
+/** What a seller is told after a disconnect, and in which voice. */
+export interface DisconnectSay {
+	tone: 'info' | 'error';
+	message: string;
+}
+
+/**
+ * The sentence a finished disconnect leaves behind, from what both halves
+ * answered.
+ *
+ * The order the two halves run in is what makes this a decision rather than two
+ * independent sentences: the machine forgets first, and only then is the
+ * control plane asked. So a server refusal arrives with the login already gone,
+ * and the seller is standing in front of a machine that is signed out of a
+ * marketplace this console still calls connected — which is not a half-failure
+ * to be reported as a failure, because the half that matters is the one that
+ * did not run: while the connection stands, so does every lease against it.
+ *
+ * A server refusal therefore leads, ahead of anything the device half reported.
+ * Where the device half also failed, nothing at all happened, and saying so is
+ * the whole of it; the machine's own refusal is reached on the retry that gets
+ * past the server.
+ */
+export function disconnectSay(
+	marketplace: Marketplace,
+	forgotten: SessionOutcome,
+	server: DisconnectServer
+): DisconnectSay {
+	const name = CARD_NAME[marketplace];
+	if (server.kind === 'refused') {
+		return {
+			tone: 'error',
+			message:
+				forgotten.kind === 'done'
+					? `The ${name} login has been removed from this machine, but ${name} is still ` +
+						'connected here, so scheduled work has not stopped. Try Disconnect again.'
+					: `${name} could not be disconnected.`
+		};
+	}
+	if (forgotten.kind === 'unsupported') {
+		return { tone: 'error', message: APP_CANNOT_FORGET };
+	}
+	if (forgotten.kind === 'refused') {
+		return { tone: 'error', message: forgotten.detail };
+	}
+	return server.moved === 0
+		? { tone: 'info', message: `${name} was already disconnected.` }
+		: {
+				tone: 'info',
+				message: `${name} is disconnected. Connecting again is the same button.`
+			};
 }
 
 /** Which card is mid-flight, and at what. A record rather than one slot,
