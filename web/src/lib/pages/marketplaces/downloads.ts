@@ -2,6 +2,7 @@
 // Pure, so it tests without a component.
 
 import { type DownloadsManifest, downloadHref } from './api';
+import type { Mark } from './catalogue';
 
 export type Platform = 'windows' | 'android' | 'apple';
 
@@ -11,6 +12,25 @@ export const PLATFORM_NAME: Record<Platform, string> = {
 	windows: 'Windows',
 	android: 'Android',
 	apple: 'Apple'
+};
+
+/** What each download tile draws in its mark box.
+ *
+ *  A neutral glyph rather than the platform owner's store badge, and the reason
+ *  is the badge licence rather than taste. Google, Apple and Microsoft each
+ *  grant their badge for one purpose, to link to a listing on that store, and
+ *  none of these three cards links to one: the Windows and Android builds are a
+ *  file the release manifest names and installs by hand, and no macOS build is
+ *  published at all. A badge on a card offering a sideloaded file is outside the
+ *  licence and misleading to the reader, which is a different thing from the
+ *  guideline risk the founder accepted for marketplace logos on 2026-09-05.
+ *
+ *  Typed `Mark` rather than a glyph name, so the day a store listing exists the
+ *  badge lands as a change to this table and to nothing else. */
+export const PLATFORM_MARK: Record<Platform, Mark> = {
+	windows: { kind: 'glyph', name: 'monitor' },
+	android: { kind: 'glyph', name: 'smartphone' },
+	apple: { kind: 'glyph', name: 'laptop' }
 };
 
 /** What a card says while there is nothing to download.
@@ -32,6 +52,7 @@ const OFFERED: Record<Platform, string> = {
 export interface DownloadCard {
 	platform: Platform;
 	name: string;
+	mark: Mark;
 	body: string;
 	/** Absent where nothing is published, which is what makes the card read
 	 *  "Coming soon" and carry no button. A card never links to a file the
@@ -57,11 +78,17 @@ export function downloadCards(manifest: DownloadsManifest | null): DownloadCard[
 	return PLATFORM_ORDER.map((platform) => {
 		const entry = manifest === null ? null : manifest[platform];
 		if (manifest === null || entry === null) {
-			return { platform, name: PLATFORM_NAME[platform], body: NOTHING_YET };
+			return {
+				platform,
+				name: PLATFORM_NAME[platform],
+				mark: PLATFORM_MARK[platform],
+				body: NOTHING_YET
+			};
 		}
 		return {
 			platform,
 			name: PLATFORM_NAME[platform],
+			mark: PLATFORM_MARK[platform],
 			body: OFFERED[platform],
 			offer: {
 				label: `Download for ${PLATFORM_NAME[platform]}`,

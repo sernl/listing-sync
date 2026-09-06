@@ -142,7 +142,7 @@ export function coverToDraw(cover: string | null, failed: ReadonlySet<string>): 
  *  the palette: the founder's item asks for the resource rather than for the
  *  board filtered down to it. */
 export function resultHref(id: string): string {
-	return `/inventory/${id}`;
+	return `/resources/${id}`;
 }
 
 /**

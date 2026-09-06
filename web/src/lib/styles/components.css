@@ -11,15 +11,16 @@
 /* --- buttons ------------------------------------------------------------- */
 
 /* Additive and confirming: adding a label, sending a request, running a bulk
-   verb over a selection. Paua blue, which is the one hue no status uses. */
+   verb over a selection. `--additive` is the one hue no status uses, which is
+   what lets it read as a tier rather than as a verdict. */
 .cta.add {
 	background: var(--additive);
 	border-color: var(--additive);
 }
 
 .cta.add:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--additive) 84%, #000);
-	border-color: color-mix(in srgb, var(--additive) 84%, #000);
+	background: color-mix(in srgb, var(--additive) 84%, var(--text));
+	border-color: color-mix(in srgb, var(--additive) 84%, var(--text));
 }
 
 /* Tertiary: a label with no box, for an action that must not compete. */
@@ -136,7 +137,7 @@
 	inset: 2px auto 2px 2px;
 	width: 16px;
 	border-radius: 50%;
-	background: #fff;
+	background: var(--on-fill);
 	transition: transform 120ms ease;
 }
 
@@ -253,6 +254,31 @@
 	flex: none;
 }
 
+/* The close control, on the banners that have one. Square at the full control
+   floor rather than the small one: `small` is 30px, and this is frequently the
+   only thing in the banner a pointer or a thumb has to hit. Transparent border
+   rather than none, so the box does not move when a focus ring lands on it. */
+.banner-close {
+	align-self: center;
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: var(--control-h);
+	min-height: var(--control-h);
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.banner-close:hover {
+	background: var(--hover);
+	color: var(--ink);
+}
+
 .banner.warn {
 	background: var(--warn-soft);
 }
@@ -297,6 +323,27 @@
 	.banner .act .cta {
 		width: 100%;
 		justify-content: center;
+	}
+
+	/* With no action to tab to, the close control is the banner's only control,
+	   so painting it out of DOM order cannot disagree with anything. It is
+	   lifted beside the glyph to spare it a row of its own below the sentence.
+	   The glyph is ordered ahead of it, or the control sorts to its left. */
+	.banner:not(.has-act) > .ico {
+		order: -2;
+	}
+
+	.banner:not(.has-act) .banner-close {
+		order: -1;
+		margin-left: auto;
+	}
+
+	/* Where there is an action, nothing is reordered: the close control already
+	   precedes it in the markup, so paint and tab agree by construction. The
+	   two share the wrapped row rather than taking one each, which is why the
+	   action gives up the full width it takes when it is alone. */
+	.banner.has-act .act {
+		flex: 1 1 auto;
 	}
 }
 

@@ -91,6 +91,17 @@ describe('the sync card', () => {
 		expect(syncState(facts({ openQuestions: 3 })).label).toBe('No marketplace connected');
 	});
 
+	// A disconnected marketplace leaves its row behind, so a list of nothing but
+	// unlinked rows is a seller with no marketplace -- which reading the length
+	// alone got wrong, and reported open questions about a shop that is gone.
+	it('reads a list of nothing but disconnected rows as no marketplace connected', () => {
+		const gone = facts({
+			connections: [connection('Tpt', { state: 'unlinked', status: 'disconnected' })],
+			openQuestions: 3
+		});
+		expect(syncState(gone)).toEqual({ label: 'No marketplace connected', tone: 'warn' });
+	});
+
 	it('raises the open questions where there are any', () => {
 		const asked = facts({ connections: [connection('Tpt')], openQuestions: 3 });
 		expect(syncState(asked)).toEqual({ label: '3 open questions', tone: 'warn' });

@@ -65,7 +65,7 @@
 	const queryClient = useQueryClient();
 
 	// The two filters the server answers ride the URL: the Labels page links
-	// straight to `/inventory?label=<name>`, and a narrowed board is a place
+	// straight to `/resources?label=<name>`, and a narrowed board is a place
 	// worth bookmarking, so both have to be readable from the address rather
 	// than held in this component. The rest of the filter card narrows rows this
 	// page already holds and stays local.
@@ -105,7 +105,7 @@
 	}));
 	const connections = createQuery(() => ({
 		queryKey: queryKeys.connections,
-		queryFn: () => api.connections().then((view) => view.connections)
+		queryFn: () => api.connections()
 	}));
 	const halts = createQuery(() => ({
 		queryKey: queryKeys.status,
@@ -640,7 +640,7 @@
 			{#snippet actions()}
 				<Button tier="primary" href="/import" icon="download">Import from a marketplace</Button>
 				<span class="res-note">or</span>
-				<Button href="/inventory/new" icon="plus">Create a resource</Button>
+				<Button href="/resources/new" icon="plus">Create a resource</Button>
 			{/snippet}
 		</Placeholder>
 	{:else if rows.length === 0}
@@ -657,7 +657,7 @@
 		<div class="res-rows">
 			{#each shown as row (row.product.id)}
 				<RowCard
-					href={`/inventory/${row.product.id}`}
+					href={`/resources/${row.product.id}`}
 					title={row.product.title}
 					meta={metaLine(row.product, row, now)}
 					cover={row.product.cover ?? null}
@@ -670,7 +670,7 @@
 						<MarketplaceChips chips={row.chips} />
 					{/snippet}
 					{#snippet menu(close: () => void)}
-						<a class="res-menu-link" href={`/inventory/${row.product.id}`}>Open</a>
+						<a class="res-menu-link" href={`/resources/${row.product.id}`}>Open</a>
 						<button type="button" disabled title={DUPLICATE_MISSING}>Duplicate</button>
 						<button
 							class="res-danger"

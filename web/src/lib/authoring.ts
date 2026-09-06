@@ -341,77 +341,16 @@ export function rightsOf(
 }
 
 // ---------------------------------------------------------------- the edit
-
-/** What the edit form holds. The platform set is deliberately absent: no
- *  endpoint adds a mapping to an existing product, so an edit changes the
- *  canonical fields and never which marketplaces carry them. */
-export interface EditSeed {
-	title: string;
-	body: string;
-	bodyFormat: CopyFormat;
-	branch: PricingBranch;
-	amount: string;
-	currency: string;
-	licence: string | null;
-}
+//
+// The edit form's own seed and body used to live here, holding six fields of a
+// model with twenty-four. Both are gone: `ResourceForm` renders the edit as its
+// second mode, so `draftOf` and `patchBodyOf` in `$lib/tpt-form` compose the
+// whole product rather than a subset, and one function pair serves both
+// directions. What stays here is what the edit still needs and the create needs
+// too: the licence options, the rights grant, and the refusal below.
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
-}
-
-/** The price a stored product carries, read back into the fields that wrote
- *  it. A shape this client cannot read seeds a free listing and says nothing,
- *  because guessing an amount is worse than asking for one. */
-export function priceSeedOf(price: unknown): Pick<EditSeed, 'branch' | 'amount' | 'currency'> {
-	const free = { branch: 'free' as const, amount: '', currency: 'Gbp' };
-	if (!isRecord(price) || !isRecord(price.Paid)) {
-		return free;
-	}
-	const { minor_units: minorUnits, currency } = price.Paid;
-	if (typeof minorUnits !== 'number' || typeof currency !== 'string') {
-		return free;
-	}
-	if (CURRENCIES[currency] === undefined) {
-		return free;
-	}
-	return { branch: 'paid', amount: toMajorUnits(minorUnits, currency), currency };
-}
-
-/** The stored product as the edit form's starting state. */
-export function editSeedOf(product: ProductView): EditSeed {
-	return {
-		title: product.title,
-		body: product.body,
-		bodyFormat: product.body_format,
-		licence: product.rights?.native_id ?? product.rights?.segments[0] ?? null,
-		...priceSeedOf(product.price)
-	};
-}
-
-/** The edit as a request body, or `null` where the price is one this client
- *  will not send.
- *
- * `body_format` always travels with the body it describes, because the server
- * refuses a format on its own: a format that moved without its text is how a
- * Markdown listing acquires escaped markup. A licence cannot be cleared here —
- * the edit carries a stated grant or leaves the stored one alone — because the
- * wire has no way to say "unstated". */
-export function patchBodyOf(seed: EditSeed, licenceVocabulary: InventoryId | null) {
-	const price = priceOf(seed);
-	if (price === null) {
-		return null;
-	}
-	const rights =
-		seed.licence !== null && seed.licence.length > 0 && licenceVocabulary !== null
-			? { inventory: licenceVocabulary, segments: [seed.licence], native_id: seed.licence }
-			: undefined;
-	return {
-		title: seed.title.trim(),
-		body: seed.body,
-		body_format: seed.bodyFormat,
-		price,
-		rights
-	};
 }
 
 /** Why this product cannot be edited through us, or `null` where it can.

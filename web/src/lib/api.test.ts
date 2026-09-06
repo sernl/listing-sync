@@ -500,12 +500,12 @@ describe('the authoring endpoints', () => {
 				})
 			)
 		);
-		const view = await api.connections();
+		const held = await api.connections();
 		// Served and undeclared: a fact about the seller.
-		expect(view.connections[0].authorship).toEqual({ state: 'undeclared' });
+		expect(held[0].authorship).toEqual({ state: 'undeclared' });
 		// Not served at all: a fact about the surface, and never to be rendered
 		// as "not declared".
-		expect(view.connections[1].authorship).toBeUndefined();
+		expect(held[1].authorship).toBeUndefined();
 	});
 
 	it('reads one marketplace vocabulary per inventory', async () => {

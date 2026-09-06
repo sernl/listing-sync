@@ -2,18 +2,25 @@
 	import { ApiFailure, api, type ArchiveMode, type UploadedView } from '$lib/api';
 	import { formatBytes, quotaSentence } from '$lib/authoring';
 	import Banner from '$lib/Banner.svelte';
+	import Button from '$lib/Button.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import { STORAGE_NOT_RECLAIMED } from '$lib/pages/resources/files';
 
 	let {
 		uploaded,
 		keepWhole,
 		onUploaded,
-		onKeepWhole
+		onKeepWhole,
+		onCleared
 	}: {
 		uploaded: UploadedView | null;
 		keepWhole: boolean;
 		onUploaded: (result: UploadedView | null) => void;
 		onKeepWhole: (whole: boolean) => void;
+		/** The seller taking back a file they had just chosen, before anything
+		 *  is created. The parent drops the handles; nothing is deleted and no
+		 *  storage is reclaimed, which the copy beside the control says. */
+		onCleared: () => void;
 	} = $props();
 
 	const base = $props.id();
@@ -63,6 +70,18 @@
 			void send(file);
 		}
 		event.currentTarget.value = '';
+	}
+
+	/** Drops what was chosen, here and in the parent's draft.
+	 *
+	 *  The bytes are untouched: they reached `POST /v1/uploads` when the file
+	 *  was chosen, they are already counted against the organisation's storage,
+	 *  and this removes the handles rather than the file. */
+	function clear() {
+		name = null;
+		refusal = null;
+		sent = 0;
+		onCleared();
 	}
 
 	const percent = $derived(Math.round(sent * 100));
@@ -122,6 +141,15 @@
 			<span class="uf-name" title={name ?? undefined}>{name ?? 'the upload'}</span>
 		</span>
 		<span class="uf-at">{headroom}</span>
+		<span class="uf-acts">
+			<Button
+				small
+				danger
+				disabled={sending}
+				reason={sending ? 'A file is being uploaded.' : undefined}
+				onclick={clear}>Remove</Button
+			>
+		</span>
 	</div>
 	{#each uploaded.payload as file (file.hash)}
 		<div class="uf-row">
@@ -138,6 +166,7 @@
 		{uploaded.previews.length}
 		{uploaded.previews.length === 1 ? 'preview' : 'previews'}. Uploading again replaces all of them.
 	</p>
+	<p class="foot-note">{STORAGE_NOT_RECLAIMED}</p>
 {/if}
 
 <style>
@@ -184,6 +213,14 @@
 		font-size: 12px;
 		color: var(--faint);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+
+	/* The row's own action, kept off the baseline the name and the figure share
+	   so a button does not sit on a text baseline. */
+	.uf-acts {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 	}
 
 	.uf-at {

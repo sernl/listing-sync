@@ -472,6 +472,32 @@ export interface ConnectionView {
 	authorship?: AuthorshipView;
 }
 
+/** The connections answer as `ConnectionsView` in
+ *  `crates/tam-api/src/resources.rs` serialises it: the list inside an
+ *  envelope, never a bare array. */
+export interface ConnectionsView {
+	connections: ConnectionView[];
+}
+
+/** The list out of the envelope, which is the only shape this module lets out.
+ *
+ *  The envelope escaping here is what blanked the Resources board: two query
+ *  functions under the one `['connections']` cache key held two shapes, and
+ *  whichever refetched last decided which one the board was handed, so
+ *  `rowFor` called `.find` on an object. Unwrapping at the wire leaves one
+ *  shape for every caller to hold.
+ *
+ *  An answer that is not the envelope raises rather than degrading to `[]`:
+ *  the pages tell an unread list apart from an empty one, and a silent `[]`
+ *  would tell a seller they are signed in nowhere. */
+export function connectionList(answer: unknown): ConnectionView[] {
+	const held = (answer as ConnectionsView | null | undefined)?.connections;
+	if (!Array.isArray(held)) {
+		throw new Error('/v1/connections answered something other than a list of connections');
+	}
+	return held;
+}
+
 export interface QueueItem {
 	id: string;
 	term: string;
@@ -768,11 +794,13 @@ export interface TptBaseInput {
 	tags?: string[];
 	formats?: string[];
 	custom_categories?: string[];
-	/** `data[ItemsLocalization][country_id_flag]`. Absent states nothing about
-	 *  the control rather than answering it: the sidecar holds three states and
-	 *  a form that rendered the checkbox sends the box's own state either way,
-	 *  so false arrives only as an answer. */
-	appropriate_for_country?: boolean;
+	/** `data[ItemsLocalization][country_id_flag]`. Absent or null states nothing
+	 *  about the control rather than answering it: the sidecar holds three
+	 *  states, and a form that rendered the checkbox sends the box's own state
+	 *  either way, so false arrives only as an answer. `null` travels because an
+	 *  edit form seeded from a product that never answered has to be able to
+	 *  leave it unanswered; `Option<bool>` on the server reads it as `None`. */
+	appropriate_for_country?: boolean | null;
 	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
 	teaching_duration_id?: number | null;
 	pages_or_slides?: number | null;
@@ -822,6 +850,9 @@ export interface PatchProductBody {
 	subjects?: string[];
 	grades?: PathInput[];
 	rights?: RightsInput;
+	/** Given whole or not at all: the sidecar row is replaced rather than
+	 *  merged, so a field the seller cleared reaches the server as cleared. */
+	tpt_base?: TptBaseInput;
 }
 
 export interface PatchedProductView {
@@ -856,6 +887,10 @@ export interface FileView {
 	role: FileRole;
 	kind: FileKind;
 	byte_len: number;
+	/** The digest of these bytes, which is how a handle names a file. Carried
+	 *  so an edit form can seed a draft that is genuinely this product rather
+	 *  than one whose files it can count and not name. */
+	hash: string;
 	scan: string;
 	/** What the seller called this file, where a name was recorded. Absent for
 	 *  a file stored before names existed and for a generated cover, and the
@@ -923,6 +958,32 @@ export interface GradesView {
 	derived?: AgeView;
 }
 
+/** The TPT-base sidecar as the read returns it.
+ *
+ *  Every field is the name `TptBaseInput` sends, so the edit form seeds from
+ *  this and patches with that without a second vocabulary in between. The two
+ *  differ only in optionality: the read states each field, the write may omit
+ *  one. */
+export interface TptBaseView {
+	thumbnail_mode: number;
+	thumbnail_hashes: string[];
+	video_preview_hash: string | null;
+	additional_licence_minor_units: number | null;
+	bundle_discount_minor_units: number | null;
+	tax_code_id: number | null;
+	subject_areas: string[];
+	tags: string[];
+	formats: string[];
+	custom_categories: string[];
+	appropriate_for_country: boolean | null;
+	standards: { framework: number; code: string; tpt_node_id: number | null }[];
+	teaching_duration_id: number | null;
+	pages_or_slides: number | null;
+	answer_key_id: number | null;
+	copyright_declaration_id: number | null;
+	status_user: number;
+}
+
 /** The product aggregate. `files` is payload, cover and previews alike, so a
  *  consumer filters on `role` rather than assuming the array is one kind. */
 export interface ProductView {
@@ -935,6 +996,10 @@ export interface ProductView {
 	subjects: string[];
 	grades: GradesView;
 	rights?: PathView;
+	/** Absent for a product with no sidecar row: one authored before the table
+	 *  existed, or imported from a marketplace. Not the same as a row whose
+	 *  fields are all unanswered. */
+	tpt_base?: TptBaseView;
 	created_at: number;
 	updated_at: number;
 }
@@ -1161,11 +1226,13 @@ export interface DraftInput {
 	tags?: string[];
 	formats?: string[];
 	custom_categories?: string[];
-	/** `data[ItemsLocalization][country_id_flag]`. Absent states nothing about
-	 *  the control rather than answering it: the sidecar holds three states and
-	 *  a form that rendered the checkbox sends the box's own state either way,
-	 *  so false arrives only as an answer. */
-	appropriate_for_country?: boolean;
+	/** `data[ItemsLocalization][country_id_flag]`. Absent or null states nothing
+	 *  about the control rather than answering it: the sidecar holds three
+	 *  states, and a form that rendered the checkbox sends the box's own state
+	 *  either way, so false arrives only as an answer. `null` travels because an
+	 *  edit form seeded from a product that never answered has to be able to
+	 *  leave it unanswered; `Option<bool>` on the server reads it as `None`. */
+	appropriate_for_country?: boolean | null;
 	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
 	teaching_duration_id?: number | null;
 	pages_or_slides?: number | null;
@@ -1487,7 +1554,10 @@ export const api = {
 	 *  marketplace expires them, which the page states. */
 	revokeDevice: (device: string) => post<DeviceView>(`/v1/devices/${device}/revoke`, {}),
 
-	connections: () => request<{ connections: ConnectionView[] }>('/v1/connections'),
+	/** Every marketplace connection this organisation holds. The envelope the
+	 *  route answers with is opened here, so no caller can hold a second
+	 *  shape of the same read. */
+	connections: () => request<ConnectionsView>('/v1/connections').then(connectionList),
 	/** Declare who holds the copyright in the work sent to one marketplace.
 	 *
 	 *  The path segment is the marketplace's own serde name — `Tpt`, `Tes`,
@@ -1503,9 +1573,23 @@ export const api = {
 			{ name }
 		),
 
+	/** Terminal, and nothing undoes it. The device check-in lifts a connection
+	 *  to `linked` only from `unlinked`, `linking` or `needs_reauth`, so a
+	 *  revoked marketplace stays revoked for that tenant however many live
+	 *  sessions their machines report. The operator and security path; a
+	 *  seller's Disconnect is `disconnect` below. */
 	revoke: (connection: string) =>
 		post<{ connections: number; elapsed_ms: number }>(
 			`/v1/connections/${connection}/revoke`,
+			{}
+		),
+	/** The seller's own disconnect: reversible, because the next check-in from
+	 *  a machine holding that login lifts the row back. Answers the same two
+	 *  numbers `revoke` does — one row moved or none — and answers zero rather
+	 *  than a not-found for a connection this tenant does not have. */
+	disconnect: (connection: string) =>
+		post<{ connections: number; elapsed_ms: number }>(
+			`/v1/connections/${connection}/disconnect`,
 			{}
 		),
 

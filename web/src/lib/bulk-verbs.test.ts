@@ -44,10 +44,17 @@ describe('the bulk verbs', () => {
 		expect(unavailable().map((action) => action.verb)).toEqual(['edit']);
 	});
 
-	it('does not claim a missing endpoint for the verb whose endpoint exists', () => {
+	it('says the gap is a screen rather than an endpoint, in words a seller reads', () => {
 		const edit = BULK_ACTIONS.find((action) => action.verb === 'edit');
-		expect(edit?.missing).toContain('PATCH /v1/products/{id}');
 		expect(edit?.missing).toContain('screen');
+		// The sentence is read on a phone, where it is the only touch-reachable
+		// statement of the refusal -- the menu item carries the same words in a
+		// `title`, which a thumb cannot open. A route path is a fact for us, so
+		// none of the reasons may name one.
+		for (const action of BULK_ACTIONS) {
+			expect(action.missing ?? '').not.toMatch(/\/v1\//);
+			expect(action.missing ?? '').not.toMatch(/\b(GET|POST|PATCH|PUT|DELETE)\b/);
+		}
 	});
 
 	it('gives every verb a label and a control to hang it on', () => {

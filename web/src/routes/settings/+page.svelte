@@ -31,6 +31,7 @@
 	import Panel from '$lib/Panel.svelte';
 	import { passkeyLabel, passkeyReach } from '$lib/passkey-label';
 	import { queryKeys } from '$lib/query';
+	import { signOut } from '$lib/sign-out';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
 	import '$lib/pages/account/account.css';
@@ -357,6 +358,10 @@
 	>
 		{#snippet aside()}
 			<Button tier="quiet" icon="credit-card" href="/settings/subscription">Subscription</Button>
+			<!-- The shell's account nav-card carries the other one, and `shell.css`
+			     hides that card below 620px, so this is the whole of signing out on
+			     a phone. Both run `signOut`. -->
+			<Button tier="quiet" icon="log-out" onclick={() => signOut(queryClient)}>Log out</Button>
 		{/snippet}
 	</PageHead>
 

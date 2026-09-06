@@ -87,7 +87,7 @@
 
 <div class="mp-request">
 	{#if thanked !== null}
-		<Banner tone="ok" action={dismiss}>
+		<Banner tone="ok" onDismiss={onclose} dismissLabel="Close this confirmation">
 			Thanks — we have your request for {thanked}.
 		</Banner>
 	{:else}
@@ -154,6 +154,3 @@
 	{/if}
 </div>
 
-{#snippet dismiss()}
-	<Button tier="outline" small onclick={onclose}>Close</Button>
-{/snippet}

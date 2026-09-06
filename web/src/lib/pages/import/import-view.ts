@@ -8,6 +8,7 @@
 // a refusal from the machine the seller is standing at.
 
 import type { ConnectionView, SyncRequestHead } from '$lib/api';
+import { standingMarketplaces } from '$lib/connection-standing';
 import { APP_TOO_OLD, type StartOutcome } from '$lib/desktop';
 import { TRANSPORT_OF } from '$lib/inventory';
 import { MARKETPLACE_OF, INVENTORY_ORDER } from '$lib/listings-view';
@@ -102,10 +103,11 @@ export interface ImportCard {
 	/** Whether the seller holds a connection for this marketplace, and whether
 	 *  this console knows.
 	 *
-	 * Presence rather than health, which is `migrateSource`'s own predicate: a
-	 * connection needing a fresh sign-in is still the seller's shop, and it is
-	 * their own device that discovers the sign-in is needed rather than this
-	 * page. */
+	 * Standing rather than health: a connection needing a fresh sign-in is
+	 * still the seller's shop, and it is their own device that discovers the
+	 * sign-in is needed rather than this page. What it is not is presence
+	 * alone — a marketplace the seller disconnected leaves its row behind, and
+	 * reading presence badged that row Connected. */
 	standing: ConnectionStanding;
 	/** Why a shop cannot be read from here, or null where one can. */
 	unreadable: string | null;
@@ -122,7 +124,7 @@ export interface ImportCard {
  * Ordered with the readable ones first, because the card a seller can act on
  * should not sit under one they cannot. */
 export function importCards(connections: readonly ConnectionView[] | null): ImportCard[] {
-	const held = connections === null ? null : new Set(connections.map((one) => one.marketplace));
+	const held = connections === null ? null : standingMarketplaces(connections);
 	const cards = onDeviceBranch().map((marketplace) => {
 		const sites = sourcesOn(marketplace);
 		return {
@@ -141,7 +143,9 @@ export function importCards(connections: readonly ConnectionView[] | null): Impo
 }
 
 /** A null set is the list not having been read, which is neither answer about
- *  the seller. */
+ *  the seller. A marketplace whose row exists but says `unlinked` or `revoked`
+ *  is `absent`, because the seller gave that connection up: `$lib/connection-standing`
+ *  owns which states those are. */
 function standingOf(held: Set<Marketplace> | null, marketplace: Marketplace): ConnectionStanding {
 	if (held === null) {
 		return 'unread';
@@ -246,9 +250,19 @@ export function standingBadge(card: ImportCard): { tone: PillTone; label: string
 	return STANDING_BADGE[card.standing];
 }
 
-/** What the card says while the seller holds no connection for it. */
+/** What the card says while the seller holds no connection for it.
+ *
+ * Names the app rather than only the screen. Marketplaces is where the control
+ * is, and for a marketplace on the device branch that control connects only in
+ * the app on the seller's own machine — so sending them to a page and stopping
+ * there is what left a seller circling between two screens neither of which
+ * could connect anything. */
 export function notConnected(card: ImportCard): string {
-	return `${card.name} is not connected. Connect it on Marketplaces first.`;
+	return (
+		`${card.name} is not connected. Connect it on Marketplaces, in the Teachouse app on your ` +
+		'computer: the app opens the marketplace\u2019s own sign-in and keeps the login on that ' +
+		'machine, which is the only place it is ever kept.'
+	);
 }
 
 /** The permanent line under the site choice, which says where the work runs
@@ -267,8 +281,29 @@ export const WHAT_AN_IMPORT_IS =
 	'An import copies a marketplace’s listings into your Resources: the details, ' +
 	'and where each file sits on your own computer.';
 
-/** Where a connection is made, which is the marketplaces screen. */
+/** Where a connection is made, which is the marketplaces screen.
+ *
+ * One href for both hosts rather than one that names the downloads: inside the
+ * app that screen now carries the Connect control itself, and in a browser it
+ * carries the sentence naming the app with the downloads below it. Sending a
+ * seller who already has the app to install it again is the loop this work
+ * closed. */
 export const CONNECT_HREF = '/marketplaces';
+
+/** What the control leading there is called. Names the screen rather than the
+ *  act, because pressing it connects nothing on its own. */
+export const CONNECT_LABEL = 'Connect on Marketplaces';
+
+/** What the import screen says before any card, while the seller has no
+ *  marketplace connected at all.
+ *
+ * Before the cards, because the cards describe an act none of them can
+ * complete: the founder's own reading of this screen was that there was no
+ * option to connect anywhere on it. */
+export const NOTHING_CONNECTED =
+	'You have no marketplace connected, so there is no shop to import from yet. A marketplace ' +
+	'login is made in the Teachouse app on your computer and stays on that machine \u2014 ' +
+	'Marketplaces is where you connect one, and where the app can be downloaded.';
 
 /** What the seller is told after asking this computer to run the import, or
  *  null where there is nothing to say.

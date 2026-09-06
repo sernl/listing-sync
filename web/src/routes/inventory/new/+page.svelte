@@ -1,5 +1,1 @@
-<script lang="ts">
-	import ResourceForm from '$lib/pages/resources/ResourceForm.svelte';
-</script>
-
-<ResourceForm />
+<p class="quiet">Taking you to the new item form…</p>

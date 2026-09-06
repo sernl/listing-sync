@@ -1,7 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
 
-/** The console's home is the Resources list, which lives at `/inventory`.
+/** The console's home is the Resources list, which lives at `/resources`.
  *
  * A redirect rather than a second rendering of the same board: `sectionFor`
  * answers `null` for this path, so a list drawn here would come with no
@@ -10,5 +10,5 @@ import type { PageLoad } from './$types';
  * where the public site and the desktop app both land and is a destination the
  * navigation model still names. */
 export const load: PageLoad = () => {
-	redirect(308, '/inventory');
+	redirect(308, '/resources');
 };

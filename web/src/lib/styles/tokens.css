@@ -1,60 +1,114 @@
 /* The console's colour, type and shape tokens.
  *
- * Kauri: Waipoua forest and the sand below it. Rimu heartwood carries the
- * primary action, a pohutukawa flower carries the accent, and paua shell
+ * Pounamu: New Zealand forest and the greenstone taken from its rivers. Deep
+ * forest carries the primary action, jade carries the accent, and a violet
  * carries the additive tier, which leaves the four status colours as the only
  * other saturated things on a screen. That separation is the point: this
  * console's failures are per-marketplace and long-lived, so a status has to
  * win the eye against everything else on the page.
  *
- * The two alternates the palette proof offered, Pohutukawa and Tussock, are
- * recorded in the design specification rather than commented out here; a
- * commented-out palette is a second source of truth nothing checks.
+ * It replaces "Kauri", the warm bleached-floorboard palette this file carried
+ * until 2026-09-06. Kauri is retired rather than kept as an alternate: two
+ * live palettes is two sources of truth, and the design specification records
+ * what it was.
  *
  * Names are stable: `--card`, `--ink` and `--serif` are the sheet's original
  * spellings and stay as aliases of `--surface`, `--text` and `--display`,
  * because renaming them across 2000 lines of component rules would be a
  * separate change from choosing a palette.
+ *
+ * There is no dark block here yet. It is its own change, and it is gated on
+ * this one: a stray white literal on a dark ground is invisible, so every
+ * colour the console draws had to reach a token first. `tokens.test.ts` holds
+ * that line, and it strips comments before it searches -- but the hex is
+ * spelled out in prose nowhere in this file anyway, so a plain grep for a
+ * colour outside `:root` returns nothing here and agrees with the gate.
  */
 
 :root {
+	/* Light, and said out loud: the palette below is the only one this console
+	   has, so a browser told nothing paints its own form controls, scrollbars
+	   and canvas dark for a seller whose system is dark and leaves them
+	   surrounded by widgets the page never chose. A dark theme is a later
+	   founder decision, and this line is what it changes. */
+	color-scheme: light;
+
 	/* grounds, lightest to the card the content sits on */
-	--ground: #f7f2e9;
-	--nav: #ece1cd;
-	--surface: #fffdf9;
+	--ground: #f6f4f1;
+	--nav: #e8ece9;
+	--surface: #fdfdfc;
 	--card: var(--surface);
-	--hover: #f1e9db;
+	--hover: #eef1ee;
 
 	/* action tiers */
-	--primary: #6b4423;
-	--accent: #c2543a;
-	/* The accent as ink. `--accent` is the fill the palette was chosen on and
-	   stays exactly as it is; at 14px on `--accent-soft` it reaches only 3.78,
-	   so accent-coloured text takes this instead and clears 4.97. */
-	--accent-ink: #a5462f;
+	--primary: #1f4a38;
+	--accent: #127761;
+	/* The accent as ink. Both are drawn as text somewhere, so both clear 4.5 on
+	   every ground in this file; `--accent-ink` is the deeper one, and it is
+	   what accent-coloured text on `--accent-soft` takes, where `--accent`
+	   itself measures 4.74 and this token 5.59. */
+	--accent-ink: #0f6b54;
 	--accent-deep: var(--accent-ink);
-	--accent-soft: #f7e7e1;
-	--additive: #3e5a8c;
-	--additive-soft: #e7ecf5;
+	--accent-soft: #e3f2ec;
+	--additive: #544799;
+	--additive-soft: #ece9f6;
 
 	/* ink */
-	--text: #241a12;
+	--text: #17231c;
 	--ink: var(--text);
-	--muted: #726254;
-	--faint: #756c62;
-	--line: #e4d8c4;
+	--muted: #5a6560;
+	--faint: #626d68;
+	--line: #dde3df;
 
-	/* State, and only state. Every one of these is darker than the palette proof
-	   showed, because a status badge is 10.5px uppercase and so earns no
-	   large-text allowance: each now clears 4.5 on its own soft ground. */
-	--ok: #3a7249;
-	--ok-soft: #e9f1ea;
-	--warn: #8f5f14;
-	--warn-soft: #f8efda;
-	--bad: #9e3423;
-	--bad-soft: #f7e4df;
-	--soon: #6e655d;
-	--soon-soft: #efeae1;
+	/* State, and only state. Every one of these is darker than a palette proof
+	   would suggest, because a status badge is 10.5px uppercase and so earns no
+	   large-text allowance: each clears 4.5 on its own soft ground. */
+	--ok: #1f6a45;
+	--ok-soft: #e6f1ea;
+	--warn: #7a5410;
+	--warn-soft: #f6eedc;
+	--bad: #96311f;
+	--bad-soft: #f8e5e1;
+	--soon: #5e6169;
+	--soon-soft: #edebf2;
+
+	/* The two members of the outcome bar's scale that no other token names.
+	   The bar borrows `--ok`, `--warn`, `--bad`, `--additive`, `--accent`,
+	   `--muted` and `--faint` for its other seven segments, and nine of them
+	   can be drawn side by side in one stacked bar, so neither of these may be
+	   folded into the neighbour it resembles: `--blocked` into `--warn` would
+	   draw blocked and degraded the same colour, and `--queued` into `--line`
+	   would draw a segment at the weight of a hairline. */
+	--blocked: #c07a2c;
+	--queued: #cdd6d1;
+
+	/* The marketing hero's wash, and the ink a filled control carries.
+	   `--tint` is the violet `--additive` already belongs to, which is why it
+	   is neither forest nor jade and competes with neither. */
+	--tint: #efebf7;
+	--tint-edge: #f3f4f7;
+	--on-fill: #ffffff;
+
+	/* The seven colours a seller can give a label, and the one scale here that
+	   deliberately does not follow the theme: the colour is derived from the
+	   label's own name in migration 0046's closed set, not chosen from this
+	   console's palette. Defined once because the labels page and the labels
+	   dialog both draw them.
+
+	   Red, amber, green and teal are darker than the set they were transcribed
+	   from, which measured 4.28, 3.74, 3.97 and 4.26 as chip text on
+	   `--ground` -- and `--ground` is the ground that matters, because
+	   `LabelsDialog.svelte` gives the chip `background: var(--ground)` while
+	   the card behind it is the lighter `--surface`. Hue and saturation are
+	   unchanged and only lightness moved, by two to six points, so each is the
+	   same colour a seller picked and each now clears 4.5. */
+	--label-red: #cc3448;
+	--label-amber: #97630c;
+	--label-green: #297d50;
+	--label-teal: #0f7a86;
+	--label-blue: #2f6fb3;
+	--label-violet: #6a4bb3;
+	--label-pink: #b3407f;
 
 	/* type */
 	--display: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
@@ -68,8 +122,8 @@
 	--r-field: 8px;
 	--r-pill: 999px;
 
-	/* shadow, tinted with the palette's own ink so a warm ground never carries
-	   a cold shadow */
+	/* shadow, tinted with the palette's own ink so the ground and the shadow
+	   below it never sit in different colour families */
 	--sh-1: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent);
 	--sh-2: 0 4px 14px color-mix(in srgb, var(--text) 8%, transparent);
 

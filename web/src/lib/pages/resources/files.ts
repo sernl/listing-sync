@@ -137,6 +137,14 @@ export const LAST_FILE_LOSES_THUMBNAIL =
 export const COVER_STAYS =
 	'The thumbnail is drawn from the first file. Replace that file to redraw it.';
 
+/** What removing or replacing a file does to the bytes, which is nothing.
+ *
+ *  Stated in one place because two places state it: the Files panel, where a
+ *  stored file is removed, and the create form, where an upload is taken back
+ *  before the draft is made. One fact, so one wording. */
+export const STORAGE_NOT_RECLAIMED =
+	'Removing or replacing a file does not reclaim storage: the file itself stays in your storage either way.';
+
 /**
  * Whether a row's Remove is offered, and the sentence to state on the control
  * when it is not.

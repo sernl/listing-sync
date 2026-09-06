@@ -9,6 +9,7 @@
 	import Placeholder from '$lib/Placeholder.svelte';
 	import RowCard from '$lib/RowCard.svelte';
 	import { queryKeys } from '$lib/query';
+	import { remember, remembered } from '$lib/dismissal';
 	import { toast } from '$lib/toast';
 	import { LABEL_COUNTS_KEY, countAll, deleteLabel, renameLabel } from './api';
 	import {
@@ -62,7 +63,15 @@
 	}));
 
 	let search = $state('');
-	let bannerShown = $state(true);
+	/** Read at setup rather than in an effect: this app does not render on the
+	 *  server, so storage is readable here, and an effect would draw the banner
+	 *  and then take it away in front of a seller who closed it last week. */
+	let bannerShown = $state(!remembered('labels.what-are-labels'));
+	/** Closed for the visit alone. Every label is still listed under this
+	 *  sentence -- it is the counts beside them that are missing -- so closing
+	 *  it leaves a page that still explains itself, and the counts may well be
+	 *  readable on the next navigation. */
+	let uncountedShown = $state(true);
 	let newAsked = $state(false);
 	let editing = $state<string | null>(null);
 	let draft = $state('');
@@ -74,34 +83,6 @@
 	let confirming = $state<string | null>(null);
 	let nameField = $state<HTMLInputElement | null>(null);
 	let confirmPanel = $state<HTMLElement | null>(null);
-
-	/** The banner is dismissed for good rather than for this visit: a control
-	 *  that undoes itself on every navigation is not a dismissal. Read through a
-	 *  guard because a browser can refuse storage outright. */
-	const BANNER_KEY = 'labels.what-are-labels.dismissed';
-
-	function remembered(key: string): boolean {
-		try {
-			return localStorage.getItem(key) === 'yes';
-		} catch {
-			return false;
-		}
-	}
-
-	function remember(key: string) {
-		try {
-			localStorage.setItem(key, 'yes');
-		} catch {
-			// A browser that refuses storage still gets the dismissal for this
-			// visit, which is what the page had before it remembered anything.
-		}
-	}
-
-	$effect(() => {
-		if (remembered(BANNER_KEY)) {
-			bannerShown = false;
-		}
-	});
 
 	$effect(() => {
 		nameField?.focus();
@@ -233,19 +214,15 @@
 	</PageHead>
 
 	{#if bannerShown}
-		<Banner title="What are labels?">
+		<Banner
+			title="What are labels?"
+			onDismiss={() => {
+				bannerShown = false;
+				remember('labels.what-are-labels');
+			}}
+		>
 			Use labels to group and filter your resources; the colour of each is picked from its
 			name.
-			{#snippet action()}
-				<Button
-					tier="quiet"
-					small
-					onclick={() => {
-						bannerShown = false;
-						remember(BANNER_KEY);
-					}}>Dismiss</Button
-				>
-			{/snippet}
 		</Banner>
 	{/if}
 
@@ -261,7 +238,7 @@
 				You make a label by putting it on a resource: open one, or pick several on the
 				Resources list, and add it there.
 				{#snippet action()}
-					<Button href="/inventory" icon="layout-list">Go to Resources</Button>
+					<Button href="/resources" icon="layout-list">Go to Resources</Button>
 				{/snippet}
 			</Banner>
 		{/if}
@@ -283,7 +260,7 @@
 			body="A label is your own word for a group of resources; add one on a resource and it appears here."
 		>
 			{#snippet actions()}
-				<Button tier="additive" href="/inventory" icon="layout-list">Go to Resources</Button>
+				<Button tier="additive" href="/resources" icon="layout-list">Go to Resources</Button>
 			{/snippet}
 		</Placeholder>
 	{:else}
@@ -302,8 +279,12 @@
 			<span class="labels-total">{totalLine(all.length)}</span>
 		</div>
 
-		{#if uncounted}
-			<Banner tone="warn" title="Some resource counts could not be read">
+		{#if uncounted && uncountedShown}
+			<Banner
+				tone="warn"
+				title="Some resource counts could not be read"
+				onDismiss={() => (uncountedShown = false)}
+			>
 				Your labels are all listed below; we could not read all of the counts.
 				{#snippet action()}
 					<Button onclick={() => counts.refetch()}>Try again</Button>

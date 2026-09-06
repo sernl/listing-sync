@@ -15,6 +15,12 @@ import {
 const TILES = [...PLANNED, ...LISTED, ...EXTENSIONS];
 const MARKS: readonly Mark[] = [...LIVE, ...TILES].map((tile) => tile.mark);
 
+/** The twenty-one tiles that are marketplaces, which is every group but the
+ *  browsers. The description guards below run over exactly this set, because
+ *  the founder asked for a description of each marketplace and a browser is not
+ *  one. */
+const MARKETPLACES = [...LIVE, ...PLANNED, ...LISTED];
+
 /** The smallest a wordmark may be set and still be read at a glance beside a
  *  17px card heading. Above the function's own floor, so a word that only just
  *  fits fails this rather than shipping unreadable. */
@@ -107,6 +113,45 @@ describe('the tile catalogue', () => {
 		}
 	});
 
+	it('says what every marketplace is, in a sentence a seller can read', () => {
+		for (const tile of MARKETPLACES) {
+			expect(tile.about.trim(), tile.name).toBe(tile.about);
+			expect(tile.about.length, tile.name).toBeGreaterThan(20);
+			expect(tile.about.endsWith('.'), tile.name).toBe(true);
+		}
+	});
+
+	it('keeps every description to one sentence, or two at the most', () => {
+		// The page is already over seven thousand pixels tall at phone width, and
+		// twenty-one descriptions are what this change adds to it. One sentence is
+		// the default and two the exception; a third is a paragraph, and a
+		// paragraph belongs somewhere other than a tile.
+		for (const tile of MARKETPLACES) {
+			const sentences = tile.about.match(/[.!?](\s|$)/g) ?? [];
+			expect(sentences.length, tile.about).toBeLessThanOrEqual(2);
+		}
+	});
+
+	it('describes each marketplace differently, so no card is another one copied', () => {
+		// The mutation this closes: fifteen tiles already carry the identical
+		// transport sentence in `body`, so a description pasted from the tile
+		// above passes every other assertion here — it is a non-empty sentence
+		// that ends in a full stop and sits on a tile that has one.
+		const said = MARKETPLACES.map((tile) => tile.about);
+		expect(new Set(said).size).toBe(said.length);
+	});
+
+	it('describes twenty-one marketplaces and neither browser', () => {
+		// By group rather than by count, because the point is which tiles carry a
+		// description: `EXTENSIONS` is typed `ProspectTile`, which has no `about`
+		// at all, so a description added to a browser tile fails the type check
+		// rather than this.
+		expect(MARKETPLACES.length).toBe(21);
+		for (const tile of EXTENSIONS) {
+			expect(Object.hasOwn(tile, 'about'), tile.slug).toBe(false);
+		}
+	});
+
 	it('leads with the two connected marketplaces', () => {
 		expect(LIVE.map((tile) => tile.marketplace)).toEqual(['Tes', 'Tpt']);
 	});
@@ -168,6 +213,16 @@ describe('the tile catalogue', () => {
 
 	it('tiles twenty-one marketplaces, which the browser cards are not among', () => {
 		expect(LIVE.length + PLANNED.length + LISTED.length).toBe(21);
+	});
+
+	it('shows no browser vendor logo, because neither vendor publishes a fetchable one', () => {
+		// Google gates Chrome's logo and its usage terms behind a partner login,
+		// and Mozilla's brand portal serves an application rather than a file, so
+		// the terms that `marketplace-logo-sources.md` requires be recorded for
+		// every landed mark cannot be read for either. Asserting the kind is what
+		// closes the direction that matters: a vendor image on one of these tiles
+		// fails here rather than shipping with no provenance row behind it.
+		expect(EXTENSIONS.map((tile) => tile.mark.kind)).toEqual(['wordmark', 'wordmark']);
 	});
 });
 

@@ -25,7 +25,7 @@ export interface BulkAction {
 const MISSING: Record<BulkVerb, string | null> = {
 	cross_list: null,
 	delete: null,
-	edit: 'No screen chooses which fields change across a selection. The per-item edit is served, at PATCH /v1/products/{id}; the screen is what does not exist.',
+	edit: 'No screen chooses which fields change across a selection. Editing one resource at a time works; the screen for editing several at once is what does not exist.',
 	labels: null,
 	mark_listed: null
 };

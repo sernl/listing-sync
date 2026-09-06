@@ -31,11 +31,13 @@ import FileDown from '@lucide/svelte/icons/file-down';
 import HeartPulse from '@lucide/svelte/icons/heart-pulse';
 import Image from '@lucide/svelte/icons/image';
 import Info from '@lucide/svelte/icons/info';
+import Laptop from '@lucide/svelte/icons/laptop';
 import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 import LayoutList from '@lucide/svelte/icons/layout-list';
 import LayoutTemplate from '@lucide/svelte/icons/layout-template';
 import LogOut from '@lucide/svelte/icons/log-out';
 import Minus from '@lucide/svelte/icons/minus';
+import Monitor from '@lucide/svelte/icons/monitor';
 import Package from '@lucide/svelte/icons/package';
 import Pause from '@lucide/svelte/icons/pause';
 import Plus from '@lucide/svelte/icons/plus';
@@ -45,11 +47,13 @@ import Share2 from '@lucide/svelte/icons/share-2';
 import ShoppingBag from '@lucide/svelte/icons/shopping-bag';
 import ShieldCheck from '@lucide/svelte/icons/shield-check';
 import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
+import Smartphone from '@lucide/svelte/icons/smartphone';
 import Store from '@lucide/svelte/icons/store';
 import Tag from '@lucide/svelte/icons/tag';
 import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 import Users from '@lucide/svelte/icons/users';
 import WavesHorizontal from '@lucide/svelte/icons/waves-horizontal';
+import X from '@lucide/svelte/icons/x';
 
 export const ICONS = {
 	activity: Activity,
@@ -75,11 +79,13 @@ export const ICONS = {
 	'heart-pulse': HeartPulse,
 	image: Image,
 	info: Info,
+	laptop: Laptop,
 	'layout-dashboard': LayoutDashboard,
 	'layout-list': LayoutList,
 	'layout-template': LayoutTemplate,
 	'log-out': LogOut,
 	minus: Minus,
+	monitor: Monitor,
 	package: Package,
 	pause: Pause,
 	plus: Plus,
@@ -89,11 +95,13 @@ export const ICONS = {
 	'shopping-bag': ShoppingBag,
 	'shield-check': ShieldCheck,
 	'sliders-horizontal': SlidersHorizontal,
+	smartphone: Smartphone,
 	store: Store,
 	tag: Tag,
 	'triangle-alert': TriangleAlert,
 	users: Users,
-	'waves-horizontal': WavesHorizontal
+	'waves-horizontal': WavesHorizontal,
+	x: X
 } as const satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

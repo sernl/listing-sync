@@ -13,6 +13,7 @@
 	import Panel from '$lib/Panel.svelte';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
+	import { remember, remembered } from '$lib/dismissal';
 	import { AXES, AXIS_LABEL, draftOf, isComplete } from '$lib/templates';
 	import { chosenOf, destinationsOf } from './destinations';
 	import type { InventoryId, TermKind } from '$lib/generated/vocab';
@@ -173,11 +174,24 @@
 				failure instanceof ApiFailure ? failure.message : 'That override was not withdrawn.';
 		}
 	}
+
+	/** Closed for good once closed: the sentence is about the product and
+	 *  does not change, so meeting it again on every visit is noise. */
+	let licenceShown = $state(!remembered('templates.licence-is-yours'));
 </script>
 
-<Banner tone="info" title="Licence is yours alone">
-	{LICENCE_REFUSAL}
-</Banner>
+{#if licenceShown}
+	<Banner
+		tone="info"
+		title="Licence is yours alone"
+		onDismiss={() => {
+			licenceShown = false;
+			remember('templates.licence-is-yours');
+		}}
+	>
+		{LICENCE_REFUSAL}
+	</Banner>
+{/if}
 
 <Panel
 	title="Add an override"

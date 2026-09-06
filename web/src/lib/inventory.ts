@@ -237,7 +237,7 @@ function gateAction(
 		case 'connections':
 			return { label: 'Open Marketplaces', href: '/marketplaces' };
 		case 'listing':
-			return { label: 'Open the item', href: `/inventory/${product}` };
+			return { label: 'Open the item', href: `/resources/${product}` };
 		default:
 			return run;
 	}
@@ -306,12 +306,32 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 					'The last send to this marketplace failed. The run keeps its own reason.',
 				action: run
 			};
+		default: {
+			// A state this bundle has no word for. The `never` binding is the
+			// compile-time half: a state added in Rust widens `ItemState` and
+			// stops this assignment compiling until the switch above names it.
+			// The verdict is the run-time half, and it is needed because the
+			// console is a static bundle served from the control plane: a
+			// deploy that widens the enum does not rebuild the page a seller
+			// already has open. Without it the switch falls through as
+			// `undefined`, which the `!== null` test at the call site lets
+			// past, and one item on one mapping takes the whole board down.
+			const unnamed: never = entry.item.state;
+			return {
+				state: 'in_flight',
+				detail:
+					'This run is in a state this app does not have a word for yet. Open the run to see what it says.',
+				action: run
+			};
+		}
 	}
 }
 
 /** What the mapping's own two stored states say. */
 function ofMapping(input: ChipInput, mapping: MappingHead): Verdict {
-	switch (standingOf(mapping)) {
+	// Bound rather than switched on directly, so the arm below can narrow it.
+	const standing = standingOf(mapping);
+	switch (standing) {
 		case 'live':
 			return {
 				state: 'listed',
@@ -322,28 +342,43 @@ function ofMapping(input: ChipInput, mapping: MappingHead): Verdict {
 				// a marketplace whose page shape it has not observed.
 				action:
 					mapping.listing_url === null
-						? { label: 'Open the item', href: `/inventory/${input.product}` }
+						? { label: 'Open the item', href: `/resources/${input.product}` }
 						: { label: 'Open the listing', href: mapping.listing_url, external: true }
 			};
 		case 'draft':
 			return {
 				state: 'draft',
 				detail: 'This marketplace holds the listing and is not showing it to buyers yet.',
-				action: { label: 'Open the item', href: `/inventory/${input.product}` }
+				action: { label: 'Open the item', href: `/resources/${input.product}` }
 			};
 		case 'unsent':
 			return {
 				state: 'not_listed',
 				detail: 'Chosen for this item and never sent.',
-				action: { label: 'Open the item', href: `/inventory/${input.product}` }
+				action: { label: 'Open the item', href: `/resources/${input.product}` }
 			};
 		case 'other':
 			return {
 				state: 'in_flight',
 				detail:
 					'A send is out and we have not recorded what came of it. Nothing else is sent until it settles.',
-				action: { label: 'Open the item', href: `/inventory/${input.product}` }
+				action: { label: 'Open the item', href: `/resources/${input.product}` }
 			};
+		default: {
+			// `standingOf` is total over its four answers today, so this arm is
+			// unreachable. It is here because this function and `ofWork` are
+			// read as a pair, and a reader should not have to walk into
+			// `tes-portfolio.ts` to prove that only one of them can fall
+			// through. The `never` binding fails the build if that stops being
+			// true.
+			const unnamed: never = standing;
+			return {
+				state: 'in_flight',
+				detail:
+					'This listing is in a state this app does not have a word for yet. Open the item to see what it says.',
+				action: { label: 'Open the item', href: `/resources/${input.product}` }
+			};
+		}
 	}
 }
 
@@ -364,16 +399,30 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 				'Sending is paused for this marketplace. Nothing is lost; queued work waits.')
 			: null;
 	const onDevice = onSellerDevice(input.inventory);
-	const dressed = (verdict: Verdict): MarketplaceChip => ({
-		inventory: input.inventory,
-		state: verdict.state,
-		label: STATE_LABEL[verdict.state],
-		tone: STATE_TONE[verdict.state],
-		detail: verdict.detail,
-		action: verdict.action,
-		onDevice,
-		paused
-	});
+	// The parameter admits `undefined` only so the refusal below can be
+	// written. A verdict function that falls through its switch returns
+	// `undefined` through a `Verdict | null` signature and the `!== null` test
+	// at the call site lets it past; reading `.state` off it then fails two
+	// frames from the function that was actually wrong, with a message naming
+	// neither it nor the value. Both verdict functions are total now, so this
+	// is for the next one.
+	const dressed = (verdict: Verdict | undefined): MarketplaceChip => {
+		if (verdict === undefined) {
+			throw new TypeError(
+				`no verdict for ${input.inventory}: a verdict function fell through its switch`
+			);
+		}
+		return {
+			inventory: input.inventory,
+			state: verdict.state,
+			label: STATE_LABEL[verdict.state],
+			tone: STATE_TONE[verdict.state],
+			detail: verdict.detail,
+			action: verdict.action,
+			onDevice,
+			paused
+		};
+	};
 
 	if (input.mapping === undefined) {
 		return dressed({

@@ -4,16 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
     <title>Teachouse Console</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap"
-    />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap"
-    />
+    <!-- No font link and no preconnect: both faces are served from
+         `static/fonts` and declared in `app.css`. The desktop and Android
+         builds show this same document under a policy that admits no
+         third-party origin, so the two stylesheets these replace were refused
+         there and the app fell back to the stacks in `tokens.css`. -->
     <!-- PNG before any other icon: at 16 px a rasterised glyph stays crisp where
          a scaled-down SVG goes muddy, and browsers take the first match they
          understand. -->

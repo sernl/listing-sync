@@ -1,1 +1,5 @@
-<p class="quiet">Taking you to Resources…</p>
+<script lang="ts">
+	import ResourcesPage from '$lib/pages/resources/ResourcesPage.svelte';
+</script>
+
+<ResourcesPage />

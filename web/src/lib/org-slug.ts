@@ -41,6 +41,7 @@ export const RESERVED_SLUGS: readonly string[] = [
 	'downloads',
 	'email',
 	'export',
+	'fonts',
 	'guides',
 	'help',
 	'import',

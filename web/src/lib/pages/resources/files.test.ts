@@ -32,6 +32,9 @@ function file(
 		role,
 		kind: role === 'cover' ? 'image' : 'pdf',
 		byte_len: bytes,
+		// Distinct per row, as a digest is: nothing here reads it, and one
+		// shared literal would make two files one file to anything that did.
+		hash: id.repeat(64).slice(0, 64),
 		scan: 'clean',
 		name
 	};

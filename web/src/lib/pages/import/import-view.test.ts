@@ -10,6 +10,7 @@ import {
 	importCards,
 	importRows,
 	migrationHref,
+	NOTHING_CONNECTED,
 	notConnected,
 	standingBadge,
 	startRefusal,
@@ -101,9 +102,22 @@ describe('importCards', () => {
 		}
 	});
 
-	it('reads a connection as presence rather than as health', () => {
-		expect(cardFor('Tes', [connection({ status: 'disconnected' })]).standing).toBe('held');
+	it('reads a connection as standing rather than as health', () => {
+		expect(
+			cardFor('Tes', [connection({ state: 'needs_reauth', status: 'disconnected' })]).standing
+		).toBe('held');
 		expect(cardFor('Tes', [connection({ marketplace: 'Tpt' })]).standing).toBe('absent');
+	});
+
+	// The defect this replaces: the card read presence alone, so a marketplace
+	// the seller had just disconnected went on wearing the green Connected
+	// badge while the marketplaces screen said it was off.
+	it('does not badge a disconnected or revoked marketplace as connected', () => {
+		for (const state of ['unlinked', 'revoked']) {
+			const card = cardFor('Tes', [connection({ state, status: 'disconnected' })]);
+			expect(card.standing, state).toBe('absent');
+			expect(standingBadge(card).label, state).toBe('Not connected');
+		}
 	});
 
 	// The failure this type exists to prevent: an unreadable connections list
@@ -193,6 +207,20 @@ describe('the card’s own sentences', () => {
 	it('says what a migration does with the listings it finds', () => {
 		expect(IMPORT_IS_A_MIGRATION).toContain('drafted on TPT');
 		expect(IMPORT_IS_A_MIGRATION).toContain('coming feature');
+	});
+
+	// The founder's own reading of this screen: "I can't see any option to
+	// connect to the TPT/TES, how is that supposed to work?" Naming the screen
+	// alone was what produced it, because that screen sent them back to the
+	// downloads. Both sentences now name the app and say the login stays on the
+	// machine, which is the fact that makes the app the only place it happens.
+	it('says where a connection is actually made, not only which screen to open', () => {
+		for (const sentence of [notConnected(cardFor('Tes')), NOTHING_CONNECTED]) {
+			expect(sentence).toContain('Teachouse app');
+			expect(sentence).toContain('Marketplaces');
+		}
+		expect(notConnected(cardFor('Tes'))).toContain('on that machine');
+		expect(NOTHING_CONNECTED).toContain('stays on that machine');
 	});
 });
 

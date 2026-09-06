@@ -148,10 +148,19 @@
 	object-fit: contain;
 }
 
+/* A neutral drawing of our own, for a tile whose owner's mark we do not show.
+   Muted rather than inked, the same weight the wordmark takes, so a tile with
+   no logo in it does not read as the loudest thing in the row.
+   `docs/notes/design/marketplace-logo-sources.md` has the reason there is no
+   logo to draw. */
+.mp-mark svg {
+	color: var(--muted);
+}
+
 /* One marketplace's rule cannot be met truthfully, so its name in our own
-   typeface is the mark; the two browser tiles are not marketplaces and have no
-   mark to fetch. `docs/notes/design/marketplace-logo-sources.md` has the
-   reason. */
+   typeface is the mark; the two browser tiles draw their name for a different
+   reason, that neither vendor publishes a logo we can fetch the terms for.
+   `docs/notes/design/marketplace-logo-sources.md` has both reasons. */
 .mp-mark .word {
 	font-family: var(--display);
 	font-weight: 600;
@@ -233,6 +242,19 @@ a.mp-mark:hover {
 	line-height: 1.45;
 }
 
+/* What the marketplace is, above what the card is saying about it. The same
+   size as `.mp-body` rather than a step under it, because the two now differ by
+   order and a first paragraph set smaller than the second reads as a mistake
+   rather than as a hierarchy. Nothing separates them but the card's own 10px
+   gap, since a rule inside each of twenty-one cards is more furniture than the
+   distinction is worth. */
+.mp-about {
+	margin: 0;
+	font-size: 13px;
+	color: var(--muted);
+	line-height: 1.45;
+}
+
 .mp-transport {
 	display: flex;
 	align-items: center;
@@ -243,24 +265,73 @@ a.mp-mark:hover {
 }
 
 /* The foot sits at the bottom of whichever card in a row is tallest, so a row
-   of cards has one line of actions rather than three heights of them. */
+   of cards has one line of actions rather than three heights of them.
+
+   Two controls now, and they wrap rather than shrink: the browser-side connect
+   names the app in a sentence, and at 390px that sentence is wider than the
+   card on its own. */
 .mp-foot {
 	margin-top: auto;
 	padding-top: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	flex-wrap: wrap;
 }
 
+/* One rule for both elements the primary action can be. The command arm is a
+   button because it performs an act rather than going somewhere, and a button
+   that looks like the link beside it must also be reset like one: a bare
+   `button` carries the platform's own background, border and font. */
+/* Inline rather than inline-flex, so the arrow follows the last word instead
+   of being a flex item parked at the right edge. The browser-side connect is a
+   sentence naming the app and the machine, and at 390px it takes two lines. */
 .mp-foot .go {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
+	display: inline;
 	font-size: 13.5px;
 	font-weight: 600;
 	color: var(--accent-ink);
 	text-decoration: none;
+	background: none;
+	border: 0;
+	padding: 0;
+	font-family: inherit;
+	text-align: left;
+	cursor: pointer;
 }
 
 .mp-foot .go:hover {
 	text-decoration: underline;
+}
+
+.mp-foot .go:disabled {
+	cursor: default;
+	opacity: 0.6;
+	text-decoration: none;
+}
+
+/* The disconnect. Quiet by construction: it is the destructive control on the
+   card and must not compete with the one that connects. */
+.mp-foot .off {
+	background: none;
+	border: 0;
+	padding: 0;
+	font-family: inherit;
+	font-size: 13px;
+	color: var(--muted);
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+.mp-foot .off:hover {
+	color: var(--bad);
+}
+
+.mp-foot .off:disabled {
+	cursor: default;
+	opacity: 0.6;
+	text-decoration: none;
 }
 
 /* --- the request card ---------------------------------------------------- */

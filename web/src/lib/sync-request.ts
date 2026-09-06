@@ -19,6 +19,7 @@ import type {
 	SyncResourceView,
 	SyncTermCoverage
 } from '$lib/api';
+import { connectionStands } from '$lib/connection-standing';
 import { TRANSPORT_OF, onSellerDevice } from '$lib/inventory';
 import { MARKETPLACE_OF } from '$lib/listings-view';
 import { PLATFORMS, SHORT_NAME } from '$lib/platforms';
@@ -494,15 +495,23 @@ export const MIGRATE_TARGET: InventoryId = 'Tpt';
 /** The marketplace the seller can migrate from, or null where they have no
  *  connection on one.
  *
- * Presence rather than health: a connection that needs a fresh sign-in is
+ * Standing rather than health: a connection that needs a fresh sign-in is
  * still the seller's shop, and it is their device that discovers the sign-in
- * is needed, not this page. Both halves must hold — the marketplace has to run
- * on the seller's own device, and a migrate has to be able to read from it. */
+ * is needed, not this page. A connection the seller disconnected is a
+ * different fact and is not theirs to migrate from, which presence alone could
+ * not tell apart — `$lib/connection-standing` owns that line.
+ *
+ * Both halves must still hold — the marketplace has to run on the seller's own
+ * device, and a migrate has to be able to read from it. */
 export function migrateSource(connections: readonly ConnectionView[]): Marketplace | null {
 	const readable = new Set(MIGRATE_SOURCES.map((inventory) => MARKETPLACE_OF[inventory]));
 	for (const connection of connections) {
 		const marketplace = connection.marketplace;
-		if (TRANSPORT_OF[marketplace] === 'SellerDevice' && readable.has(marketplace)) {
+		if (
+			connectionStands(connection) &&
+			TRANSPORT_OF[marketplace] === 'SellerDevice' &&
+			readable.has(marketplace)
+		) {
 			return marketplace;
 		}
 	}

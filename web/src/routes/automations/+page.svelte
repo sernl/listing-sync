@@ -17,7 +17,7 @@
 	$effect(() => {
 		void api
 			.connections()
-			.then((view) => (connections = view.connections))
+			.then((held) => (connections = held))
 			.catch(() => (connections = []));
 		void api
 			.syncRequests()

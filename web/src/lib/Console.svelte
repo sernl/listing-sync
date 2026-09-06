@@ -7,6 +7,7 @@
 	import { api } from '$lib/api';
 	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
+	import { desktopInvoker, registerThisMachine } from '$lib/desktop';
 	import { renderFailureReport } from '$lib/render-failure';
 	import Icon from '$lib/Icon.svelte';
 	import ImpersonationBanner from '$lib/ImpersonationBanner.svelte';
@@ -56,6 +57,32 @@
 	const impersonation = $derived(impersonationState(identity.data ?? null));
 
 	const queryClient = useQueryClient();
+
+	// The console registers the machine it is running on, once per load.
+	//
+	// Here rather than on the machines page because this shell is what every
+	// signed-in page renders inside, and a machine that only registered when
+	// the seller happened to open Marketplaces would be missing from the list
+	// the rest of the time. It is also the one place that knows a seller is
+	// signed in: the layout renders this component only under a session, and a
+	// session is exactly what the application's own start-up check-in lacks --
+	// that runs before the sign-in, and then not again for an hour on a
+	// computer or until the next resume on a phone.
+	//
+	// Once, not on every render: an `$effect` whose body reads nothing reactive
+	// runs on mount alone. In a browser there is no invoker, the call answers
+	// false, and nothing is refetched.
+	$effect(() => {
+		void registerThisMachine(desktopInvoker()).then((registered) => {
+			if (registered) {
+				// Only the device list, and only when a row may have appeared: the
+				// machines page refreshes if it is open, and nothing else is
+				// disturbed.
+				void queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+			}
+		});
+	});
+
 	let stopping = $state(false);
 	let stopRefusal = $state<string | null>(null);
 
@@ -95,7 +122,7 @@
 	const crumb = $derived(breadcrumbFor(pathname));
 	const orgName = $derived(organisation.data?.name);
 	const initials = $derived(initialsOf(orgName));
-	const links = $derived(connections.data?.connections ?? []);
+	const links = $derived(connections.data ?? []);
 
 	// Which section the rail lights and whose pages the card lists. The
 	// operator's own section joins the rail only for a human the probe
@@ -252,7 +279,25 @@
 				<kbd>ctrl K</kbd>
 			</button>
 			<a class="cta" href={CREATE_TAB.href}>{CREATE_TAB.label}</a>
-			<a class="account" href="/settings">
+			<!-- Named here rather than by its contents. Below the phone breakpoint
+			     `.account .who` is `display: none`, which takes its text out of the
+			     accessibility tree as well as off the screen, and the avatar beside
+			     it is `aria-hidden` because the initials are decoration. Without
+			     this label the one surviving route to Account on a phone announces
+			     as a link with no name at all.
+
+			     `aria-current` for the same reason: Account is the one section with
+			     no cell on the tab bar, so on the width where this is the whole of
+			     it, the state every other section gets from its lit tab has to come
+			     from here. -->
+			<a
+				class="account"
+				href="/settings"
+				aria-label={accountSection?.label ?? 'Account'}
+				aria-current={accountSection !== undefined && accountSection.id === section?.id
+					? 'page'
+					: undefined}
+			>
 				<span class="avatar" aria-hidden="true">{initials}</span>
 				<span class="who">
 					<span class="org" title={orgName}>
@@ -289,21 +334,38 @@
 		     than the components the rest of the console is built from. It renders
 		     at the moment something has already gone wrong, and a component that
 		     threw in here would escape to the root exactly as the page did. -->
-		<svelte:boundary onerror={(error) => reportDrawFailure(error)}>
-			{@render children()}
+		<!-- Keyed on the path so each route gets its own boundary. A boundary that
+		     has tripped stays tripped until something recreates it, and this one
+		     wraps every route, so before the key one page throwing left the
+		     refusal standing over every page reached afterwards -- the seller saw
+		     Marketplaces broken because Resources had been. The key costs no
+		     remount that was not already happening: SvelteKit replaces the route
+		     component on a path change regardless, and a query-only change, such
+		     as the board's own filter, does not touch `pathname`. -->
+		{#key pathname}
+			<svelte:boundary onerror={(error) => reportDrawFailure(error)}>
+				{@render children()}
 
-			{#snippet failed()}
-				<div class="page">
-					<p>This page could not be drawn. Reload to try again.</p>
-					<button class="btn" type="button" onclick={() => location.reload()}>Reload</button>
-				</div>
-			{/snippet}
-		</svelte:boundary>
+				{#snippet failed()}
+					<div class="page">
+						<p>This page could not be drawn. Reload to try again.</p>
+						<button class="btn" type="button" onclick={() => location.reload()}>Reload</button>
+					</div>
+				{/snippet}
+			</svelte:boundary>
+		{/key}
 	</main>
 
 	<nav class="tabbar" aria-label="Sections">
-		{#each PHONE_BAR as tab (tab.href)}
-			{#if tab.create}
+		<!-- Keyed by label rather than href: the search cell opens the palette in
+		     place and so carries no destination at all. -->
+		{#each PHONE_BAR as tab (tab.label)}
+			{#if tab.search}
+				<button class="tab-item" type="button" onclick={() => (searching = true)}>
+					<span class="ico"><Icon name={tab.icon} size={19} /></span>
+					<span>{tab.label}</span>
+				</button>
+			{:else if tab.create}
 				<a class="tab-create" href={tab.href}>
 					<span class="ring"><Icon name={tab.icon} size={18} /></span>
 					<span>{tab.label}</span>

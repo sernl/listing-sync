@@ -279,7 +279,7 @@ describe('what the popup says', () => {
 	});
 
 	it('opens a result at the resource, not at the board filtered to it', () => {
-		expect(resultHref('abc-123')).toBe('/inventory/abc-123');
+		expect(resultHref('abc-123')).toBe('/resources/abc-123');
 	});
 
 	it('names the marketplaces showing a resource, and stays silent about the rest', () => {
@@ -384,7 +384,7 @@ describe('how many results a key can move through', () => {
 		expect(
 			resultCount({
 				kind: 'results',
-				rows: [{ id: 'a', title: 'A', meta: '', href: '/inventory/a', cover: null }],
+				rows: [{ id: 'a', title: 'A', meta: '', href: '/resources/a', cover: null }],
 				total: 1,
 				stale: false
 			})

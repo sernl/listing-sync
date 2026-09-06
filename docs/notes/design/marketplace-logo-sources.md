@@ -3,7 +3,7 @@
 Where every logo on the Marketplaces page came from, so a later reader can check a mark against its source rather than trusting the file.
 
 - date: 2026-09-05
-- status: twenty marks land and are shown, every one with a source row; two more were fetched and are deliberately not landed
+- status: twenty marks land and are shown, every one with a source row; two more were fetched and are deliberately not landed; no browser or platform vendor's mark is landed at all, and the closing section records why; amended 2026-09-06, when eighteen of these files were copied to the public marketing site as well, which "On the public marketing page" below records
 - decisions it implements: the founder's 2026-09-05 decision to show every marketplace's logo under a disclaimer, recorded in `docs/design/decisions.md`
 - research it rests on: `marketplace-catalogue-1.md` and `marketplace-catalogue-2.md` in this directory
 
@@ -28,6 +28,25 @@ So the default is the owner's own mark, and the one exception below is an except
 Shopify's brand page asks that web use of its assets "should include embedded hyperlinks to our homepage: www.shopify.com."
 That condition is met: the Shopify tile's logo and name both link to https://www.shopify.com/, as every other marketplace tile links to its own front page.
 The link is on every tile rather than on Shopify's alone, so meeting one owner's condition did not make one card behave unlike the other twenty.
+
+## On the public marketing page, 2026-09-06
+
+These files are no longer shown only behind a login.
+Eighteen of them are copied to `apps/landing/public/marks/` and drawn in a band under the hero of the public site, under the founder's decision of 2026-09-06 in `../../design/decisions.md`.
+The copies sit under `marks/` rather than under `marketplaces/`, which is what they are called here, because the landing build is answered ahead of the console and a directory sharing a name with a console route would let a later marketing page take a seller's Marketplaces screen.
+That is a wider exposure than the 2026-09-05 decision this note implements, which was taken for the Marketplaces page and reasoned about a reader who has already signed up.
+A marketing page is the surface a rights holder actually looks at, so it is written down here rather than left as a consequence of a decision about a different page.
+
+Two of the twenty are deliberately not copied.
+`etsy.png` and `shopify.png` stay in `web/static/marketplaces/` and reach the login-gated page only; the landing build holds no file for either, so the exclusion is a fact about the bytes that ship rather than only about the markup.
+Both owners require written permission for logo use, quoted above, and each becomes a real mark on the public page on the day permission is reported.
+Boom Learning is drawn as its initial and name there for the reason it is a wordmark here.
+
+The band draws every mark greyscale at rest and in colour on hover.
+The file is the owner's published bytes unaltered and a CSS filter changes the drawing rather than the file, which is the same distinction the render harness draws between changing a page and changing the moment it is photographed.
+A rights holder could nonetheless read a greyscale rendering as alteration of their mark, so it is recorded rather than treated as a styling detail.
+
+The copies are copies rather than links for the reason `apps/landing/public/favicon.svg` is a copy of `web/static/email/teachouse-mark.svg`: the two trees build separately, so a path that resolved through the console's `ServeDir` fallthrough under `tam-server` would 404 under `just landing-dev`, and the development render would disagree with the production one on exactly the thing the band adds.
 
 ## Retrieved and in use
 
@@ -170,3 +189,54 @@ The hash in its row is `shopify.png`'s own, which is the one row in this table w
 Each of these three publishes a square mark, and each publishes it only far below the 128-pixel bar; Amped Up Learning's own filename records the size it was uploaded at.
 Upscaling one would invent detail its owner never published, and cropping the wide wordmark already landed would alter the mark, so all three keep the wordmark they have.
 Whichever way the tiles handle a marketplace with no square icon, it is these three that meet it.
+
+## Browser and platform marks, sought and not taken
+
+Added 2026-09-06, after everything above.
+The founder asked for two more things on this page: a store badge on each of the three download tiles, and the vendor's own logo on the Chrome and Firefox tiles.
+Neither landed, no file was added to `web/static/`, and this section is the record of why, so the question is not reopened from memory.
+
+Nothing in this section was fetched from a marketplace.
+The only hosts contacted were the two browser vendors' own brand addresses named below.
+
+### The three store badges
+
+Google Play, the App Store and the Microsoft Store each publish a badge and each license it for one purpose: to link to that product's listing on that store.
+None of the three download tiles links to a listing.
+The Windows and Android cards offer a file the release manifest names, installed by hand, and the Apple card offers nothing at all, because no macOS build is published.
+A "Get it on Google Play" badge over a sideloaded `.apk` is outside the licence that grants the badge, and it tells the reader something untrue about where the file came from.
+That is a different thing from the brand-guideline risk the founder knowingly accepted on 2026-09-05 for the marketplace logos: there the mark identifies a marketplace correctly and breaches a guideline, here the mark would state a fact that is not so.
+
+So the three tiles draw a neutral glyph of our own instead, from the Lucide set already approved as a dependency: `monitor`, `smartphone` and `laptop`.
+A glyph is a drawing rather than a logo, claims no relationship, and needs no provenance row, which is why this section has no table.
+`PLATFORM_MARK` in `web/src/lib/pages/marketplaces/downloads.ts` is typed as a `Mark` rather than as a glyph name, so the day a store listing exists the badge lands as a change to that table and to nothing else, and `downloads.test.ts` fails on a change from a glyph to an image, which is the point at which somebody has to have read the badge licence.
+
+### The two browser logos
+
+Neither vendor publishes its browser logo at an address that can be fetched, which is a fact about the sources rather than a decision of ours.
+
+`https://about.google/brand-resource-center/` redirects to `partnermarketinghub.withgoogle.com/brands/google/overview/`, whose own navigation links `/brands/chrome/overview/brand-introduction/`.
+That address, and `/brands/chrome/` with it, redirect to a login, so Chrome's logo and its published usage terms are both behind a Google partner account.
+`https://www.google.com/chrome/branding/`, the other address on record for Chrome brand assets, is a 404.
+All three were checked on 2026-09-06.
+
+`https://mozilla.design/firefox/` redirects to `https://brand.mozilla.com/all-brands`, a Frontify portal that serves the same JavaScript shell at every path under it, `/firefox` and `/sitemap.xml` included, with no asset address anywhere in the markup.
+The Firefox logo is reachable only by driving that application in a browser.
+Checked the same day.
+
+Mozilla's trademark policy expressly permits nominative use of its marks to refer to Mozilla products without prior permission, which makes Firefox the least exposed of the five marks in this section and the only one whose owner publishes such an allowance.
+That is a fact about permission rather than about availability, and it does not make the file any easier to obtain.
+
+So both browser tiles keep the name set in our own typeface, which is what they already drew.
+A mark whose licence terms cannot be read cannot be landed under the rule the rest of this note holds every file to, and a partner portal is what makes them unreadable.
+
+A glyph of ours was the alternative, as the download tiles take, and it is not the right answer here.
+Lucide carries no brand marks at all, so the nearest it offers either browser is a generic drawing, and a circular one resembles Chrome's own logo more closely than the word "Chrome" does.
+A mark adopted to avoid using a logo must not be the closer imitation of it, and that asymmetry is the whole reason the glyph is right on the download tiles and wrong on these two: a monitor, a phone and a laptop resemble no store badge.
+
+### What this leaves unchanged, deliberately
+
+`web/static/` gains no file, so nothing new is published unauthenticated by `ServeDir` and the rule at the top of this note still holds.
+The guard in `catalogue.test.ts` requiring every mark to be served from `/marketplaces/` on our own origin is untouched and stays exactly as strong as it was; there is no second directory to admit.
+The disclaimer beneath the grid still says "marketplace names and logos", and still says only that, because no browser or platform vendor's mark appears under it.
+Every mark on this page that is not a marketplace's is a drawing of ours, so extending that sentence to browser and platform vendors would have claimed we show something we do not.

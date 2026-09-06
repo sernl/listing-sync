@@ -3,6 +3,73 @@
 @import './lib/styles/shell.css';
 @import './lib/styles/components.css';
 
+/* The two brand faces, served from `static/fonts` rather than fetched from
+ * Google. The desktop and Android builds show this same console under a policy
+ * that admits no third-party origin, so both stylesheets and both font files
+ * were refused there and every surface in the app fell back to the stacks in
+ * `tokens.css` -- which is a large part of why the app read as "the web,
+ * condensed". Nothing external remains, so the CSP needs no host for type.
+ *
+ * One block per family and subset rather than one per weight: each subset is a
+ * single variable font, and the stylesheet these replace named the same URL in
+ * every weight block it emitted. The `unicode-range` values are transcribed
+ * from that stylesheet unchanged, so the browser fetches exactly the subsets
+ * the text on screen needs and no more. Provenance, hashes and the refresh
+ * procedure are in `static/fonts/README.md`. */
+@font-face {
+	font-family: 'Fraunces';
+	font-style: normal;
+	font-weight: 500 600;
+	font-display: swap;
+	src: url('/fonts/fraunces-latin.woff2') format('woff2');
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+		U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Fraunces';
+	font-style: normal;
+	font-weight: 500 600;
+	font-display: swap;
+	src: url('/fonts/fraunces-latin-ext.woff2') format('woff2');
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+		U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+		U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Fraunces';
+	font-style: normal;
+	font-weight: 500 600;
+	font-display: swap;
+	src: url('/fonts/fraunces-vietnamese.woff2') format('woff2');
+	unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0,
+		U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+
+@font-face {
+	font-family: 'Instrument Sans';
+	font-style: normal;
+	font-weight: 400 600;
+	font-stretch: 100%;
+	font-display: swap;
+	src: url('/fonts/instrument-sans-latin.woff2') format('woff2');
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+		U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Instrument Sans';
+	font-style: normal;
+	font-weight: 400 600;
+	font-stretch: 100%;
+	font-display: swap;
+	src: url('/fonts/instrument-sans-latin-ext.woff2') format('woff2');
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+		U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+		U+2C60-2C7F, U+A720-A7FF;
+}
+
 /* The console's design system. A class here describes the same thing on every
    page, which is what a global sheet buys over a component `<style>` block.
    Three concerns have been lifted into `lib/styles/`: the tokens, the shell
@@ -75,7 +142,7 @@ button {
 
 .cta {
 	background: var(--accent);
-	color: #fff;
+	color: var(--on-fill);
 	border-color: var(--accent);
 }
 
@@ -678,7 +745,7 @@ input:focus-visible {
 }
 
 .seg-odd {
-	background: #7c5c9e;
+	background: var(--additive);
 }
 
 .seg-mut {
@@ -690,7 +757,7 @@ input:focus-visible {
 }
 
 .seg-block {
-	background: #c97b2e;
+	background: var(--blocked);
 }
 
 .seg-park {
@@ -698,7 +765,7 @@ input:focus-visible {
 }
 
 .seg-queue {
-	background: #d8cec2;
+	background: var(--queued);
 }
 
 .toasts {
@@ -712,17 +779,50 @@ input:focus-visible {
 }
 
 .toast {
+	display: flex;
+	align-items: center;
+	gap: 8px;
 	border-radius: 9px;
-	padding: 9px 14px;
+	/* Trimmed on the closing side, because the control inside already carries
+	   the full 38px and the padding would be added to it. */
+	padding: 4px 4px 4px 14px;
 	font-size: 12.5px;
-	color: #fff;
+	color: var(--on-fill);
 	background: var(--ink);
-	box-shadow: 0 6px 20px rgb(31 26 23 / 18%);
+	box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 18%, transparent);
 	max-width: 380px;
 }
 
 .toast.error {
 	background: var(--bad);
+}
+
+.toast-say {
+	flex: 1;
+	min-width: 0;
+}
+
+/* Square at the full control floor, like every other close control in the
+   console. The hover fill is drawn from `--on-fill` rather than `--hover`,
+   because this box sits on the ink and on the bad tone rather than on a
+   card, and a card's hover would disappear into both. */
+.toast-close {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: var(--control-h);
+	min-height: var(--control-h);
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 7px;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+}
+
+.toast-close:hover {
+	background: color-mix(in srgb, var(--on-fill) 16%, transparent);
 }
 
 @media (max-width: 980px) {
@@ -786,7 +886,7 @@ input:focus-visible {
 	flex-wrap: wrap;
 	padding: 10px 20px;
 	background: var(--bad);
-	color: #fff;
+	color: var(--on-fill);
 	border-bottom: 2px solid var(--bad-soft);
 	font-size: 13px;
 }
@@ -795,7 +895,7 @@ input:focus-visible {
 	width: 24px;
 	height: 24px;
 	border-radius: 8px;
-	background: rgb(255 255 255 / 0.18);
+	background: color-mix(in srgb, var(--on-fill) 18%, transparent);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -811,7 +911,7 @@ input:focus-visible {
 }
 
 .impersonating .refused {
-	background: rgb(255 255 255 / 0.15);
+	background: color-mix(in srgb, var(--on-fill) 15%, transparent);
 	border-radius: 7px;
 	padding: 3px 9px;
 	font-size: 12px;
@@ -819,8 +919,8 @@ input:focus-visible {
 
 .impersonating button {
 	margin-left: auto;
-	border: 1px solid rgb(255 255 255 / 0.55);
-	background: #fff;
+	border: 1px solid color-mix(in srgb, var(--on-fill) 55%, transparent);
+	background: var(--on-fill);
 	color: var(--bad);
 	font-weight: 700;
 	border-radius: 8px;
@@ -839,7 +939,8 @@ input:focus-visible {
 
 /* The authoring surface: the create form, the platform pickers, the upload
    control, and the two dialogs the publish and the delete open. Everything
-   below is used under /inventory/new and /inventory/<id>. */
+   below is used under /resources/new and /resources/<id>; /inventory/new and
+   /inventory/<id> reach the same rules only as 308 redirects to those. */
 
 .form.wide {
 	max-width: none;
@@ -1098,7 +1199,7 @@ dialog {
 }
 
 dialog::backdrop {
-	background: rgb(31 26 23 / 42%);
+	background: color-mix(in srgb, var(--text) 42%, transparent);
 }
 
 .dialog-body {

@@ -17,6 +17,24 @@ export type FailureCode =
   | "AdapterVersionRejected"
   | "Other";
 
+export const FAILURE_CODES: readonly FailureCode[] = [
+  "SelectorNotFound",
+  "SelectorAmbiguous",
+  "SelectorResolvedViaFallback",
+  "PreconditionElementAbsent",
+  "NavigationCancelled",
+  "UnexpectedOrigin",
+  "SubmitNoConfirmation",
+  "ChallengePresented",
+  "SessionExpired",
+  "UploadRejected",
+  "RateLimited",
+  "VerificationMismatch",
+  "FormSchemaDrift",
+  "AdapterVersionRejected",
+  "Other",
+];
+
 export type APIErrorCode =
   | "unsupported_api_version"
   | "version_parameter_missing"
@@ -42,16 +60,55 @@ export type APIErrorCode =
   | "org_slug_taken"
   | "internal";
 
+export const API_ERROR_CODES: readonly APIErrorCode[] = [
+  "unsupported_api_version",
+  "version_parameter_missing",
+  "version_parameter_unreadable",
+  "session_required",
+  "idempotency_key_required",
+  "sync_mappings_invalid",
+  "duplicate_sync_item",
+  "resource_missing",
+  "backoffice_unavailable",
+  "platform_account_already_linked",
+  "blob_store_unavailable",
+  "upload_rejected",
+  "payload_missing",
+  "required_field_missing",
+  "quota_exceeded",
+  "uncaptured_transition",
+  "listing_still_bound",
+  "mapping_already_exists",
+  "listing_url_unusable",
+  "mapping_not_bindable",
+  "listing_already_claimed",
+  "org_slug_taken",
+  "internal",
+];
+
 export type APIErrorKind =
   | "validation"
   | "unauthenticated"
   | "not_found"
   | "internal";
 
+export const API_ERROR_KINDS: readonly APIErrorKind[] = [
+  "validation",
+  "unauthenticated",
+  "not_found",
+  "internal",
+];
+
 export type SlugPrompt =
   | "settled"
   | "claim"
   | "banner";
+
+export const SLUG_PROMPTS: readonly SlugPrompt[] = [
+  "settled",
+  "claim",
+  "banner",
+];
 
 export type InventoryId =
   | "TesGb"
@@ -60,14 +117,33 @@ export type InventoryId =
   | "Etsy"
   | "Tpt";
 
+export const INVENTORY_IDS: readonly InventoryId[] = [
+  "TesGb",
+  "TesUs",
+  "TesNz",
+  "Etsy",
+  "Tpt",
+];
+
 export type Marketplace =
   | "Tes"
   | "Etsy"
   | "Tpt";
 
+export const MARKETPLACES: readonly Marketplace[] = [
+  "Tes",
+  "Etsy",
+  "Tpt",
+];
+
 export type TransportClass =
   | "OfficialApi"
   | "SellerDevice";
+
+export const TRANSPORT_CLASSES: readonly TransportClass[] = [
+  "OfficialApi",
+  "SellerDevice",
+];
 
 export type LabelColour =
   | "slate"
@@ -79,11 +155,29 @@ export type LabelColour =
   | "violet"
   | "pink";
 
+export const LABEL_COLOURS: readonly LabelColour[] = [
+  "slate",
+  "red",
+  "amber",
+  "green",
+  "teal",
+  "blue",
+  "violet",
+  "pink",
+];
+
 export type ConnectionStatus =
   | "connected"
   | "checking"
   | "unstable"
   | "disconnected";
+
+export const CONNECTION_STATUSES: readonly ConnectionStatus[] = [
+  "connected",
+  "checking",
+  "unstable",
+  "disconnected",
+];
 
 export type ConnectionEvent =
   | "linked"
@@ -95,10 +189,27 @@ export type ConnectionEvent =
   | "revoked"
   | "unlinked";
 
+export const CONNECTION_EVENTS: readonly ConnectionEvent[] = [
+  "linked",
+  "claimed",
+  "refreshed",
+  "refresh_failed",
+  "needs_reauth",
+  "relinked",
+  "revoked",
+  "unlinked",
+];
+
 export type DeviceSessionStatus =
   | "connected"
   | "signed_out"
   | "wiped";
+
+export const DEVICE_SESSION_STATUSES: readonly DeviceSessionStatus[] = [
+  "connected",
+  "signed_out",
+  "wiped",
+];
 
 export type BlockedGate =
   | "reconciliation"
@@ -115,6 +226,22 @@ export type BlockedGate =
   | "awaiting_seller_signin"
   | "awaiting_marketplace_answer";
 
+export const BLOCKED_GATES: readonly BlockedGate[] = [
+  "reconciliation",
+  "election",
+  "currency_unknown",
+  "cover_missing",
+  "scan_incomplete",
+  "awaiting_counterpart",
+  "binding",
+  "unbound",
+  "subject_diverged",
+  "lifecycle_diverged",
+  "ReauthRequired",
+  "awaiting_seller_signin",
+  "awaiting_marketplace_answer",
+];
+
 export type ItemState =
   | "queued"
   | "leased"
@@ -125,6 +252,17 @@ export type ItemState =
   | "verifying"
   | "settled";
 
+export const ITEM_STATES: readonly ItemState[] = [
+  "queued",
+  "leased",
+  "running",
+  "blocked",
+  "parked_live",
+  "parked_cold",
+  "verifying",
+  "settled",
+];
+
 export type ItemOutcome =
   | "succeeded"
   | "degraded"
@@ -133,9 +271,23 @@ export type ItemOutcome =
   | "skipped"
   | "blocked";
 
+export const ITEM_OUTCOMES: readonly ItemOutcome[] = [
+  "succeeded",
+  "degraded",
+  "failed",
+  "ambiguous",
+  "skipped",
+  "blocked",
+];
+
 export type JobPhase =
   | "active"
   | "settled";
+
+export const JOB_PHASES: readonly JobPhase[] = [
+  "active",
+  "settled",
+];
 
 export type TermKind =
   | "subject"
@@ -144,15 +296,35 @@ export type TermKind =
   | "phase"
   | "licence";
 
+export const TERM_KINDS: readonly TermKind[] = [
+  "subject",
+  "topic",
+  "resource_type",
+  "phase",
+  "licence",
+];
+
 export type CopyFormat =
   | "Markdown"
   | "Html";
+
+export const COPY_FORMATS: readonly CopyFormat[] = [
+  "Markdown",
+  "Html",
+];
 
 export type LengthUnit =
   | "Bytes"
   | "Utf16CodeUnits"
   | "Codepoints"
   | "GraphemeClusters";
+
+export const LENGTH_UNITS: readonly LengthUnit[] = [
+  "Bytes",
+  "Utf16CodeUnits",
+  "Codepoints",
+  "GraphemeClusters",
+];
 
 export type FileKind =
   | "pdf"
@@ -161,19 +333,44 @@ export type FileKind =
   | "zip"
   | "image";
 
+export const FILE_KINDS: readonly FileKind[] = [
+  "pdf",
+  "pptx",
+  "docx",
+  "zip",
+  "image",
+];
+
 export type FileRole =
   | "payload"
   | "preview"
   | "cover";
 
+export const FILE_ROLES: readonly FileRole[] = [
+  "payload",
+  "preview",
+  "cover",
+];
+
 export type QuotaKind =
   | "listings_max"
   | "storage_bytes_max";
+
+export const QUOTA_KINDS: readonly QuotaKind[] = [
+  "listings_max",
+  "storage_bytes_max",
+];
 
 export type NativeDirection =
   | "written"
   | "read_only"
   | "both";
+
+export const NATIVE_DIRECTIONS: readonly NativeDirection[] = [
+  "written",
+  "read_only",
+  "both",
+];
 
 export type NativeVocabularyKind =
   | "closed"
@@ -182,28 +379,65 @@ export type NativeVocabularyKind =
   | "numeric"
   | "unmeasured";
 
+export const NATIVE_VOCABULARY_KINDS: readonly NativeVocabularyKind[] = [
+  "closed",
+  "closed_uncaptured",
+  "free",
+  "numeric",
+  "unmeasured",
+];
+
 export type Cardinality =
   | "one"
   | "many";
+
+export const CARDINALITIES: readonly Cardinality[] = [
+  "one",
+  "many",
+];
 
 export type Delegation =
   | "by_opt_in"
   | "never";
 
+export const DELEGATIONS: readonly Delegation[] = [
+  "by_opt_in",
+  "never",
+];
+
 export type NonDelegableReason =
   | "legal_content";
+
+export const NON_DELEGABLE_REASONS: readonly NonDelegableReason[] = [
+  "legal_content",
+];
 
 export type PayloadFileRule =
   | "every_payload_file"
   | "exactly_one";
 
+export const PAYLOAD_FILE_RULES: readonly PayloadFileRule[] = [
+  "every_payload_file",
+  "exactly_one",
+];
+
 export type BodyWire =
   | "carries_declared_format"
   | "renders_to_html";
 
+export const BODY_WIRES: readonly BodyWire[] = [
+  "carries_declared_format",
+  "renders_to_html",
+];
+
 export type StandardsState =
   | "ingested"
   | "not_ingested";
+
+export const STANDARDS_STATES: readonly StandardsState[] = [
+  "ingested",
+  "not_ingested",
+];
 
 export type FormGroup =
   | "name"
@@ -234,11 +468,25 @@ export type ElectionTriggerKind =
   | "over_cap"
   | "narrow";
 
+export const ELECTION_TRIGGER_KINDS: readonly ElectionTriggerKind[] = [
+  "supply",
+  "elect_one",
+  "over_cap",
+  "narrow",
+];
+
 export type LossKind =
   | "broadened"
   | "no_target_field"
   | "collapsed"
   | "elected";
+
+export const LOSS_KINDS: readonly LossKind[] = [
+  "broadened",
+  "no_target_field",
+  "collapsed",
+  "elected",
+];
 
 export type JobEventKind =
   | "JobQueued"

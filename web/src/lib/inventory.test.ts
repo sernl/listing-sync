@@ -122,7 +122,7 @@ describe('a chip with no run touching it', () => {
 			mapping: mapping({ inventory: 'Tpt', binding_state: 'unbound' })
 		});
 		expect(never.state).toBe('not_listed');
-		expect(never.action?.href).toBe('/inventory/p1');
+		expect(never.action?.href).toBe('/resources/p1');
 	});
 
 	it('a listed chip opens the listing itself when the server serves its page', () => {
@@ -146,7 +146,7 @@ describe('a chip with no run touching it', () => {
 			connection: connection('Etsy')
 		});
 		expect(listed.state).toBe('listed');
-		expect(listed.action).toEqual({ label: 'Open the item', href: '/inventory/p1' });
+		expect(listed.action).toEqual({ label: 'Open the item', href: '/resources/p1' });
 		expect(listed.action?.external).toBeUndefined();
 	});
 
@@ -241,7 +241,7 @@ describe('a chip the newest run speaks for', () => {
 				mapping: bound,
 				work: work({ state: 'blocked', blocked_on: 'cover_missing' })
 			}).action?.href
-		).toBe('/inventory/p1');
+		).toBe('/resources/p1');
 		expect(
 			chip('Tpt', {
 				mapping: bound,

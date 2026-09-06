@@ -169,7 +169,7 @@ describe('the swatch', () => {
 
 describe('the filter link', () => {
 	it('escapes the name, which travels as a query value', () => {
-		expect(filterHref('Year 5 & 6')).toBe('/inventory?label=Year%205%20%26%206');
+		expect(filterHref('Year 5 & 6')).toBe('/resources?label=Year%205%20%26%206');
 	});
 });
 

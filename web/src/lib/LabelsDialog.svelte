@@ -221,40 +221,40 @@
 		cursor: pointer;
 	}
 
-	/* The eight of migration 0046's closed set. Tokens rather than fixed
-	   triples: the console has a light and a dark theme, and one hex per
-	   colour would pick one of them. */
+	/* The eight of migration 0046's closed set, drawn from the `--label-*`
+	   tokens `labels.css` also draws, so the two files that repeat this scale
+	   read one definition. */
 	.c-slate {
 		border-color: var(--line);
 		color: var(--muted);
 	}
 	.c-red {
-		border-color: color-mix(in srgb, #d1495b 40%, var(--line));
-		color: #d1495b;
+		border-color: color-mix(in srgb, var(--label-red) 40%, var(--line));
+		color: var(--label-red);
 	}
 	.c-amber {
-		border-color: color-mix(in srgb, #b3760e 40%, var(--line));
-		color: #b3760e;
+		border-color: color-mix(in srgb, var(--label-amber) 40%, var(--line));
+		color: var(--label-amber);
 	}
 	.c-green {
-		border-color: color-mix(in srgb, #2f8f5b 40%, var(--line));
-		color: #2f8f5b;
+		border-color: color-mix(in srgb, var(--label-green) 40%, var(--line));
+		color: var(--label-green);
 	}
 	.c-teal {
-		border-color: color-mix(in srgb, #10808c 40%, var(--line));
-		color: #10808c;
+		border-color: color-mix(in srgb, var(--label-teal) 40%, var(--line));
+		color: var(--label-teal);
 	}
 	.c-blue {
-		border-color: color-mix(in srgb, #2f6fb3 40%, var(--line));
-		color: #2f6fb3;
+		border-color: color-mix(in srgb, var(--label-blue) 40%, var(--line));
+		color: var(--label-blue);
 	}
 	.c-violet {
-		border-color: color-mix(in srgb, #6a4bb3 40%, var(--line));
-		color: #6a4bb3;
+		border-color: color-mix(in srgb, var(--label-violet) 40%, var(--line));
+		color: var(--label-violet);
 	}
 	.c-pink {
-		border-color: color-mix(in srgb, #b3407f 40%, var(--line));
-		color: #b3407f;
+		border-color: color-mix(in srgb, var(--label-pink) 40%, var(--line));
+		color: var(--label-pink);
 	}
 
 	.sr-only {

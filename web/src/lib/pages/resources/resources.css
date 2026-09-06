@@ -440,7 +440,8 @@
 .resources-page .res-form .res-choices + .field,
 .resources-page .res-form .field + .res-row,
 .resources-page .res-form .res-choices + .res-row,
-.resources-page .res-form .res-row + .field {
+.resources-page .res-form .res-row + .field,
+.resources-page .res-form .res-foot + .res-choices {
 	margin-top: 14px;
 }
 
@@ -509,6 +510,12 @@
 	flex-direction: column;
 	align-items: stretch;
 	gap: 8px;
+	/* The wrap inherited from `.res-choices` is for a row of radios and is
+	   wrong once the direction is column: Firefox stretches the single flex
+	   line, so the four thumbnail slots came out 420px tall around 90px of
+	   content, and the seller read four mostly-empty boxes. Measured in
+	   isolation: 242px against 53px on the same markup. */
+	flex-wrap: nowrap;
 }
 
 /* TPT's four thumbnail slots, drawn so the layout matches theirs. Dashed,
@@ -915,4 +922,35 @@
 .resources-page .res-file-anon {
 	color: var(--faint);
 	font-weight: 500;
+}
+
+/* The whole form as one disable-able group. A `fieldset` is the only element
+   whose `disabled` reaches its descendants, so the resource form uses one to
+   hold every control back when a published listing makes the edit
+   unattemptable; these rules take away the box the user agent draws around it,
+   and `min-width: 0` undoes the `min-content` floor a fieldset otherwise
+   imposes, which is what stops a wide picker forcing the page to scroll
+   sideways at 390px. */
+.resources-page .res-lock {
+	border: 0;
+	margin: 0;
+	padding: 0;
+	min-width: 0;
+	/* Block, exactly as `.res-form` was: the sections and the panel space
+	   themselves, and a flex container here would restack them. */
+	display: block;
+}
+
+/* Every control inside reads as unavailable rather than merely inert, which is
+   what separates "held back" from "broken". */
+.resources-page .res-lock:disabled {
+	opacity: 0.72;
+}
+
+/* The stored files, inside the form's own Files section rather than in a panel
+   of their own: the section already carries the heading, so this only needs the
+   rule that separates the rows from the upload copy above them. */
+.resources-page .res-files {
+	margin-top: 10px;
+	border-top: 1px solid var(--line);
 }

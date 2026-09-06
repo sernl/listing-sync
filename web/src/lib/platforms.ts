@@ -50,7 +50,20 @@ export const MARKETPLACE_NAME: Record<Marketplace, string> = {
 	Etsy: 'Etsy (Etsy.com)'
 };
 
+/** How this marketplace is titled, or its own identifier where the map has no
+ *  name for it.
+ *
+ * `Object.hasOwn` rather than indexing straight in, and a fallback at all,
+ * because the map is total over the union and the argument is not always drawn
+ * from it. The chip strip filters through `INVENTORY_ORDER` first, but a row's
+ * `mapped` set is built straight from the wire mappings and reaches the delete
+ * and bulk dialogs whole, so an inventory a server ahead of this bundle knows
+ * about arrives here. Reading `.acronym` off the resulting `undefined` took the
+ * dialog down rather than naming one unknown row. */
 export function platformTitle(inventory: InventoryId): string {
+	if (!Object.hasOwn(PLATFORMS, inventory)) {
+		return inventory;
+	}
 	const name = PLATFORMS[inventory];
 	const head = `${name.acronym} (${name.full})`;
 	return name.region === null ? head : `${head} · ${name.region}`;

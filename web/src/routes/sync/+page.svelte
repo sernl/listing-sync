@@ -2,6 +2,7 @@
 	import ActivityLog from '$lib/ActivityLog.svelte';
 	import { api, type ConnectionView, type JobHead } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
+	import { remember, remembered } from '$lib/dismissal';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
 	import type { Marketplace } from '$lib/generated/vocab';
@@ -79,8 +80,8 @@
 		void loadPage();
 		void api
 			.connections()
-			.then((view) => {
-				connections = view.connections;
+			.then((held) => {
+				connections = held;
 				connectionsFailed = false;
 			})
 			.catch(() => {
@@ -93,6 +94,10 @@
 			.then((stats) => (openQuestions = stats.open))
 			.catch(() => (openQuestions = null));
 	});
+
+	/** Closed for good once closed: the sentence is about the product and
+	 *  does not change, so meeting it again on every visit is noise. */
+	let scheduleShown = $state(!remembered('sync.schedule-is-fixed'));
 </script>
 
 <div class="page">
@@ -119,7 +124,18 @@
 				</Panel>
 			{:else if shown !== null}
 				<Panel title={shown.name} description={SETTINGS_ARE_A_PREVIEW}>
-					<Banner tone="info" title={SCHEDULE_TITLE}>{SCHEDULE_BODY}</Banner>
+					{#if scheduleShown}
+						<Banner
+							tone="info"
+							title={SCHEDULE_TITLE}
+							onDismiss={() => {
+								scheduleShown = false;
+								remember('sync.schedule-is-fixed');
+							}}
+						>
+							{SCHEDULE_BODY}
+						</Banner>
+					{/if}
 
 					<div class="set-grid">
 						<div class="set-toggle">

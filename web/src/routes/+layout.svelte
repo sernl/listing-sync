@@ -1,17 +1,21 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import '../app.css';
 	import { QueryClientProvider } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { impersonationState } from '$lib/admin';
-	import { impersonatedSession, signOutEverywhere } from '$lib/auth-client';
+	import { impersonatedSession } from '$lib/auth-client';
 	import Console from '$lib/Console.svelte';
+	import Icon from '$lib/Icon.svelte';
 	import ClaimBanner from '$lib/pages/account/claim/ClaimBanner.svelte';
 	import ClaimScreen from '$lib/pages/account/claim/ClaimScreen.svelte';
 	import { consoleGate } from '$lib/pages/account/claim/state';
 	import { createQueryClient, queryKeys } from '$lib/query';
-	import { toast, toastStore } from '$lib/toast';
+	import { signOut } from '$lib/sign-out';
+	import { afterToastDismissed } from '$lib/focus-return';
+	import { dismiss, sweep, toastStore } from '$lib/toast';
 
 	let { data, children } = $props();
 
@@ -65,13 +69,79 @@
 	}
 
 	async function logout() {
-		const complete = await signOutEverywhere();
-		if (!complete) {
-			toast('error', 'Signed out here, but one of the two sessions may still be open.');
+		await signOut(queryClient);
+	}
+
+	// The toast stack's clock lives here rather than in the store, because what
+	// pauses it is a pointer and a focus ring, and only the element knows about
+	// those. A sweep that removed the toast under the pointer would steal the
+	// click that was about to close it, so the stack holds every standing toast
+	// while it is hovered or focused within, and lets them go on the way out.
+	//
+	// The interval is armed only while something is standing, and `sweep` is
+	// silent when it drops nothing, so an idle console redraws nothing.
+	let held = $state(false);
+
+	$effect(() => {
+		if (held || $toastStore.length === 0) {
+			return;
 		}
-		queryClient.clear();
-		await invalidateAll();
-		await goto('/login');
+		const timer = setInterval(() => sweep(Date.now()), 250);
+		return () => clearInterval(timer);
+	});
+
+	// Who was working when the stack arrived. Captured as the stack fills rather
+	// than as a toast is closed, because by then the close control itself holds
+	// focus and the answer is gone. Not `$state`: nothing renders from it, and a
+	// reactive read here would re-run the effect that writes it.
+	let interrupted: HTMLElement | null = null;
+
+	$effect(() => {
+		if ($toastStore.length === 0) {
+			interrupted = null;
+			return;
+		}
+		if (interrupted !== null) {
+			return;
+		}
+		const active = document.activeElement;
+		interrupted =
+			active instanceof HTMLElement && active.closest('.toasts') === null ? active : null;
+	});
+
+	function keyedToast(event: KeyboardEvent, id: number) {
+		if (event.key !== 'Escape') {
+			return;
+		}
+		event.stopPropagation();
+		void closeToast(id);
+	}
+
+	async function closeToast(id: number) {
+		const previous = interrupted;
+		dismiss(id);
+		await tick();
+		const region = document.querySelector('main');
+		switch (
+			afterToastDismissed({
+				previous: previous?.isConnected === true,
+				region: region !== null
+			})
+		) {
+			case 'previous':
+				previous?.focus();
+				break;
+			case 'region':
+				if (region !== null) {
+					if (!region.hasAttribute('tabindex')) {
+						region.setAttribute('tabindex', '-1');
+					}
+					region.focus();
+				}
+				break;
+			case 'none':
+				break;
+		}
 	}
 </script>
 
@@ -102,9 +172,36 @@
 			{@render children()}
 		</div>
 	{/if}
-	<div class="toasts">
+	<div
+		class="toasts"
+		role="status"
+		aria-live="polite"
+		onmouseenter={() => (held = true)}
+		onmouseleave={() => (held = false)}
+		onfocusin={() => (held = true)}
+		onfocusout={() => (held = false)}
+	>
 		{#each $toastStore as entry (entry.id)}
-			<div class="toast {entry.tone === 'error' ? 'error' : ''}">{entry.message}</div>
+			<!-- Escape closes the toast focus is inside, and the handler sits on
+			     that toast rather than on the window so a dialog open over the
+			     stack keeps the key. The close button is the only thing in a toast
+			     that takes focus, so this reaches the same seller by another
+			     press; the element is not a control in its own right. -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div
+				class="toast {entry.tone === 'error' ? 'error' : ''}"
+				onkeydown={(event) => keyedToast(event, entry.id)}
+			>
+				<span class="toast-say">{entry.message}</span>
+				<button
+					type="button"
+					class="toast-close"
+					aria-label="Close: {entry.message}"
+					onclick={() => closeToast(entry.id)}
+				>
+					<Icon name="x" size={16} />
+				</button>
+			</div>
 		{/each}
 	</div>
 </QueryClientProvider>

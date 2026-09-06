@@ -5,9 +5,10 @@ import {
 	CREATE_TAB,
 	HOME_ITEM,
 	LEGACY_REDIRECTS,
-	MOBILE_TABS,
 	OPEN_QUESTIONS_ITEM,
 	PHONE_BAR,
+	SEARCH_TAB,
+	SECTION_TABS,
 	SECTIONS,
 	breadcrumbFor,
 	currentDestination,
@@ -67,7 +68,7 @@ describe('the navigation model', () => {
 	// substitution, and nothing else in this file reads the page lists at all.
 	it('lists exactly the Crosslist pages, in order', () => {
 		expect(pagesOf('crosslist')).toEqual([
-			'/inventory',
+			'/resources',
 			'/labels',
 			'/import',
 			'/analytics',
@@ -117,15 +118,18 @@ describe('the navigation model', () => {
 	});
 });
 
-describe('the phone tab bar', () => {
+// The rail's sections rendered as tabs, which is the navigating half of the
+// phone bar rather than the bar itself: `PHONE_BAR` below drops Account from
+// these and adds the create and search cells.
+describe('the section tabs', () => {
 	it('mirrors the rail rather than choosing its own destinations', () => {
-		expect(MOBILE_TABS.map((tab) => tab.href)).toEqual(SECTIONS.map((section) => section.href));
-		expect(MOBILE_TABS.map((tab) => tab.label)).toEqual(SECTIONS.map((section) => section.label));
+		expect(SECTION_TABS.map((tab) => tab.href)).toEqual(SECTIONS.map((section) => section.href));
+		expect(SECTION_TABS.map((tab) => tab.label)).toEqual(SECTIONS.map((section) => section.label));
 	});
 
-	it('carries the four sections, which is what a phone width fits', () => {
-		expect(MOBILE_TABS.map((tab) => tab.href)).toEqual([
-			'/inventory',
+	it('carries all four sections the rail names, in rail order', () => {
+		expect(SECTION_TABS.map((tab) => tab.href)).toEqual([
+			'/resources',
 			'/automations',
 			'/marketplaces',
 			'/settings'
@@ -140,7 +144,7 @@ describe('the phone tab bar', () => {
 	});
 
 	it('takes each glyph from its section rather than a second copy', () => {
-		for (const [index, tab] of MOBILE_TABS.entries()) {
+		for (const [index, tab] of SECTION_TABS.entries()) {
 			expect(tab.icon).toBe(SECTIONS[index].icon);
 		}
 	});
@@ -149,7 +153,7 @@ describe('the phone tab bar', () => {
 	// tab is built from `{ href, label, icon }` and cannot carry `soon` at all,
 	// so asserting it there passes whatever the model says.
 	it('offers no tab to a section whose landing page is not built', () => {
-		for (const tab of MOBILE_TABS) {
+		for (const tab of SECTION_TABS) {
 			const landing = SECTIONS.flatMap((section) => section.items).find(
 				(item) => item.href === tab.href
 			);
@@ -165,7 +169,7 @@ describe('the phone bar', () => {
 			'Automations',
 			'New resource',
 			'Marketplaces',
-			'Account'
+			'Search'
 		]);
 	});
 
@@ -175,14 +179,33 @@ describe('the phone bar', () => {
 		expect(CREATE_TAB.label).toBe('New resource');
 	});
 
-	it('marks exactly one item as the create action, and it is the third', () => {
-		const created = PHONE_BAR.filter((tab) => tab.create === true);
-		expect(created).toEqual([CREATE_TAB]);
+	it('marks exactly one cell as create and exactly one as search', () => {
+		expect(PHONE_BAR.filter((tab) => tab.create === true)).toEqual([CREATE_TAB]);
+		expect(PHONE_BAR.filter((tab) => tab.search === true)).toEqual([SEARCH_TAB]);
 		expect(PHONE_BAR[2]).toBe(CREATE_TAB);
 	});
 
-	it('leaves the four navigation tabs exactly as the rail states them', () => {
-		expect(PHONE_BAR.filter((tab) => tab.create !== true)).toEqual([...MOBILE_TABS]);
+	it('navigates only to the sections the rail states, and never twice', () => {
+		const going = PHONE_BAR.filter((tab) => tab.create !== true && tab.search !== true);
+		expect(going).toEqual(SECTION_TABS.filter((tab) => tab.href !== '/settings'));
+		const hrefs = PHONE_BAR.map((tab) => tab.href).filter((href) => href !== undefined);
+		expect(new Set(hrefs).size).toBe(hrefs.length);
+	});
+
+	// The one deliberate disagreement between the rail and the bar, pinned so
+	// it cannot drift back by accident. Account stays a section and keeps its
+	// rail entry; on a phone it is the avatar in the top strip instead, which
+	// is where the rail already puts it -- at the foot beside Help, rather than
+	// among the sections.
+	it('leaves Account off the bar while keeping it a section', () => {
+		expect(SECTIONS.some((section) => section.id === 'account')).toBe(true);
+		expect(SECTION_TABS.some((tab) => tab.href === '/settings')).toBe(true);
+		expect(PHONE_BAR.some((tab) => tab.href === '/settings')).toBe(false);
+	});
+
+	it('gives the search cell no destination, so it lights nothing', () => {
+		expect(SEARCH_TAB.href).toBeUndefined();
+		expect(SECTION_TABS.some((tab) => tab.label === SEARCH_TAB.label)).toBe(false);
 	});
 
 	it('opens the same screen the section-primary button opens', () => {
@@ -191,14 +214,14 @@ describe('the phone bar', () => {
 	});
 
 	it('is not a navigation destination, so it lights nothing', () => {
-		expect(isCurrent('/inventory', CREATE_TAB.href)).toBe(false);
-		expect(MOBILE_TABS.some((tab) => tab.href === CREATE_TAB.href)).toBe(false);
+		expect(isCurrent('/resources', CREATE_TAB.href)).toBe(false);
+		expect(SECTION_TABS.some((tab) => tab.href === CREATE_TAB.href)).toBe(false);
 	});
 });
 
 describe('the section the rail lights', () => {
 	it('is the one holding the page the browser is on', () => {
-		expect(sectionFor('/inventory')?.id).toBe('crosslist');
+		expect(sectionFor('/resources')?.id).toBe('crosslist');
 		expect(sectionFor('/analytics')?.id).toBe('crosslist');
 		expect(sectionFor('/sync')?.id).toBe('automations');
 		expect(sectionFor('/automations')?.id).toBe('automations');
@@ -207,7 +230,7 @@ describe('the section the rail lights', () => {
 	});
 
 	it('follows a detail page to its parent section', () => {
-		expect(sectionFor('/inventory/9f2c8a11')?.id).toBe('crosslist');
+		expect(sectionFor('/resources/9f2c8a11')?.id).toBe('crosslist');
 		expect(sectionFor('/sync/9f2c8a11')?.id).toBe('automations');
 	});
 
@@ -250,7 +273,7 @@ describe('the section the rail lights', () => {
 describe('the current destination', () => {
 	it('is the home path only on the home path', () => {
 		expect(isCurrent('/app', '/app')).toBe(true);
-		expect(isCurrent('/inventory', '/app')).toBe(false);
+		expect(isCurrent('/resources', '/app')).toBe(false);
 	});
 
 	it('keeps Subscription off Preferences, which prefixes it', () => {
@@ -297,8 +320,8 @@ describe('the operator section', () => {
 
 describe('the destination a path belongs to', () => {
 	it('is the item whose own href contains it', () => {
-		expect(currentDestination('/inventory')?.href).toBe('/inventory');
-		expect(currentDestination('/inventory/9f2c8a11')?.href).toBe('/inventory');
+		expect(currentDestination('/resources')?.href).toBe('/resources');
+		expect(currentDestination('/resources/9f2c8a11')?.href).toBe('/resources');
 	});
 
 	// The reason this exists rather than an `isCurrent` per item: an import's
@@ -336,7 +359,7 @@ describe('the destination a path belongs to', () => {
 describe('the breadcrumb', () => {
 	it('names the page the browser is on', () => {
 		expect(breadcrumbFor('/app')).toBe('Resources');
-		expect(breadcrumbFor('/inventory')).toBe('Resources');
+		expect(breadcrumbFor('/resources')).toBe('Resources');
 		expect(breadcrumbFor('/reconciliation')).toBe('Open questions');
 		expect(breadcrumbFor('/settings')).toBe('Preferences');
 		expect(breadcrumbFor('/marketplaces')).toBe('Marketplaces');
@@ -385,8 +408,10 @@ describe('the redirects from the old paths', () => {
 	});
 
 	it('send every screen that was renamed to its new path', () => {
-		expect(legacyDestination('/listings')).toBe('/inventory');
-		expect(legacyDestination('/listings/new')).toBe('/inventory/new');
+		expect(legacyDestination('/listings')).toBe('/resources');
+		expect(legacyDestination('/listings/new')).toBe('/resources/new');
+		expect(legacyDestination('/inventory')).toBe('/resources');
+		expect(legacyDestination('/inventory/new')).toBe('/resources/new');
 		expect(legacyDestination('/connections')).toBe('/marketplaces');
 		expect(legacyDestination('/queue')).toBe('/reconciliation');
 		expect(legacyDestination('/library')).toBe('/guides');
@@ -394,10 +419,25 @@ describe('the redirects from the old paths', () => {
 		expect(legacyDestination('/settings/devices')).toBe('/marketplaces');
 	});
 
-	it('carry an item identifier through the inventory rename', () => {
+	it('carry an item identifier through the catalogue renames', () => {
 		expect(legacyDestination('/listings/9f2c8a11-0000-4000-8000-000000000000')).toBe(
-			'/inventory/9f2c8a11-0000-4000-8000-000000000000'
+			'/resources/9f2c8a11-0000-4000-8000-000000000000'
 		);
+		expect(legacyDestination('/inventory/9f2c8a11-0000-4000-8000-000000000000')).toBe(
+			'/resources/9f2c8a11-0000-4000-8000-000000000000'
+		);
+	});
+
+	// The catalogue has been renamed twice, so the table can accumulate a chain:
+	// `/listings` pointed at `/inventory`, which now points at `/resources`. A
+	// bookmark from the first naming would then need two round trips, and a
+	// browser that refuses the second lands the seller nowhere.
+	it('sends a twice-renamed path to its destination in one hop', () => {
+		for (const from of ['/listings', '/inventory']) {
+			const to = legacyDestination(from);
+			expect(to).toBe('/resources');
+			expect(legacyDestination(to ?? '')).toBeNull();
+		}
 	});
 
 	it('name a destination the sidebar still holds, so no redirect lands on nothing', () => {
@@ -407,12 +447,13 @@ describe('the redirects from the old paths', () => {
 		}
 	});
 
-	it('sends the old help placeholder to the catalogue that now owns the word', () => {
-		expect(legacyDestination('/resources')).toBe('/inventory');
+	it('leaves the catalogue itself alone, now that it owns the word', () => {
+		expect(legacyDestination('/resources')).toBeNull();
+		expect(legacyDestination('/resources/new')).toBeNull();
 	});
 
 	it('leave every path that did not move alone', () => {
-		for (const path of ['/app', '/inventory', '/sync', '/marketplaces', '/jobsy', '/reconciliation']) {
+		for (const path of ['/app', '/resources', '/sync', '/marketplaces', '/jobsy', '/reconciliation']) {
 			expect(legacyDestination(path)).toBeNull();
 		}
 	});
@@ -439,12 +480,12 @@ describe('the account initials', () => {
 
 describe('the search destination', () => {
 	it('is the unfiltered catalogue board for a blank query', () => {
-		expect(searchHref('')).toBe('/inventory');
-		expect(searchHref('   ')).toBe('/inventory');
+		expect(searchHref('')).toBe('/resources');
+		expect(searchHref('   ')).toBe('/resources');
 	});
 
 	it('carries the trimmed query, encoded', () => {
-		expect(searchHref('  poetry unit  ')).toBe('/inventory?q=poetry%20unit');
-		expect(searchHref('a&b')).toBe('/inventory?q=a%26b');
+		expect(searchHref('  poetry unit  ')).toBe('/resources?q=poetry%20unit');
+		expect(searchHref('a&b')).toBe('/resources?q=a%26b');
 	});
 });

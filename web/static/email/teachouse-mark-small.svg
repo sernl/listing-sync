@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="Teachouse">
-  <rect width="96" height="96" rx="22" fill="#6B4423" />
+  <rect width="96" height="96" rx="22" fill="#1F4A38" />
   <path d="M13 51 L48 26 L83 51" fill="none" stroke="#F7F2E9" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
-  <circle cx="48" cy="18" r="7.5" fill="#C2543A" />
+  <circle cx="48" cy="18" r="7.5" fill="#127761" />
   <rect x="17" y="60" width="26" height="22" fill="#F7F2E9" />
   <rect x="53" y="60" width="26" height="22" fill="#F2E9DA" />
 </svg>

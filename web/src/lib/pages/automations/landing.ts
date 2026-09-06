@@ -7,6 +7,7 @@
 // from a read the page already makes for another reason.
 
 import type { ConnectionView, SyncRequestHead } from '$lib/api';
+import { anyConnectionStands } from '$lib/connection-standing';
 import type { IconName } from '$lib/icons';
 import { headStage, mayMigrate, migrateSource, targetAuthorship } from '$lib/sync-request';
 
@@ -93,7 +94,11 @@ export function migrationState(facts: AutomationFacts): CardState {
 }
 
 export function syncState(facts: AutomationFacts): CardState {
-	if (facts.connections.length === 0) {
+	// The row's presence is not the question: a connection the seller
+	// disconnected is still a row, and reading it as a marketplace they have is
+	// exactly what `$lib/connection-standing` exists to stop. The migration and
+	// import pages ask it this way too.
+	if (!anyConnectionStands(facts.connections)) {
 		return { label: 'No marketplace connected', tone: 'warn' };
 	}
 	const open = facts.openQuestions;

@@ -120,6 +120,26 @@ describe('merge', () => {
 		).toEqual(['tok-phone']);
 	});
 
+	it('lists a registered phone as a machine rather than as a stray browser sign-in', () => {
+		// The founder's complaint, as a test. The Android app signs in by
+		// navigating its own window to the console, so its session is a browser
+		// session with an Android user agent and nothing else. Until the app
+		// registered a device there was no row to claim it, and Settings could
+		// only show it under "Browser sign-ins".
+		const { rows, orphans } = merge(
+			[device('d1', 'Google Pixel 8', 'android')],
+			[session('tok-phone', ANDROID)],
+			null
+		);
+		expect(rows.map((row) => [row.device.name, row.confidence, row.session?.token])).toEqual([
+			['Google Pixel 8', 'matched', 'tok-phone']
+		]);
+		expect(
+			orphans,
+			'a phone that appears in both lists at once tells the seller they have two things'
+		).toHaveLength(0);
+	});
+
 	it('leaves an unreadable user agent unattributed rather than assigning it', () => {
 		const { rows, orphans } = merge(
 			[device('d1', 'founder-pc', 'windows')],

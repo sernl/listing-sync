@@ -10,6 +10,7 @@
 	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import { anyConnectionStands } from '$lib/connection-standing';
 	import { APP_TOO_OLD, desktopInvoker, startImportHere } from '$lib/desktop';
 	import Field from '$lib/Field.svelte';
 	import type { InventoryId, Marketplace } from '$lib/generated/vocab';
@@ -82,6 +83,16 @@
 	let keys: Record<string, string> = {};
 
 	const from = $derived(migrateSource(connections));
+
+	/** Whether the seller has no marketplace at all, which is a different fact
+	 *  from having none this migration can read.
+	 *
+	 *  `from` answers only the second: `MIGRATE_SOURCES` is the three TES sites
+	 *  and nothing else, so it is null for a seller who connected TPT first —
+	 *  the ordinary order, since TPT is where a migration writes. Titling a
+	 *  banner "No marketplace is connected" off `from` told that seller
+	 *  something false. */
+	const nothingConnected = $derived(!connectionsUnread && !anyConnectionStands(connections));
 	const sites = $derived(from === null ? [] : sourcesOn(from));
 	// The console's own gate, and until the server refuses one of its own it is
 	// the only gate: a migrate submitted with no declaration on record settles
@@ -134,8 +145,8 @@
 		void load();
 		void api
 			.connections()
-			.then((view) => {
-				connections = view.connections;
+			.then((held) => {
+				connections = held;
 				connectionsUnread = false;
 			})
 			.catch(() => {
@@ -183,9 +194,18 @@
 		description="Move a whole shop from one marketplace to another, once."
 	/>
 
+	{#if nothingConnected}
+		<Banner tone="warn" title="No marketplace is connected" action={toDownloads}>
+			A migration reads a shop you already sell on, so there is nothing to move until one is
+			connected. Connect it in the Teachouse app on your computer: the app opens the
+			marketplace's own sign-in there and keeps the login on that machine, which is the only
+			place it is ever kept.
+		</Banner>
+	{/if}
+
 	<div class="auto-body">
 		<MarketplaceList {rows} {selected} onselect={(marketplace) => (held = marketplace)}
-			empty="Connect a marketplace and it appears here." />
+			empty="Connect a marketplace in the Teachouse app and it appears here." />
 
 		<div class="auto-right">
 			{#if connectionsUnread}
@@ -195,14 +215,23 @@
 						bring across; nothing has been started.
 					</p>
 				</Panel>
+			{:else if nothingConnected}
+				<!-- The banner above already states the blocker and offers the one
+				     remedy, so this column says what the feature is rather than
+				     repeating it: two panels naming the same missing thing read as
+				     two different problems. -->
+				<Panel title="Bring a shop across">
+					<p class="quiet">{WHAT_A_MIGRATION_IS}</p>
+				</Panel>
 			{:else if from === null}
 				<Panel title="Bring a shop across">
 					<p class="quiet">
-						A migration reads the shop you already sell on, so it needs that marketplace
-						connected first.
+						A migration reads the shop you already sell on, and the one it reads is TES, so
+						it needs TES connected. That happens in the Teachouse app on your computer, which
+						opens the marketplace's own sign-in and keeps the login on that machine.
 					</p>
 					<div class="set-foot">
-						<Button href="/marketplaces" tier="outline">Connect a marketplace</Button>
+						<Button href="/marketplaces" tier="outline">Connect on Marketplaces</Button>
 					</div>
 				</Panel>
 			{:else}
@@ -313,3 +342,7 @@
 		</div>
 	</div>
 </div>
+
+{#snippet toDownloads()}
+	<Button tier="outline" small href="/marketplaces">Connect on Marketplaces</Button>
+{/snippet}

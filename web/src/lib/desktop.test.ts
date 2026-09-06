@@ -1,9 +1,21 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	APP_CANNOT_CONNECT,
+	APP_CANNOT_FORGET,
 	APP_TOO_OLD,
+	CONNECT_MARKETPLACE,
+	DEVICE_CHECK_IN,
+	FORGET_SESSION,
+	OPEN_URL,
 	ORIGIN_NOT_GRANTED,
 	START_IMPORT,
+	connectHere,
 	desktopInvoker,
+	forgetHere,
+	openExternal,
+	registerThisMachine,
 	startImportHere
 } from './desktop';
 import type { Invoke } from './desktop';
@@ -28,6 +40,41 @@ describe('reaching the desktop application', () => {
 		const invoke = vi.fn();
 		vi.stubGlobal('window', { __TAURI__: { core: { invoke } } });
 		expect(desktopInvoker()).toBe(invoke);
+	});
+});
+
+describe('putting this machine in the registry', () => {
+	it('invokes the check-in and says the registry may have gained a row', async () => {
+		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+		const invoke: Invoke = async (command, args) => {
+			calls.push({ command, args });
+			return { revoked: false, reached_server: true, signed_in: true };
+		};
+		expect(await registerThisMachine(invoke)).toBe(true);
+		expect(calls).toEqual([{ command: DEVICE_CHECK_IN, args: {} }]);
+	});
+
+	it('says no row was gained when the application could not reach the server', async () => {
+		// The application answers rather than rejecting here, so a caller that
+		// read the call's success would refetch over a connection it has just
+		// been told is dead.
+		const invoke: Invoke = async () => ({
+			revoked: false,
+			reached_server: false,
+			signed_in: false
+		});
+		expect(await registerThisMachine(invoke)).toBe(false);
+	});
+
+	it('says no row was gained when the application rejects the command', async () => {
+		const invoke: Invoke = async (command) => {
+			throw `${command} not allowed. Command not found`;
+		};
+		expect(await registerThisMachine(invoke)).toBe(false);
+	});
+
+	it('does nothing at all in a browser, which is not a failure', async () => {
+		expect(await registerThisMachine(null)).toBe(false);
 	});
 });
 
@@ -207,5 +254,238 @@ describe('asking this computer to run an import', () => {
 			throw 'entitlement closed';
 		};
 		expect((await startImportHere(invoke, 'r-7')).kind).not.toBe('started');
+	});
+});
+
+describe('asking this computer to connect or forget one marketplace', () => {
+	it('invokes each command with the marketplace under the name the app expects', async () => {
+		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+		const invoke: Invoke = async (command, args) => {
+			calls.push({ command, args });
+			return null;
+		};
+		expect(await connectHere(invoke, 'Tpt')).toEqual({ kind: 'done' });
+		expect(await forgetHere(invoke, 'Tes')).toEqual({ kind: 'done' });
+		// The key is `marketplace` because Tauri matches an argument by name and
+		// the command signature spells it that way; a renamed key is a rejection
+		// no type would catch.
+		expect(calls).toEqual([
+			{ command: CONNECT_MARKETPLACE, args: { marketplace: 'Tpt' } },
+			{ command: FORGET_SESSION, args: { marketplace: 'Tes' } }
+		]);
+	});
+
+	it('invokes nothing at all in a browser, and calls that unavailable', async () => {
+		expect(await connectHere(null, 'Tpt')).toEqual({ kind: 'unavailable' });
+		expect(await forgetHere(null, 'Tpt')).toEqual({ kind: 'unavailable' });
+	});
+
+	it('tells the seller to update when the application does not know the command', async () => {
+		const invoke: Invoke = async (command) => {
+			throw `${command} not allowed. Command not found`;
+		};
+		expect(await connectHere(invoke, 'Tpt')).toEqual({ kind: 'unsupported' });
+		expect(await forgetHere(invoke, 'Tpt')).toEqual({ kind: 'unsupported' });
+	});
+
+	it('words each update remedy for the act the seller pressed, never for an import', async () => {
+		for (const sentence of [APP_CANNOT_CONNECT, APP_CANNOT_FORGET]) {
+			expect(sentence).not.toContain('import');
+			expect(sentence).not.toMatch(/command/i);
+		}
+		expect(APP_CANNOT_CONNECT).toMatch(/update/i);
+		// The one that must also say what still stands: a disconnect the machine
+		// could not perform leaves the login exactly where it was.
+		expect(APP_CANNOT_FORGET).toContain('still on');
+		expect(APP_TOO_OLD).toContain('import');
+	});
+
+	// The substitution is per command, because the gate names whichever command
+	// was called. Matching one name against another command's rejection would
+	// fall through to an ordinary refusal and print the fence verbatim.
+	it('names an ungranted page as such for each command, and shows the seller no fence', async () => {
+		for (const [command, run] of [
+			[CONNECT_MARKETPLACE, connectHere],
+			[FORGET_SESSION, forgetHere]
+		] as const) {
+			const invoke: Invoke = async () => {
+				throw [
+					`${command} not allowed on window "main", webview "main", URL: http://tauri.localhost/`,
+					'',
+					'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://teachouse.stowiq.io]',
+					'',
+					`referenced by: capability: console, permission: allow-${command.replace(/_/g, '-')}`
+				].join('\n');
+			};
+			const outcome = await run(invoke, 'Tpt');
+			expect(outcome, command).toEqual({ kind: 'refused', detail: ORIGIN_NOT_GRANTED });
+			const detail = outcome.kind === 'refused' ? outcome.detail : '';
+			for (const internal of [
+				'teachouse.stowiq.io',
+				'tauri.localhost',
+				'capability',
+				'permission',
+				'webview',
+				'allowed on',
+				command
+			]) {
+				expect(detail, `${command}/${internal}`).not.toContain(internal);
+			}
+		}
+	});
+
+	it("shows the application's own refusal verbatim rather than interpreting it", async () => {
+		// Every sentence `connect_marketplace` refuses with, as the command
+		// itself words them. None is a code the console could branch on.
+		for (const sentence of [
+			'a login window for this marketplace is already open',
+			'the login window was closed before the sign-in completed',
+			"the sign-in did not complete before the window's deadline",
+			'this device has been signed out from the console, so the marketplace session was not kept'
+		]) {
+			const invoke: Invoke = async () => {
+				throw sentence;
+			};
+			expect(await connectHere(invoke, 'Tpt')).toEqual({ kind: 'refused', detail: sentence });
+		}
+	});
+
+	it('never renders a refusal as an empty line or an object, and names the act it was', async () => {
+		for (const thrown of [undefined, null, '', '   ', {}, { message: '' }]) {
+			const invoke: Invoke = async () => {
+				throw thrown;
+			};
+			const connect = await connectHere(invoke, 'Tpt');
+			const forget = await forgetHere(invoke, 'Tpt');
+			for (const outcome of [connect, forget]) {
+				expect(outcome.kind).toBe('refused');
+				const detail = outcome.kind === 'refused' ? outcome.detail : '';
+				expect(detail.trim()).not.toBe('');
+				expect(detail).not.toContain('[object');
+			}
+			// Each fallback names its own act, so a seller reading one after
+			// pressing the other would notice.
+			expect(connect.kind === 'refused' ? connect.detail : '').toContain('sign-in');
+			expect(forget.kind === 'refused' ? forget.detail : '').toContain('login');
+		}
+	});
+
+	it('a refused connect is never reported as a completed one', async () => {
+		const invoke: Invoke = async () => {
+			throw 'the login window was closed before the sign-in completed';
+		};
+		expect((await connectHere(invoke, 'Tpt')).kind).not.toBe('done');
+	});
+});
+
+describe('opening a marketplace link in the seller\'s own browser', () => {
+	it('asks nothing in a browser, where the anchor already does the right thing', async () => {
+		const invoke = vi.fn();
+		expect(await openExternal(null, 'https://www.tes.com/teaching-resource/x-1')).toEqual({
+			kind: 'unavailable'
+		});
+		expect(invoke).not.toHaveBeenCalled();
+	});
+
+	it('hands the address to the opener plugin under the name the grant carries', async () => {
+		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+		const invoke: Invoke = async (command, args) => {
+			calls.push({ command, args });
+			return null;
+		};
+		const url = 'https://www.teacherspayteachers.com/Product/x-1';
+		expect(await openExternal(invoke, url)).toEqual({ kind: 'opened' });
+		expect(calls).toEqual([{ command: OPEN_URL, args: { url } }]);
+	});
+
+	it("carries the application's own words when it refuses", async () => {
+		const invoke: Invoke = async () => {
+			throw 'Forbidden URL';
+		};
+		expect(await openExternal(invoke, 'https://www.tes.com/')).toEqual({
+			kind: 'refused',
+			detail: 'Forbidden URL'
+		});
+	});
+
+	it('never reports a refusal as an opened link, whatever it rejected with', async () => {
+		for (const thrown of [undefined, null, '', '   ', {}, { message: '' }]) {
+			const invoke: Invoke = async () => {
+				throw thrown;
+			};
+			const outcome = await openExternal(invoke, 'https://www.tes.com/');
+			expect(outcome.kind).toBe('refused');
+			const detail = outcome.kind === 'refused' ? outcome.detail : '';
+			expect(detail.trim()).not.toBe('');
+			expect(detail).not.toContain('[object');
+		}
+	});
+});
+
+/** The application's own capability files, read from source.
+ *
+ * The Rust side already asserts that the origin the capability grants is the
+ * one this build talks to (`control_plane.rs`,
+ * `the_capability_grants_the_origin_this_build_uses`). Nothing asserted the
+ * other direction: that the console's command string and the grant behind it
+ * are one decision. A capability naming a permission the console never calls,
+ * or a console calling a plugin the capability never grants, builds clean and
+ * refuses at run time in front of a seller. */
+function capability(name: string): Record<string, unknown> {
+	return JSON.parse(
+		readFileSync(
+			fileURLToPath(
+				new URL(`../../../apps/desktop/src-tauri/capabilities/${name}.json`, import.meta.url)
+			),
+			'utf8'
+		)
+	) as Record<string, unknown>;
+}
+
+describe('the grant behind the opener command', () => {
+	const opener = capability('opener');
+
+	it('grants open_url for the plugin the console names', () => {
+		// `plugin:opener|open_url` is Tauri's own routing: the plugin, then the
+		// command. Both halves are read out rather than compared to a copy of
+		// the same literal, so a rename on either side fails here.
+		const [prefixed, command] = OPEN_URL.split('|');
+		expect(prefixed).toBe('plugin:opener');
+		const plugin = prefixed.slice('plugin:'.length);
+		const granted = (opener.permissions as Array<{ identifier: string }>).map(
+			(entry) => entry.identifier
+		);
+		expect(granted).toEqual([`${plugin}:allow-${command.replaceAll('_', '-')}`]);
+	});
+
+	it('carries a scope, without which the grant refuses every address', () => {
+		// Not decoration on the permission. `allow-open-url` arrives with an
+		// empty allow list, and tauri-plugin-opener 2.5.5 answers
+		// `is_url_allowed` with `self.allowed.iter().any(..)` (src/scope.rs), so
+		// the bare permission is a grant to a command that refuses everything.
+		const scope = (opener.permissions as Array<{ allow?: Array<{ url?: string }> }>)[0].allow;
+		expect(scope).toEqual([{ url: 'https://*' }]);
+	});
+
+	it('reaches the same origin the console is served from and no other', () => {
+		// The console is one page whichever file grants it, so a grant that
+		// named a second origin would widen the application's surface without
+		// widening anything the console can do with it.
+		const remote = (name: string) =>
+			(capability(name).remote as { urls: string[] } | undefined)?.urls;
+		expect(remote('opener')).toEqual(remote('console'));
+		expect(remote('opener')).toEqual(['https://teachouse.stowiq.io']);
+	});
+
+	it('is granted to the console window only, so a login webview gains nothing', () => {
+		expect(opener.windows).toEqual(['main']);
+	});
+
+	it('carries no platform list, unlike the updater it sits beside', () => {
+		// Android is the platform this matters most on: its webview has no
+		// second window, so without the plugin a marketplace link replaces the
+		// console itself.
+		expect(opener.platforms).toBeUndefined();
+		expect(capability('updater').platforms).toEqual(['linux', 'macOS', 'windows']);
 	});
 });

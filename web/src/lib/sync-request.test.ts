@@ -298,9 +298,25 @@ describe('starting a migrate', () => {
 		expect(migrateSource([connection('Etsy')])).toBeNull();
 	});
 
-	it('offers one whatever state the connection is in, because the device decides', () => {
-		const stale = { ...connection('Tes'), status: 'disconnected' as const };
+	// Amended rather than deleted: the reason it states survives for the state
+	// it was written about. A connection needing a fresh sign-in is still the
+	// seller's shop and their own device is what discovers the sign-in is
+	// needed, so a migrate is still offered from it. What the reason never
+	// covered is a connection the seller gave up.
+	it('offers one from a connection that needs a fresh sign-in, because the device decides', () => {
+		const stale = {
+			...connection('Tes'),
+			state: 'needs_reauth',
+			status: 'disconnected' as const
+		};
 		expect(migrateSource([stale])).toBe('Tes');
+	});
+
+	it('offers none from a marketplace the seller disconnected, or one revoked', () => {
+		for (const state of ['unlinked', 'revoked']) {
+			const off = { ...connection('Tes'), state, status: 'disconnected' as const };
+			expect(migrateSource([off]), state).toBeNull();
+		}
 	});
 
 	it('names every site of the marketplace the seller may have sold on', () => {

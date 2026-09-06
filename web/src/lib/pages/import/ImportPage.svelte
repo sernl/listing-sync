@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api, type ConnectionView, type SyncRequestHead } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
+	import { anyConnectionStands } from '$lib/connection-standing';
 	import Button from '$lib/Button.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import Field from '$lib/Field.svelte';
@@ -18,9 +19,11 @@
 	import {
 		CONNECTIONS_UNREAD,
 		CONNECT_HREF,
+		CONNECT_LABEL,
 		HANDOFF_LABEL,
 		IMPORTS_UNREAD,
 		IMPORT_IS_A_MIGRATION,
+		NOTHING_CONNECTED,
 		NO_IMPORT_YET,
 		WHAT_AN_IMPORT_IS,
 		deviceLine,
@@ -46,13 +49,27 @@
 	let chosen = $state<Record<string, InventoryId>>({});
 
 	const cards = $derived(importCards(connections));
+
+	/** Whether the seller has no marketplace connected at all.
+	 *
+	 *  Over every connection rather than over this screen's own cards, because
+	 *  the sentence claims about all of them. The cards are the device branch
+	 *  alone, so a seller connected only on the server branch would be told
+	 *  they have nothing, which is false.
+	 *
+	 *  Only once the list has been read: a null list is not a seller with no
+	 *  shop, and raising this on it would tell them there is nothing when all
+	 *  we know is that we could not ask. */
+	const nothingHeld = $derived(
+		!connectionsUnread && connections !== null && !anyConnectionStands(connections)
+	);
 	const rows = $derived(importRows(requests, (inventory) => SHORT_NAME[inventory]));
 
 	$effect(() => {
 		void api
 			.connections()
-			.then((view) => {
-				connections = view.connections;
+			.then((held) => {
+				connections = held;
 				connectionsUnread = false;
 			})
 			.catch(() => {
@@ -90,6 +107,10 @@
 
 	{#if connectionsUnread}
 		<Banner tone="bad" title="Your marketplaces could not be read">{CONNECTIONS_UNREAD}</Banner>
+	{:else if nothingHeld}
+		<Banner tone="warn" title="No marketplace is connected" action={toMarketplaces}>
+			{NOTHING_CONNECTED}
+		</Banner>
 	{/if}
 
 	<div class="import-cards">
@@ -137,7 +158,7 @@
 						<Banner tone="bad">
 							{notConnected(card)}
 							{#snippet action()}
-								<Button href={CONNECT_HREF}>Go to Marketplaces</Button>
+								<Button href={CONNECT_HREF}>{CONNECT_LABEL}</Button>
 							{/snippet}
 						</Banner>
 					{/if}
@@ -203,3 +224,7 @@
 		{/if}
 	</Panel>
 </div>
+
+{#snippet toMarketplaces()}
+	<Button tier="outline" small href={CONNECT_HREF}>{CONNECT_LABEL}</Button>
+{/snippet}

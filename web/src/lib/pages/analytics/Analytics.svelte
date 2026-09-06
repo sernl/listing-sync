@@ -4,6 +4,7 @@
 	import { formatMetric, METRIC_COLUMNS, titlesByMapping } from '$lib/analytics-view';
 	import { allPages, api } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
+	import { remember, remembered } from '$lib/dismissal';
 	import { agoLabel } from '$lib/elapsed';
 	import Field from '$lib/Field.svelte';
 	import PageHead from '$lib/PageHead.svelte';
@@ -157,6 +158,11 @@
 			captured: new Date(row.observedAt).toLocaleString()
 		}))
 	);
+
+	/** Closed for good once closed: the sentence is about the product and
+	 *  does not change, so meeting it again on every visit is noise. It carries
+	 *  no title, so the close control is named here rather than after one. */
+	let tptOnlyShown = $state(!remembered('analytics.tpt-reports-only'));
 </script>
 
 <div class="page">
@@ -196,10 +202,19 @@
 		</p>
 	</div>
 
-	<Banner tone="info">
-		Only TPT reports figures today; TES publishes none, so its panel counts your own Resources
-		instead.
-	</Banner>
+	{#if tptOnlyShown}
+		<Banner
+			tone="info"
+			dismissLabel="Dismiss: only TPT reports figures"
+			onDismiss={() => {
+				tptOnlyShown = false;
+				remember('analytics.tpt-reports-only');
+			}}
+		>
+			Only TPT reports figures today; TES publishes none, so its panel counts your own
+			Resources instead.
+		</Banner>
+	{/if}
 
 	<div class="an-tiles">
 		{#each tiles as tile (tile.key)}

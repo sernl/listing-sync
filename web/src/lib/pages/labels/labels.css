@@ -96,50 +96,53 @@
 }
 
 /* The eight colours of migration 0046's closed set, which `LabelsDialog.svelte`
-   also spells out: the colour of a label is a value the server derived from
-   its name rather than a choice from this console's palette, so there is no
-   token for it. Mixed into the surface rather than used flat, because a row of
-   68px blocks at full strength would out-shout every status on the page, and
-   held at thirty percent over a firm ring rather than lower, because eight
-   pastels at row size stop being eight colours. */
+   also draws: the colour of a label is a value the server derived from its
+   name rather than a choice from this console's palette, so the `--label-*`
+   tokens are the one scale in `tokens.css` that does not follow the theme.
+   They are tokens rather than hexes here because this file and the dialog both
+   draw them and one definition is the point. Mixed into the surface rather
+   than used flat, because a row of 68px blocks at full strength would
+   out-shout every status on the page, and held at thirty percent over a firm
+   ring rather than lower, because eight pastels at row size stop being eight
+   colours. */
 .labels-page .label-row.c-slate .thumb {
 	background: var(--soon-soft);
 	box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .labels-page .label-row.c-red .thumb {
-	background: color-mix(in srgb, #d1495b 30%, var(--surface));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, #d1495b 62%, transparent);
+	background: color-mix(in srgb, var(--label-red) 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--label-red) 62%, transparent);
 }
 
 .labels-page .label-row.c-amber .thumb {
-	background: color-mix(in srgb, #b3760e 30%, var(--surface));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, #b3760e 62%, transparent);
+	background: color-mix(in srgb, var(--label-amber) 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--label-amber) 62%, transparent);
 }
 
 .labels-page .label-row.c-green .thumb {
-	background: color-mix(in srgb, #2f8f5b 30%, var(--surface));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, #2f8f5b 62%, transparent);
+	background: color-mix(in srgb, var(--label-green) 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--label-green) 62%, transparent);
 }
 
 .labels-page .label-row.c-teal .thumb {
-	background: color-mix(in srgb, #10808c 30%, var(--surface));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, #10808c 62%, transparent);
+	background: color-mix(in srgb, var(--label-teal) 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--label-teal) 62%, transparent);
 }
 
 .labels-page .label-row.c-blue .thumb {
-	background: color-mix(in srgb, #2f6fb3 30%, var(--surface));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, #2f6fb3 62%, transparent);
+	background: color-mix(in srgb, var(--label-blue) 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--label-blue) 62%, transparent);
 }
 
 .labels-page .label-row.c-violet .thumb {
-	background: color-mix(in srgb, #6a4bb3 30%, var(--surface));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, #6a4bb3 62%, transparent);
+	background: color-mix(in srgb, var(--label-violet) 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--label-violet) 62%, transparent);
 }
 
 .labels-page .label-row.c-pink .thumb {
-	background: color-mix(in srgb, #b3407f 30%, var(--surface));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, #b3407f 62%, transparent);
+	background: color-mix(in srgb, var(--label-pink) 30%, var(--surface));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--label-pink) 62%, transparent);
 }
 
 /* --- rename and delete, both inline -------------------------------------- */

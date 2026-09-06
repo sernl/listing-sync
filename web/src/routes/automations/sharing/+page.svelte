@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api, type ConnectionView, type DeviceView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
+	import { remember, remembered } from '$lib/dismissal';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
 	import type { Marketplace } from '$lib/generated/vocab';
@@ -38,8 +39,8 @@
 	$effect(() => {
 		void api
 			.connections()
-			.then((view) => {
-				connections = view.connections;
+			.then((held) => {
+				connections = held;
 				connectionsFailed = false;
 			})
 			.catch(() => {
@@ -66,6 +67,10 @@
 	const shown = $derived(rows.find((row) => row.marketplace === selected) ?? null);
 	const noDevice = $derived(devicesRead && devices.length === 0);
 	const zone = timezoneLine(timezoneName());
+
+	/** Closed for good once closed: the sentence is about the product and
+	 *  does not change, so meeting it again on every visit is noise. */
+	let notBuiltShown = $state(!remembered('sharing.not-built'));
 </script>
 
 <div class="page">
@@ -75,7 +80,18 @@
 		description="Publish one resource to every marketplace you are connected to, in one scheduled action."
 	/>
 
-	<Banner tone="info" title={NOT_BUILT_TITLE}>{NOT_BUILT_BODY}</Banner>
+	{#if notBuiltShown}
+		<Banner
+			tone="info"
+			title={NOT_BUILT_TITLE}
+			onDismiss={() => {
+				notBuiltShown = false;
+				remember('sharing.not-built');
+			}}
+		>
+			{NOT_BUILT_BODY}
+		</Banner>
+	{/if}
 
 	<div class="auto-body">
 		<MarketplaceList {rows} {selected} onselect={(marketplace) => (held = marketplace)}

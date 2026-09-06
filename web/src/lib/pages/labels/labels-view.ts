@@ -167,5 +167,5 @@ export function swatchClass(colour: string): string {
  *  name is one query value rather than a path segment, so a label carrying a
  *  reserved character survives the trip. */
 export function filterHref(name: string): string {
-	return `/inventory?label=${encodeURIComponent(name)}`;
+	return `/resources?label=${encodeURIComponent(name)}`;
 }

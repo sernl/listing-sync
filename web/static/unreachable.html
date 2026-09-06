@@ -3,20 +3,21 @@
 <title>Teachouse</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
-  /* Kauri, written out rather than imported: this page is served from the
+  /* Pounamu, written out rather than imported: this page is served from the
      desktop app's own bundle when the console cannot be reached, so it has
      no stylesheet, no font and no network. Each of the seven below is the
-     token of the same name in web/src/lib/styles/tokens.css; every literal
-     outside this block is named where it stands, because a palette edit will
-     move the tokens and cannot move these. */
+     token of the same name in web/src/lib/styles/tokens.css, and every
+     literal outside this block is named where it stands. Both are checked
+     against that file by tokens.test.ts, so a palette edit that leaves this
+     page behind fails the lane rather than shipping. */
   :root {
-    --ground: #f7f2e9;
-    --surface: #fffdf9;
-    --primary: #6b4423;
-    --accent-ink: #a5462f;
-    --text: #241a12;
-    --muted: #726254;
-    --line: #e4d8c4;
+    --ground: #f6f4f1;
+    --surface: #fdfdfc;
+    --primary: #1f4a38;
+    --accent-ink: #0f6b54;
+    --text: #17231c;
+    --muted: #5a6560;
+    --line: #dde3df;
     color-scheme: light;
   }
   body {
@@ -38,7 +39,7 @@
     border-radius: 16px;
     /* --sh-2: --text at 8 percent. Written as rgba rather than color-mix,
        which the bundled webview may predate. */
-    box-shadow: 0 4px 14px rgba(36, 26, 18, 0.08);
+    box-shadow: 0 4px 14px rgba(23, 35, 28, 0.08);
     padding: 28px;
   }
   .mark {
@@ -77,6 +78,7 @@
     border-radius: 999px;
     border: 1px solid var(--primary);
     background: var(--primary);
+    /* --on-fill: the ink a filled control carries. */
     color: #fff;
     cursor: pointer;
     width: 100%;
@@ -85,9 +87,9 @@
     /* --soon-soft and --soon: the disabled fill and ink the console's own
        buttons take. Not in :root above because nothing else on this page
        reads them. */
-    background: #efeae1;
+    background: #edebf2;
     border-color: var(--line);
-    color: #6e655d;
+    color: #5e6169;
     cursor: default;
   }
   #outcome {
@@ -99,14 +101,14 @@
 </style>
 <main>
   <div class="mark">
-    <!-- A verbatim copy of web/static/favicon.svg, which is the mark's own
-         source of truth rather than the palette's: three of its four colours
-         happen to equal --primary, --ground and --accent, and #F2E9DA is the
-         shaded second page of the book, which is the mark's alone and matches
-         no token. Change it there and copy it here; do not retint it from
-         tokens.css. -->
+    <!-- A copy of web/static/favicon.svg, which is the mark's own source of
+         truth rather than the palette's: two of its four colours happen to
+         equal --primary and --accent, and the cream and its shade are the
+         mark's alone and match no token. Change it there and copy it here; do
+         not retint it from tokens.css. tokens.test.ts holds the two files to
+         the same set of colours. -->
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" aria-hidden="true">
-      <rect width="96" height="96" rx="22" fill="#6B4423" />
+      <rect width="96" height="96" rx="22" fill="#1F4A38" />
       <path
         d="M15 46 L48 19 L81 46"
         fill="none"
@@ -115,10 +117,10 @@
         stroke-linecap="round"
         stroke-linejoin="round"
       />
-      <circle cx="48" cy="19" r="5.5" fill="#C2543A" />
+      <circle cx="48" cy="19" r="5.5" fill="#127761" />
       <path d="M45 58 C39 54 30 52.5 22 54 L22 74 C30 72.5 39 74 45 78 Z" fill="#F7F2E9" />
       <path d="M51 58 C57 54 66 52.5 74 54 L74 74 C66 72.5 57 74 51 78 Z" fill="#F2E9DA" />
-      <path d="M48 58 L48 78" fill="none" stroke="#C2543A" stroke-width="3" stroke-linecap="round" />
+      <path d="M48 58 L48 78" fill="none" stroke="#127761" stroke-width="3" stroke-linecap="round" />
     </svg>
     Teachouse
   </div>

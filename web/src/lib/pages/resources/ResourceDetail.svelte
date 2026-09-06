@@ -8,20 +8,13 @@
 		type MappingHead,
 		type VocabularyView
 	} from '$lib/api';
-	import {
-		CURRENCY_OPTIONS,
-		editBlockedBy,
-		editSeedOf,
-		measure,
-		patchBodyOf,
-		licenceOptions,
-		type EditSeed
-	} from '$lib/authoring';
+	import { editBlockedBy } from '$lib/authoring';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
 	import { agoLabel } from '$lib/elapsed';
+	import { external } from '$lib/external';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import {
 		WORK_RUNS,
@@ -37,6 +30,7 @@
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
+	import ResourceForm from './ResourceForm.svelte';
 	import PublishDialog from '$lib/PublishDialog.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { connectionFor, readinessOf } from '$lib/publish-readiness';
@@ -45,24 +39,6 @@
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { PILL_TONE, fullStop } from './list';
 	import { sentenceFor } from './refusal';
-	import {
-		IDLE,
-		advance,
-		busy,
-		fileRefusal,
-		LAST_FILE_LOSES_THUMBNAIL,
-		ROLE_WORD,
-		fileName,
-		fileWords,
-		reachSentence,
-		redrawsCover,
-		removable,
-		replaceable,
-		retiresCover,
-		stalesCover,
-		type FileAction,
-		type FileVerb
-	} from './files';
 	import './resources.css';
 
 	const queryClient = useQueryClient();
@@ -79,7 +55,7 @@
 	}));
 	const connections = createQuery(() => ({
 		queryKey: queryKeys.connections,
-		queryFn: () => api.connections().then((view) => view.connections)
+		queryFn: () => api.connections()
 	}));
 	const statuses = createQuery(() => ({
 		queryKey: queryKeys.status,
@@ -172,9 +148,6 @@
 		};
 	});
 
-	let seed = $state<EditSeed | null>(null);
-	let saving = $state(false);
-	let editRefusal = $state<string | null>(null);
 	let publishing = $state(false);
 	let deleting = $state(false);
 	// The marketplace being added, so the row that started it is the one that
@@ -192,20 +165,6 @@
 	// read below carries them: a run the server has not listed yet would
 	// otherwise vanish between starting it and the refetch landing.
 	let justStarted = $state<{ inventory: InventoryId; job: string }[]>([]);
-
-	// Seeded once per resource rather than mirrored: a refetch arriving while the
-	// seller is typing must not overwrite what they typed, and a move from one
-	// resource to the next must not leave the first one's fields in the form —
-	// SvelteKit keeps one component across a change of `[id]`, so without the
-	// second guard a save would write this resource's title onto that one.
-	let seededFor = $state<string | null>(null);
-	$effect(() => {
-		const stored = product.data;
-		if (stored !== undefined && (seed === null || seededFor !== stored.id)) {
-			seed = editSeedOf(stored);
-			seededFor = stored.id;
-		}
-	});
 
 	const chips = $derived.by(() => {
 		const found = new Map<InventoryId, MarketplaceChip>();
@@ -252,69 +211,10 @@
 	const needing = $derived([...chips.values()].filter((chip) => chip.action !== null && chip.tone === 'bad'));
 
 	const blockedBy = $derived(editBlockedBy(mappings));
-	const licensing = $derived(
-		inventories.filter(
-			(inventory: InventoryId) => vocabularies.get(inventory)?.authoring.licence !== undefined
-		)
-	);
-	const licenceChoices = $derived(
-		seed === null || licensing.length === 0
-			? []
-			: licenceOptions(vocabularies.get(licensing[0]), seed.branch)
-	);
 	const payloadFiles = $derived(
 		(product.data?.files ?? []).filter((file) => file.role === 'payload').length
 	);
 	const hasRights = $derived(product.data?.rights !== undefined);
-	const bodyCap = $derived.by(() => {
-		const caps = inventories
-			.map(
-				(inventory: InventoryId) =>
-					vocabularies.get(inventory)?.canonical.find((entry) => entry.field === 'description')
-						?.cap
-			)
-			.filter((cap) => cap !== undefined);
-		return caps.length === 0 ? null : caps.reduce((a, b) => (a.limit <= b.limit ? a : b));
-	});
-
-	async function save(event: SubmitEvent) {
-		event.preventDefault();
-		if (seed === null || blockedBy.length > 0) {
-			return;
-		}
-		const body = patchBodyOf(seed, licensing[0] ?? product.data?.rights?.inventory ?? null);
-		if (body === null) {
-			editRefusal = 'A paid price is a positive amount, written in the currency’s own units.';
-			return;
-		}
-		saving = true;
-		editRefusal = null;
-		try {
-			const patched = await api.patchProduct(id, body);
-			await queryClient.invalidateQueries({ queryKey: queryKeys.product(id) });
-			await queryClient.invalidateQueries({ queryKey: queryKeys.products });
-			toast(
-				'info',
-				patched.reaches.length === 0
-					? 'Saved. This listing is on no marketplace yet.'
-					: `Saved. Reaches ${patched.reaches.map(platformTitle).join(', ')} on the next send.`
-			);
-		} catch (failure) {
-			editRefusal = editRefusalOf(failure);
-		} finally {
-			saving = false;
-		}
-	}
-
-	function editRefusalOf(failure: unknown): string {
-		if (!(failure instanceof ApiFailure)) {
-			return 'The edit was not saved.';
-		}
-		if (failure.code() === 'uncaptured_transition') {
-			return 'This listing is live on a platform whose edit-published transition we have not captured, so the edit cannot be attempted.';
-		}
-		return sentenceFor(failure, 'The edit was not saved.');
-	}
 
 	function published(started: { inventory: InventoryId; job: string }[]) {
 		publishing = false;
@@ -383,143 +283,12 @@
 		}
 	}
 
-	// The Files panel's own state. One action at a time, so a seller cannot
-	// remove the file an upload is in the middle of replacing; the machine in
-	// `files.ts` is what holds that, and it is tested there.
-	let fileAction = $state<FileAction>(IDLE);
-	// What a file change reaches, kept from the last one so the panel can say
-	// where it landed rather than only that it landed.
-	let fileReach = $state<string | null>(null);
-	let picking: HTMLInputElement | null = $state(null);
-	// Which row the picker was opened for, and `null` for the add. Held here
-	// rather than in the machine because it outlives the confirmation: the
-	// picker fires long after the control was pressed.
-	let pickingFor: string | null = null;
-	let pickingVerb: 'add' | 'replace' = 'replace';
-	let chosen: File | null = null;
-
-	const storedFiles = $derived(product.data?.files ?? []);
-
-	function fileEvent(event: Parameters<typeof advance>[1]) {
-		fileAction = advance(fileAction, event);
-	}
-
-	/** Opens the file picker for one row, or for the add. Nothing is destroyed
-	 *  yet: a replacement asks for confirmation once the file is chosen, so the
-	 *  question can name both files rather than only the one being lost. */
-	function choose(verb: 'add' | 'replace', file: string | null) {
-		if (busy(fileAction)) {
-			return;
-		}
-		pickingVerb = verb;
-		pickingFor = file;
-		chosen = null;
-		picking?.click();
-	}
-
-	function picked(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0] ?? null;
-		// Cleared so choosing the same file twice in a row still fires a change.
-		input.value = '';
-		if (file === null) {
-			return;
-		}
-		chosen = file;
-		if (pickingVerb === 'add') {
-			void sendFile('add', null, file);
-			return;
-		}
-		fileEvent({
-			kind: 'ask',
-			verb: 'replace',
-			file: pickingFor ?? '',
-			chosen: file.name
-		});
-	}
-
-	/** Uploads the chosen bytes, then names the handle back. `keep_whole`
-	 *  because one replacement is one file: `explode` would answer with a
-	 *  handle per entry for an archive, and the row takes exactly one. */
-	async function sendFile(verb: 'add' | 'replace', file: string | null, bytes: File) {
-		fileEvent({ kind: 'send', verb, file });
-		try {
-			const uploaded = await api.upload(bytes, 'keep_whole', (fraction) =>
-				fileEvent({ kind: 'progress', fraction })
-			);
-			fileEvent({ kind: 'stored' });
-			const stored = uploaded.payload[0];
-			if (stored === undefined) {
-				fileEvent({ kind: 'failed', sentence: 'That upload carried no file we can store.' });
-				return;
-			}
-			// The name is the client's word: the upload sends a raw body, which
-			// carries no filename, so it travels back beside the handle.
-			const handle = { ...stored, name: bytes.name };
-			if (verb === 'add') {
-				const added = await api.addProductFile(id, 'payload', handle);
-				await settleFile(added.reaches, 'File added.');
-				return;
-			}
-			// No thumbnail is sent: the server renders one from these bytes
-			// where it decides a redraw is due, and reports what it drew. A
-			// handle offered from here would be a handle a client could point
-			// at any file, which is the hole that closed by removing the field.
-			const replaced = await api.replaceProductFile(id, file ?? '', handle);
-			await settleFile(
-				replaced.reaches,
-				replaced.cover === undefined ? 'File replaced.' : 'File replaced, thumbnail redrawn.'
-			);
-		} catch (failure) {
-			fileEvent({ kind: 'failed', sentence: fileRefusal(failure, verb) });
-		}
-	}
-
-	async function removeFile(file: string) {
-		fileEvent({ kind: 'send', verb: 'remove', file });
-		try {
-			const landed = await api.removeProductFile(id, file);
-			await settleFile(
-				landed.reaches,
-				landed.thumbnail.state === 'redrawn'
-					? 'File removed, thumbnail redrawn.'
-					: landed.thumbnail.state === 'retired'
-						? 'File removed, and the thumbnail with it.'
-						: 'File removed.'
-			);
-		} catch (failure) {
-			fileEvent({ kind: 'failed', sentence: fileRefusal(failure, 'remove') });
-		}
-	}
-
-	async function settleFile(reaches: InventoryId[], said: string) {
-		fileReach = reachSentence(reaches);
-		fileEvent({ kind: 'settled' });
-		await queryClient.invalidateQueries({ queryKey: queryKeys.product(id) });
-		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
-		toast('info', said);
-	}
-
-	function confirmFile() {
-		if (fileAction.kind !== 'confirming') {
-			return;
-		}
-		const { verb, file } = fileAction;
-		if (verb === 'remove') {
-			void removeFile(file);
-			return;
-		}
-		if (chosen !== null) {
-			void sendFile('replace', file, chosen);
-		}
-	}
-
 	async function deleted() {
 		deleting = false;
 		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
 		await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
 		toast('info', 'Listing deleted.');
-		await goto('/inventory');
+		await goto('/resources');
 	}
 </script>
 
@@ -534,7 +303,7 @@
 			body="It may have been deleted. The catalogue still has everything else."
 		>
 			{#snippet actions()}
-				<Button href="/inventory" icon="layout-list">Back to Resources</Button>
+				<Button href="/resources" icon="layout-list">Back to Resources</Button>
 			{/snippet}
 		</Placeholder>
 	{:else if product.isError || product.data === undefined}
@@ -549,7 +318,7 @@
 			body="Nothing has happened to it; the reading failed. Reload to try again."
 		>
 			{#snippet actions()}
-				<Button href="/inventory" icon="layout-list">Back to Resources</Button>
+				<Button href="/resources" icon="layout-list">Back to Resources</Button>
 			{/snippet}
 		</Placeholder>
 	{:else if allMappings.isError}
@@ -569,7 +338,7 @@
 			body="Nothing below would be true without it, so nothing below is shown. Reload to try again."
 		>
 			{#snippet actions()}
-				<Button href="/inventory" icon="layout-list">Back to Resources</Button>
+				<Button href="/resources" icon="layout-list">Back to Resources</Button>
 			{/snippet}
 		</Placeholder>
 	{:else}
@@ -665,6 +434,7 @@
 								href={chip.action.href}
 								target={chip.action.external ? '_blank' : undefined}
 								rel={chip.action.external ? 'noopener noreferrer' : undefined}
+								use:external
 							>{chip.action.label}</a>
 						{/if}
 						{#if mapping.binding_state === 'unbound'}
@@ -765,288 +535,15 @@
 			</Panel>
 		{/if}
 
-		{#if blockedBy.length > 0}
-			<Banner tone="warn" title="This resource is live and cannot be edited through us">
-				{blockedBy.map(platformTitle).join(', ')} has a published listing, and neither editing a
-				published listing nor taking one back to draft is a transition we have captured there. The
-				fields below are shown as stored and the edit is held back rather than sent and refused.
-			</Banner>
-		{/if}
-
-		{#if seed}
-			{@const current = seed}
-			<form class="res-form" onsubmit={save}>
-				<Panel
-					title="The resource"
-					description="The canonical fields. Every marketplace this resource is on takes them from here."
-				>
-					<Field label="Title" id="edit-title" required>
-						<input
-							id="edit-title"
-							type="text"
-							required
-							maxlength="500"
-							disabled={blockedBy.length > 0}
-							value={current.title}
-							oninput={(event) => (seed = { ...current, title: event.currentTarget.value })}
-						/>
-					</Field>
-
-					<Field label="Description" id="edit-body">
-						{#if bodyCap}
-							{@const used = measure(current.body, bodyCap.unit)}
-							<span class="res-count" class:over={used > bodyCap.limit}>
-								{used} of {bodyCap.limit}
-							</span>
-						{/if}
-						<textarea
-							id="edit-body"
-							disabled={blockedBy.length > 0}
-							value={current.body}
-							oninput={(event) => (seed = { ...current, body: event.currentTarget.value })}
-						></textarea>
-					</Field>
-
-					<fieldset class="res-choices">
-						<legend>Written as</legend>
-						{#each ['Markdown', 'Html'] as const as format (format)}
-							<label>
-								<input
-									type="radio"
-									name="edit-body-format"
-									disabled={blockedBy.length > 0}
-									checked={current.bodyFormat === format}
-									onchange={() => (seed = { ...current, bodyFormat: format })}
-								/>
-								{format}
-							</label>
-						{/each}
-					</fieldset>
-
-					<fieldset class="res-choices">
-						<legend>Price</legend>
-						<label>
-							<input
-								type="radio"
-								name="edit-price-branch"
-								disabled={blockedBy.length > 0}
-								checked={current.branch === 'free'}
-								onchange={() => (seed = { ...current, branch: 'free' })}
-							/>
-							Free
-						</label>
-						<label>
-							<input
-								type="radio"
-								name="edit-price-branch"
-								disabled={blockedBy.length > 0}
-								checked={current.branch === 'paid'}
-								onchange={() => (seed = { ...current, branch: 'paid' })}
-							/>
-							Paid
-						</label>
-					</fieldset>
-
-					{#if current.branch === 'paid'}
-						<div class="res-row">
-							<Field label="Amount" id="edit-amount" required>
-								<input
-									id="edit-amount"
-									type="text"
-									inputmode="decimal"
-									placeholder="4.50"
-									disabled={blockedBy.length > 0}
-									value={current.amount}
-									oninput={(event) => (seed = { ...current, amount: event.currentTarget.value })}
-								/>
-							</Field>
-							<Field label="Currency" id="edit-currency" required>
-								<select
-									id="edit-currency"
-									disabled={blockedBy.length > 0}
-									value={current.currency}
-									onchange={(event) =>
-										(seed = { ...current, currency: event.currentTarget.value })}
-								>
-									{#each CURRENCY_OPTIONS as option (option.value)}
-										<option value={option.value}>{option.code}</option>
-									{/each}
-								</select>
-							</Field>
-						</div>
-					{/if}
-
-					{#if licensing.length > 0}
-						<Field
-							label="Licence"
-							id="edit-licence"
-							hint="Gated on the price, so changing free or paid changes this list. A stated licence can be replaced here but not withdrawn."
-						>
-							<select
-								id="edit-licence"
-								disabled={blockedBy.length > 0}
-								value={current.licence ?? ''}
-								onchange={(event) =>
-									(seed = {
-										...current,
-										licence: event.currentTarget.value === '' ? null : event.currentTarget.value
-									})}
-							>
-								<option value="">Leave as stored</option>
-								{#each licenceChoices as choice (choice.id)}
-									<option value={choice.id}>{choice.label}</option>
-								{/each}
-							</select>
-						</Field>
-					{/if}
-
-					{#if editRefusal !== null}
-						<Banner tone="bad">{editRefusal}</Banner>
-					{/if}
-
-					<div class="res-acts">
-						<Button
-							tier="primary"
-							type="submit"
-							disabled={saving || blockedBy.length > 0}
-							reason={blockedBy.length > 0
-								? 'A published listing cannot be edited through us.'
-								: saving
-									? 'The change is being saved.'
-									: undefined}
-						>
-							{saving ? 'Saving…' : 'Save changes'}
-						</Button>
-						<span class="res-note">
-							Saving writes the catalogue. It reaches a marketplace on the next send.
-						</span>
-					</div>
-				</Panel>
-			</form>
-		{/if}
-
-		<Panel
-			title="Files"
-			description="What a buyer downloads, plus the thumbnail we draw from the first file."
-		>
-			{#each stored.files as file (file.id)}
-				{@const may = removable(storedFiles, file.id, inventories.length > 0)}
-				{@const swappable = replaceable(storedFiles, file.id)}
-				{@const mine = fileAction.kind !== 'idle' && fileAction.file === file.id}
-				<div class="res-line res-file">
-					<span class="res-line-what">
-						<StatusPill tone="flat" label={ROLE_WORD[file.role]} />
-						<span class="res-line-t" class:res-file-anon={file.name === undefined}
-							>{fileName(file)}</span
-						>
-						<span class="res-line-id">{file.kind} · {file.scan}</span>
-					</span>
-					<span class="res-line-at">{file.byte_len.toLocaleString('en-GB')} bytes</span>
-					<span class="res-file-acts">
-						<Button
-							small
-							disabled={busy(fileAction) || !swappable.ok}
-							reason={busy(fileAction)
-								? 'One file change runs at a time.'
-								: swappable.ok
-									? undefined
-									: swappable.reason}
-							onclick={() => choose('replace', file.id)}>Replace…</Button
-						>
-						<Button
-							small
-							danger
-							disabled={busy(fileAction) || !may.ok}
-							reason={busy(fileAction)
-								? 'One file change runs at a time.'
-								: may.ok
-									? undefined
-									: may.reason}
-							onclick={() => fileEvent({ kind: 'ask', verb: 'remove', file: file.id, chosen: null })}
-							>Remove…</Button
-						>
-					</span>
-					{#if mine && fileAction.kind === 'uploading'}
-						<p class="res-file-say" role="status">
-							Replacing {fileWords(file)}… {Math.round(fileAction.fraction * 100)}% sent
-						</p>
-					{:else if mine && fileAction.kind === 'writing'}
-						<p class="res-file-say" role="status">Saving…</p>
-					{:else if mine && fileAction.kind === 'confirming'}
-						<div class="res-file-ask">
-							<p class="res-file-say">
-								{#if fileAction.verb === 'remove'}
-									Remove {fileWords(file)} from this resource?
-									{#if retiresCover(storedFiles, file.id)}
-										{LAST_FILE_LOSES_THUMBNAIL}
-									{:else if stalesCover(storedFiles, file.id)}
-										The thumbnail is drawn from this file, so it is redrawn from the next one.
-									{/if}
-								{:else}
-									Replace {fileWords(file)} with {fileAction.chosen}?
-									{#if redrawsCover(storedFiles, file.id)}
-										The thumbnail is drawn from this file, so it is redrawn from the new one.
-									{/if}
-								{/if}
-								{reachSentence(inventories)} Removing or replacing a file does not reclaim storage: the
-								file itself stays in your storage either way.
-							</p>
-							<span class="res-file-acts">
-								<Button small tier="primary" onclick={confirmFile}>
-									{fileAction.verb === 'remove' ? 'Remove it' : 'Replace it'}
-								</Button>
-								<Button small onclick={() => fileEvent({ kind: 'cancel' })}>Keep it</Button>
-							</span>
-						</div>
-					{:else if mine && fileAction.kind === 'refused'}
-						<p class="res-file-say res-file-no" role="alert">{fileAction.sentence}</p>
-					{/if}
-				</div>
-			{:else}
-				<p class="res-note">No files recorded.</p>
-			{/each}
-
-			<div class="res-file-add">
-				<Button
-					small
-					icon="plus"
-					disabled={busy(fileAction)}
-					reason={busy(fileAction) ? 'One file change runs at a time.' : undefined}
-					onclick={() => choose('add', null)}>Add file</Button
-				>
-				{#if fileAction.kind === 'uploading' && fileAction.file === null}
-					<span class="res-file-say" role="status"
-						>Sending… {Math.round(fileAction.fraction * 100)}%</span
-					>
-				{:else if fileAction.kind === 'writing' && fileAction.file === null}
-					<span class="res-file-say" role="status">Saving…</span>
-				{:else if fileAction.kind === 'refused' && fileAction.file === null}
-					<span class="res-file-say res-file-no" role="alert">{fileAction.sentence}</span>
-				{/if}
-			</div>
-
-			<!-- Off-screen rather than hidden: a display:none input cannot be
-			     clicked open in every browser, and this one is opened by script. -->
-			<input
-				class="res-file-pick"
-				type="file"
-				bind:this={picking}
-				onchange={picked}
-				tabindex="-1"
-				aria-hidden="true"
-			/>
-
-			<p class="res-foot">
-				<span class="block"
-					>Changing a file here changes your Resources. {fileReach ??
-						reachSentence(inventories)}</span
-				>
-				<span class="block"
-					>The thumbnail is drawn from the first file. Replacing that file redraws it; replacing any
-					other leaves it alone.</span
-				>
-			</p>
-		</Panel>
+		<!-- The same form the create route renders, in its second mode. Not a
+		     second form: the edit used to collect six fields of a model with
+		     twenty-four, so seventeen sidecar fields were set once at create and
+		     could never be changed. The live-listing banner, the files panel and
+		     the marketplace ticks are all inside it, because each belongs beside
+		     the fields it constrains. -->
+		<ResourceForm
+			mode={{ kind: 'edit', product: stored, mapped: inventories, blockedBy }}
+		/>
 
 		<PublishDialog
 			open={publishing}

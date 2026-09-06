@@ -18,14 +18,18 @@ import type {
 	DraftInput,
 	FacetView,
 	FileHandle,
+	FileView,
 	FormCaps,
 	FormVocabularyView,
+	PatchProductBody,
 	PathInput,
+	PathView,
 	PriceIntent,
+	ProductView,
 	TptBaseInput,
 	VocabularyView
 } from '$lib/api';
-import type { FormGroup, InventoryId, TermKind } from '$lib/generated/vocab';
+import type { CopyFormat, FileRole, FormGroup, InventoryId, TermKind } from '$lib/generated/vocab';
 import { core, loadCore } from '$lib/core';
 import { licenceElections, licenceGated, rightsOf, type LicenceIntent } from '$lib/authoring';
 import { MARKETPLACE_OF } from '$lib/listings-view';
@@ -117,13 +121,29 @@ export interface StandardPick {
 export interface TptDraft {
 	name: string;
 	description: string;
+	/** How `description` is written.
+	 *
+	 *  Carried rather than asserted at the wire. A create writes Markdown and
+	 *  no control changes it, but an edit is seeded from a product that may
+	 *  already be `Html` — the Tes import writes those — and a save that
+	 *  relabelled it would leave the markup unchanged under a declaration that
+	 *  is now wrong, which is how a listing acquires escaped markup on its next
+	 *  send. The format only ever travels beside the body it describes. */
+	bodyFormat: CopyFormat;
 	payload: FileHandle[];
 	cover: FileHandle | null;
 	previews: FileHandle[];
-	videoPreview: FileHandle | null;
+	/** The video preview's handle, as the sidecar stores it: a bare digest.
+	 *  No control writes one yet, and the read carries the hash alone, so a
+	 *  whole `FileHandle` here would be a kind and a length nothing states. */
+	videoPreview: string | null;
 	/** `1` auto-generate, `2` upload now, `3` upload later. */
 	thumbnailMode: string;
-	thumbnails: FileHandle[];
+	/** One digest per filled slot, in slot order, as the sidecar stores them.
+	 *  Bare hashes rather than handles for the same reason `videoPreview` is:
+	 *  the read carries the hash alone, so a kind and a length here would be
+	 *  values nothing states. */
+	thumbnails: string[];
 	free: boolean;
 	price: string;
 	additionalLicence: string;
@@ -139,11 +159,14 @@ export interface TptDraft {
 	 *  country and is served, never written here, so a seller outside the one
 	 *  country we have measured does not read another country's name.
 	 *
-	 *  A boolean rather than the sidecar's three-state option, and the two
-	 *  agree: the wire's absent case is a product nobody asked, and a seller
-	 *  looking at this control has been asked, so a saved form states the
-	 *  checkbox's own answer whichever way it is ticked. */
-	appropriateForCountry: boolean;
+	 *  Three states, as the sidecar has: `true` and `false` are the ticked and
+	 *  unticked answers of a seller who was shown the control, and `null` is a
+	 *  product that was never asked. A create shows the control, so it starts
+	 *  at `false` and an unticked box is an answer. An edit is seeded from a
+	 *  product that may hold none, and collapsing that to `false` on the way in
+	 *  would turn "not stated" into "explicitly no" on the first save, since
+	 *  the sidecar is sent whole every time. */
+	appropriateForCountry: boolean | null;
 	standards: StandardPick[];
 	teachingDuration: string | null;
 	pagesOrSlides: string;
@@ -166,10 +189,33 @@ export interface TptDraft {
 	overrides: Record<string, string>;
 }
 
+/** Which of the two things this form is doing.
+ *
+ *  One component renders both, because the create form and the edit form are
+ *  one model: TPT's own create and edit post near-identical bodies, and a
+ *  second component would be a second set of seventeen controls to keep in
+ *  step. The mode decides the seed, the request the submit makes, and whether
+ *  a marketplace tick can be taken back — nothing else. */
+export type FormMode =
+	| { kind: 'create' }
+	| {
+			kind: 'edit';
+			product: ProductView;
+			/** The marketplaces this resource already reaches. Add-only: no
+			 *  route unmaps one, so these render ticked and disabled. */
+			mapped: readonly InventoryId[];
+			/** The live listings that make this whole form read-only, or empty.
+			 *  A published listing on a platform whose edit transition we have
+			 *  not captured cannot be edited through us, and the server refuses
+			 *  the request, so the fields are shown as stored and held back. */
+			blockedBy: readonly InventoryId[];
+	  };
+
 export function emptyTptDraft(): TptDraft {
 	return {
 		name: '',
 		description: '',
+		bodyFormat: 'Markdown',
 		payload: [],
 		cover: null,
 		previews: [],
@@ -840,9 +886,9 @@ export function draftInputOf(draft: TptDraft): DraftInput {
 		for_marketplace: draft.inventories.length > 0,
 		payload_hash: draft.payload[0]?.hash ?? null,
 		preview_hash: draft.previews[0]?.hash ?? null,
-		video_preview_hash: draft.videoPreview?.hash ?? null,
+		video_preview_hash: draft.videoPreview,
 		thumbnail_mode: Number(draft.thumbnailMode),
-		thumbnail_hashes: draft.thumbnails.map((file) => file.hash),
+		thumbnail_hashes: draft.thumbnails,
 		description: draft.description,
 		free: draft.free,
 		price_minor_units: draft.free ? null : minorUnitsOf(draft.price),
@@ -907,8 +953,8 @@ export function gradePathsOf(draft: TptDraft): PathInput[] {
 export function tptBaseOf(draft: TptDraft): TptBaseInput {
 	return {
 		thumbnail_mode: Number(draft.thumbnailMode),
-		thumbnail_hashes: draft.thumbnails.map((file) => file.hash),
-		video_preview_hash: draft.videoPreview?.hash ?? null,
+		thumbnail_hashes: draft.thumbnails,
+		video_preview_hash: draft.videoPreview,
 		additional_licence_minor_units: draft.free ? null : minorUnitsOf(draft.additionalLicence),
 		bundle_discount_minor_units: draft.free ? null : minorUnitsOf(draft.bundleDiscount),
 		tax_code_id: draft.free || draft.taxCode === null ? null : Number(draft.taxCode),
@@ -958,7 +1004,7 @@ export function createBodyOf(
 	return {
 		title: draft.name.trim(),
 		body: draft.description,
-		body_format: 'Markdown',
+		body_format: draft.bodyFormat,
 		price,
 		payload: draft.payload,
 		cover: draft.cover,
@@ -969,6 +1015,164 @@ export function createBodyOf(
 		inventories: draft.inventories,
 		elections: licenceElections(intent, known),
 		tpt_base: tptBaseOf(draft)
+	};
+}
+
+/** The draft as `PATCH /v1/products/{product}` reads it, or `null` where the
+ *  price is one this client will not send.
+ *
+ *  Three fields the create carries are deliberately absent, and each for the
+ *  same reason: on this route an absent field is left as stored, so sending
+ *  one the form does not collect would clear it. `payload`, `cover` and
+ *  `previews` belong to the file sub-resource. `subjects` is the canonical
+ *  taxonomy an import writes and this form has no control for, so the create's
+ *  own empty list would wipe it here. `inventories` and `elections` have no
+ *  place on this body at all: a marketplace is added through its own route,
+ *  and edit mode never removes one.
+ *
+ *  `tpt_base` travels whole because the server replaces the row rather than
+ *  merging it, which is what makes clearing a control expressible. */
+export function patchBodyOf(
+	draft: TptDraft,
+	known: ReadonlyMap<InventoryId, VocabularyView> = new Map()
+): PatchProductBody | null {
+	const price = priceIntentOf(draft);
+	if (price === null) {
+		return null;
+	}
+	const rights = rightsOf(licenceIntentOf(draft), known);
+	return {
+		title: draft.name.trim(),
+		body: draft.description,
+		// The format the product already carries, not a constant. Always beside
+		// the body it describes, because the server refuses a format on its own
+		// — and a format that changed without its text is the same fault seen
+		// from the other side: an `Html` body relabelled Markdown is unchanged
+		// markup under a declaration that is now wrong, which the next send
+		// renders as escaped markup.
+		body_format: draft.bodyFormat,
+		price,
+		grades: gradePathsOf(draft),
+		...(rights === null ? {} : { rights }),
+		tpt_base: tptBaseOf(draft)
+	};
+}
+
+/** The stored product as this form's own state: the inverse of
+ *  [`createBodyOf`] and [`tptBaseOf`] together.
+ *
+ *  A product with no sidecar row keeps [`emptyTptDraft`]'s values for the
+ *  seventeen fields it holds, and in particular leaves the copyright
+ *  attestation and the tax code unstated: neither is ours to invent, and a
+ *  form that arrived with one pre-selected would make the statement ours
+ *  rather than the seller's (D7).
+ *
+ *  `licence` and `inventories` come from the product and its mappings rather
+ *  than from the sidecar, which holds neither. */
+export function draftOf(
+	product: ProductView,
+	inventories: readonly InventoryId[] = []
+): TptDraft {
+	const base = product.tpt_base;
+	const files = (role: FileRole) => product.files.filter((file) => file.role === role);
+	const empty = emptyTptDraft();
+	const paid = paidMinorUnits(product.price);
+	return {
+		...empty,
+		name: product.title,
+		description: product.body,
+		bodyFormat: product.body_format,
+		payload: files('payload').map(handleOf),
+		cover: files('cover').map(handleOf)[0] ?? null,
+		previews: files('preview').map(handleOf),
+		videoPreview: base?.video_preview_hash ?? null,
+		thumbnailMode: base === undefined ? empty.thumbnailMode : String(base.thumbnail_mode),
+		thumbnails: base?.thumbnail_hashes ?? [],
+		free: paid === null,
+		price: paid === null ? '' : majorUnitsOf(paid),
+		additionalLicence: optionalMajorUnits(base?.additional_licence_minor_units),
+		bundleDiscount: optionalMajorUnits(base?.bundle_discount_minor_units),
+		taxCode: optionalId(base?.tax_code_id),
+		grades: product.grades.raw.map(pathSlug),
+		subjectAreas: base?.subject_areas ?? [],
+		tags: base?.tags ?? [],
+		formats: base?.formats ?? [],
+		customCategories: base?.custom_categories ?? [],
+		// `?? null` rather than `?? false`: a product with no sidecar and a
+		// sidecar that answered nothing are both unanswered, and neither is a
+		// seller saying no.
+		appropriateForCountry: base?.appropriate_for_country ?? null,
+		standards: (base?.standards ?? []).map(storedPick),
+		teachingDuration: optionalId(base?.teaching_duration_id),
+		pagesOrSlides: base?.pages_or_slides === null || base === undefined ? '' : String(base.pages_or_slides),
+		answerKey: optionalId(base?.answer_key_id),
+		copyright: optionalId(base?.copyright_declaration_id),
+		status: base === undefined ? empty.status : String(base.status_user),
+		licence: product.rights?.native_id ?? product.rights?.segments[0] ?? null,
+		inventories: [...inventories]
+	};
+}
+
+/** Everything the draft carries about a file, dropped.
+ *
+ *  The bytes are untouched: they reached `POST /v1/uploads` when the file was
+ *  chosen and they stay in the organisation's storage either way. This drops
+ *  the handles so the create does not carry them, and nothing else. */
+export function withoutPayload(draft: TptDraft): TptDraft {
+	return { ...draft, payload: [], cover: null, previews: [] };
+}
+
+function handleOf(file: FileView): FileHandle {
+	return { hash: file.hash, kind: file.kind, byte_len: file.byte_len, name: file.name };
+}
+
+/** The stored price in minor units, or `null` for a free listing and for a
+ *  shape this client cannot read. Both read back as free, because guessing an
+ *  amount is worse than showing none. */
+function paidMinorUnits(price: unknown): number | null {
+	if (typeof price !== 'object' || price === null) {
+		return null;
+	}
+	const paid = (price as { Paid?: unknown }).Paid;
+	if (typeof paid !== 'object' || paid === null) {
+		return null;
+	}
+	const minor = (paid as { minor_units?: unknown }).minor_units;
+	return typeof minor === 'number' ? minor : null;
+}
+
+function optionalMajorUnits(minorUnits: number | null | undefined): string {
+	return minorUnits === null || minorUnits === undefined ? '' : majorUnitsOf(minorUnits);
+}
+
+function optionalId(id: number | null | undefined): string | null {
+	return id === null || id === undefined ? null : String(id);
+}
+
+function pathSlug(path: PathView): string {
+	return path.native_id ?? path.segments[0] ?? '';
+}
+
+/** One stored alignment as a pick.
+ *
+ *  The sidecar holds the framework, the code and TPT's node id, and neither
+ *  the statement the mirror published nor the mirror's own identifier. So the
+ *  identifier is synthesised from what is stored and marked as such: the chips
+ *  render the code and remove by this key, which works, and a seller who finds
+ *  the same standard again in the search adds a second pick rather than seeing
+ *  the stored one already ticked. Storing the mirror's guid would fix that and
+ *  is a migration, so it is stated here rather than papered over. */
+function storedPick(alignment: {
+	framework: number;
+	code: string;
+	tpt_node_id: number | null;
+}): StandardPick {
+	return {
+		framework: alignment.framework,
+		code: alignment.code,
+		statement: '',
+		source_guid: `stored:${alignment.framework}:${alignment.code}:${alignment.tpt_node_id ?? ''}`,
+		...(alignment.tpt_node_id === null ? {} : { tpt_node_id: alignment.tpt_node_id })
 	};
 }
 
@@ -986,14 +1190,16 @@ export const UNCOLLECTED_FIELDS: readonly string[] = [];
 
 /** One thumbnail slot's state, in the order TPT lays the four out.
  *
- *  `local` is the seller's own bytes as the browser can draw them, held from
- *  the instant the file is chosen so the picture appears before the upload
- *  finishes. `handle` is what the server answered with, and only a slot that
- *  has one is a slot the create carries. The two are separate because the gap
- *  between them is exactly the interval the seller is told about. */
+ *  `local` is where the picture can be drawn from: the browser's own object
+ *  URL for bytes the seller has just chosen, held from the instant they choose
+ *  so the picture appears before the upload finishes, or the stored blob's own
+ *  route for a slot seeded from a saved listing. `handle` is the digest the
+ *  server answered with, and only a slot that has one travels. The two are
+ *  separate because the gap between them is exactly the interval the seller is
+ *  told about. */
 export interface ThumbnailSlot {
 	local: string | null;
-	handle: FileHandle | null;
+	handle: string | null;
 	sending: boolean;
 	refusal: string | null;
 }
@@ -1007,12 +1213,31 @@ export function emptySlots(): ThumbnailSlot[] {
 	}));
 }
 
-/** The handles the create carries, in slot order and skipping the empty ones.
+/** The four slots as a saved listing left them: one filled per stored digest,
+ *  in the order the sidecar holds them, and the rest empty.
+ *
+ *  A stored slot draws from `GET /{version}/uploads/{handle}`, which serves any
+ *  blob this organisation sealed and therefore needs no route of its own. That
+ *  route answers PNG, JPEG, GIF and WebP, each decided from the bytes' own
+ *  signature by `image_type` in `crates/tam-api/src/resources.rs`, and refuses
+ *  anything else, so a slot holding some other format shows as stored without
+ *  drawing; the digest still travels, so an edit that does not touch the slot
+ *  does not drop the thumbnail. */
+export function slotsFrom(hashes: readonly string[]): ThumbnailSlot[] {
+	return emptySlots().map((slot, index) => {
+		const hash = hashes[index];
+		return hash === undefined
+			? slot
+			: { local: `/v1/uploads/${hash}`, handle: hash, sending: false, refusal: null };
+	});
+}
+
+/** The digests the create carries, in slot order and skipping the empty ones.
  *
  *  Skipping rather than padding: the sidecar stores a list and a slot nobody
  *  filled is not a thumbnail, so a placeholder would be a hash standing for no
  *  bytes — which is the thing `create_product`'s own check refuses. */
-export function thumbnailHandles(slots: readonly ThumbnailSlot[]): FileHandle[] {
+export function thumbnailHashes(slots: readonly ThumbnailSlot[]): string[] {
 	return slots.flatMap((slot) => (slot.handle === null ? [] : [slot.handle]));
 }
 

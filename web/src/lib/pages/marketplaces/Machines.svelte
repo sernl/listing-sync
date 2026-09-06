@@ -95,9 +95,9 @@
 	<div class="mp-sect">
 		<h2>Your machines</h2>
 		<p>
-			Each machine running the desktop app appears here. Your marketplace logins stay on that
-			machine and never reach our servers, so this list only says what each one reports
-			holding.
+			Each computer and phone running the Teachouse app appears here. Your marketplace logins
+			stay on that machine and never reach our servers, so this list only says what each one
+			reports holding.
 		</p>
 	</div>
 
@@ -108,8 +108,8 @@
 	{:else if joined.rows.length === 0}
 		<div class="mp-card">
 			<p class="mp-body">
-				No machine is registered yet. Install the desktop app and sign in on it, and it
-				appears here.
+				No machine is registered yet. Install the Teachouse app on a computer or a phone and
+				sign in on it, and it appears here.
 			</p>
 			<div class="mp-foot"><a class="go" href="#downloads">Downloads <span aria-hidden="true">→</span></a></div>
 		</div>

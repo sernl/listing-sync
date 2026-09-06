@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type DownloadsManifest, readManifest } from './api';
-import { PLATFORM_ORDER, downloadCards } from './downloads';
+import { PLATFORM_MARK, PLATFORM_ORDER, downloadCards } from './downloads';
 
 /** The producer's own shape, from `nix/module.nix`: a channel version at the
  *  top, and an Android entry carrying its own version beside its digest because
@@ -27,6 +27,32 @@ describe('the download cards', () => {
 
 	it('offers nothing at all when no manifest is published', () => {
 		expect(downloadCards(null).every((card) => card.offer === undefined)).toBe(true);
+	});
+
+	it('draws a mark on every download card, published or not', () => {
+		// Before this, the three download tiles were the only cards on the page
+		// with an empty caption where every other card carries a mark, and the
+		// state that showed it was the unpublished one: a card with no build has
+		// no button either, so a missing mark left it the emptiest thing on the
+		// screen. Both manifests, because the mark comes from the platform and
+		// not from what the manifest happened to name.
+		for (const cards of [downloadCards(null), downloadCards(PUBLISHED)]) {
+			for (const card of cards) {
+				expect(card.mark, card.platform).toEqual(PLATFORM_MARK[card.platform]);
+			}
+		}
+	});
+
+	it('marks each platform with a glyph of our own, never a store badge', () => {
+		// The rule this holds: all three badge programmes license the badge to
+		// link to a listing on that store, and none of these cards links to one.
+		// A change from a glyph to an image here is the moment someone has to
+		// have read that licence, so it fails until they have.
+		expect(PLATFORM_ORDER.map((platform) => PLATFORM_MARK[platform].kind)).toEqual([
+			'glyph',
+			'glyph',
+			'glyph'
+		]);
 	});
 
 	it('offers nothing for a platform whose entry is null', () => {

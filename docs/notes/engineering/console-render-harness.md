@@ -23,6 +23,55 @@ So copy `web/build` to a snapshot directory whose name nothing else will take, s
 Grep the snapshot for a string only the new code contains — a class name the change added, or one it deleted — and refuse to render when the string is missing.
 That check costs one command and is the only thing standing between a green render and a render of last week.
 
+## A readiness check must prove the server is yours, not that one answers
+
+The snapshot rule above stops a render from photographing a stale build.
+It does not stop it from photographing somebody else's build, and on a shared machine that is the easier mistake to make.
+Several sessions run this harness at once, each on a port it picked, and a port two of them pick is a port only one of them gets.
+The loser's server exits on `EADDRINUSE` at once; the winner's goes on answering, correctly, on that port.
+
+What makes it silent is the readiness check.
+Starting the server in the background and then curling the page for a 200 proves that a server is listening, which was never in doubt — it does not prove the server is the one just started.
+So the capture runs, the page renders, and every pixel of it belongs to another session's snapshot of another slice's work.
+This cost a render that showed a page with none of the change on it, read as the change being broken, and was one edit away from being reported that way.
+Nothing in the picture said so, and nothing in the exit status did either: the shots were written, the text dumped, and the harness reported success throughout.
+
+The check has to name the tree.
+The server prints the snapshot path it is serving on its first line, so grep its log for the path this run created and refuse to render when it is absent; a server that lost the port leaves a traceback there instead, which the same grep catches.
+Reading the background process's exit status is not a substitute, because the shell reports the status of the pipeline the log was tee'd through rather than of the server.
+Picking an unlikely port is not a substitute either — it lengthens the odds and changes nothing about what happens when they come in.
+
+## A snapshot copied during someone else's build is two builds
+
+The rule above says to copy `web/build` before serving it, and the readiness check says to prove the server is yours.
+Neither covers the window inside the copy itself.
+`cp -r web/build <snapshot>` is not atomic, and `web/build` is shared, so a build that lands while the copy is walking the tree leaves a snapshot holding `index.html` from one build and chunks from the other.
+
+The page then goes blank, and nothing says why.
+SvelteKit's shell boots from an inline script that assigns a global named `__sveltekit_<id>`, where the id is regenerated per build, and the entry chunk reads that same global back by name.
+Across two builds the names disagree, so the chunk reads `undefined`, its start function throws on the first property access, and the document is left holding the shell's own markup and nothing else.
+The screenshot is an empty page, the capture reports success, the probe reports a handful of elements, and the obvious reading is that the change under review broke the console.
+This cost a render that was one message away from being reported as a regression in a change that turned out to be a stylesheet and two comments.
+
+The grep in the snapshot rule cannot catch it, because both halves of a mixed snapshot contain the string the change added.
+The check that does is to compare the two: extract `__sveltekit_<id>` from the snapshot's `index.html`, scan every `.js` under `_app/immutable` for the same pattern, and refuse to render when any chunk names an id the shell does not declare.
+It is one pass over the snapshot and it is the difference between a blank page you can explain and one you cannot.
+
+The same evidence tells a mixed snapshot from a real failure after the fact, which is worth knowing when a blank render has already happened: a page that failed for its own reasons still boots, so its errors carry component names and its probe carries a drawn shell, while a mixed one throws inside the framework's own entry before any of that exists.
+
+## Only one `npm run check` in the tree at a time
+
+`npm run check` is `svelte-kit sync && svelte-check`, and the sync step writes into `.svelte-kit/` — the generated `tsconfig.json` and the ambient type declarations the whole project compiles against.
+That directory belongs to the tree rather than to the run, so two checks started at once write over each other's output, and the second one type-checks against a directory the first is still rewriting.
+
+The symptom is not a crash and not an obviously broken tool.
+It is a long, plausible list of type errors in files nobody has touched: `window` and `MouseEvent` unknown, `Object.hasOwn` missing, `svelteHTML` undefined, a module that plainly exists reported as not found.
+Every one of them reads like a real regression in shared configuration, and the tempting repair — widening `lib` in `tsconfig.json`, or adding a triple-slash reference — makes the noise go away by loosening a gate that was never wrong.
+Never do that.
+
+The rule: run one `npm run check` in the tree at a time, and treat a sudden tree-wide type failure as a race until a serialised second run reproduces it.
+A failure that survives a run with nothing else building is a real one and worth every minute spent on it; one that vanishes was never in the code.
+
 ## A build outside the web lane uses whichever core happens to be there
 
 Some of the console's rules are decided by a compiled core that is generated rather than committed, and the directory holding it is ignored, so a fresh checkout has none of it at all.

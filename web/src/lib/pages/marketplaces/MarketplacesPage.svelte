@@ -1,14 +1,24 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { api } from '$lib/api';
 	import AddCard from '$lib/AddCard.svelte';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import { currentSessionToken, listBrowserSessions } from '$lib/browser-sessions';
+	import {
+		APP_CANNOT_CONNECT,
+		APP_CANNOT_FORGET,
+		connectHere,
+		desktopInvoker,
+		forgetHere,
+		type SessionOutcome
+	} from '$lib/desktop';
 	import { merge } from '$lib/device-merge';
 	import { marketplaceRows, needingAttention } from '$lib/devices-view';
+	import type { Marketplace } from '$lib/generated/vocab';
 	import { TRANSPORT_OF } from '$lib/inventory';
 	import { queryKeys } from '$lib/query';
+	import { toast } from '$lib/toast';
 	import Authorship from './Authorship.svelte';
 	import Downloads from './Downloads.svelte';
 	import Machines from './Machines.svelte';
@@ -17,12 +27,20 @@
 	import { fetchManifest } from './api';
 	import { DISCLAIMER, EXTENSIONS, LISTED, LIVE, PLANNED } from './catalogue';
 	import {
+		type Busy,
 		CARD_NAME,
 		type LiveRead,
 		TRANSPORT_BADGE,
+		busyAt,
 		deviceBranchInTileOrder,
+		disconnectAsk,
+		disconnectLabel,
+		disconnectable,
+		headerAction,
+		hostOf,
 		liveFace,
-		transportLine
+		transportLine,
+		withBusy
 	} from './view';
 	import './marketplaces.css';
 
@@ -48,10 +66,18 @@
 	// measured from the same instant and the list does not appear to tick.
 	const now = Date.now();
 
+	// Read once as well: whether this console is running inside the application,
+	// and on what, does not change while the page is open.
+	const invoke = desktopInvoker();
+	const host = hostOf(invoke, typeof navigator === 'undefined' ? null : navigator.userAgent);
+	const header = headerAction(host);
+
+	const queryClient = useQueryClient();
+
 	let requesting = $state(false);
 
 	const devices = $derived(registry.data?.devices ?? []);
-	const connections = $derived(linked.data?.connections ?? []);
+	const connections = $derived(linked.data ?? []);
 	const rows = $derived(marketplaceRows(devices, connections, now));
 	const joined = $derived(merge(devices, signIns.data ?? [], current.data ?? null));
 
@@ -82,9 +108,119 @@
 			const row = rows.find((entry) => entry.marketplace === tile.marketplace);
 			const held: LiveRead =
 				read === 'read' && row !== undefined ? { state: 'read', row } : { state: read === 'failed' ? 'failed' : 'pending' };
-			return { tile, face: liveFace(held) };
+			return { tile, face: liveFace(held, host) };
 		})
 	);
+
+	/** The stored connection for one marketplace, or undefined where the tenant
+	 *  has none. `MarketplaceRow.connection` is null by construction on the
+	 *  device branch, so the row cannot answer this and the list has to. */
+	function connectionFor(marketplace: Marketplace) {
+		return connections.find((entry) => entry.marketplace === marketplace);
+	}
+
+	/** Which cards are mid-flight, and at what. Per card, because the cards are
+	 *  independent: two marketplaces are two logins in two windows, and the
+	 *  application refuses a second window for the same marketplace itself. A
+	 *  seller starting the second must not make the first read idle while its
+	 *  own login window is still open. */
+	let busy = $state<Busy>({});
+
+	/** Ask this machine to open one marketplace's login.
+	 *
+	 *  Nothing is invalidated until it answers, and then both reads are: the
+	 *  application checks in before it reports success, so by the time this
+	 *  resolves the server has already lifted the connection to linked and the
+	 *  refetched card is right without a poll. */
+	const connecting = createMutation(() => ({
+		mutationFn: (marketplace: Marketplace) => connectHere(invoke, marketplace),
+		onSuccess: async (outcome: SessionOutcome, marketplace: Marketplace) => {
+			const name = CARD_NAME[marketplace];
+			if (outcome.kind === 'done') {
+				toast('info', `${name} is connected on this machine.`);
+			} else if (outcome.kind === 'unsupported') {
+				toast('error', APP_CANNOT_CONNECT);
+			} else if (outcome.kind === 'refused') {
+				toast('error', outcome.detail);
+			} else {
+				// Unreachable from this page, which offers the command only where
+				// there is an invoker. Said rather than swallowed, because a
+				// silent button is the failure this whole change is fixing.
+				toast('error', `${name} is connected from the Teachouse app on your computer.`);
+			}
+			await refetchConnections();
+		},
+		onError: () => {
+			toast('error', 'The sign-in could not be opened on this machine.');
+		},
+		onSettled: (_data, _error, marketplace: Marketplace) => {
+			busy = withBusy(busy, marketplace, null);
+		}
+	}));
+
+	/** Disconnect one marketplace: this machine first, then the control plane.
+	 *
+	 *  In that order because until the jar is gone the machine still holds
+	 *  cookies for a marketplace the server has been told is disconnected, and
+	 *  because its very next check-in would lift the row back to linked.
+	 *
+	 *  The server half runs whatever the device half answered. A machine that
+	 *  could not forget is a reason to tell the seller so, never a reason to
+	 *  leave scheduled work running. */
+	const disconnecting = createMutation(() => ({
+		mutationFn: async (marketplace: Marketplace) => {
+			const forgotten: SessionOutcome =
+				host === 'app'
+					? await forgetHere(invoke, marketplace)
+					: { kind: 'unavailable' };
+			const connection = connectionFor(marketplace);
+			const moved =
+				connection === undefined ? 0 : (await api.disconnect(connection.id)).connections;
+			return { forgotten, moved };
+		},
+		onSuccess: async (
+			done: { forgotten: SessionOutcome; moved: number },
+			marketplace: Marketplace
+		) => {
+			const name = CARD_NAME[marketplace];
+			if (done.forgotten.kind === 'unsupported') {
+				toast('error', APP_CANNOT_FORGET);
+			} else if (done.forgotten.kind === 'refused') {
+				toast('error', done.forgotten.detail);
+			} else if (done.moved === 0) {
+				toast('info', `${name} was already disconnected.`);
+			} else {
+				toast('info', `${name} is disconnected. Connecting again is the same button.`);
+			}
+			await refetchConnections();
+		},
+		onError: () => {
+			toast('error', 'The marketplace could not be disconnected.');
+		},
+		onSettled: (_data, _error, marketplace: Marketplace) => {
+			busy = withBusy(busy, marketplace, null);
+		}
+	}));
+
+	async function refetchConnections() {
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: queryKeys.connections }),
+			queryClient.invalidateQueries({ queryKey: queryKeys.devices })
+		]);
+	}
+
+	function connect(marketplace: Marketplace) {
+		busy = withBusy(busy, marketplace, 'action');
+		connecting.mutate(marketplace);
+	}
+
+	function disconnect(marketplace: Marketplace) {
+		if (!confirm(disconnectAsk(marketplace, host, connectionFor(marketplace)))) {
+			return;
+		}
+		busy = withBusy(busy, marketplace, 'disconnect');
+		disconnecting.mutate(marketplace);
+	}
 
 	/** Only the marketplaces this page offers an action for.
 	 *
@@ -142,7 +278,11 @@
 			</p>
 		</div>
 		<span class="act">
-			<Button tier="primary" icon="circle-plus" href="#downloads">Connect a marketplace</Button>
+			<Button
+				tier={host === 'app' ? 'outline' : 'primary'}
+				icon="circle-plus"
+				href={header.href}>{header.label}</Button
+			>
 		</span>
 	</div>
 
@@ -171,11 +311,21 @@
 				handle={card.face.handle}
 				status={card.face.status}
 				body={card.face.body}
+				about={card.tile.about}
 				transport={{
 					badge: TRANSPORT_BADGE[TRANSPORT_OF[card.tile.marketplace]],
 					line: transportLine(TRANSPORT_OF[card.tile.marketplace], card.tile.name)
 				}}
 				action={card.face.action}
+				disconnect={disconnectable(connectionFor(card.tile.marketplace))
+					? {
+							label: disconnectLabel(card.tile.marketplace),
+							marketplace: card.tile.marketplace
+						}
+					: undefined}
+				running={busyAt(busy, card.tile.marketplace)}
+				onrun={connect}
+				ondisconnect={disconnect}
 			/>
 		{/each}
 
@@ -186,6 +336,7 @@
 				home={tile.home}
 				status={{ tone: 'soon', label: 'Coming soon' }}
 				body={tile.body}
+				about={tile.about}
 				transport={tile.marketplace === undefined
 					? undefined
 					: {
@@ -203,6 +354,7 @@
 				home={tile.home}
 				status={{ tone: 'soon', label: 'On our list' }}
 				body={tile.body}
+				about={tile.about}
 				pending
 			/>
 		{/each}

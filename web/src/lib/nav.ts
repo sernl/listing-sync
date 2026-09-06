@@ -56,10 +56,10 @@ export const SECTIONS: readonly NavSection[] = [
 		id: 'crosslist',
 		label: 'Crosslist',
 		icon: 'package',
-		href: '/inventory',
-		primary: { href: '/inventory/new', label: 'New resource', icon: 'circle-plus' },
+		href: '/resources',
+		primary: { href: '/resources/new', label: 'New resource', icon: 'circle-plus' },
 		items: [
-			{ href: '/inventory', label: 'Resources', icon: 'layout-list' },
+			{ href: '/resources', label: 'Resources', icon: 'layout-list' },
 			{ href: '/labels', label: 'Labels', icon: 'tag' },
 			{ href: '/import', label: 'Import', icon: 'download' },
 			{ href: '/analytics', label: 'Analytics', icon: 'chart-line' },
@@ -125,7 +125,7 @@ export const SECTIONS: readonly NavSection[] = [
  * navigate to; it answers with the Resources list rather than a dashboard of
  * its own, so it is named for what it shows. It keeps its own entry rather than
  * being folded into the Crosslist page list because the path is real and the
- * breadcrumb has to resolve it, and it lands on the same screen `/inventory`
+ * breadcrumb has to resolve it, and it lands on the same screen `/resources`
  * does. The reconciliation queue is reached from the Marketplace Sync screen,
  * which carries its count; the rail carries no badge of its own, because two
  * places showing one figure is one place too many. */
@@ -247,27 +247,33 @@ export function sectionFor(pathname: string, operator = false): NavSection | nul
  *  prefix match on either would light two entries at once. */
 const EXACT_ONLY: readonly string[] = ['/admin', '/settings'];
 
-/** The bottom bar the console shows below the phone breakpoint, and the one
- *  navigation on that viewport. It mirrors the rail exactly rather than
- *  choosing its own five destinations: the rail is already down to four
- *  sections, four fits a phone, and a tab bar that disagreed with the rail
- *  would be a second information architecture to keep true.
+/** The rail's sections rendered as tabs. `PHONE_BAR` below is the bar the
+ *  console actually shows; this is the navigating half of it, so the tabs and
+ *  the rail cannot come to name different destinations.
  *
  *  This is the Android app's navigation too, because that build shows this
  *  same console (`apps/desktop/src-tauri/tauri.conf.json`).
  *
  *  Derived from `SECTIONS`, so a renamed section renames its tab or stops the
  *  lane at module load rather than rotting silently. */
-export const MOBILE_TABS: readonly NavItem[] = SECTIONS.map((section) => ({
+export const SECTION_TABS: readonly NavItem[] = SECTIONS.map((section) => ({
 	href: section.href,
 	label: section.label,
 	icon: section.icon
 }));
 
-export interface PhoneTab extends NavItem {
+export interface PhoneTab extends Omit<NavItem, 'href'> {
+	/** Where the cell goes. Absent on the cell that opens the palette: it is an
+	 *  action rather than a destination, so it has no path to carry and no
+	 *  `aria-current` to take. */
+	href?: string;
 	/** The create action. Drawn as a filled button rather than as a tab,
 	 *  because it is the one thing on the bar that is not a place to go. */
 	create?: true;
+	/** The search action. Opens the command palette in place, which on a phone
+	 *  is a full-width sheet rather than a control competing for the top
+	 *  strip. */
+	search?: true;
 }
 
 /** The create action the phone bar carries, taken from the Crosslist section's
@@ -278,7 +284,9 @@ if (createAction === undefined) {
 	throw new Error('the phone bar carries the Crosslist create action, which that section has none of');
 }
 
-export const CREATE_TAB: PhoneTab = {
+/** `href` narrowed back to a definite string: only the search cell is allowed
+ *  to lack one, and the top strip's own create link reads this href directly. */
+export const CREATE_TAB: PhoneTab & { href: string } = {
 	href: createAction.href,
 	// The section-primary's own words, so the three create controls — the
 	// navigation card, the top strip and this — cannot come to read differently.
@@ -289,15 +297,39 @@ export const CREATE_TAB: PhoneTab = {
 	create: true
 };
 
-/** The phone bar: the four section tabs with the create action in the middle.
+/** The search action the phone bar carries, in the cell Account used to hold.
  *
- * Composed from `MOBILE_TABS` rather than listed again, so the four navigation
- * tabs stay exactly what the rail says they are and only their spacing
- * changes. */
+ * Account leaves the bar and is reached by the avatar in the top strip, which
+ * is the phone equivalent of where the rail already puts it: `Console.svelte`
+ * filters Account out of the rail proper and re-renders it at the foot beside
+ * Help, so the bar is not disagreeing with the rail about a peer section. A
+ * founder decision, pinned in `nav.test.ts` so it cannot drift back. */
+export const SEARCH_TAB: PhoneTab = {
+	label: 'Search',
+	icon: 'search',
+	search: true
+};
+
+const ACCOUNT_HREF = SECTIONS.find((section) => section.id === 'account')?.href;
+
+/** The rail's sections minus Account, dropped by id rather than by position so
+ *  a reordered `SECTIONS` cannot silently drop a different one instead. */
+const PHONE_SECTION_TABS: readonly NavItem[] = SECTION_TABS.filter(
+	(tab) => tab.href !== ACCOUNT_HREF
+);
+
+/** The phone bar: the three remaining section tabs, the create action in the
+ * middle, and search in the fifth cell.
+ *
+ * Composed from `SECTION_TABS` rather than listed again, so the navigating tabs
+ * stay exactly what the rail says they are and only their spacing changes.
+ * Five cells at about 78px on a 390px screen, which is what keeps
+ * "Marketplaces" and "New resource" from being renamed for the bar. */
 export const PHONE_BAR: readonly PhoneTab[] = [
-	...MOBILE_TABS.slice(0, 2),
+	...PHONE_SECTION_TABS.slice(0, 2),
 	CREATE_TAB,
-	...MOBILE_TABS.slice(2)
+	...PHONE_SECTION_TABS.slice(2),
+	SEARCH_TAB
 ];
 
 /** Whether a nav destination is the one the browser is on.
@@ -343,17 +375,21 @@ export function currentDestination(pathname: string): NavItem | null {
  * under its new name, and a redirect table listing identifiers could not. */
 export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
 	{ from: '/jobs', to: '/sync' },
-	{ from: '/listings', to: '/inventory' },
+	// One hop, not two: `/listings` was pointed at the catalogue when the
+	// catalogue was `/inventory`, and a table that walked through the old name
+	// to reach the new one would redirect twice for every saved link.
+	{ from: '/listings', to: '/resources' },
 	{ from: '/connections', to: '/marketplaces' },
 	{ from: '/settings/devices', to: '/marketplaces' },
 	{ from: '/queue', to: '/reconciliation' },
 	// The help placeholder was `/library`, then `/resources`; it is `/guides`
 	// now, because "Resources" is what the catalogue is called and two
-	// destinations cannot share a name. A seller who reads Resources in the
-	// navigation and types the path means the catalogue, so `/resources` lands
-	// there rather than on the placeholder it used to serve.
+	// destinations cannot share a name.
 	{ from: '/library', to: '/guides' },
-	{ from: '/resources', to: '/inventory' },
+	// The catalogue answered at `/inventory` until the seller-facing noun won:
+	// the rail says Resources, so the path does. Permanent, because a bookmark
+	// on one resource and every link already sent out name the old path.
+	{ from: '/inventory', to: '/resources' },
 	// `/help` and `/guides` were two placeholders for one thing, and nothing
 	// pointed at `/help` any more.
 	{ from: '/help', to: '/guides' }
@@ -393,5 +429,5 @@ export function initialsOf(name: string | undefined | null): string {
  *  rather than an empty `?q=`. */
 export function searchHref(query: string): string {
 	const trimmed = query.trim();
-	return trimmed.length === 0 ? '/inventory' : `/inventory?q=${encodeURIComponent(trimmed)}`;
+	return trimmed.length === 0 ? '/resources' : `/resources?q=${encodeURIComponent(trimmed)}`;
 }

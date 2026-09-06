@@ -463,20 +463,36 @@
 		gap: 10px;
 	}
 
-	/* The per-marketplace dots go: the Marketplaces tab is where that reads
-	   now, and the strip is the top strip's widest part. The search stays and
-	   takes a row of its own, because it is how a resource is reached from any
-	   page at all: it opens the palette, which is a whole screen's worth of
-	   search on a phone rather than a control competing for this strip. */
+	/* The strip keeps one control on a phone, and it is the account one.
+	   Everything else here has somewhere better to be: the dots read on the
+	   Marketplaces tab, the search and the create action are cells on the tab
+	   bar, and the organisation caption decides nothing a seller can act on.
+	   Leaving them cost three rows of a phone screen before any page began. */
 	.top .conn,
-	.search kbd {
+	.top .search,
+	.top .cta,
+	.account .who {
 		display: none;
 	}
 
-	.top .search {
-		flex: 1 1 100%;
-		order: 3;
+	/* The one control left is the one a thumb has to hit, so it takes the 44px
+	   the tiles and the row card's kebab already take rather than the 30px it
+	   has beside a name that is no longer beside it. */
+	.avatar {
+		width: 44px;
 		height: 44px;
+		border-radius: 12px;
+		font-size: 14px;
+	}
+
+	/* Account is the one section with no cell on the bar, so the avatar carries
+	   the state a lit tab carries everywhere else. A ring rather than the tab's
+	   colour change, because the avatar is already drawn in the accent and a
+	   second accent on top of it would not read; `box-shadow` rather than
+	   `outline`, which belongs to the focus ring and has to stay tellable from
+	   this. */
+	.account[aria-current='page'] .avatar {
+		box-shadow: 0 0 0 2px var(--accent-ink);
 	}
 
 	/* The foot clears the fixed tab bar rather than sitting under it. */
@@ -490,7 +506,7 @@
 		position: fixed;
 		inset: auto 0 0;
 		z-index: 20;
-		background: color-mix(in srgb, var(--ground) 94%, #fff);
+		background: color-mix(in srgb, var(--ground) 94%, var(--surface));
 		border-top: 1px solid var(--line);
 		padding-bottom: env(safe-area-inset-bottom);
 	}
@@ -512,6 +528,15 @@
 		letter-spacing: -0.01em;
 		color: var(--muted);
 		overflow: hidden;
+	}
+
+	/* One cell of the five is a button, because search opens the palette rather
+	   than going anywhere. It has to draw as the four anchors beside it do. */
+	button.tab-item {
+		border: 0;
+		background: none;
+		font-family: inherit;
+		cursor: pointer;
 	}
 
 	.tab-item .ico {
@@ -556,7 +581,7 @@
 		height: 30px;
 		border-radius: 50%;
 		background: var(--accent);
-		color: #fff;
+		color: var(--on-fill);
 		display: grid;
 		place-items: center;
 		flex: none;
@@ -789,5 +814,12 @@ dialog.pal-box[open] {
 		max-height: 58vh;
 		margin: 0 auto auto;
 		border-radius: 0 0 14px 14px;
+	}
+
+	/* There is no Escape key to name, and the sheet is closed by the backdrop
+	   or the system back gesture. The hint would spend part of a 390px row
+	   telling a thumb about a keyboard. */
+	.pal-key {
+		display: none;
 	}
 }

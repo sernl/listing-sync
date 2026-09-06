@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Button from '$lib/Button.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import TileMark from './TileMark.svelte';
 	import type { DownloadsManifest } from './api';
 	import { downloadCards } from './downloads';
 
@@ -22,6 +23,13 @@
 		{#each cards as card (card.platform)}
 			<article class="mp-card" class:pending={card.offer === undefined}>
 				<div class="mp-cap">
+					<!-- The same mark box the marketplace tiles carry, so a row of download
+					     cards reads as the same kind of card rather than as a caption with
+					     something missing from it. Never a link: these three tiles offer a
+					     file, not a page belonging to the platform's owner. -->
+					<span class="mp-mark mp-square">
+						<TileMark mark={card.mark} />
+					</span>
 					<span class="mp-who"><span class="t">{card.name}</span></span>
 					{#if card.offer}
 						<StatusPill tone="ok" label="Available" />
