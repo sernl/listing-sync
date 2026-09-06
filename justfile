@@ -16,6 +16,13 @@ dev_entitlement_public := ".dev/entitlement.pub.hex"
 # schema; dev-only credential, matching db/init/02-auth-role.sql
 auth_db_url := "postgres://tam_auth:tam_auth_dev@127.0.0.1:5433/tam"
 
+# The operator role's read-only cross-tenant pool; dev-only credential,
+# matching db/init/03-backoffice-role.sql. Passed by the development recipes
+# below because a server started without it serves no operator surface at all,
+# and every admin page then draws the same "this deployment serves no operator
+# surface" placeholder in the environment those pages are developed in.
+backoffice_db_url := "postgres://tam_backoffice:tam_backoffice_dev@127.0.0.1:5433/tam"
+
 # The pg-gated crates and the feature spelled per crate, shared by the two
 # database-backed lanes so a crate cannot be added to one and missed by the other
 pg_tests := "-p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests"
@@ -606,7 +613,7 @@ dev: db-up db-wait db-migrate
     #!/usr/bin/env sh
     set -eu
     echo "need a login? in another terminal:  just dev-session"
-    set -- '{{db_url}}'
+    set -- '{{db_url}}' --backoffice-db-url '{{backoffice_db_url}}'
     if [ -f "{{dev_entitlement_key}}" ]; then
         set -- "$@" --entitlement-key-path "{{dev_entitlement_key}}"
     else
@@ -635,7 +642,8 @@ dev-all: db-up db-wait db-migrate auth-migrate auth-env
     # cargo's and npm's own children rather than orphaning them; the trap is
     # cleared first so the signal it sends cannot re-enter it.
     trap 'trap - INT TERM; kill 0' INT TERM
-    set -- '{{db_url}}' --auth-issuer "$issuer" --auth-jwks-url "$issuer/api/auth/jwks"
+    set -- '{{db_url}}' --backoffice-db-url '{{backoffice_db_url}}' \
+        --auth-issuer "$issuer" --auth-jwks-url "$issuer/api/auth/jwks"
     if [ -f "{{dev_entitlement_key}}" ]; then
         set -- "$@" --entitlement-key-path "{{dev_entitlement_key}}"
     else

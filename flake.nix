@@ -216,6 +216,43 @@
           teachouseLanding = pkgs.callPackage ./nix/landing.nix { nodejs = pkgs.nodejs_22; };
           tamAuth = pkgs.callPackage ./nix/tam-auth.nix { nodejs = pkgs.nodejs_22; };
           teachouseMigrations = pkgs.callPackage ./nix/migrations.nix { };
+
+          # Every first path segment the console's route table defines, read
+          # off `web/src/routes` so a route added tomorrow is gated the day it
+          # is added rather than the day someone remembers a list. A SvelteKit
+          # group directory names no segment and its children do, so the walk
+          # recurses into `(...)`; a `[param]` directory names no fixed
+          # segment, so it is dropped. `_app` and `downloads` are namespaces
+          # rather than routes and are named here.
+          #
+          # Only the names reach the derivation, so editing a route file does
+          # not rebuild the check and adding or removing a route directory
+          # does.
+          consoleSegments =
+            let
+              walk =
+                dir:
+                pkgs.lib.concatLists (
+                  pkgs.lib.mapAttrsToList (
+                    name: type:
+                    if type != "directory" then
+                      [ ]
+                    else if pkgs.lib.hasPrefix "(" name then
+                      walk (dir + "/${name}")
+                    else if pkgs.lib.hasPrefix "[" name then
+                      [ ]
+                    else
+                      [ name ]
+                  ) (builtins.readDir dir)
+                );
+            in
+            pkgs.lib.unique (
+              walk ./web/src/routes
+              ++ [
+                "_app"
+                "downloads"
+              ]
+            );
         in
         {
           packages = {
@@ -271,21 +308,95 @@
               # year-long freshness rule keys on.
               test -n "$(find "$landing/_astro" -name '*.css' -print -quit)"
 
-              # The namespaces `route` reserves ahead of the landing probe. A
-              # build that emitted one of these would have the console's home,
-              # its whole client bundle, a seller's catalogue or the download
-              # surface; the reservation turns that into a 404 rather than a
-              # marketing page, and either way the build must not carry them.
+              # Every first path segment the console answers under, derived
+              # from `web/src/routes` by `consoleSegments` above rather than
+              # restated here. A landing build carrying one of them takes that
+              # path from the console, and the name decides how it breaks:
+              # `route` refuses the reserved handful ahead of the landing
+              # probe, so a page there 404s into the console shell, while every
+              # other route is merely probed second, so a page there answers a
+              # signed-in seller's board with a marketing page and nothing
+              # anywhere says so. The message says which happened, because the
+              # two want different fixes.
               #
               # `resources` is the one a marketing site would take without
               # meaning to: a teaching-resources site has an obvious use for the
               # word, and the catalogue board answers under it.
-              for reserved in app _app resources downloads; do
-                if [ -e "$landing/$reserved" ]; then
-                  echo "the landing build carries $reserved, which tam-server reserves" >&2
+              #
+              # A flake evaluates the source its VCS reports, so a route
+              # directory that has not been snapshotted yet is invisible to the
+              # walk in a local build; CI runs from a committed tree and is the
+              # authority on what this list holds.
+              #
+              # The list carries one name per line and every expansion of it
+              # below is quoted, so a name carrying a space is compared as one
+              # name rather than split into two.
+              console_segments="${pkgs.lib.concatStringsSep "\n" consoleSegments}"
+
+              # The names `route` refuses ahead of the landing probe, read out
+              # of the file that refuses them.
+              namespaces=$(sed -n 's/^const CONSOLE_NAMESPACES[^=]*= \[\(.*\)\];$/\1/p' \
+                ${./crates/tam-server/src/serving.rs} | tr ',' '\n' | tr -d ' "')
+              downloads=$(sed -n 's/^const DOWNLOADS_NAMESPACE[^=]*= "\(.*\)";$/\1/p' \
+                ${./crates/tam-server/src/serving.rs})
+              reserved=$(printf '%s\n%s\n' "$namespaces" "$downloads")
+
+              # A walk that found nothing, or a constant whose spelling moved
+              # out from under the sed above, would leave every loop below
+              # passing by having nothing to say. The floor sits well under the
+              # thirty segments the route table defines today and well over
+              # anything a broken filter would leave behind.
+              #
+              # grep -c exits 1 on a count of zero, which set -e would take as a
+              # failure of the build rather than of the guard below.
+              segments_found=$(printf '%s\n' "$console_segments" | grep -c . || true)
+              if [ "$segments_found" -lt 20 ]; then
+                echo "only $segments_found console route segments were derived from web/src/routes;" >&2
+                echo "the route tree moved, or the walk in flake.nix stopped finding it" >&2
+                exit 1
+              fi
+              for expected in app _app; do
+                if ! printf '%s\n' "$console_segments" | grep -qx "$expected"; then
+                  echo "the derived console segments do not name $expected," >&2
+                  echo "so the walk in flake.nix is not reading the console's route table" >&2
                   exit 1
                 fi
               done
+              if [ -z "$namespaces" ] || [ -z "$downloads" ]; then
+                echo "no reserved namespace was read out of crates/tam-server/src/serving.rs;" >&2
+                echo "CONSOLE_NAMESPACES or DOWNLOADS_NAMESPACE no longer matches the sed above" >&2
+                exit 1
+              fi
+
+              while IFS= read -r segment; do
+                if [ -e "$landing/$segment" ]; then
+                  if printf '%s\n' "$reserved" | grep -qx "$segment"; then
+                    echo "the landing build carries $segment, which tam-server reserves:" >&2
+                    echo "that page would 404 into the console shell rather than render" >&2
+                  else
+                    echo "the landing build carries $segment, which the console routes under:" >&2
+                    echo "tam-server probes the landing build first, so that page would" >&2
+                    echo "shadow the console route silently" >&2
+                  fi
+                  exit 1
+                fi
+              done <<< "$console_segments"
+
+              # The same drift from the other side. A route renamed without
+              # the constant following leaves tam-server reserving a path no
+              # console route serves, so a landing page there 404s into the
+              # shell instead of rendering. Asserted rather than derived:
+              # deriving CONSOLE_NAMESPACES from this list would widen what the
+              # origin reserves from four names to thirty, which is a decision
+              # about what the product serves rather than a consequence of
+              # adding a gate.
+              while IFS= read -r reservation; do
+                if ! printf '%s\n' "$console_segments" | grep -qx "$reservation"; then
+                  echo "tam-server reserves $reservation, which is no longer a console route;" >&2
+                  echo "a landing page at that path would 404 into the console shell" >&2
+                  exit 1
+                fi
+              done <<< "$reserved"
 
               # Both tiers self-host their faces, and neither build fingerprints
               # the files, so the name in the sheet is the name in the artefact
@@ -333,6 +444,28 @@
                   fi
                 fi
               done
+
+              # The same shadowing for the files rather than the faces, over
+              # every top-level name both builds carry: `favicon.svg` is the
+              # live one, and a name added to `apps/landing/public` and
+              # `web/static` alike would join it without anyone deciding to.
+              #
+              # `index.html` is excluded because the two are meant to differ:
+              # the console's shell is reached as the fallback for a path no
+              # other tier claims, never under that name, so the landing copy
+              # answering `/index.html` is the intended behaviour rather than a
+              # collision.
+              while IFS= read -r path; do
+                entry=''${path##*/}
+                if [ "$entry" = index.html ]; then
+                  continue
+                fi
+                if test -f "$console/$entry" && ! cmp -s "$landing/$entry" "$console/$entry"; then
+                  echo "$entry differs between the console and landing builds," >&2
+                  echo "and tam-server answers both tiers with the landing copy" >&2
+                  exit 1
+                fi
+              done <<< "$(find "$landing" -maxdepth 1 -type f | sort)"
 
               # No symlink: `walk` neither follows nor serves one, so a build
               # that used symlinkJoin would serve a page whose fonts and

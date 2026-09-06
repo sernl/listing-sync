@@ -58,7 +58,7 @@ impl From<CheckInError> for CommandError {
 }
 
 /// What this device's standing with the server is, as the interface reads it.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DeviceState {
     /// The seller signed this device out from the console. Sessions have been
     /// forgotten and no work will run.
@@ -71,6 +71,17 @@ pub struct DeviceState {
     /// session to speak under. False is the ordinary state of a machine at a
     /// sign-in screen, and is a different fact from either of the two above.
     pub signed_in: bool,
+    /// Why the check-in did not reach the server, in the words
+    /// [`crate::heartbeat::ControlPlaneError`] already writes for a person, and
+    /// `None` when it did reach.
+    ///
+    /// The four sentences name no credential, no jar and no host but our own
+    /// control plane, and they are the whole difference between "nothing
+    /// appeared in the list" and a cause somebody can act on: no transport in
+    /// this build, the plane refused, this device is not registered, nobody is
+    /// signed in here. Carried rather than discarded because a phone has no
+    /// other channel — its log is private storage and its stdout needs a cable.
+    pub detail: Option<String>,
 }
 
 /// Opens the marketplace's own login page in a window on this device, waits
@@ -170,11 +181,13 @@ pub async fn device_check_in(app: AppHandle) -> Result<DeviceState, CommandError
             revoked: answer.revoked,
             reached_server: true,
             signed_in: true,
+            detail: None,
         }),
-        Err(CheckInError::Plane(_)) => Ok(DeviceState {
+        Err(CheckInError::Plane(why)) => Ok(DeviceState {
             revoked: state.revoked(),
             reached_server: false,
             signed_in: state.signed_in(),
+            detail: Some(why.to_string()),
         }),
         Err(why) => Err(CommandError::from(why)),
     }
@@ -206,15 +219,32 @@ pub async fn session_status(
 
 /// Removes the stored session. The seller's disconnect, and the only way a
 /// captured jar leaves this device's keychain.
+///
+/// Generic over the runtime for the reason [`start_import`] is: the mock
+/// runtime a host test builds cannot hand an `AppHandle<Wry>` to a command
+/// that names one, and this command's own body — a forget followed by a
+/// check-in — is what those tests exist to pin.
 #[tauri::command]
-pub async fn forget_session(
-    app: AppHandle,
+pub async fn forget_session<R: tauri::Runtime>(
+    app: AppHandle<R>,
     marketplace: Marketplace,
 ) -> Result<SessionStatus, CommandError> {
-    app.state::<DesktopState>()
-        .store()
-        .forget(marketplace)
-        .await?;
+    let state = app.state::<DesktopState>();
+    state.store().forget(marketplace).await?;
+    // The mirror of `connect_marketplace` above, and for the same reason read
+    // the other way round: the server's per-device session list is replaced
+    // only by a check-in, so between a forget and the next scheduled one the
+    // registry goes on listing a login for a jar that no longer exists. That
+    // window is an hour on a computer and until the next resume on a phone,
+    // and the seller is looking at both answers on one screen.
+    //
+    // `check_in` rather than the self-healing `check_in_or_register`: a device
+    // the server has never seen has no session row to correct.
+    //
+    // Discarded rather than raised, the same judgement `cycle` makes: the jar
+    // is already gone, and a check-in that could not reach the server is not a
+    // reason to report the disconnect as failed.
+    check_in(&state, state.control_plane()).await.ok();
     Ok(SessionStatus::disconnected(marketplace))
 }
 
@@ -544,6 +574,309 @@ mod import_command_tests {
              seller can act on the first and can only discover the second. Got: {}",
             refusal.0
         );
+        drop(app);
+    }
+}
+
+#[cfg(test)]
+mod session_command_tests {
+    use super::forget_session;
+    use crate::device::{DeviceId, DeviceIdentity};
+    use crate::heartbeat::{
+        CheckIn, ControlPlane, ControlPlaneError, HostFacts, PlaneFuture, SessionReport,
+    };
+    use crate::session::memory::MemorySessionStore;
+    use crate::session::{Cookie, CookieJar, SessionRecord, SessionStore};
+    use crate::state::DesktopState;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tam_types::{Marketplace, Timestamp};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+
+    fn identity() -> DeviceIdentity {
+        DeviceIdentity {
+            id: DeviceId::from_raw("11112222333344445555666677778888"),
+            label: "founder-pc".to_owned(),
+        }
+    }
+
+    fn a_record(marketplace: Marketplace) -> SessionRecord {
+        SessionRecord {
+            marketplace,
+            account_label: None,
+            captured_at: Timestamp(1_756_000_000_000),
+            device_id: identity().id,
+            jar: CookieJar::new(vec![Cookie {
+                name: "sessionKey".to_owned(),
+                value: "s3cr3t".to_owned(),
+            }]),
+        }
+    }
+
+    /// What the device told the server, and how often.
+    ///
+    /// Every heartbeat is kept rather than only the last, because the property
+    /// under test is that a forget produces exactly one and that the one it
+    /// produces names what the store holds AFTER the forget. A fake keeping
+    /// only the last would pass for an implementation that checked in first.
+    struct Recorder {
+        answer: Result<CheckIn, ControlPlaneError>,
+        beats: tokio::sync::Mutex<Vec<Vec<SessionReport>>>,
+        registrations: AtomicUsize,
+    }
+
+    impl Recorder {
+        fn answering(answer: Result<CheckIn, ControlPlaneError>) -> Arc<Self> {
+            Arc::new(Self {
+                answer,
+                beats: tokio::sync::Mutex::new(Vec::new()),
+                registrations: AtomicUsize::new(0),
+            })
+        }
+
+        fn allowing() -> Arc<Self> {
+            Self::answering(Ok(CheckIn {
+                revoked: false,
+                entitlement: None,
+            }))
+        }
+
+        async fn beats(&self) -> Vec<Vec<SessionReport>> {
+            self.beats.lock().await.clone()
+        }
+    }
+
+    impl ControlPlane for Recorder {
+        fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::TesGb)))
+        }
+
+        fn register<'a>(
+            &'a self,
+            _device: &'a DeviceIdentity,
+            _facts: HostFacts,
+        ) -> PlaneFuture<'a, ()> {
+            self.registrations.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn heartbeat<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            sessions: &'a [SessionReport],
+        ) -> PlaneFuture<'a, CheckIn> {
+            let answer = self.answer.clone();
+            Box::pin(async move {
+                self.beats.lock().await.push(sessions.to_vec());
+                answer
+            })
+        }
+    }
+
+    /// An application carrying the state these commands read, on the mock
+    /// runtime. No capability and no real context: the grant is not what these
+    /// tests are about, and `import_command_tests` above holds the one
+    /// assertion that the console's strings reach a registered command.
+    fn app_holding(
+        store: Arc<MemorySessionStore>,
+        plane: Arc<Recorder>,
+    ) -> tauri::App<tauri::test::MockRuntime> {
+        let app = mock_builder()
+            .build(mock_context(noop_assets()))
+            .expect("the mock application builds");
+        app.manage(DesktopState::with_control_plane(identity(), store, plane));
+        app
+    }
+
+    fn marketplaces_in(beat: &[SessionReport]) -> Vec<Marketplace> {
+        beat.iter().map(|line| line.marketplace).collect()
+    }
+
+    /// The application answers the disconnect the console sends, at the origin
+    /// the console runs at.
+    ///
+    /// Here because this command's signature changed: it became generic over
+    /// the runtime so a host test could hand it a mock one, and
+    /// `generate_handler!` expands a generic command differently from a
+    /// concrete one. Nothing in the type system says the expansion still
+    /// registers under the name the console sends, and a registration that
+    /// silently stopped would reach a seller as `Command forget_session not
+    /// found` rendered as though it were a considered refusal — which is the
+    /// failure `import_command_tests` above exists to prevent for the other
+    /// generic command.
+    ///
+    /// The real generated context and the control plane's own origin, for the
+    /// reasons that test states at length: a mock context carries no
+    /// capabilities and would refuse every name identically.
+    #[test]
+    fn the_application_answers_the_disconnect_the_console_sends() {
+        use tauri::test::{get_ipc_response, INVOKE_KEY};
+        use tauri::webview::InvokeRequest;
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+        #[expect(
+            clippy::exit,
+            reason = "the generated context's own expansion, not a call this test makes"
+        )]
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![super::forget_session])
+            .build(tauri::generate_context!())
+            .expect("the application builds");
+        app.manage(DesktopState::new(
+            identity(),
+            Arc::new(MemorySessionStore::default()),
+        ));
+        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+            .parse()
+            .expect("the compiled origin is a url");
+        let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(origin.clone()))
+            .build()
+            .expect("the console window builds");
+
+        let answer = get_ipc_response(
+            &webview,
+            InvokeRequest {
+                // The console's own string, spelled here as it spells it: the
+                // name is what the registration and the grant are keyed on.
+                cmd: "forget_session".to_owned(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: origin,
+                body: serde_json::json!({ "marketplace": "Tes" }).into(),
+                headers: tauri::http::HeaderMap::default(),
+                invoke_key: INVOKE_KEY.to_owned(),
+            },
+        );
+
+        let said = format!("{answer:?}");
+        assert!(
+            answer.is_ok(),
+            "the console's own string must reach the handler and come back with the handler's \
+             own answer: neither unregistered nor ungranted at the origin the console runs at. \
+             Got: {said}"
+        );
+        assert!(
+            said.contains("Tes") && said.contains("false"),
+            "and the answer is this command's own — the marketplace it was asked about, \
+             disconnected. Got: {said}"
+        );
+        drop(app);
+    }
+
+    /// The defect this whole change exists for: the server's per-device
+    /// session list is replaced only by a check-in, so a forget that told it
+    /// nothing left the registry listing a login for a jar that no longer
+    /// exists — for an hour on a computer, and until the next resume on a
+    /// phone.
+    #[tokio::test]
+    async fn a_forget_tells_the_server_what_this_device_now_holds() {
+        let store = Arc::new(MemorySessionStore::new());
+        store
+            .put(&a_record(Marketplace::Tes))
+            .await
+            .expect("tes stores");
+        store
+            .put(&a_record(Marketplace::Tpt))
+            .await
+            .expect("tpt stores");
+        let plane = Recorder::allowing();
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+
+        forget_session(app.handle().clone(), Marketplace::Tes)
+            .await
+            .expect("the forget answers");
+
+        let beats = plane.beats().await;
+        assert_eq!(
+            beats.len(),
+            1,
+            "exactly one check-in: none at all leaves the stale row standing, and the count is \
+             what distinguishes that from this. Got: {beats:?}"
+        );
+        assert_eq!(
+            marketplaces_in(&beats[0]),
+            vec![Marketplace::Tpt],
+            "and it reports the store as it stands AFTER the forget, so a check-in placed before \
+             it — which would report Tes as still held and re-derive the link straight back to \
+             linked — fails here. Got: {beats:?}"
+        );
+        drop(app);
+    }
+
+    /// The jar is already gone by the time the server is told, so an
+    /// unreachable server is not a reason to report the disconnect as failed.
+    /// The obvious wrong implementation is `?` on the check-in.
+    #[tokio::test]
+    async fn a_forget_stands_when_the_server_cannot_be_told() {
+        let store = Arc::new(MemorySessionStore::new());
+        store
+            .put(&a_record(Marketplace::Tes))
+            .await
+            .expect("tes stores");
+        let plane = Recorder::answering(Err(ControlPlaneError::Refused("no route".to_owned())));
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+
+        let answer = forget_session(app.handle().clone(), Marketplace::Tes)
+            .await
+            .expect("a forget the server could not be told of is still a forget");
+        assert_eq!(answer.marketplace, Marketplace::Tes);
+        assert!(
+            !answer.connected,
+            "the jar is gone whatever the server heard"
+        );
+        assert!(
+            store
+                .get(Marketplace::Tes)
+                .await
+                .expect("the store reads")
+                .is_none(),
+            "and it is gone from the store, which is the only copy there is"
+        );
+        drop(app);
+    }
+
+    /// A device signed out from the console while a disconnect is in flight
+    /// learns of it through this very check-in, and `check_in` wipes before it
+    /// returns. The disconnect the seller asked for still succeeded.
+    #[tokio::test]
+    async fn a_revoked_answer_during_a_forget_is_not_a_failed_disconnect() {
+        let store = Arc::new(MemorySessionStore::new());
+        store
+            .put(&a_record(Marketplace::Tes))
+            .await
+            .expect("tes stores");
+        store
+            .put(&a_record(Marketplace::Tpt))
+            .await
+            .expect("tpt stores");
+        let plane = Recorder::answering(Ok(CheckIn {
+            revoked: true,
+            entitlement: None,
+        }));
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+
+        forget_session(app.handle().clone(), Marketplace::Tes)
+            .await
+            .expect("a revocation learned of mid-disconnect does not fail the disconnect");
+
+        for marketplace in Marketplace::ALL {
+            assert!(
+                store
+                    .get(marketplace)
+                    .await
+                    .expect("the store reads")
+                    .is_none(),
+                "and the revocation wiped every marketplace, {marketplace:?} included"
+            );
+        }
         drop(app);
     }
 }

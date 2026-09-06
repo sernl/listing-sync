@@ -441,6 +441,29 @@ fn slot_view(label: &str, slot: &Slot) -> SlotView {
     }
 }
 
+/// TPT's own measured ceiling on one thumbnail, in bytes.
+///
+/// Served to the console as `form.limits.thumbnail.max_size_bytes` and read
+/// here by the create and the edit, which bound how many bytes a slot check
+/// will decrypt and probe. It is the only measured ceiling on a slot image in
+/// this system and nothing in `tam-limits` states one, so the check mirrors
+/// the marketplace constraint the console already enforces rather than
+/// inventing a bound of its own; without any bound a create naming five
+/// payload handles would force five times the 256 MiB upload ceiling, about
+/// 1.25 gigabytes, of decryption per request.
+///
+/// `None` only where the compiled-in capture does not parse, as
+/// [`form_vocabulary`] is `None` for the same reason.
+pub(crate) fn thumbnail_slot_bytes_max() -> Option<u64> {
+    Some(
+        capture()?
+            .constraints
+            .upload_slots
+            .thumbnails
+            .max_size_bytes,
+    )
+}
+
 /// The whole payload, assembled from the capture.
 ///
 /// `None` only where the compiled-in capture does not parse, which is a
@@ -571,7 +594,8 @@ pub(crate) async fn form_vocabulary_view(
 #[cfg(test)]
 mod tests {
     use super::{
-        capture, form, form_vocabulary, selection_caps, GRADE_CATEGORY, GRADE_COLUMN_SIZES,
+        capture, form, form_vocabulary, selection_caps, thumbnail_slot_bytes_max, GRADE_CATEGORY,
+        GRADE_COLUMN_SIZES,
     };
     use tam_domain::product::{AnswerKey, TaxCode};
 
@@ -811,5 +835,19 @@ mod tests {
         assert_eq!(limits.preview.max_size_bytes, 31_457_280);
         assert_eq!(limits.video_preview.max_size_bytes, 1_073_741_824);
         assert_eq!(limits.thumbnail.max_size_bytes, 4_194_304);
+    }
+
+    /// The bound the create and the edit read back against is the same number
+    /// the console is served, from the same capture. Asserted as one equality
+    /// rather than two literals, because a mirror that can drift from what the
+    /// client enforces is a rule with two answers.
+    #[test]
+    fn the_slot_ceiling_the_server_reads_is_the_one_the_console_is_served() {
+        assert_eq!(
+            thumbnail_slot_bytes_max(),
+            Some(rendered().limits.thumbnail.max_size_bytes),
+            "the server-side read-back bound is the capture's own thumbnail ceiling"
+        );
+        assert_eq!(thumbnail_slot_bytes_max(), Some(4_194_304));
     }
 }

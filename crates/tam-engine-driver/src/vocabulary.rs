@@ -547,7 +547,11 @@ pub struct SettleEnvelope {
     pub verdict: ItemVerdict,
     /// The device's asserted instant, recorded as the seller's assertion
     /// beside the server's own receipt. `org_seq` keeps ordering
-    /// server-authoritative, so this is evidence rather than authority.
+    /// server-authoritative, so this is evidence rather than authority. The
+    /// job-item settle is the exception: the server stamps its own clock and
+    /// drops the asserted instant, because migration 0045 added `asserted_at`
+    /// to `job_event` and `write_attempt` only and `job_item` has no column
+    /// for it.
     pub at_ms: i64,
 }
 

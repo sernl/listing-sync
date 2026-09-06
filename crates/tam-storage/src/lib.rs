@@ -39,7 +39,8 @@ pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{
     BackofficeRepo, DailyCount, FailedWrite, HaltRecord, IdentityAuditRepo, ImpersonationEvent,
-    ImportDrainRun, OrgDetail, OrgSummary, SignupsRepo, SubscriptionRecord, SyncHealth,
+    ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, SignupsRepo, SubscriptionRecord,
+    SyncHealth,
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
@@ -55,9 +56,10 @@ pub use device::{
 };
 pub use file_source::ProductFileSourceRepo;
 pub use import_batches::{
-    BatchState, BatchWrite, ImportBatchDraftRecord, ImportBatchRecord, ImportBatchRepo,
-    ImportBatchRowRecord, NewImportBatch, NewImportBatchRow, RowFile, RowIntent, RowState,
-    SweepReport, BATCHES_LISTED_MAX,
+    AttachCounts, BatchState, BatchWrite, BindOutcome, BoundRow, ClaimedRow, CommitCounts,
+    CommitOpening, ImportBatchDraftRecord, ImportBatchRecord, ImportBatchRepo,
+    ImportBatchRowRecord, NewImportBatch, NewImportBatchRow, RowAddress, RowFile, RowFiles,
+    RowIntent, RowRef, RowState, SweepReport, UnbindOutcome, BATCHES_LISTED_MAX,
 };
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,

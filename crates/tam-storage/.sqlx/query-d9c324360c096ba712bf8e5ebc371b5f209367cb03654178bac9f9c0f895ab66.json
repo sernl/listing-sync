@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sheet, ordinal FROM import_batch_row WHERE org_id = $1 AND batch_id = $2 AND state IN ('parsed', 'attached') AND file_hash IS NULL AND inventory IS NOT NULL ORDER BY sheet, ordinal LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sheet",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "ordinal",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "d9c324360c096ba712bf8e5ebc371b5f209367cb03654178bac9f9c0f895ab66"
+}

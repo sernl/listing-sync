@@ -1,0 +1,98 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH page AS (\n                   SELECT sheet, ordinal,\n                          row_number() OVER (ORDER BY sheet, ordinal) AS slot\n                     FROM (\n                         SELECT sheet, ordinal\n                           FROM import_batch_row\n                          WHERE org_id = $1 AND batch_id = $2\n                            AND state IN ('parsed', 'attached', 'creating')\n                          ORDER BY sheet, ordinal\n                          LIMIT $3\n                            FOR UPDATE SKIP LOCKED\n                     ) held\n               )\n               UPDATE import_batch_row r\n                  SET state = 'creating',\n                      product_id = COALESCE(r.product_id, ($4::uuid[])[p.slot::int]),\n                      mapping_id = CASE WHEN r.inventory IS NULL THEN NULL\n                                        ELSE COALESCE(r.mapping_id, ($5::uuid[])[p.slot::int])\n                                   END\n                 FROM page p\n                WHERE r.org_id = $1 AND r.batch_id = $2\n                  AND r.sheet = p.sheet AND r.ordinal = p.ordinal\n            RETURNING r.sheet, r.ordinal, r.inventory, r.intent, r.draft,\n                      r.file_hash, r.file_kind, r.file_byte_len,\n                      r.cover_hash, r.cover_kind, r.cover_byte_len,\n                      r.product_id AS \"product_id!\", r.mapping_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sheet",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "ordinal",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "intent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "draft",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "file_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "file_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "file_byte_len",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "cover_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 9,
+        "name": "cover_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "cover_byte_len",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "product_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 12,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "61f9a7b67af4ff3c940a9e716e272f9bb7cad72a1f72ecc9b7518db15de26ba8"
+}

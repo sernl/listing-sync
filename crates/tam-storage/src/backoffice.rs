@@ -284,6 +284,20 @@ pub struct ImportDrainRun {
     pub payload: serde_json::Value,
 }
 
+/// One read of the drain series, and whether the limit cut it short.
+///
+/// `truncated` travels beside the runs rather than being left to be inferred
+/// from their count, because it cannot be inferred correctly: the ordering is
+/// by organisation name, so a full page drops whole tenants off the end of the
+/// alphabet and the rows that survive look like the complete answer. A caller
+/// comparing the length against its own limit would also be guessing at the
+/// clamp this repository applies to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportDrainPage {
+    pub runs: Vec<ImportDrainRun>,
+    pub truncated: bool,
+}
+
 pub struct BackofficeRepo {
     pool: PgPool,
 }
@@ -546,8 +560,9 @@ impl BackofficeRepo {
     /// compares a tenant's first migration against its tenth, so the position
     /// of a row in its own tenant's series is the whole meaning of "first";
     /// a global ordering would interleave tenants and make that meaningless.
-    pub async fn import_drain(&self, limit: i64) -> Result<Vec<ImportDrainRun>, StorageError> {
-        let rows = sqlx::query!(
+    pub async fn import_drain(&self, limit: i64) -> Result<ImportDrainPage, StorageError> {
+        let cap = limit.clamp(1, MAX_ROWS);
+        let mut rows = sqlx::query!(
             // The `!` assertions are needed because the columns come through a
             // view, and sqlx cannot carry NOT NULL inference across one. Every
             // one of them is NOT NULL on `job_event` itself (migration 0005).
@@ -556,18 +571,27 @@ impl BackofficeRepo {
              FROM import_drain_measurement d \
              JOIN organisation o ON o.id = d.org_id \
              ORDER BY o.name, d.org_seq LIMIT $1",
-            limit.clamp(1, MAX_ROWS),
+            // One past the cap, so a page that exactly fills the limit is told
+            // from one the limit cut short. The extra row is a probe and is
+            // dropped below rather than served.
+            cap.saturating_add(1),
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| ImportDrainRun {
-                org: OrgId(uuid_from_db(row.org_id)),
-                org_name: row.org_name,
-                org_seq: row.org_seq,
-                payload: row.payload,
-            })
-            .collect())
+        let width = usize::try_from(cap).unwrap_or(usize::MAX);
+        let truncated = rows.len() > width;
+        rows.truncate(width);
+        Ok(ImportDrainPage {
+            runs: rows
+                .into_iter()
+                .map(|row| ImportDrainRun {
+                    org: OrgId(uuid_from_db(row.org_id)),
+                    org_name: row.org_name,
+                    org_seq: row.org_seq,
+                    payload: row.payload,
+                })
+                .collect(),
+            truncated,
+        })
     }
 }

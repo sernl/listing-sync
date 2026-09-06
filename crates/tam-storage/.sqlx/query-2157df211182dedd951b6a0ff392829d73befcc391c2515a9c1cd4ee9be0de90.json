@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_batch SET state = 'attaching' WHERE org_id = $1 AND id = $2 AND state = 'parsed'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2157df211182dedd951b6a0ff392829d73befcc391c2515a9c1cd4ee9be0de90"
+}

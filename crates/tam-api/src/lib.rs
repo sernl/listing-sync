@@ -234,6 +234,20 @@ pub fn router(state: AppState) -> Router {
             "/{version}/imports/{batch}",
             get(import_batch::view).delete(import_batch::abandon),
         )
+        // The bind carries two handles and never bytes, so it keeps the
+        // default body ceiling rather than either upload's: the bytes reached
+        // `POST /{version}/uploads` already and this names what they were for.
+        .route(
+            "/{version}/imports/{batch}/rows/{sheet}/{ordinal}/file",
+            post(import_batch::attach::bind).delete(import_batch::attach::unbind),
+        )
+        // The commit takes no body and creates a page of rows per call, so it
+        // keeps the default ceiling too: the chunking is the server's, and a
+        // client asks for the next page by asking again.
+        .route(
+            "/{version}/imports/{batch}/commit",
+            post(import_batch::commit::commit),
+        )
         .route(
             "/{version}/products/{product}",
             get(resources::product_view)

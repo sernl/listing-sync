@@ -9,17 +9,25 @@
 //! `POST /{version}/jobs` for the seller's own device to claim. This module
 //! parses, validates and holds; it creates nothing.
 //!
-//! Five routes in this phase. The template is generated from the registry on
-//! request; an upload is parsed, validated and written as a batch with a row
-//! per spreadsheet row and no product; the listing and the batch view serve the
-//! report; and an abandon settles a batch the seller has given up on. The file
-//! attachment and the commit are the phases after this one, and the row model
-//! already carries the columns they fill.
+//! Eight routes. The template is generated from the registry on request; an
+//! upload is parsed, validated and written as a batch with a row per
+//! spreadsheet row and no product; the listing and the batch view serve the
+//! report; an abandon settles a batch the seller has given up on; a bind and an
+//! unbind attach the bytes one row names, reversibly; and a commit creates the
+//! resources, a chunk at a time.
+//!
+//! The commit stops at the catalogue: a row that asked to go live becomes a
+//! resource here and is published from the seller's own device afterwards, so
+//! no job is minted and `import_batch_row.job_id` stays null. That is D1, not
+//! an unfinished edge.
 //!
 //! The spreadsheet is metadata only. No byte of a seller's resource travels
 //! through it, and no request to a marketplace originates here or anywhere else
 //! on this server for a no-API marketplace.
 
+pub mod attach;
+pub mod commit;
+pub mod lower;
 pub mod parse;
 pub mod report;
 pub mod sheet;
@@ -36,7 +44,7 @@ use tam_storage::{
     ImportBatchRowRecord, LabelRepo, NewImportBatch, NewImportBatchRow, RowIntent, RowState,
     StorageError,
 };
-use tam_types::{InventoryId, Marketplace, Timestamp, Uuid};
+use tam_types::{InventoryId, Marketplace, ProductId, Timestamp, Uuid};
 
 use crate::blocking::spawn_supervised_blocking;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
@@ -169,6 +177,7 @@ impl BatchStateView {
 pub enum RowStateView {
     Parsed,
     Attached,
+    Creating,
     Created,
     Published,
     Failed,
@@ -176,9 +185,10 @@ pub enum RowStateView {
 }
 
 impl RowStateView {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Parsed,
         Self::Attached,
+        Self::Creating,
         Self::Created,
         Self::Published,
         Self::Failed,
@@ -189,6 +199,7 @@ impl RowStateView {
         match state {
             RowState::Parsed => Self::Parsed,
             RowState::Attached => Self::Attached,
+            RowState::Creating => Self::Creating,
             RowState::Created => Self::Created,
             RowState::Published => Self::Published,
             RowState::Failed => Self::Failed,
@@ -263,9 +274,17 @@ pub struct ImportRowView {
     pub state: RowStateView,
     pub problems: Vec<Problem>,
     pub file_name: Option<String>,
-    /// Whether the bytes for this row are held. Always false in this phase;
-    /// the bind route is the next one.
+    /// Whether the bytes for this row are held, which is what the bind route
+    /// writes and the unbind clears.
     pub file_attached: bool,
+    /// The resource this row became, once the commit created it.
+    ///
+    /// Present from `creating` onwards, because the identifier is reserved
+    /// before the product exists; the row's own state is what says whether it
+    /// exists yet. The batch page links to it, which is the whole reason it
+    /// travels rather than being looked up by a client that has no other way
+    /// to find it.
+    pub product: Option<ProductId>,
     pub failure_detail: Option<String>,
 }
 
@@ -284,6 +303,7 @@ impl ImportRowView {
             problems: serde_json::from_value(record.problems).unwrap_or_default(),
             file_name: record.file_name,
             file_attached: record.file.is_some(),
+            product: record.product_id,
             failure_detail: record.failure_detail,
         }
     }

@@ -2824,6 +2824,53 @@ mod tests {
 #[cfg(test)]
 mod image_tests {
     use super::image_type;
+    use tam_pipeline::probe::probe_kind;
+    use tam_types::FileKind;
+
+    /// Every byte string this crate's fixtures cover, so the two functions
+    /// below are compared over one set rather than over two that could drift.
+    const FIXTURES: [&[u8]; 12] = [
+        b"\x89PNG\r\n\x1a\nrest",
+        b"\xFF\xD8\xFF\xE0\x00\x10JFIF",
+        b"GIF87a\x08\x00",
+        b"GIF89a\x08\x00",
+        b"GIF8ZZ\x08\x00",
+        b"RIFF\x24\x00\x00\x00WEBPVP8 ",
+        b"RIFF\x24\x00\x00\x00WAVEfmt ",
+        b"RIFF\x24\x00",
+        b"%PDF-1.7 a worksheet",
+        b"PK\x03\x04",
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\">",
+        b"",
+    ];
+
+    /// Anything the upload admits as an image is one this route can name.
+    ///
+    /// This is the direction the write-side slot check rests on: a slot that
+    /// stored bytes [`probe_kind`] called an image and [`image_type`] then
+    /// refuses is a slot that reads back as 415 and draws nothing, which is a
+    /// filled slot showing an empty tile. The converse deliberately does not
+    /// hold — WebP is servable and not uploadable — so it is not asserted.
+    #[test]
+    fn every_kind_the_upload_calls_an_image_is_one_this_route_can_name() {
+        let admitted = FIXTURES
+            .into_iter()
+            .filter(|bytes| probe_kind(bytes) == Some(FileKind::Image))
+            .count();
+        assert_eq!(
+            admitted, 4,
+            "the fixtures cover every format the upload admits as an image; a set that \
+             matched none would make the implication below vacuous"
+        );
+        for bytes in FIXTURES {
+            if probe_kind(bytes) == Some(FileKind::Image) {
+                assert!(
+                    image_type(bytes).is_some(),
+                    "the upload admitted bytes this route cannot name: {bytes:?}"
+                );
+            }
+        }
+    }
 
     /// Every format the two byte-serving routes will name, decided from the
     /// bytes. A leading fragment is enough: the signature is what is read, and

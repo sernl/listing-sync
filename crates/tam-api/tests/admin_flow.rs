@@ -18,11 +18,12 @@ use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_api::admin::{
-    FailedWriteView, FailedWritesView, ImpersonationsView, OrgDetailView, OrgsView, SignupsView,
-    SyncHealthView,
+    FailedWriteView, FailedWritesView, ImpersonationsView, ImportDrainView, OrgDetailView,
+    OrgsView, SignupsView, SyncHealthView,
 };
+use tam_api::openapi::ROUTES;
 use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
-use tam_storage::{OperatorRepo, SessionRepo, SessionToken};
+use tam_storage::{BackofficeRepo, OperatorRepo, SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
 
@@ -37,14 +38,25 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 6] = [
+const ADMIN_PATHS: [&str; 7] = [
     "/v1/admin/signups",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     "/v1/admin/sync-health",
     "/v1/admin/failed-writes",
+    "/v1/admin/import-drain",
     "/v1/admin/impersonations",
 ];
+
+/// The mounted operator route `ADMIN_PATHS` does not carry, named rather than
+/// left absent.
+///
+/// `marketplace_requests::list_all` is the one operator route outside
+/// `admin.rs`, and the fixture it needs belongs to that module's own slice.
+/// Listing it here keeps the closure below failing for the next route somebody
+/// forgets, which is the whole point of closing the world; an unlisted absence
+/// would make the closure vacuous instead.
+const ADMIN_PATHS_UNCOVERED: [&str; 1] = ["/{version}/admin/marketplace-requests"];
 
 #[expect(
     clippy::expect_used,
@@ -815,6 +827,176 @@ async fn impersonations_are_absent_where_the_identity_schema_is(pool: PgPool) {
         view.impersonations.is_none(),
         "a database carrying no identity schema reports no record at all, rather \
          than an empty list that would read as nobody having been impersonated"
+    );
+}
+
+/// Every operator route the router mounts is reached by `ADMIN_PATHS`.
+///
+/// The two refusal loops below read that array whole, so a route mounted and
+/// not listed is covered by neither: the suite stays green while an operator
+/// route goes unproven against a seller, an anonymous caller and a deployment
+/// with no backoffice database. Closing the world here is what turns the next
+/// omission into a failure rather than something a reader has to notice.
+///
+/// The comparison is by prefix because `ADMIN_PATHS` holds concrete paths and
+/// the route table holds patterns: `/{version}/admin/orgs/{org}` is reached by
+/// the entry naming an actual organisation.
+#[test]
+fn every_mounted_admin_route_is_reached_by_the_refusal_loops() {
+    let mounted: Vec<&str> = ROUTES
+        .iter()
+        .map(|route| route.path)
+        .filter(|path| path.starts_with("/{version}/admin"))
+        .filter(|path| !ADMIN_PATHS_UNCOVERED.contains(path))
+        .collect();
+    for path in &mounted {
+        let concrete = path.replacen("{version}", "v1", 1);
+        let prefix = concrete
+            .split_once('{')
+            .map_or(concrete.clone(), |(head, _)| head.to_owned());
+        assert!(
+            ADMIN_PATHS.iter().any(|listed| listed.starts_with(&prefix)),
+            "{path} is mounted but no ADMIN_PATHS entry reaches it, so no refusal \
+             test covers it"
+        );
+    }
+    assert_eq!(
+        mounted.len(),
+        ADMIN_PATHS.len(),
+        "every mounted operator route has exactly one entry; a count that drifts \
+         means a path was listed twice or one was covered by another's prefix"
+    );
+}
+
+/// One drain measurement in a tenant's ledger, at the position given.
+///
+/// Written as SQL rather than through `record_drain_report`, because this
+/// crate holds no dependency on `tam-import` and gaining one to seed a fixture
+/// would put a marketplace adapter in the API's test graph. The payload
+/// spelling that writer produces is pinned byte for byte by its own test; what
+/// this file proves is the route between the ledger and the client.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_drain(
+    pool: &PgPool,
+    org: OrgId,
+    job_byte: u8,
+    seq: i64,
+    payload: &serde_json::Value,
+) {
+    let job = uuid::Uuid::from_bytes([job_byte; 16]).to_string();
+    let body = serde_json::to_string(payload).expect("the fixture payload serialises");
+    pinned(
+        pool,
+        org,
+        &[format!(
+            "INSERT INTO job_event \
+             (org_id, org_seq, job_id, kind, payload, created_at, actor_kind) \
+             VALUES ($1, {seq}, '{job}', 'ImportDrainMeasured', '{body}'::jsonb, now(), \
+                 'system')"
+        )],
+    )
+    .await;
+}
+
+/// A measurement in the spelling `record_drain_report` writes.
+fn measurement(items_new: u32) -> serde_json::Value {
+    serde_json::json!({
+        "source": "TesGb",
+        "target": "TesNz",
+        "rows": 4,
+        "terms_seen": 20,
+        "terms_unmapped": 2,
+        "terms_covered": 6,
+        "items_new": items_new,
+        "items_already_open": 1
+    })
+}
+
+/// The rung between the role and the client: `backoffice_grants` proves the
+/// role reads exactly these rows and `drain.test.ts` proves the client shapes
+/// them, and until now nothing proved the route between them answers at all.
+///
+/// The sequences are seeded out of order within a tenant, so the ordering the
+/// page's notion of "first" and "tenth" rests on is proved rather than
+/// inherited from the order the fixture inserted.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_drain_route_carries_every_tenant_in_ledger_order(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    seed_drain(&pool, ORG_A, 0x31, 7, &measurement(3)).await;
+    seed_drain(&pool, ORG_A, 0x31, 3, &measurement(9)).await;
+    seed_drain(&pool, ORG_B, 0x32, 5, &measurement(4)).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = call(
+        pool.clone(),
+        Some(backoffice),
+        "/v1/admin/import-drain",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "the operator is admitted");
+    let view: ImportDrainView = answer.json();
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| (row.org, row.org_name.clone(), row.org_seq))
+            .collect::<Vec<_>>(),
+        vec![
+            (ORG_A, "org-a".to_owned(), 3),
+            (ORG_A, "org-a".to_owned(), 7),
+            (ORG_B, "org-b".to_owned(), 5),
+        ],
+        "both tenants come back in one read, ordered by organisation name and \
+         then by ledger position"
+    );
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.payload.clone())
+            .collect::<Vec<_>>(),
+        vec![measurement(9), measurement(3), measurement(4)],
+        "each payload travels verbatim: the route parses none of it, which is \
+         what lets the client drop one malformed row and draw the rest"
+    );
+    assert!(
+        !view.truncated,
+        "three rows do not fill a limit of five hundred"
+    );
+}
+
+/// A read that fills its limit says so.
+///
+/// The ordering is by organisation name, so a truncated read drops whole
+/// tenants off the end of the alphabet and leaves rows that look exactly like
+/// the complete platform. The exact-fit case is asserted beside it because it
+/// is the one a length comparison gets wrong: a page of precisely the limit is
+/// complete, and reporting it truncated would put a permanent warning on a
+/// page that is telling the whole truth.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_drain_read_that_fills_its_limit_says_so(pool: PgPool) {
+    provision(&pool).await;
+    seed_drain(&pool, ORG_A, 0x31, 1, &measurement(3)).await;
+    seed_drain(&pool, ORG_A, 0x31, 2, &measurement(2)).await;
+    seed_drain(&pool, ORG_B, 0x32, 1, &measurement(1)).await;
+    let repo = BackofficeRepo::new(backoffice_pool(&pool).await);
+
+    let cut = repo.import_drain(2).await.ok();
+    assert_eq!(
+        cut.map(|page| (page.runs.len(), page.truncated)),
+        Some((2, true)),
+        "a limit of two over three rows carries two and reports the cut; the row \
+         read past the limit is a probe and must not be served"
+    );
+
+    let whole = repo.import_drain(3).await.ok();
+    assert_eq!(
+        whole.map(|page| (page.runs.len(), page.truncated)),
+        Some((3, false)),
+        "a read that exactly fits its limit is complete, not truncated"
     );
 }
 

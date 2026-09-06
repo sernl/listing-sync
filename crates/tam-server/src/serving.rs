@@ -584,7 +584,14 @@ pub(crate) fn content_type(file: &str) -> &'static str {
 mod tests {
     use super::{route, Answer};
 
-    /// The landing build this repository actually produces, as a set of names.
+    /// A fixture in the shape of a landing build: enough names to reach every
+    /// arm of `route` without a directory to read.
+    ///
+    /// It stands in for `landing_has` and claims nothing about what
+    /// `apps/landing` emits. The real artefact's shape is asserted by
+    /// `checks.served-artefacts` in `flake.nix`, against the store path the
+    /// build produces -- including the font names, which used to appear
+    /// nowhere but here.
     const BUILT: [&str; 7] = [
         "index.html",
         "pricing/index.html",

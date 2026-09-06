@@ -21,9 +21,10 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
 use tam_storage::{
-    BatchState, BatchWrite, ImportBatchRepo, NewImportBatch, NewImportBatchRow, RowIntent, RowState,
+    BatchState, BatchWrite, BindOutcome, CommitOpening, ImportBatchRepo, NewImportBatch,
+    NewImportBatchRow, RowAddress, RowFile, RowFiles, RowIntent, RowState, UnbindOutcome,
 };
-use tam_types::{InventoryId, OrgId, Timestamp, Uuid};
+use tam_types::{ContentHash, InventoryId, OrgId, Timestamp, Uuid};
 
 mod common;
 use common::{seed_org_a, ORG_A};
@@ -117,6 +118,62 @@ fn row<'a>(
         problems,
         file_name: None,
     }
+}
+
+/// Bytes this organisation has sealed, as the handle a bind names them by.
+///
+/// Written straight into `blob` because the upload route that seals them lives
+/// in another crate; what the bind reads is this row, and the foreign key on
+/// `(org_id, hash)` is what makes it a per-tenant fact.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a malformed fixture is a broken test and should panic"
+)]
+async fn seal(pool: &PgPool, org: OrgId, marker: u8) -> RowFile {
+    let hash = vec![marker; 32];
+    let mut tx = pinned(pool, org).await.expect("the pin sets");
+    sqlx::query(
+        "INSERT INTO blob (org_id, hash, byte_len, object_key, dek_key_version, first_seen_at) \
+         VALUES ($1, $2, 9, 'k', 1, now()) ON CONFLICT DO NOTHING",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(&hash)
+    .execute(&mut *tx)
+    .await
+    .expect("the blob writes");
+    tx.commit().await.expect("the seal commits");
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(&hash);
+    RowFile {
+        hash: ContentHash(bytes),
+        kind: "pdf".to_owned(),
+        byte_len: 9,
+    }
+}
+
+/// How many of a batch's rows hold a cover.
+///
+/// Read by direct statement rather than through the repository, because the
+/// column has no reader on the report: the commit is what writes it onto the
+/// product, and until that route exists a test is the only thing that can say
+/// the cover is there at all.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a malformed fixture is a broken test and should panic"
+)]
+async fn covers_held(pool: &PgPool, org: OrgId, id: Uuid) -> i64 {
+    let mut tx = pinned(pool, org).await.expect("the pin sets");
+    let counted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM import_batch_row \
+          WHERE org_id = $1 AND batch_id = $2 AND cover_hash IS NOT NULL",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(uuid::Uuid::from_bytes(id.0))
+    .fetch_one(&mut *tx)
+    .await
+    .expect("the count runs");
+    tx.commit().await.expect("the read commits");
+    counted
 }
 
 fn batch<'a>(id: Uuid, rows: &'a [NewImportBatchRow<'a>]) -> NewImportBatch<'a> {
@@ -395,6 +452,37 @@ async fn the_columns_refuse_what_the_repository_would_never_write(pool: PgPool) 
         half_a_handle.is_err(),
         "a file handle is three facts or none, so a hash without its length is refused"
     );
+    drop(tx);
+
+    let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
+    let half_a_cover = sqlx::query(
+        "UPDATE import_batch_row SET cover_kind = 'image' \
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(BATCH_A.0))
+    .execute(&mut *tx)
+    .await;
+    assert!(
+        half_a_cover.is_err(),
+        "and the cover handle is held to the same three-or-none rule as the payload's"
+    );
+    drop(tx);
+
+    let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
+    let claimed_without_an_identifier = sqlx::query(
+        "UPDATE import_batch_row SET state = 'creating' \
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(BATCH_A.0))
+    .execute(&mut *tx)
+    .await;
+    assert!(
+        claimed_without_an_identifier.is_err(),
+        "a claimed row names the product identifier the claim reserved, which is the whole \
+         point of the state: a resumed commit reads it rather than minting a second product"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -472,8 +560,11 @@ async fn the_sweep_settles_an_expired_batch_and_leaves_a_live_one_alone(pool: Pg
 }
 
 /// The one thing the sweep does that no other pass does: release a row's hold
-/// on bytes. Driven with a handle written directly, because the route that
-/// binds one is the phase after this.
+/// on bytes.
+///
+/// Both handles, because a row holding a cover for a payload it no longer
+/// names is a thumbnail of nothing, and the cover is charged storage the
+/// seller can no longer see either.
 #[sqlx::test(migrations = "./migrations")]
 async fn the_sweep_releases_the_file_handles_its_rows_hold(pool: PgPool) {
     seed_org_a(&pool).await.expect("org a seeds");
@@ -486,30 +577,24 @@ async fn the_sweep_releases_the_file_handles_its_rows_hold(pool: PgPool) {
         Ok(BatchWrite::Saved(_))
     ));
 
-    let hash = vec![0x51_u8; 32];
-    let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
-    sqlx::query(
-        "INSERT INTO blob (org_id, hash, byte_len, object_key, dek_key_version, first_seen_at) \
-         VALUES ($1, $2, 4, 'k', 1, now())",
-    )
-    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
-    .bind(&hash)
-    .execute(&mut *tx)
-    .await
-    .expect("the blob writes");
-    sqlx::query(
-        "UPDATE import_batch_row \
-            SET file_hash = $3, file_kind = 'pdf', file_byte_len = 4, state = 'attached' \
-          WHERE org_id = $1 AND batch_id = $2",
-    )
-    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
-    .bind(uuid::Uuid::from_bytes(BATCH_A.0))
-    .bind(&hash)
-    .execute(&mut *tx)
-    .await
-    .expect("the handle binds");
-    tx.commit().await.expect("the bind commits");
-
+    let payload = seal(&pool, ORG_A, 0x51).await;
+    let cover = seal(&pool, ORG_A, 0x52).await;
+    assert!(matches!(
+        repo.bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+        .await,
+        Ok(BindOutcome::Bound(_))
+    ));
     assert!(
         repo.rows(ORG_A, BATCH_A)
             .await
@@ -517,6 +602,11 @@ async fn the_sweep_releases_the_file_handles_its_rows_hold(pool: PgPool) {
             .first()
             .is_some_and(|row| row.file.is_some()),
         "the row holds bytes before the sweep runs"
+    );
+    assert_eq!(
+        covers_held(&pool, ORG_A, BATCH_A).await,
+        1,
+        "and it holds the cover the upload generated beside them"
     );
 
     let report = ImportBatchRepo::new(engine_pool(&pool).await)
@@ -526,7 +616,7 @@ async fn the_sweep_releases_the_file_handles_its_rows_hold(pool: PgPool) {
     assert_eq!(
         (report.abandoned, report.released),
         (1, 1),
-        "the pass settles the batch and releases the one handle it held"
+        "the pass settles the batch and releases the one row that held handles"
     );
     assert!(
         repo.rows(ORG_A, BATCH_A)
@@ -535,5 +625,538 @@ async fn the_sweep_releases_the_file_handles_its_rows_hold(pool: PgPool) {
             .first()
             .is_some_and(|row| row.file.is_none()),
         "and the row no longer names bytes it will never publish"
+    );
+    assert_eq!(
+        covers_held(&pool, ORG_A, BATCH_A).await,
+        0,
+        "nor the cover, which is the handle the payload's release would otherwise leave standing"
+    );
+}
+
+/// The bind's two writes and the counts it answers with.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_bind_moves_the_row_and_the_batch_and_counts_what_still_waits(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    let repo = ImportBatchRepo::new(pool.clone());
+    let held = draft("A worksheet");
+    let clean = no_problems();
+    let rows = [
+        row("TES GB", 4, RowIntent::Live, &held, &clean),
+        row("TES GB", 5, RowIntent::Draft, &held, &clean),
+        // A Teachouse row names no marketplace, so D32 asks it for no file and
+        // it is never counted as waiting for one.
+        row("Teachouse", 4, RowIntent::Draft, &held, &clean),
+    ];
+    assert!(matches!(
+        repo.create(ORG_A, &batch(BATCH_A, &rows)).await,
+        Ok(BatchWrite::Saved(_))
+    ));
+
+    let payload = seal(&pool, ORG_A, 0x61).await;
+    let cover = seal(&pool, ORG_A, 0x62).await;
+    let bound = repo
+        .bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+        .await
+        .expect("the bind runs");
+    let BindOutcome::Bound(bound) = bound else {
+        panic!("a clean row on an open batch binds: {bound:?}");
+    };
+    assert_eq!(
+        (
+            bound.row.state,
+            bound.batch_state,
+            bound.counts.attached,
+            bound.counts.awaiting
+        ),
+        (RowState::Attached, BatchState::Attaching, 1, 1),
+        "one of the two marketplace rows holds bytes, one still waits, and the Teachouse row          waits for nothing"
+    );
+    assert_eq!(
+        repo.get(ORG_A, BATCH_A)
+            .await
+            .expect("the read runs")
+            .map(|record| record.state),
+        Some(BatchState::Attaching),
+        "the batch moved with the row, in one transaction, so no reader sees one without the          other"
+    );
+    assert_eq!(
+        repo.draft_page(ORG_A, BATCH_A, None, 10)
+            .await
+            .expect("the drafts read")
+            .into_iter()
+            .find(|draft| draft.sheet == "TES GB" && draft.ordinal == 4)
+            .and_then(|draft| draft.cover),
+        Some(cover),
+        "and the cover reaches the commit, which is the reader that writes it onto the product"
+    );
+}
+
+/// Re-binding replaces, and unbinding is idempotent. Both are what "reversible
+/// before the commit" means for a seller who matched the wrong file.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_rebind_replaces_the_handle_and_an_unbind_converges(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    let repo = ImportBatchRepo::new(pool.clone());
+    let held = draft("A worksheet");
+    let clean = no_problems();
+    let rows = [row("TES GB", 4, RowIntent::Live, &held, &clean)];
+    assert!(matches!(
+        repo.create(ORG_A, &batch(BATCH_A, &rows)).await,
+        Ok(BatchWrite::Saved(_))
+    ));
+
+    let first = seal(&pool, ORG_A, 0x71).await;
+    let second = seal(&pool, ORG_A, 0x72).await;
+    let cover = seal(&pool, ORG_A, 0x73).await;
+    for payload in [&first, &second] {
+        assert!(matches!(
+            repo.bind_file(
+                ORG_A,
+                BATCH_A,
+                RowAddress {
+                    sheet: "TES GB",
+                    ordinal: 4,
+                },
+                RowFiles {
+                    payload,
+                    cover: &cover,
+                },
+            )
+            .await,
+            Ok(BindOutcome::Bound(_))
+        ));
+    }
+    assert_eq!(
+        repo.rows(ORG_A, BATCH_A)
+            .await
+            .expect("the rows read")
+            .into_iter()
+            .map(|row| row.file)
+            .collect::<Vec<_>>(),
+        vec![Some(second)],
+        "the second bind replaced the first rather than writing a second row"
+    );
+
+    assert_eq!(
+        repo.unbind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+        )
+        .await
+        .expect("the unbind runs"),
+        UnbindOutcome::Cleared
+    );
+    assert_eq!(
+        repo.rows(ORG_A, BATCH_A)
+            .await
+            .expect("the rows read")
+            .into_iter()
+            .map(|row| (row.state, row.file))
+            .collect::<Vec<_>>(),
+        vec![(RowState::Parsed, None)],
+        "the row waits again"
+    );
+    assert_eq!(
+        covers_held(&pool, ORG_A, BATCH_A).await,
+        0,
+        "and the cover went with it"
+    );
+    assert_eq!(
+        repo.get(ORG_A, BATCH_A)
+            .await
+            .expect("the read runs")
+            .map(|record| record.state),
+        Some(BatchState::Attaching),
+        "the batch does not walk back: a batch that has begun attaching has begun"
+    );
+    assert_eq!(
+        repo.unbind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+        )
+        .await
+        .expect("the second unbind runs"),
+        UnbindOutcome::Cleared,
+        "clearing what is already clear converges rather than refusing"
+    );
+}
+
+/// What the two writes refuse, and the fence they refuse across.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    seed_org_b(&pool).await.expect("org b seeds");
+    let repo = ImportBatchRepo::new(pool.clone());
+    let held = draft("A worksheet");
+    let clean = no_problems();
+    let refused = one_problem();
+    let rows = [
+        row("TES GB", 4, RowIntent::Live, &held, &clean),
+        row("TES GB", 5, RowIntent::Live, &held, &refused),
+    ];
+    assert!(matches!(
+        repo.create(ORG_A, &batch(BATCH_A, &rows)).await,
+        Ok(BatchWrite::Saved(_))
+    ));
+
+    let payload = seal(&pool, ORG_A, 0x81).await;
+    let cover = seal(&pool, ORG_A, 0x82).await;
+    assert_eq!(
+        repo.bind_file(
+            ORG_B,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+            .await
+            .expect("the bind runs"),
+        BindOutcome::NoSuchRow,
+        "another organisation's batch is absent rather than bindable, and its identifier is the          one thing a caller could guess"
+    );
+    assert_eq!(
+        repo.unbind_file(
+            ORG_B,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+        )
+        .await
+        .expect("the unbind runs"),
+        UnbindOutcome::NoSuchRow,
+        "nor may its rows be cleared across the fence"
+    );
+    assert_eq!(
+        repo.bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 9,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+        .await
+        .expect("the bind runs"),
+        BindOutcome::NoSuchRow,
+        "a row the sheet never held is absent"
+    );
+    assert_eq!(
+        repo.bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 5,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+            .await
+            .expect("the bind runs"),
+        BindOutcome::RowClosed(RowState::Failed),
+        "a row the parse refused can never be created, so binding to it would be work the          seller loses"
+    );
+
+    assert!(repo
+        .abandon(ORG_A, BATCH_A, AFTER_DEADLINE, "given up on")
+        .await
+        .expect("the abandon runs"));
+    assert_eq!(
+        repo.bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+        .await
+        .expect("the bind runs"),
+        BindOutcome::BatchClosed(BatchState::Abandoned),
+        "a settled batch takes no more files, and the refusal names which settlement it is"
+    );
+    assert_eq!(
+        repo.unbind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal: 4,
+            },
+        )
+        .await
+        .expect("the unbind runs"),
+        UnbindOutcome::BatchClosed(BatchState::Abandoned)
+    );
+}
+
+/// A second `tam_app` connection, which is what a seller with the page open in
+/// two tabs actually has.
+///
+/// The point of `SKIP LOCKED` is a lock another transaction is holding right
+/// now, and a lock cannot be held from the connection that is asking, so the
+/// rival needs a pool of its own.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a malformed fixture is a broken test and should panic"
+)]
+async fn rival_pool(app: &PgPool) -> PgPool {
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(app)
+        .await
+        .expect("the database name reads");
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&format!(
+            "postgres://tam_app:tam_dev_password@127.0.0.1:5433/{database}"
+        ))
+        .await
+        .expect("the second app connection opens")
+}
+
+/// Two chunks running at once claim different rows.
+///
+/// The severity is that the rival's lock is real and held across the claim: a
+/// claim written without `SKIP LOCKED` would block on it until this test's
+/// timeout rather than answer, and one written without `FOR UPDATE` at all
+/// would hand the same row to both chunks and create the seller's resource
+/// twice.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_claim_skips_the_rows_another_chunk_is_holding(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    let repo = ImportBatchRepo::new(pool.clone());
+    let held = draft("One");
+    let clean = no_problems();
+    let rows = [
+        row("TES GB", 4, RowIntent::Draft, &held, &clean),
+        row("TES GB", 5, RowIntent::Draft, &held, &clean),
+    ];
+    repo.create(ORG_A, &batch(BATCH_A, &rows))
+        .await
+        .expect("the batch writes");
+    let payload = seal(&pool, ORG_A, 0x31).await;
+    let cover = seal(&pool, ORG_A, 0x32).await;
+    for ordinal in [4, 5] {
+        repo.bind_file(
+            ORG_A,
+            BATCH_A,
+            RowAddress {
+                sheet: "TES GB",
+                ordinal,
+            },
+            RowFiles {
+                payload: &payload,
+                cover: &cover,
+            },
+        )
+        .await
+        .expect("the bind writes");
+    }
+
+    let rival = rival_pool(&pool).await;
+    let mut holding = pinned(&rival, ORG_A).await.expect("the rival pin sets");
+    sqlx::query(
+        "SELECT state FROM import_batch_row \
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4 \
+          FOR UPDATE",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(BATCH_A.0))
+    .fetch_one(&mut *holding)
+    .await
+    .expect("the rival takes the row");
+
+    let claimed = repo
+        .claim_page(ORG_A, BATCH_A, 10)
+        .await
+        .expect("the claim runs");
+    assert_eq!(
+        claimed.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
+        vec![5],
+        "the row the rival holds is left to the rival, and the other is claimed"
+    );
+    let Some(taken) = claimed.first() else {
+        panic!("the claim answered one row");
+    };
+    assert!(
+        taken.mapping.is_some(),
+        "a row naming an inventory reserves a mapping identifier beside its product, \
+         which is what import_batch_row_mapping_follows_inventory holds"
+    );
+
+    holding.rollback().await.expect("the rival lets go");
+    let after = repo
+        .claim_page(ORG_A, BATCH_A, 10)
+        .await
+        .expect("the second claim runs");
+    assert_eq!(
+        after.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
+        vec![4, 5],
+        "once the rival lets go both rows are claimable, and the one already claimed \
+         comes back rather than being stranded"
+    );
+    let Some(again) = after.iter().find(|row| row.ordinal == 5) else {
+        panic!("the second claim answered row five");
+    };
+    assert_eq!(
+        again.product, taken.product,
+        "a re-claimed row keeps the identifier reserved for it, which is what stops a \
+         resumed pass minting a second product for one spreadsheet row"
+    );
+}
+
+/// A commit settles to `imported` where every row created and to `failed` where
+/// any did not, and the sentence counts what happened.
+///
+/// Two organisations rather than two batches, because one import is open per
+/// organisation at a time. The rows are Teachouse rows, which name no
+/// marketplace and so need no file: D32's gate is about the rows that do.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_settle_writes_imported_with_no_failed_row_and_failed_with_one(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    seed_org_b(&pool).await.expect("the second org seeds");
+    let repo = ImportBatchRepo::new(pool.clone());
+    let held = draft("One");
+    let clean = no_problems();
+    let rows = [
+        row("Teachouse", 4, RowIntent::Draft, &held, &clean),
+        row("Teachouse", 5, RowIntent::Draft, &held, &clean),
+    ];
+    for (org, id) in [(ORG_A, BATCH_A), (ORG_B, BATCH_B)] {
+        repo.create(org, &batch(id, &rows))
+            .await
+            .expect("the batch writes");
+        assert_eq!(
+            repo.open_commit(org, id).await.expect("the commit opens"),
+            CommitOpening::Open,
+            "a batch of Teachouse rows needs no file to begin"
+        );
+        let claimed = repo.claim_page(org, id, 10).await.expect("the claim runs");
+        assert_eq!(claimed.len(), 2, "both rows are claimed");
+        assert!(
+            claimed.iter().all(|row| row.mapping.is_none()),
+            "a Teachouse row names no inventory, so it reserves no mapping"
+        );
+    }
+
+    for ordinal in [4, 5] {
+        assert!(
+            repo.record_created(
+                ORG_A,
+                BATCH_A,
+                RowAddress {
+                    sheet: "Teachouse",
+                    ordinal
+                }
+            )
+            .await
+            .expect("the breadcrumb writes"),
+            "a claimed row records its create"
+        );
+    }
+    assert_eq!(
+        repo.settle(ORG_A, BATCH_A, AFTER_DEADLINE)
+            .await
+            .expect("the settle runs"),
+        BatchState::Imported,
+        "a commit with no failed row is imported"
+    );
+    let settled = repo
+        .get(ORG_A, BATCH_A)
+        .await
+        .expect("the batch reads")
+        .expect("the batch is held");
+    assert_eq!(settled.state, BatchState::Imported);
+    assert_eq!(
+        settled.failure_detail, None,
+        "an imported batch carries no failure, which import_batch_failure_detail also holds"
+    );
+    assert_eq!(settled.settled_at, Some(AFTER_DEADLINE));
+
+    repo.record_created(
+        ORG_B,
+        BATCH_B,
+        RowAddress {
+            sheet: "Teachouse",
+            ordinal: 4,
+        },
+    )
+    .await
+    .expect("the breadcrumb writes");
+    assert!(
+        repo.record_row_failed(
+            ORG_B,
+            BATCH_B,
+            RowAddress {
+                sheet: "Teachouse",
+                ordinal: 5,
+            },
+            "the price is not one a listing can carry",
+        )
+        .await
+        .expect("the refusal writes"),
+        "a claimed row records its refusal"
+    );
+    assert_eq!(
+        repo.settle(ORG_B, BATCH_B, AFTER_DEADLINE)
+            .await
+            .expect("the settle runs"),
+        BatchState::Failed,
+        "one failed row settles the batch as failed"
+    );
+    let failed = repo
+        .get(ORG_B, BATCH_B)
+        .await
+        .expect("the batch reads")
+        .expect("the batch is held");
+    assert_eq!(
+        failed.failure_detail.as_deref(),
+        Some("1 of 2 rows did not create"),
+        "the sentence counts what happened rather than saying only that something did"
+    );
+    let counts = repo
+        .pending_counts(ORG_B, BATCH_B)
+        .await
+        .expect("the counts read");
+    assert_eq!(
+        (counts.outstanding, counts.created, counts.failed),
+        (0, 1, 1),
+        "and nothing is outstanding once every row has an outcome"
     );
 }

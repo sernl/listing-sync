@@ -359,6 +359,353 @@ async fn a_thumbnail_hash_this_tenant_never_uploaded_is_refused(pool: PgPool) {
     assert_eq!(error.errors[0].code, Some(APIErrorCode::UploadRejected));
 }
 
+// --------------------------------------------- the picture slots hold pictures
+
+/// A PDF over TPT's four-mebibyte thumbnail ceiling.
+///
+/// The ceiling is what bounds the slot check's read-back, so a blob past it is
+/// refused on the length the `blob` row records rather than on its bytes.
+fn oversized_pdf() -> Vec<u8> {
+    let mut bytes = pdf("oversized");
+    bytes.resize(4 * 1024 * 1024 + 1, b' ');
+    bytes
+}
+
+/// The refusal one entry carried, as a code and a sentence.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn refusal_of(body: &[u8]) -> (Option<APIErrorCode>, String) {
+    let error: APIError = parse(body);
+    let entry = error.errors.first().expect("a refusal carries an entry");
+    (entry.code, entry.message.clone())
+}
+
+/// A create carrying one thumbnail digest, in the shape the console sends.
+fn create_with_thumbnail(uploaded: &UploadedView, title: &str, digest: &str) -> serde_json::Value {
+    let mut body = create_body(uploaded, title, &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    let mut base = tpt_base();
+    base["thumbnail_mode"] = serde_json::json!(2);
+    base["thumbnail_hashes"] = serde_json::json!([digest]);
+    body["tpt_base"] = base;
+    body
+}
+
+/// A worksheet renamed `cover.jpg` is refused where it is offered, before any
+/// of it is sealed and before the tenant is asked whether it has room.
+///
+/// The browser cannot see this: `File.type` is derived from the extension, so
+/// the console's own check passes a PDF called `cover.jpg`. The server reads
+/// the leading bytes, which is the only place the answer exists.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_worksheet_offered_to_a_thumbnail_slot_is_refused_before_it_is_sealed(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("slot-worksheet");
+    let state = configured(pool, &root);
+
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::POST,
+            path: "/v1/uploads?slot=image&archive=keep_whole",
+            body: Some(Body::from(pdf("a worksheet in a picture slot"))),
+            content_type: Some("application/octet-stream"),
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let (code, said) = refusal_of(&body);
+    assert_eq!(code, Some(APIErrorCode::UploadRejected));
+    for format in ["JPEG", "PNG", "GIF"] {
+        assert!(
+            said.contains(format),
+            "the sentence names the formats a picture may be, so a seller knows what to \
+             send instead: {said}"
+        );
+    }
+
+    // Nothing was sealed and nothing was charged: this organisation's stored
+    // bytes after one legitimate upload are what an organisation that made no
+    // refused attempt reports after the same one.
+    let mine = upload(state.clone(), &TOKEN_A, tiny_jpeg(), "?slot=image").await;
+    let theirs = upload(state, &TOKEN_B, tiny_jpeg(), "?slot=image").await;
+    assert_eq!(
+        mine.stored_bytes, theirs.stored_bytes,
+        "the refused worksheet left no sealed bytes behind to be charged for"
+    );
+}
+
+/// The same bytes are still an ordinary payload, which is what makes the
+/// refusal above the slot's rather than a new global one.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_same_bytes_are_still_an_ordinary_payload(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("slot-payload-unaffected");
+    let state = configured(pool, &root);
+    let uploaded = upload(
+        state,
+        &TOKEN_A,
+        pdf("a worksheet in a picture slot"),
+        "?archive=keep_whole",
+    )
+    .await;
+    assert_eq!(
+        uploaded.payload.len(),
+        1,
+        "a seller's worksheet is the product, and the picture rule is not its rule"
+    );
+}
+
+/// A create naming a worksheet's handle as its cover is refused, and writes
+/// nothing.
+///
+/// `FileHandle::resolve` writes the `kind` string the body sent, so `kind:
+/// "image"` beside a PDF's hash was stored as stated and the console then drew
+/// an empty tile against a slot that said filled.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_create_naming_a_worksheet_as_its_cover_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("create-cover-worksheet");
+    let state = configured(pool, &root);
+    let worksheet = upload(state.clone(), &TOKEN_A, pdf("the worksheet"), "").await;
+    let picture = upload(state.clone(), &TOKEN_A, tiny_jpeg(), "").await;
+
+    let mut body = create_body(&picture, "A cover that is a worksheet", &[]);
+    body["cover"] = serde_json::json!({
+        "hash": worksheet.payload[0].hash,
+        "kind": "image",
+        "byte_len": worksheet.payload[0].byte_len
+    });
+    let (status, response) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    let (code, said) = refusal_of(&response);
+    assert_eq!(code, Some(APIErrorCode::UploadRejected));
+    assert!(
+        said.contains("picture"),
+        "the refusal is the slot's own rather than a held-bytes one: {said}"
+    );
+
+    let (status, listed) = get(state, &TOKEN_A, "/v1/products").await;
+    assert_eq!(status, StatusCode::OK);
+    let page: ProductsPage = parse(&listed);
+    assert!(
+        page.products.is_empty(),
+        "a refused create leaves no half-written resource behind"
+    );
+}
+
+/// The same through the sidecar's four thumbnail slots, which carry bare
+/// digests and so carry no kind at all.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_create_naming_a_worksheet_as_a_thumbnail_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("create-thumb-worksheet");
+    let state = configured(pool, &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("the worksheet"), "").await;
+    let body = create_with_thumbnail(
+        &uploaded,
+        "A thumbnail that is a worksheet",
+        &uploaded.payload[0].hash,
+    );
+    let (status, response) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    let (code, said) = refusal_of(&response);
+    assert_eq!(code, Some(APIErrorCode::UploadRejected));
+    assert!(
+        said.contains("picture"),
+        "the digest was held by this tenant, so the refusal is about what it is: {said}"
+    );
+}
+
+/// The edit route writes the sidecar whole, so it grants the same role the
+/// create does; before this it granted it unchecked.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_edit_naming_a_worksheet_as_a_thumbnail_is_refused(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("edit-thumb-worksheet");
+    let state = configured(pool, &root);
+    let picture = upload(state.clone(), &TOKEN_A, tiny_jpeg(), "?slot=image").await;
+    let worksheet = upload(state.clone(), &TOKEN_A, pdf("the worksheet"), "").await;
+    let good = picture.payload[0].hash.clone();
+    let body = create_with_thumbnail(&picture, "Editable", &good);
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let made: CreatedProductView = parse(&created);
+    let path = format!("/v1/products/{}", made.product.0.to_hyphenated());
+
+    let mut base = tpt_base();
+    base["thumbnail_mode"] = serde_json::json!(2);
+    base["thumbnail_hashes"] = serde_json::json!([worksheet.payload[0].hash]);
+    let (status, response) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &path,
+        &serde_json::json!({ "tpt_base": base }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    let (code, said) = refusal_of(&response);
+    assert_eq!(code, Some(APIErrorCode::UploadRejected));
+    assert!(said.contains("picture"), "{said}");
+
+    let (status, read) = get(state, &TOKEN_A, &path).await;
+    assert_eq!(status, StatusCode::OK);
+    let view: ProductView = parse(&read);
+    assert_eq!(
+        view.tpt_base.map(|base| base.thumbnail_hashes),
+        Some(vec![good]),
+        "a refused edit leaves the stored thumbnails as they stood rather than half-applied"
+    );
+}
+
+/// The held-bytes check the create has, on the route that lacked it: an edit
+/// could name digests this organisation never uploaded.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_thumbnail_digest_this_tenant_never_uploaded_is_refused_on_the_edit_too(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("edit-thumb-unheld");
+    let state = configured(pool, &root);
+    let picture = upload(state.clone(), &TOKEN_A, tiny_jpeg(), "?slot=image").await;
+    let body = create_with_thumbnail(&picture, "Editable", &picture.payload[0].hash);
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created)
+    );
+    let made: CreatedProductView = parse(&created);
+
+    let mut base = tpt_base();
+    base["thumbnail_mode"] = serde_json::json!(2);
+    base["thumbnail_hashes"] = serde_json::json!(["c".repeat(64)]);
+    let (status, response) = json_call(
+        state,
+        &TOKEN_A,
+        Method::PATCH,
+        &format!("/v1/products/{}", made.product.0.to_hyphenated()),
+        &serde_json::json!({ "tpt_base": base }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (code, said) = refusal_of(&response);
+    assert_eq!(code, Some(APIErrorCode::UploadRejected));
+    assert!(
+        said.contains("has not uploaded"),
+        "the edit refuses an unheld digest for the reason the create does: {said}"
+    );
+}
+
+/// A digest past the slot ceiling is refused on the length the row records,
+/// which is what bounds the read-back.
+///
+/// The fixture is a worksheet rather than a picture deliberately: without the
+/// ceiling the same create is still refused, so only the sentence separates
+/// the bound from the kind check, and the sentence is what is asserted.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_oversized_thumbnail_digest_is_refused_without_its_bytes_being_read(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("thumb-oversized");
+    let state = configured(pool, &root);
+    let uploaded = upload(
+        state.clone(),
+        &TOKEN_A,
+        oversized_pdf(),
+        "?archive=keep_whole",
+    )
+    .await;
+    let body = create_with_thumbnail(&uploaded, "Oversized", &uploaded.payload[0].hash);
+    let (status, response) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    let (code, said) = refusal_of(&response);
+    assert_eq!(code, Some(APIErrorCode::UploadRejected));
+    assert!(
+        said.contains("4194304"),
+        "the refusal names the ceiling the read-back is bounded at: {said}"
+    );
+    assert!(
+        !said.contains("has to be a picture"),
+        "the length refused it before a byte was decrypted, so this is not the kind \
+         refusal wearing the same code: {said}"
+    );
+}
+
+/// The create the console actually sends still lands, so the guard refuses
+/// nothing a seller doing the ordinary thing produces.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_console_s_own_create_still_lands(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("create-console-shape");
+    let state = configured(pool, &root);
+    let picture = upload(state.clone(), &TOKEN_A, tiny_jpeg(), "?slot=image").await;
+    let body = create_with_thumbnail(
+        &picture,
+        "A picture in every picture slot",
+        &picture.payload[0].hash,
+    );
+    let (status, created) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the generated cover and a real thumbnail both pass: {}",
+        String::from_utf8_lossy(&created)
+    );
+    let made: CreatedProductView = parse(&created);
+    let (status, kind, _) = get_typed(
+        state,
+        &TOKEN_A,
+        &format!("/v1/products/{}/cover", made.product.0.to_hyphenated()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        kind.as_deref(),
+        Some("image/png"),
+        "and what the create stored is what the read route draws"
+    );
+}
+
 /// A fifth thumbnail is refused by the form's own cap, not by the database.
 ///
 /// Migration 0040 carries `array_length(thumbnail_hashes, 1) <= 4` as a CHECK,

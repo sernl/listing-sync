@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_batch_row SET file_hash = $5, file_kind = $6, file_byte_len = $7, cover_hash = $8, cover_kind = $9, cover_byte_len = $10, state = 'attached' WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Text",
+        "Int8",
+        "Bytea",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d460267a1d2d901efe27174e09d45527f6ab3e8a1d362f887c598bbd1bfd9c8b"
+}

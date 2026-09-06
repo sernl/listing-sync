@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 88] = [
+pub const ROUTES: [Route; 91] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -208,6 +208,21 @@ pub const ROUTES: [Route; 88] = [
         method: "delete",
         path: "/{version}/imports/{batch}",
         summary: "Abandon an open import, releasing its hold on the next one",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/imports/{batch}/rows/{sheet}/{ordinal}/file",
+        summary: "Bind one row to the payload and cover an upload already sealed",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/imports/{batch}/rows/{sheet}/{ordinal}/file",
+        summary: "Release one row's hold on the bytes bound to it",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/imports/{batch}/commit",
+        summary: "Create the next chunk of an import's resources; enqueues nothing",
     },
     Route {
         method: "get",

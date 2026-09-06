@@ -395,6 +395,10 @@ pub async fn first_run(
 /// cannot restore a revoked device: `revoked_at` is its own column and the
 /// upsert does not touch it, and a revoked device is a row that exists, so it
 /// answers a heartbeat rather than a not-found and never reaches this arm.
+///
+/// Two call sites, both on the scheduled path and both in this module:
+/// [`cycle`], and [`resume`]'s branch for a phone brought forward before its
+/// work is due. Neither is the console's, which reaches [`first_run`] instead.
 async fn check_in_or_register(
     state: &DesktopState,
     plane: &dyn ControlPlane,
@@ -449,6 +453,59 @@ pub async fn cycle<W: WorkSource + ?Sized>(
         state.record(*marketplace, now, event.clone()).await;
     }
     report
+}
+
+/// One resume's worth of a phone: always a check-in, and a scheduler tick only
+/// when the last one was longer ago than the cadence.
+///
+/// A phone has no timer — Android's Doze stops `JobScheduler` and the
+/// battery-optimisation exemption that would evade it is barred by Play
+/// policy — so a resume is the only moment it can act, and until this split
+/// every resume ran a full [`cycle`]. A phone brought forward twenty times an
+/// hour therefore posted twenty work claims and made twenty rounds of
+/// marketplace requests, which is the D3 deviation
+/// `docs/notes/design/android-client.md` describes rather than the behaviour
+/// it describes.
+///
+/// The check-in is not gated. It is the only channel by which a phone learns
+/// the seller signed it out, and gating it would make a revocation wait for
+/// the hour rather than for the next time the seller looks.
+///
+/// Answers the tick's report where it ticked and `None` where it only checked
+/// in, so the caller stamps its instant on the branch that actually worked
+/// rather than on every resume — which would hold the gate closed forever.
+#[cfg(any(mobile, test))]
+pub(crate) async fn resume<W: WorkSource + ?Sized>(
+    state: &DesktopState,
+    plane: &dyn ControlPlane,
+    scheduler: &Scheduler,
+    source: &W,
+    at: ResumeAt,
+) -> Option<TickReport> {
+    if crate::scheduler::work_is_due(at.last_tick, at.now, scheduler.cadence()) {
+        return Some(cycle(state, plane, scheduler, source, at.now).await);
+    }
+    check_in_or_register(state, plane).await.ok();
+    None
+}
+
+/// When the last scheduler tick ran, and when this resume is.
+///
+/// A struct rather than two arguments of the same type, which are one careless
+/// swap from a phone that works on every resume or never works at all.
+#[cfg(any(mobile, test))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResumeAt {
+    /// `None` before anything has ticked on this run, which is due by
+    /// definition: nothing else sets the stamp.
+    ///
+    /// No caller reaches that branch today. The mobile loop in `lib.rs` seeds
+    /// the stamp with `Some(wall_now())` before its first resume, so `None`
+    /// arrives only from a test; it is kept because the seeding is the loop's
+    /// choice rather than this type's, and a caller that did not seed would
+    /// otherwise have no way to say it had never ticked.
+    pub(crate) last_tick: Option<Timestamp>,
+    pub(crate) now: Timestamp,
 }
 
 /// Forgets every marketplace session on this device and closes the gate.
@@ -1021,6 +1078,102 @@ mod tests {
                 .is_some(),
             "and it must not wipe on a failure to reach the server, which would make \
              every offline period a disconnect"
+        );
+    }
+
+    /// A phone brought forward again a minute later checks in and works
+    /// nothing.
+    ///
+    /// Both halves are asserted against the same run, because either alone
+    /// passes for an implementation that is wrong in the other direction: a
+    /// resume that pulled nothing AND checked in nothing would be a phone that
+    /// never learns it was signed out, and a resume that did both would be the
+    /// deviation this split closes. The first resume in the pair is what makes
+    /// the second severe — it proves the gate, the session and the entitlement
+    /// are all open, so the second resume's zero is the cadence refusing rather
+    /// than a readiness check that would have refused anyway.
+    ///
+    /// What this does not cover is the mobile loop itself, which is
+    /// `#[cfg(mobile)]` and unreachable from a host test. It holds the
+    /// `Option<Timestamp>` this takes as an argument and stamps it on the
+    /// `Some` branch; that wiring is three lines and is proved by the Android
+    /// target's own compile, not by this.
+    #[tokio::test]
+    async fn a_resume_before_its_work_is_due_checks_in_and_pulls_nothing() {
+        use crate::scheduler::{PullFuture, Scheduler, WorkSource};
+
+        #[derive(Debug, Default)]
+        struct CountingSource(AtomicUsize);
+
+        impl WorkSource for CountingSource {
+            fn pull(&self, _marketplace: Marketplace) -> PullFuture<'_> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Ok(vec![crate::state::WorkEvent::Idle]) })
+            }
+        }
+
+        let key = test_key();
+        let store = Arc::new(MemorySessionStore::new());
+        store
+            .put(&a_record(Marketplace::Tpt, None))
+            .await
+            .expect("tpt stores");
+        let state = DesktopState::with_verifying_keys(identity(), store, vec![key.public]);
+        let plane = Fake::granting(mint(&key, &claims(NOW, vec![Marketplace::Tpt])));
+        let scheduler = Scheduler::new(Scheduler::DEFAULT_CADENCE, vec![Marketplace::Tpt]);
+        let source = CountingSource::default();
+
+        let started = super::resume(
+            &state,
+            &plane,
+            &scheduler,
+            &source,
+            super::ResumeAt {
+                last_tick: None,
+                now: at(NOW),
+            },
+        )
+        .await;
+
+        assert!(
+            started.is_some(),
+            "a phone with no previous tick works on the first resume, or it never works at all"
+        );
+        assert_eq!(
+            source.0.load(Ordering::SeqCst),
+            1,
+            "and the work source really was reached, which is what makes the count below mean \
+             the cadence rather than a closed gate"
+        );
+        assert_eq!(plane.beats.load(Ordering::SeqCst), 1);
+
+        let again = super::resume(
+            &state,
+            &plane,
+            &scheduler,
+            &source,
+            super::ResumeAt {
+                last_tick: Some(at(NOW)),
+                now: at(NOW + 60),
+            },
+        )
+        .await;
+
+        assert!(
+            again.is_none(),
+            "a resume a minute later is not a tick, and answering Some would stamp an instant \
+             that never worked"
+        );
+        assert_eq!(
+            source.0.load(Ordering::SeqCst),
+            1,
+            "a phone brought forward twenty times an hour claims work once, not twenty times"
+        );
+        assert_eq!(
+            plane.beats.load(Ordering::SeqCst),
+            2,
+            "but it checks in every time, because that is the only channel by which it learns \
+             the seller signed it out"
         );
     }
 

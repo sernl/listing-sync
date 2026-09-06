@@ -289,7 +289,23 @@ pub(crate) async fn settle(
     Path((_version, device)): Path<(String, String)>,
     Json(body): Json<SettleEnvelope>,
 ) -> Result<StatusCode, APIError> {
-    held_by(&state, context.org, &device, body.lease).await?;
+    use tam_engine_driver::ports::ItemLedger;
+
+    let leased = held_by(&state, context.org, &device, body.lease).await?;
+    // `body.at_ms` is dropped rather than passed: `job_item` records one
+    // instant and it is our receipt, so the device's assertion has nowhere on
+    // this row to go until the split note's second column exists.
+    PgLedger::for_device(state.pool.clone(), leased.job, device)
+        .settle_item(&body.lease, &body.verdict, (state.wall)())
+        .await
+        .map_err(|error| match error {
+            // The fence again, this time as the write's own answer: the reaper
+            // can take the lease between the read above and this update.
+            LedgerError::StaleLease => lease_refusal(),
+            LedgerError::AttemptInFlight
+            | LedgerError::MappingAlreadyBound
+            | LedgerError::Refused { .. } => state.internal(&error.to_string()),
+        })?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -452,28 +468,31 @@ async fn held_by(
     device: &str,
     lease: LeaseRef,
 ) -> Result<tam_storage::LeasedItem, APIError> {
-    let refusal = || {
-        APIError::new(
-            StatusCode::CONFLICT,
-            APIErrorEntry::new(
-                "that lease is held by another device, so this call is not yours to make",
-            )
-            .kind(APIErrorKind::Validation),
-        )
-    };
     let leased = LeaseRepo::new(state.pool.clone())
         .leased_item(org, lease.item)
         .await
         .map_err(|error| state.internal(&error.to_string()))?
-        .ok_or_else(refusal)?;
+        .ok_or_else(lease_refusal)?;
     let holder = LeaseRepo::new(state.pool.clone())
         .holder(org, lease.item)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     if holder.as_deref() != Some(device) || leased.lease_epoch != lease.lease_epoch {
-        return Err(refusal());
+        return Err(lease_refusal());
     }
     Ok(leased)
+}
+
+/// What every fence failure on a device-reachable route answers with, in one
+/// place so the read's refusal and the write's are the same refusal.
+fn lease_refusal() -> APIError {
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new(
+            "that lease is held by another device, so this call is not yours to make",
+        )
+        .kind(APIErrorKind::Validation),
+    )
 }
 
 /// The call, executed. One arm per variant, so a method added to the port

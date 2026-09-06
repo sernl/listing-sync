@@ -167,3 +167,24 @@ Disconnecting writes `unlinked` rather than `revoked`, through `ConnectionRepo::
 It answers only about the machine the console happens to be running on, and every screen here renders from the server's device registry and connection list instead — the copy that covers a seller's other machines, that a browser can read at all, and that the disconnect route operates on.
 Reading it would add a second answer to a question those two already answer, which is the failure `web/src/lib/connection-standing.ts` exists to prevent.
 The connect flow does not need it either: `connect_marketplace` checks in before it returns, so the connection row is already correct when the console refetches.
+
+## Amended 2026-09-06: a forget tells the server before it answers
+
+`forget_session` removed the jar and told the server nothing, while its sibling `connect_marketplace` checked in before it reported success.
+That asymmetry was the whole of a visible defect: the server's per-device session list is replaced only by a check-in, so between a seller's disconnect and the next scheduled one the registry went on listing a login for a jar that no longer existed.
+The window is an hour on a computer and until the next resume on a phone, and the seller reads both answers on one screen — the marketplace tile saying Not connected, and that machine's row under "Your machines" still saying Connected.
+
+`forget_session` now checks in after the forget and before it answers, discarding the result.
+`check_in` rather than `check_in_or_register`: a device the server has never seen has no session row to correct, and the self-heal keeps its call sites on the scheduled path.
+Discarded rather than raised, because the jar is already gone and a check-in that could not reach the server is not a reason to report the disconnect as failed.
+
+Nothing on the console changed, and that is the point rather than an omission.
+`MarketplacesPage.svelte` already ran the device half first and the control-plane half second, and already invalidated both the connection list and the device registry; those refetches were premature rather than wrong, and they become correct the moment the device half tells the server.
+`SessionStatus` gains no field for the same reason `session_status` stays unwired: the registry and the connection list are the one copy every screen reads.
+
+The visible cost is that Disconnect stays busy for one control-plane round trip, bounded by the client's existing 30-second request and 10-second connect timeouts.
+The alternative is telling a seller the machine is clear while the server still lists the login against it.
+
+One transition is accepted rather than removed.
+The forced check-in briefly moves a `linked` connection to `needs_reauth` before the console's own disconnect writes `unlinked`, and `derive_link` records that in the connection event log with detail `device-reported`.
+The two events are ordered and distinguishable, the end state is `unlinked` either way, and no screen renders the intermediate; reordering the console's two halves would reintroduce the re-link the current order exists to prevent.

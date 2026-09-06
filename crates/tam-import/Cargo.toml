@@ -49,6 +49,13 @@ name              = "tam-import"
 path              = "src/main.rs"
 required-features = ["operator"]
 
+# The development seeder for the operator import-drain page. It writes through
+# `record_drain_report` and needs nothing the operator binary does not already
+# pull in, so it adds no dependency and is gated on the same feature.
+[[example]]
+name              = "seed_drain"
+required-features = ["operator"]
+
 [dev-dependencies]
 # The cassette fixture is the only consumer left: the binary reads no Tes
 # source, because that read runs on the seller's own device.

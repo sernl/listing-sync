@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT sheet, ordinal, inventory, intent, draft, file_hash, file_kind, file_byte_len, state FROM import_batch_row WHERE org_id = $1 AND batch_id = $2 AND (sheet, ordinal) > ($3, $4) ORDER BY sheet, ordinal LIMIT $5",
+  "query": "SELECT sheet, ordinal, inventory, intent, draft, file_hash, file_kind, file_byte_len, cover_hash, cover_kind, cover_byte_len, state FROM import_batch_row WHERE org_id = $1 AND batch_id = $2 AND (sheet, ordinal) > ($3, $4) ORDER BY sheet, ordinal LIMIT $5",
   "describe": {
     "columns": [
       {
@@ -45,6 +45,21 @@
       },
       {
         "ordinal": 8,
+        "name": "cover_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 9,
+        "name": "cover_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "cover_byte_len",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
         "name": "state",
         "type_info": "Text"
       }
@@ -67,8 +82,11 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
       false
     ]
   },
-  "hash": "d9f19440dcfc92ac1f8aaa20c1087f86855ca40b4237cfd75fcdde907cebbe23"
+  "hash": "7ffe18124aff909fe6ee42218cde8ee4dde5d4015e8721963709b0499ad1e530"
 }

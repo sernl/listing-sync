@@ -607,7 +607,8 @@ impl ProductRepo {
         Ok(true)
     }
 
-    /// Which of these content hashes this tenant actually holds bytes for.
+    /// Which of these content hashes this tenant actually holds bytes for, and
+    /// how long each stored blob is.
     ///
     /// The create names handles a client holds, and `insert_file` upserts a
     /// `blob` row rather than requiring one — the not-yet-encrypted sentinel
@@ -616,23 +617,31 @@ impl ProductRepo {
     /// exist, and count against the tenant's storage. Asked here rather than
     /// on `BlobRepo` because the caller is the create, which needs no object
     /// store to answer it.
+    ///
+    /// The length travels with the hash because a caller that reads one of
+    /// these blobs back has to bound the read before it makes it, and
+    /// `blob.byte_len` is the only length in the system that no client
+    /// asserted: a `FileHandle` carries one the request body sent, and a bare
+    /// thumbnail digest carries none at all.
     pub async fn stored_hashes(
         &self,
         org: OrgId,
         hashes: &[tam_types::ContentHash],
-    ) -> Result<Vec<tam_types::ContentHash>, StorageError> {
+    ) -> Result<Vec<(tam_types::ContentHash, i64)>, StorageError> {
         let wanted: Vec<Vec<u8>> = hashes.iter().copied().map(hash_to_db).collect();
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let rows = sqlx::query_scalar!(
-            "SELECT hash FROM blob WHERE org_id = $1 AND hash = ANY($2)",
+        let rows = sqlx::query!(
+            "SELECT hash, byte_len FROM blob WHERE org_id = $1 AND hash = ANY($2)",
             uuid_to_db(org.0),
             &wanted,
         )
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
-        rows.iter().map(|row| hash_from_db(row)).collect()
+        rows.iter()
+            .map(|row| Ok((hash_from_db(&row.hash)?, row.byte_len)))
+            .collect()
     }
 
     /// Adds one file to a product that already exists.

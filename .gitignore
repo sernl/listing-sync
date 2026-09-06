@@ -24,5 +24,10 @@ probes/local/
 # local dev state (ephemeral postgres, broker sockets)
 .dev/
 
+# svelte-kit's generated state, when `svelte-kit sync` is run from the
+# repository root rather than from `web/`. Anchored, unlike `web/.gitignore`'s
+# entry, because only the root one belongs here.
+/.svelte-kit/
+
 # agent-local settings (founder ruling: excluded from the repository)
 .claude/settings.local.json

@@ -197,6 +197,10 @@ async fn every_documented_operation_is_mounted() {
             .replace("{file}", "11111111-1111-4111-8111-111111111111")
             .replace("{connection}", "11111111-1111-4111-8111-111111111111")
             .replace("{batch}", "11111111-1111-4111-8111-111111111111")
+            // A tab title and the seller's own spreadsheet row number, which
+            // is what addresses one row of an import.
+            .replace("{sheet}", "Teachouse")
+            .replace("{ordinal}", "4")
             // A handle is a content hash, not a uuid, so it substitutes with
             // 64 hex characters or the route it names never matches.
             .replace(

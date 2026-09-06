@@ -202,8 +202,9 @@ async fn the_two_quota_reads_and_the_handle_check_stop_at_the_tenant_fence(pool:
         repo.stored_hashes(ORG_A, &[HASH_A, HASH_B])
             .await
             .expect("A's handles resolve"),
-        vec![HASH_A],
-        "B's blob is invisible to A, so a handle naming it is not resolvable"
+        vec![(HASH_A, 11)],
+        "B's blob is invisible to A, so a handle naming it is not resolvable, and the \
+         length answered is the row's own rather than anything a caller stated"
     );
     assert!(
         repo.stored_hashes(ORG_B, &[ContentHash([0x99; 32])])

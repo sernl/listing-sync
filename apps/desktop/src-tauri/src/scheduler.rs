@@ -106,6 +106,40 @@ impl TickReport {
     }
 }
 
+/// Whether a scheduler tick is due, given when the last one ran.
+///
+/// The phone's missing timer, in one predicate. D3 limits a phone to work the
+/// seller starts, and the platform agrees: Android's Doze stops
+/// `JobScheduler` and therefore `WorkManager`, so a resume is the only moment
+/// a phone can act at all. But a resume is also a moment a seller produces
+/// twenty times an hour, and a full cycle per resume is twenty work claims
+/// posted to the control plane and twenty rounds of marketplace requests from
+/// a handset. The check-in is not gated by this and must not be — it is the
+/// only channel by which a phone learns it was signed out — and the work pull
+/// is the half with no such warrant.
+///
+/// The cadence read is [`Scheduler::DEFAULT_CADENCE`], the hour the desktop
+/// timer already keeps, rather than a second number invented for phones: one
+/// founder-gated limit, in one place.
+///
+/// A clock that has moved backwards since the last tick reads as not due, and
+/// resolves itself once the clock passes the stamp. Answering "due" to a
+/// backwards jump would hand an oscillating clock a pull on every resume,
+/// which is the cost this exists to remove.
+///
+/// Compiled for the mobile build and for tests. The desktop timer deliberately
+/// does not consult it: `tokio::time::interval` already fires at the cadence,
+/// and measuring that same gap on a wall clock could round to a millisecond
+/// under it and skip an hourly tick.
+#[cfg(any(mobile, test))]
+pub(crate) fn work_is_due(last: Option<Timestamp>, now: Timestamp, cadence: Duration) -> bool {
+    let Some(last) = last else {
+        return true;
+    };
+    let cadence = i64::try_from(cadence.as_millis()).unwrap_or(i64::MAX);
+    now.0.saturating_sub(last.0) >= cadence
+}
+
 /// A deterministic, cron-shaped timer over the marketplaces this device works.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheduler {
@@ -221,7 +255,7 @@ impl Scheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::{NoWork, PullFuture, Readiness, Scheduler, WorkSource};
+    use super::{work_is_due, NoWork, PullFuture, Readiness, Scheduler, WorkSource};
     use crate::device::DeviceId;
     use crate::entitlement::{Claims, Entitlement, EntitlementGate};
     use crate::session::memory::MemorySessionStore;
@@ -471,5 +505,54 @@ mod tests {
             1,
             "revoking one marketplace must not stop the others"
         );
+    }
+
+    /// The phone's cadence, case by case.
+    ///
+    /// The first row is the one that matters most: a phone that answered false
+    /// with no previous tick would never work at all, because nothing else
+    /// sets the stamp. The exact-cadence row is the one an implementation
+    /// written with `>` fails, which would push every tick to the resume after
+    /// the one it was due on.
+    #[test]
+    fn work_is_due_only_once_a_cadence_has_passed() {
+        let hour = Scheduler::DEFAULT_CADENCE;
+        let at = |ms: i64| Timestamp(1_756_000_000_000 + ms);
+        let cases = [
+            (
+                None,
+                at(0),
+                true,
+                "no previous tick: the first resume works",
+            ),
+            (
+                Some(at(0)),
+                at(1),
+                false,
+                "a second resume in the same breath does not",
+            ),
+            (
+                Some(at(0)),
+                at(3_599_999),
+                false,
+                "nor one a millisecond short of the hour",
+            ),
+            (
+                Some(at(0)),
+                at(3_600_000),
+                true,
+                "the hour exactly is due, or a tick slips to the resume after",
+            ),
+            (Some(at(0)), at(7_200_000), true, "and anything past it"),
+            (
+                Some(at(3_600_000)),
+                at(0),
+                false,
+                "a clock that moved backwards is not due, and resolves itself",
+            ),
+        ];
+        for (last, now, expected, why) in cases {
+            assert_eq!(work_is_due(last, now, hour), expected, "{why}");
+        }
     }
 }

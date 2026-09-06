@@ -379,16 +379,6 @@ async fn run_schedule<W: scheduler::WorkSource>(app: AppHandle, work: W) {
     }
 }
 
-/// The same cycle on a phone, with no timer behind it.
-///
-/// D3 limits a phone to work the seller starts, and the platform is why:
-/// Android's Doze stops `JobScheduler` and therefore `WorkManager`, and the
-/// battery-optimisation exemption that would evade it is barred by Play
-/// policy. A cadence here would be a promise the platform breaks, so there is
-/// none — the scheduler's own cadence field is never read on this path, and it
-/// is constructed only for the marketplace set it carries. What replaces the
-/// timer is the seller: one cycle at start-up, one on every resume, and the
-/// console's own commands in between.
 /// Points the main window at the console, or at the page that explains why not.
 ///
 /// Shared by start-up and the retry command so the two cannot diverge on what
@@ -455,6 +445,24 @@ pub(crate) async fn retry_console_from<R: tauri::Runtime>(
     window.navigate(url).map_err(|why| why.to_string())
 }
 
+/// The same cycle on a phone, with no timer behind it.
+///
+/// D3 limits a phone to work the seller starts, and the platform is why:
+/// Android's Doze stops `JobScheduler` and therefore `WorkManager`, and the
+/// battery-optimisation exemption that would evade it is barred by Play
+/// policy. A cadence here would be a promise the platform breaks, so there is
+/// none. What replaces the timer is the seller: one cycle at start-up, one on
+/// every resume, and the console's own commands in between.
+///
+/// A resume is not one cycle, though, and that is the correction. The seller
+/// produces resumes at their own rate — twenty an hour is an ordinary phone —
+/// and a full cycle for each is twenty work claims posted to the control plane
+/// and twenty rounds of marketplace requests from a handset. So the two halves
+/// of a cycle are split by [`heartbeat::resume`]: the check-in runs on every
+/// resume, because it is the only channel by which a phone learns it was
+/// signed out, and the work pull runs at most once per
+/// [`Scheduler::DEFAULT_CADENCE`] — the hour the desktop timer already keeps,
+/// read from the scheduler this constructs rather than written down again.
 #[cfg(mobile)]
 #[expect(
     clippy::infinite_loop,
@@ -466,9 +474,26 @@ async fn run_schedule<W: scheduler::WorkSource>(
     resumed: Arc<tokio::sync::Notify>,
 ) {
     let scheduler = Scheduler::hourly_over_seller_device_marketplaces();
+    // Stamped before the cycle rather than after it, so a cycle that takes
+    // minutes does not push the next one an extra hour out. Erring towards
+    // working sooner is the safe direction of the two.
+    let mut last_tick = Some(wall_now());
     run_cycle(&app, &scheduler, &work).await;
     loop {
         resumed.notified().await;
-        run_cycle(&app, &scheduler, &work).await;
+        let now = wall_now();
+        let state = app.state::<DesktopState>();
+        if heartbeat::resume(
+            &state,
+            state.control_plane(),
+            &scheduler,
+            &work,
+            heartbeat::ResumeAt { last_tick, now },
+        )
+        .await
+        .is_some()
+        {
+            last_tick = Some(now);
+        }
     }
 }

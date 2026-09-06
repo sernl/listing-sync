@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               count(*) FILTER (\n                   WHERE state IN ('parsed', 'attached') AND file_hash IS NOT NULL\n               ) AS \"attached!\",\n               count(*) FILTER (\n                   WHERE state IN ('parsed', 'attached')\n                     AND file_hash IS NULL\n                     AND inventory IS NOT NULL\n               ) AS \"awaiting!\"\n             FROM import_batch_row\n            WHERE org_id = $1 AND batch_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "attached!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "awaiting!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "ef541df3d139666064f5ce58e746a35972902618afb3570a85c94d922713cd66"
+}

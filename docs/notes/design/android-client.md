@@ -219,6 +219,32 @@ Supply a launcher icon before a public listing.
 `tauri android init` generated the Tauri placeholder `ic_launcher` set, the same placeholder the desktop bundle carries, and it is what a phone would show on its home screen today.
 The application's own name is already right — `Teachouse`, taken from `productName` — and only the artwork is missing.
 
+## Amended 2026-09-06: the resume cadence, and a check-in the seller can press
+
+The scheduler section above describes what a phone was meant to do — the check-in on resume, and the work pull replaced by a command a console button calls.
+The code did something else.
+`run_schedule` on mobile ran a full `cycle` on every `Resumed`, and a cycle is a check-in followed by a scheduler tick over every seller-device marketplace, which posts a work claim to the control plane and then makes marketplace requests from the phone.
+A phone is brought forward twenty times an hour by an ordinary seller, so that was twenty claims and twenty rounds of requests, which is a deviation from D3 rather than an application of it.
+No console button existed either: `device_check_in` was granted and registered, and the console called it once per load and never again.
+
+Both halves are now built.
+
+A resume checks in every time and ticks the scheduler at most once per `Scheduler::DEFAULT_CADENCE`.
+The check-in is not gated and must not be, because it is the only channel by which a phone learns the seller signed it out; the work pull is the half with no such warrant.
+The cadence is the hour the desktop timer already keeps, read from the scheduler the mobile loop already constructs rather than invented as a second number, so no founder-gated limit moves.
+The mechanism is a pure predicate, `scheduler::work_is_due`, and one held instant that is stamped only on the branch that actually ticked; `heartbeat::resume` is the composition of the two and is what the mobile loop calls.
+A clock that has moved backwards reads as not due and resolves itself, rather than handing an oscillating clock a pull on every resume.
+
+The console carries "Check in now" in the "Your machines" panel header, rendered only inside the application.
+It is the same `device_check_in` the console calls on load, so it costs one button rather than a command, and the server's own upsert makes pressing it twice a refresh rather than a second machine.
+Not offered disabled in a browser: a control a seller can never enable is a promise the page cannot keep, and the panel already says that machines report for themselves.
+
+Beside it, `DeviceState` now carries `detail` — `ControlPlaneError`'s own sentence when a check-in did not reach us, and null when it did.
+The panel renders it as one line when a check-in it was asked for came back false.
+The four sentences name no credential, no jar and no host but our own control plane, and they are the difference between "nothing appeared in the list" and a cause somebody can act on.
+On a phone that difference is the whole diagnostic surface: `startup.log` is in private storage no one reaches without `run-as`, and stdout goes to logcat, which needs a cable.
+`docs/notes/runbooks/android-phone-check.md` is the ten-minute check that reads this line, and is the first exercise of any of this on a real handset rather than on an emulator.
+
 ## Sources
 
 `docs/notes/design/vendoo-for-teachers-rethink.md`, decisions D2, D3, D12, D14 and D29, and its §5.1 and §5.2 readings of mobile session capture and mobile scheduling.

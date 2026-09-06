@@ -418,21 +418,31 @@ pub struct ImportDrainRowView {
     pub payload: serde_json::Value,
 }
 
+/// Every measurement the read carried, and whether it carried them all.
+///
+/// `truncated` is reported rather than left to be inferred from `rows.len()`
+/// against the limit. The ordering is by organisation name, so a read that
+/// fills the limit drops whole tenants off the end of the alphabet and the
+/// rows that survive look exactly like the complete platform; a page that
+/// cannot say so claims a completeness it does not have, at precisely the
+/// scale an operator would act on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportDrainView {
     pub rows: Vec<ImportDrainRowView>,
+    pub truncated: bool,
 }
 
 pub(crate) async fn import_drain(
     State(state): State<AppState>,
     _operator: OperatorContext,
 ) -> Result<Json<ImportDrainView>, APIError> {
-    let rows = BackofficeRepo::new(backoffice(&state)?)
+    let page = BackofficeRepo::new(backoffice(&state)?)
         .import_drain(IMPORT_DRAIN_LIMIT)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     Ok(Json(ImportDrainView {
-        rows: rows
+        rows: page
+            .runs
             .into_iter()
             .map(|row| ImportDrainRowView {
                 org: row.org,
@@ -441,6 +451,7 @@ pub(crate) async fn import_drain(
                 payload: row.payload,
             })
             .collect(),
+        truncated: page.truncated,
     }))
 }
 

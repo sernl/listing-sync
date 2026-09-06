@@ -696,9 +696,10 @@ async fn the_surface_is_closed_to_a_session_that_does_not_resolve(pool: PgPool) 
     );
 }
 
-/// The whole device loop over the wire, without a client existing yet: one
-/// device claims, a second device is refused the settle, and the holder's own
-/// settle is accepted.
+/// The device loop over the wire, without a client existing yet: one device
+/// claims, and a second device's settle is refused. The accepted half is
+/// asserted in
+/// `a_settle_from_the_holder_applies_the_verdict_and_settles_the_job_once`.
 ///
 /// The refusal is the point. The lease epoch is the fence and the device id is
 /// the holder, so a settle naming a run the caller is not in is refused rather
@@ -1414,6 +1415,118 @@ async fn a_settle_naming_an_epoch_the_item_has_moved_past_is_refused(pool: PgPoo
         StatusCode::CONFLICT,
         "the device holds the item but not at this epoch, and the epoch is the run: {}",
         String::from_utf8_lossy(&refused.body)
+    );
+}
+
+/// The holder's own settle applies the verdict, and the completion is written
+/// once.
+///
+/// Two halves, in this order on purpose. A second device settles the live
+/// lease first and the row is read afterwards, so a handler that applied the
+/// envelope before consulting the fence — or without consulting it at all —
+/// fails here rather than passing on the accepted half. Then the holder
+/// settles, and the assertions are the ones the route answered 202 without
+/// earning: the verdict reaches the row, the job's last item settling settles
+/// the job, and the seller's mail is queued exactly once.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_settle_from_the_holder_applies_the_verdict_and_settles_the_job_once(pool: PgPool) {
+    let lease = claimed(&pool).await;
+    register(&pool, &TOKEN_A, DESKTOP, "desktop").await;
+    connected(&pool, &TOKEN_A, DESKTOP).await;
+    let envelope = serde_json::json!({
+        "lease": lease,
+        "verdict": {
+            "outcome": "succeeded",
+            "failure_code": null,
+            "failure_detail": null,
+        },
+        // Deliberately not the wall this request is served at: the device's
+        // asserted instant has no column on `job_item`, so it must not reach
+        // `settled_at`, which means our receipt.
+        "at_ms": 1_600_000_000_000_i64,
+    });
+    let engine = engine_pool(&pool).await;
+
+    let refused = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{DESKTOP}/settle"),
+            token: &TOKEN_A,
+            body: Some(envelope.clone()),
+            wall: t1,
+        },
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::CONFLICT,
+        "the lease is live and this device is not its holder: {}",
+        String::from_utf8_lossy(&refused.body)
+    );
+    let (held, unsettled): (String, Option<String>) =
+        sqlx::query_as("SELECT state, outcome FROM job_item")
+            .fetch_one(&engine)
+            .await
+            .expect("the leased item reads");
+    assert_eq!(
+        (held.as_str(), unsettled.as_deref()),
+        ("leased", None),
+        "a refused settle writes nothing, so the fence is consulted before the verdict is"
+    );
+
+    let accepted = call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{LAPTOP}/settle"),
+            token: &TOKEN_A,
+            body: Some(envelope),
+            wall: t2,
+        },
+    )
+    .await;
+    assert_eq!(
+        accepted.status,
+        StatusCode::ACCEPTED,
+        "the holder's settle is accepted: {}",
+        String::from_utf8_lossy(&accepted.body)
+    );
+    let (state, outcome, settled_at): (String, Option<String>, Option<i64>) = sqlx::query_as(
+        "SELECT state, outcome, (extract(epoch FROM settled_at) * 1000)::bigint FROM job_item",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the settled item reads");
+    assert_eq!(
+        (state.as_str(), outcome.as_deref()),
+        ("settled", Some("succeeded")),
+        "the verdict the device sent is what the row now carries"
+    );
+    assert_eq!(
+        settled_at,
+        Some(t2().0),
+        "the instant is our receipt rather than the device's assertion, because \
+         `job_item` records one instant and it is ours"
+    );
+    let completions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM job_event WHERE kind = 'JobSettled'")
+            .fetch_one(&engine)
+            .await
+            .expect("the job events read");
+    assert_eq!(
+        completions, 1,
+        "the job's last item settling settles the job, which is what the device path \
+         never reached"
+    );
+    let queued: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM outbox_message WHERE topic = 'email.job_settled'")
+            .fetch_one(&engine)
+            .await
+            .expect("the outbox reads");
+    assert_eq!(
+        queued, 1,
+        "one settled job is one seller notification, deduped at the index"
     );
 }
 

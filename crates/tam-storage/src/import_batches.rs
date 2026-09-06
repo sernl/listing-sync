@@ -76,6 +76,18 @@ impl BatchState {
         }
     }
 
+    /// Whether a row of this batch may still be bound to bytes.
+    ///
+    /// Narrower than [`Self::is_open`] by exactly one state, and the state is
+    /// `Importing`: a commit in flight has already passed the gate that every
+    /// marketplace row holds a file, and a handle replaced under it would
+    /// either be created twice or not at all depending on which chunk claimed
+    /// the row first.
+    #[must_use]
+    pub const fn admits_attachment(self) -> bool {
+        matches!(self, Self::Parsed | Self::Attaching)
+    }
+
     /// Whether this state is one the "one open batch per organisation" index
     /// counts. Stated here rather than restated in SQL beside every query: the
     /// index's own predicate is the authority, and this is the reader's copy
@@ -101,10 +113,16 @@ impl BatchState {
 }
 
 /// Where one row of a batch stands.
+///
+/// `Creating` is the commit's own: a row whose product and mapping identifiers
+/// are reserved and whose product does not exist yet. It is what makes a
+/// resumed commit read whether it already created this row rather than mint a
+/// second product for it, which is the hazard migration 0058's header names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowState {
     Parsed,
     Attached,
+    Creating,
     Created,
     Published,
     Failed,
@@ -112,9 +130,10 @@ pub enum RowState {
 }
 
 impl RowState {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Parsed,
         Self::Attached,
+        Self::Creating,
         Self::Created,
         Self::Published,
         Self::Failed,
@@ -126,6 +145,7 @@ impl RowState {
         match self {
             Self::Parsed => "parsed",
             Self::Attached => "attached",
+            Self::Creating => "creating",
             Self::Created => "created",
             Self::Published => "published",
             Self::Failed => "failed",
@@ -133,10 +153,21 @@ impl RowState {
         }
     }
 
+    /// Whether this row may still be bound to bytes, or unbound from them.
+    ///
+    /// A row the parse refused can never be created, so binding to it would be
+    /// work the seller loses; a row the commit has claimed already names the
+    /// bytes it was created under.
+    #[must_use]
+    pub const fn admits_attachment(self) -> bool {
+        matches!(self, Self::Parsed | Self::Attached)
+    }
+
     fn from_db(raw: &str) -> Result<Self, StorageError> {
         match raw {
             "parsed" => Ok(Self::Parsed),
             "attached" => Ok(Self::Attached),
+            "creating" => Ok(Self::Creating),
             "created" => Ok(Self::Created),
             "published" => Ok(Self::Published),
             "failed" => Ok(Self::Failed),
@@ -249,6 +280,10 @@ pub struct ImportBatchDraftRecord {
     pub intent: RowIntent,
     pub draft: serde_json::Value,
     pub file: Option<RowFile>,
+    /// The thumbnail the upload generated beside the payload. Carried because
+    /// the create writes it and a resource created without one has no
+    /// thumbnail anywhere it is later listed.
+    pub cover: Option<RowFile>,
     pub state: RowState,
 }
 
@@ -307,14 +342,161 @@ pub enum BatchWrite {
     AlreadyOpen(Box<ImportBatchRecord>),
 }
 
+/// One row's address inside a batch.
+///
+/// The tab it came off and the seller's own spreadsheet row number, which are
+/// two thirds of `import_batch_row`'s primary key and never travel apart: a
+/// sheet without its ordinal names a tab and an ordinal without its sheet
+/// names a number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowAddress<'a> {
+    pub sheet: &'a str,
+    pub ordinal: u32,
+}
+
+/// The two handles a bind writes.
+///
+/// One value because the upload answers both at once and a row holding one
+/// without the other is a resource with a thumbnail of nothing, or none at
+/// all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowFiles<'a> {
+    pub payload: &'a RowFile,
+    pub cover: &'a RowFile,
+}
+
+/// How much of a batch holds bytes, and how much still needs them.
+///
+/// Both counts are over the rows a commit could still take -- `parsed` and
+/// `attached` -- so a settled batch's history does not move them. `awaiting`
+/// is D32's rule counted: a row that passed the parse and names a marketplace
+/// needs bytes whether it asked for draft or live, and a Teachouse row needs
+/// none. It is therefore the commit's own gate as well as the panel's readout,
+/// stated once so the two cannot disagree about which rows are outstanding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AttachCounts {
+    pub attached: u32,
+    pub awaiting: u32,
+}
+
+/// One row after a bind, with everything the panel renders without re-reading
+/// the batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundRow {
+    pub row: ImportBatchRowRecord,
+    pub batch_state: BatchState,
+    pub counts: AttachCounts,
+}
+
+/// What a bind did. None of the alternatives is an error variant, for the
+/// reason [`BatchWrite`] gives: each is a sentence the seller acts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindOutcome {
+    Bound(Box<BoundRow>),
+    /// This organisation holds no such batch, or the batch holds no such row.
+    /// One answer for both, because telling the two apart would say whether a
+    /// batch identifier a caller guessed exists.
+    NoSuchRow,
+    /// The batch takes no more files: it is settled, or a commit is already
+    /// running over it.
+    BatchClosed(BatchState),
+    /// The row takes no handle in the state it is in.
+    RowClosed(RowState),
+}
+
+/// What an unbind did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnbindOutcome {
+    /// The row holds no handle now. Answered whether or not it held one
+    /// before, because clearing what is already clear is what a double-clicked
+    /// button sends rather than a fault.
+    Cleared,
+    NoSuchRow,
+    BatchClosed(BatchState),
+}
+
+/// One row named by its address alone, as a refusal lists them.
+///
+/// Owned where [`RowAddress`] borrows, because this one travels out of the
+/// statement that read it and into the sentence a seller reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowRef {
+    pub sheet: String,
+    pub ordinal: u32,
+}
+
+/// How many rows a refusal names before it stops naming them.
+///
+/// The seller fixes the first few and presses the button again, so a list
+/// longer than a screen is a list nobody reads; the count beside it is the
+/// whole answer to "how many are left".
+const AWAITING_LISTED_MAX: i64 = 20;
+
+/// What opening a commit did.
+///
+/// None of the alternatives is an error variant, for the reason [`BatchWrite`]
+/// gives: each is a sentence the seller acts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitOpening {
+    /// The batch is `importing` and its rows may be claimed. Answered for the
+    /// chunk that moved it there and for every chunk after, because a commit
+    /// is chunked and only the first transition is a transition.
+    Open,
+    NoSuchBatch,
+    /// The batch is settled: imported, failed or abandoned. Carries the state,
+    /// because what the seller does next differs by which one it is.
+    BatchClosed(BatchState),
+    /// D32's gate: a row that passed the parse and names a marketplace holds
+    /// no bytes. The count is every such row and the list is the first
+    /// [`AWAITING_LISTED_MAX`] of them.
+    Awaiting {
+        count: u32,
+        rows: Vec<RowRef>,
+    },
+}
+
+/// One row the commit has claimed, with the identifiers reserved for it.
+///
+/// The draft rather than the report's columns, because this is what a create
+/// is built from; the two handles, because the create writes both; and the
+/// identifiers, because they are reserved before the create runs and are what
+/// makes a resumed pass finish this row rather than mint a second product for
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedRow {
+    pub sheet: String,
+    pub ordinal: u32,
+    pub inventory: Option<InventoryId>,
+    pub intent: RowIntent,
+    pub draft: serde_json::Value,
+    pub file: Option<RowFile>,
+    pub cover: Option<RowFile>,
+    pub product: ProductId,
+    /// Reserved exactly where the row names an inventory, which is what
+    /// `import_batch_row_mapping_follows_inventory` holds.
+    pub mapping: Option<MappingId>,
+}
+
+/// Where a batch's rows stand part way through a commit.
+///
+/// `outstanding` is the commit's own completion test: zero is done, and it
+/// counts the claimed-but-unfinished rows as well as the unclaimed ones, so a
+/// pass that crashed between the claim and the create leaves a batch that
+/// reads unfinished rather than one that reads complete with a row missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CommitCounts {
+    pub outstanding: u32,
+    pub created: u32,
+    pub failed: u32,
+}
+
 /// What one sweep pass settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SweepReport {
     /// Batches settled to `abandoned`.
     pub abandoned: u64,
-    /// Rows whose file handle was released. Zero until the bind route exists;
-    /// counted from the start so the pass reports what it did rather than what
-    /// it was expected to do.
+    /// Rows whose file handles were released, counted once per row rather
+    /// than once per handle.
     pub released: u64,
 }
 
@@ -679,7 +861,8 @@ impl ImportBatchRepo {
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
             "SELECT sheet, ordinal, inventory, intent, draft, \
-                    file_hash, file_kind, file_byte_len, state \
+                    file_hash, file_kind, file_byte_len, \
+                    cover_hash, cover_kind, cover_byte_len, state \
                FROM import_batch_row \
               WHERE org_id = $1 AND batch_id = $2 \
                 AND (sheet, ordinal) > ($3, $4) \
@@ -707,6 +890,7 @@ impl ImportBatchRepo {
                     intent: RowIntent::from_db(&row.intent)?,
                     draft: row.draft,
                     file: file_from_db(row.file_hash, row.file_kind, row.file_byte_len)?,
+                    cover: file_from_db(row.cover_hash, row.cover_kind, row.cover_byte_len)?,
                     state: RowState::from_db(&row.state)?,
                 })
             })
@@ -744,6 +928,213 @@ impl ImportBatchRepo {
         Ok(settled.rows_affected() == 1)
     }
 
+    /// Binds the bytes of one row: the payload the seller attached and the
+    /// cover the upload generated beside it.
+    ///
+    /// One transaction, because the two writes are one fact. The row moves to
+    /// `attached` and the batch moves `parsed -> attaching`, and a seller
+    /// watching a half-applied pair would see a batch still asking for its
+    /// first file beside a row that already holds one.
+    ///
+    /// Re-binding a row that already holds a handle replaces it, which is what
+    /// "every binding is reversible before the commit" means in practice: the
+    /// seller who matched the wrong file to a row fixes it by dropping the
+    /// right one on top.
+    ///
+    /// The row is locked before the batch, while the expiry sweep takes both in
+    /// one statement whose sibling CTEs Postgres orders as it likes, so a bind
+    /// racing the sweep over one batch can deadlock in a narrow window.
+    /// Postgres detects that and aborts one of the two; the caller's retry or
+    /// the next sweep pass finishes the work. Both are locked because a
+    /// concurrent abandon must settle either wholly before this bind or wholly
+    /// after it. A row exists only under a batch, so a missing row answers for
+    /// a missing batch too.
+    pub async fn bind_file(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        at: RowAddress<'_>,
+        files: RowFiles<'_>,
+    ) -> Result<BindOutcome, StorageError> {
+        let RowAddress { sheet, ordinal } = at;
+        let RowFiles { payload, cover } = files;
+        let ordinal = ordinal_to_db(ordinal)?;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+
+        let row_state = sqlx::query_scalar!(
+            "SELECT state FROM import_batch_row \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+              FOR UPDATE",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row_state) = row_state else {
+            return Ok(BindOutcome::NoSuchRow);
+        };
+        let Some(batch_state) = locked_batch_state(&mut tx, org, batch).await? else {
+            return Ok(BindOutcome::NoSuchRow);
+        };
+        // The batch's answer first, because it is the coarser fact: a seller
+        // whose import has been settled reads that rather than a sentence
+        // about one row of it.
+        if !batch_state.admits_attachment() {
+            return Ok(BindOutcome::BatchClosed(batch_state));
+        }
+        let row_state = RowState::from_db(&row_state)?;
+        if !row_state.admits_attachment() {
+            return Ok(BindOutcome::RowClosed(row_state));
+        }
+
+        let payload_hash = crate::codec::hash_to_db(payload.hash);
+        let cover_hash = crate::codec::hash_to_db(cover.hash);
+        sqlx::query!(
+            "UPDATE import_batch_row \
+                SET file_hash = $5, file_kind = $6, file_byte_len = $7, \
+                    cover_hash = $8, cover_kind = $9, cover_byte_len = $10, \
+                    state = 'attached' \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+            payload_hash.as_slice(),
+            payload.kind,
+            payload.byte_len,
+            cover_hash.as_slice(),
+            cover.kind,
+            cover.byte_len,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // Monotone, and deliberately so: a batch that has begun attaching has
+        // begun, and never walks back to `parsed` when its last handle is
+        // cleared. One fewer state transition is one fewer arm the console's
+        // exhaustive switch has to mean something by.
+        sqlx::query!(
+            "UPDATE import_batch SET state = 'attaching' \
+              WHERE org_id = $1 AND id = $2 AND state = 'parsed'",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        let written = sqlx::query!(
+            "SELECT sheet, ordinal, inventory, intent, problems, file_name, \
+                    COALESCE( \
+                        (SELECT array_agg(value #>> '{}' ORDER BY ordinality) \
+                           FROM jsonb_array_elements(draft -> 'labels') \
+                           WITH ORDINALITY AS named(value, ordinality) \
+                          WHERE jsonb_typeof(draft -> 'labels') = 'array'), \
+                        ARRAY[]::text[] \
+                    ) AS \"labels!\", \
+                    file_hash, file_kind, file_byte_len, state, product_id, mapping_id, \
+                    job_id, failure_detail \
+               FROM import_batch_row \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let row = ImportBatchRowRecord {
+            sheet: written.sheet,
+            ordinal: count_from_db(written.ordinal)?,
+            inventory: written
+                .inventory
+                .as_deref()
+                .map(inventory_from_db)
+                .transpose()?,
+            intent: RowIntent::from_db(&written.intent)?,
+            problems: written.problems,
+            labels: written.labels,
+            file_name: written.file_name,
+            file: file_from_db(written.file_hash, written.file_kind, written.file_byte_len)?,
+            state: RowState::from_db(&written.state)?,
+            product_id: written.product_id.map(|id| ProductId(uuid_from_db(id))),
+            mapping_id: written.mapping_id.map(|id| MappingId(uuid_from_db(id))),
+            job_id: written.job_id.map(uuid_from_db),
+            failure_detail: written.failure_detail,
+        };
+        let counts = counts_in(&mut tx, org, batch).await?;
+        let batch_state = if batch_state == BatchState::Parsed {
+            BatchState::Attaching
+        } else {
+            batch_state
+        };
+        tx.commit().await?;
+        Ok(BindOutcome::Bound(Box::new(BoundRow {
+            row,
+            batch_state,
+            counts,
+        })))
+    }
+
+    /// Clears the handles one row holds and returns it to `parsed`.
+    ///
+    /// The batch does not follow it back, and the two rows are locked in
+    /// [`Self::bind_file`]'s order. See there for both reasons.
+    pub async fn unbind_file(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        at: RowAddress<'_>,
+    ) -> Result<UnbindOutcome, StorageError> {
+        let RowAddress { sheet, ordinal } = at;
+        let ordinal = ordinal_to_db(ordinal)?;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+
+        let held = sqlx::query_scalar!(
+            "SELECT state FROM import_batch_row \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+              FOR UPDATE",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if held.is_none() {
+            return Ok(UnbindOutcome::NoSuchRow);
+        }
+        let Some(batch_state) = locked_batch_state(&mut tx, org, batch).await? else {
+            return Ok(UnbindOutcome::NoSuchRow);
+        };
+        if !batch_state.admits_attachment() {
+            return Ok(UnbindOutcome::BatchClosed(batch_state));
+        }
+
+        // The state predicate rather than a refusal read off `held`: a row the
+        // parse refused holds no handle to clear, so clearing nothing is the
+        // honest answer rather than a second way to say the row is refused.
+        sqlx::query!(
+            "UPDATE import_batch_row \
+                SET file_hash = NULL, file_kind = NULL, file_byte_len = NULL, \
+                    cover_hash = NULL, cover_kind = NULL, cover_byte_len = NULL, \
+                    state = 'parsed' \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+                AND state IN ('parsed', 'attached')",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(UnbindOutcome::Cleared)
+    }
+
     /// Settles up to `batch` expired batches to `abandoned` and releases the
     /// file handles their rows hold.
     ///
@@ -757,7 +1148,8 @@ impl ImportBatchRepo {
     /// seller told to attach files to a batch that has already lost them.
     /// Releasing the handle is not yet deleting the bytes — a blob has no
     /// deletion path in this repository — so the pass answers what it released
-    /// rather than what it erased.
+    /// rather than what it erased. Both handles go together: a row holding a
+    /// cover for a payload it no longer names is a thumbnail of nothing.
     pub async fn sweep_pass(
         &self,
         cutoff: Timestamp,
@@ -774,10 +1166,11 @@ impl ImportBatchRepo {
                ),
                released AS (
                    UPDATE import_batch_row r
-                      SET file_hash = NULL, file_kind = NULL, file_byte_len = NULL
+                      SET file_hash = NULL, file_kind = NULL, file_byte_len = NULL,
+                          cover_hash = NULL, cover_kind = NULL, cover_byte_len = NULL
                      FROM doomed d
                     WHERE r.org_id = d.org_id AND r.batch_id = d.id
-                      AND r.file_hash IS NOT NULL
+                      AND (r.file_hash IS NOT NULL OR r.cover_hash IS NOT NULL)
                    RETURNING r.org_id
                ),
                settled AS (
@@ -800,6 +1193,430 @@ impl ImportBatchRepo {
             released: u64::try_from(counted.released).unwrap_or(0),
         })
     }
+
+    /// Opens a commit over this batch, or answers why it will not run.
+    ///
+    /// The gate and the transition are one transaction because they are one
+    /// decision: a seller who unbinds a row between the two would otherwise
+    /// have a batch moved to `importing` — which admits no more files — with a
+    /// marketplace row holding none. D32's rule is read through the same
+    /// [`counts_in`] the bind route answers with, so the panel's "still
+    /// waiting" readout and the commit's own gate cannot disagree about which
+    /// rows are outstanding.
+    ///
+    /// A second chunk finds the batch already `importing` and opens too: the
+    /// commit is chunked, and only the first transition is a transition.
+    pub async fn open_commit(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+    ) -> Result<CommitOpening, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(state) = locked_batch_state(&mut tx, org, batch).await? else {
+            return Ok(CommitOpening::NoSuchBatch);
+        };
+        if !state.is_open() {
+            return Ok(CommitOpening::BatchClosed(state));
+        }
+        let awaiting = counts_in(&mut tx, org, batch).await?.awaiting;
+        if awaiting > 0 {
+            let rows = awaiting_rows(&mut tx, org, batch).await?;
+            return Ok(CommitOpening::Awaiting {
+                count: awaiting,
+                rows,
+            });
+        }
+        sqlx::query!(
+            "UPDATE import_batch SET state = 'importing' \
+              WHERE org_id = $1 AND id = $2 AND state IN ('parsed', 'attaching')",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(CommitOpening::Open)
+    }
+
+    /// Claims the next page of rows, reserving a product and — where the row
+    /// names an inventory — a mapping identifier for each.
+    ///
+    /// The reservation is the whole point and it is why this is a write rather
+    /// than a read. A pass that created first and wrote a breadcrumb second
+    /// would mint a fresh product on every attempt, so a browser closed between
+    /// the two leaves a row a later pass creates again: a second charged
+    /// product in the seller's catalogue for one spreadsheet row, which is the
+    /// hazard migration 0058's own header names. With the identifier reserved,
+    /// a later pass finds the row already `creating`, reads whether that
+    /// product exists, and either records the breadcrumb or re-runs the create
+    /// under the same identifier.
+    ///
+    /// `creating` is therefore in the predicate as well as `parsed` and
+    /// `attached`: a row left claimed by a killed pass is finished by the next
+    /// chunk rather than stranded, and `COALESCE` is what keeps its reserved
+    /// identifier rather than replacing it. `SKIP LOCKED` is what keeps two
+    /// chunks running at once — a seller with the page open in two tabs — from
+    /// claiming one row twice. It does not cover the window between one
+    /// chunk's claim committing and its create finishing; what covers that is
+    /// the caller reading whether the reserved product exists before creating
+    /// it, so the worst a doubled pickup produces is a refused second insert
+    /// rather than a second product.
+    ///
+    /// The identifiers are minted here rather than in the statement so the
+    /// column keeps taking values this workspace generated, and one page's
+    /// worth is minted whether or not the page fills: an unused identifier is
+    /// four words of stack, and asking the database how many rows it would
+    /// claim before claiming them is the race this statement exists to avoid.
+    pub async fn claim_page(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        limit: i64,
+    ) -> Result<Vec<ClaimedRow>, StorageError> {
+        let reserved = usize::try_from(limit.max(0)).unwrap_or(0);
+        let products: Vec<uuid::Uuid> = (0..reserved).map(|_| uuid::Uuid::new_v4()).collect();
+        let mappings: Vec<uuid::Uuid> = (0..reserved).map(|_| uuid::Uuid::new_v4()).collect();
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let claimed = sqlx::query!(
+            r#"WITH page AS (
+                   SELECT sheet, ordinal,
+                          row_number() OVER (ORDER BY sheet, ordinal) AS slot
+                     FROM (
+                         SELECT sheet, ordinal
+                           FROM import_batch_row
+                          WHERE org_id = $1 AND batch_id = $2
+                            AND state IN ('parsed', 'attached', 'creating')
+                          ORDER BY sheet, ordinal
+                          LIMIT $3
+                            FOR UPDATE SKIP LOCKED
+                     ) held
+               )
+               UPDATE import_batch_row r
+                  SET state = 'creating',
+                      product_id = COALESCE(r.product_id, ($4::uuid[])[p.slot::int]),
+                      mapping_id = CASE WHEN r.inventory IS NULL THEN NULL
+                                        ELSE COALESCE(r.mapping_id, ($5::uuid[])[p.slot::int])
+                                   END
+                 FROM page p
+                WHERE r.org_id = $1 AND r.batch_id = $2
+                  AND r.sheet = p.sheet AND r.ordinal = p.ordinal
+            RETURNING r.sheet, r.ordinal, r.inventory, r.intent, r.draft,
+                      r.file_hash, r.file_kind, r.file_byte_len,
+                      r.cover_hash, r.cover_kind, r.cover_byte_len,
+                      r.product_id AS "product_id!", r.mapping_id"#,
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            limit,
+            &products,
+            &mappings,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        let mut rows: Vec<ClaimedRow> = claimed
+            .into_iter()
+            .map(|row| {
+                Ok(ClaimedRow {
+                    sheet: row.sheet,
+                    ordinal: count_from_db(row.ordinal)?,
+                    inventory: row
+                        .inventory
+                        .as_deref()
+                        .map(inventory_from_db)
+                        .transpose()?,
+                    intent: RowIntent::from_db(&row.intent)?,
+                    draft: row.draft,
+                    file: file_from_db(row.file_hash, row.file_kind, row.file_byte_len)?,
+                    cover: file_from_db(row.cover_hash, row.cover_kind, row.cover_byte_len)?,
+                    product: ProductId(uuid_from_db(row.product_id)),
+                    mapping: row.mapping_id.map(|id| MappingId(uuid_from_db(id))),
+                })
+            })
+            .collect::<Result<_, StorageError>>()?;
+        // An UPDATE promises nothing about the order it returns rows in, and
+        // the seller's report is read in sheet-and-row order; sorting here is
+        // what keeps a chunk's outcomes in the order the sheet was filled.
+        rows.sort_by(|left, right| {
+            left.sheet
+                .cmp(&right.sheet)
+                .then_with(|| left.ordinal.cmp(&right.ordinal))
+        });
+        Ok(rows)
+    }
+
+    /// Records that the product reserved for this row now exists.
+    ///
+    /// Answers whether a row moved. The `creating` predicate is the guard: a
+    /// row two passes both claimed is recorded once and the second answer is
+    /// `false`, which is a fact the caller counts rather than a fault.
+    ///
+    /// Takes no instant, because no column takes one: `import_batch_row`
+    /// records what a row became and never when, and a parameter no statement
+    /// reads is weight the next reader has to discharge.
+    pub async fn record_created(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        at: RowAddress<'_>,
+    ) -> Result<bool, StorageError> {
+        let RowAddress { sheet, ordinal } = at;
+        let ordinal = ordinal_to_db(ordinal)?;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let written = sqlx::query!(
+            "UPDATE import_batch_row SET state = 'created' \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+                AND state = 'creating'",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(written.rows_affected() == 1)
+    }
+
+    /// Records that this row's create was refused, in the words the seller
+    /// reads on the report.
+    ///
+    /// The reserved identifiers go with it, because
+    /// `import_batch_row_created_total` ties them to the three states that
+    /// hold a product and a failed row holds none. Nothing was created under
+    /// them — the caller only reaches this where the create refused — so
+    /// releasing them strands nothing.
+    pub async fn record_row_failed(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        at: RowAddress<'_>,
+        detail: &str,
+    ) -> Result<bool, StorageError> {
+        let RowAddress { sheet, ordinal } = at;
+        let ordinal = ordinal_to_db(ordinal)?;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let written = sqlx::query!(
+            "UPDATE import_batch_row \
+                SET state = 'failed', failure_detail = $5, \
+                    product_id = NULL, mapping_id = NULL \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+                AND state = 'creating'",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+            detail,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(written.rows_affected() == 1)
+    }
+
+    /// Where this batch's rows stand, which is what a chunk answers with and
+    /// what decides whether the batch is finished.
+    pub async fn pending_counts(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+    ) -> Result<CommitCounts, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let counts = commit_counts_in(&mut tx, org, batch).await?;
+        tx.commit().await?;
+        Ok(counts)
+    }
+
+    /// Settles a finished commit: `imported` where every row created, `failed`
+    /// where any did not.
+    ///
+    /// The counts are read inside the settling transaction rather than handed
+    /// in, so the sentence a failed batch carries counts the rows the database
+    /// holds rather than the rows one chunk happened to see. A batch that is
+    /// not `importing` is answered as it stands and settled again by nothing,
+    /// which is what two chunks finishing the last row at once looks like.
+    pub async fn settle(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        at: Timestamp,
+    ) -> Result<BatchState, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(held) = locked_batch_state(&mut tx, org, batch).await? else {
+            return Err(StorageError::Inconsistent {
+                reason: "an import settled a batch that is no longer readable".to_owned(),
+            });
+        };
+        if held != BatchState::Importing {
+            tx.commit().await?;
+            return Ok(held);
+        }
+        let counts = commit_counts_in(&mut tx, org, batch).await?;
+        let settled = if counts.failed == 0 {
+            BatchState::Imported
+        } else {
+            BatchState::Failed
+        };
+        let detail = (counts.failed > 0).then(|| {
+            format!(
+                "{} of {} rows did not create",
+                counts.failed,
+                counts.failed.saturating_add(counts.created)
+            )
+        });
+        sqlx::query!(
+            "UPDATE import_batch SET state = $3, settled_at = $4, failure_detail = $5 \
+              WHERE org_id = $1 AND id = $2 AND state = 'importing'",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            settled.as_str(),
+            timestamp_to_db(at)?,
+            detail.as_deref(),
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(settled)
+    }
+}
+
+/// One batch's state, locked, inside the caller's own transaction.
+///
+/// Read after the row it belongs to rather than before, which is the lock
+/// order [`ImportBatchRepo::bind_file`] states its reason for.
+async fn locked_batch_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    batch: Uuid,
+) -> Result<Option<BatchState>, StorageError> {
+    let held = sqlx::query_scalar!(
+        "SELECT state FROM import_batch WHERE org_id = $1 AND id = $2 FOR UPDATE",
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    held.as_deref().map(BatchState::from_db).transpose()
+}
+
+/// How many of a batch's outstanding rows hold bytes, and how many still need
+/// them, read inside the caller's own transaction so a bind's answer counts
+/// the write it just made.
+async fn counts_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    batch: Uuid,
+) -> Result<AttachCounts, StorageError> {
+    let counted = sqlx::query!(
+        r#"SELECT
+               count(*) FILTER (
+                   WHERE state IN ('parsed', 'attached') AND file_hash IS NOT NULL
+               ) AS "attached!",
+               count(*) FILTER (
+                   WHERE state IN ('parsed', 'attached')
+                     AND file_hash IS NULL
+                     AND inventory IS NOT NULL
+               ) AS "awaiting!"
+             FROM import_batch_row
+            WHERE org_id = $1 AND batch_id = $2"#,
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(AttachCounts {
+        attached: attach_count_from_db(counted.attached)?,
+        awaiting: attach_count_from_db(counted.awaiting)?,
+    })
+}
+
+/// The first few rows that still need bytes, as a refusal names them.
+///
+/// The predicate is [`counts_in`]'s `awaiting` filter, and the two are read in
+/// the same transaction, so the count a seller is told and the rows they are
+/// shown are one answer rather than two taken a moment apart.
+async fn awaiting_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    batch: Uuid,
+) -> Result<Vec<RowRef>, StorageError> {
+    let named = sqlx::query!(
+        "SELECT sheet, ordinal FROM import_batch_row \
+          WHERE org_id = $1 AND batch_id = $2 \
+            AND state IN ('parsed', 'attached') \
+            AND file_hash IS NULL \
+            AND inventory IS NOT NULL \
+          ORDER BY sheet, ordinal \
+          LIMIT $3",
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+        AWAITING_LISTED_MAX,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    named
+        .into_iter()
+        .map(|row| {
+            Ok(RowRef {
+                sheet: row.sheet,
+                ordinal: count_from_db(row.ordinal)?,
+            })
+        })
+        .collect()
+}
+
+/// Where a batch's rows stand, read inside the caller's own transaction so a
+/// chunk's answer counts the writes it just made.
+///
+/// A failed row is one this commit failed, not one the parse refused: a
+/// refusal is stored in `problems` and writes no `failure_detail`, and
+/// `import_batch_row_failure_detail` holds that detail to failed rows, so the
+/// column is the discriminator rather than a state list that cannot tell the
+/// two apart. That matters for the settle: a batch whose only failures came
+/// off the parse is `imported`, because every row the commit was given did
+/// create.
+async fn commit_counts_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    batch: Uuid,
+) -> Result<CommitCounts, StorageError> {
+    let counted = sqlx::query!(
+        r#"SELECT
+               count(*) FILTER (
+                   WHERE state IN ('parsed', 'attached', 'creating')
+               ) AS "outstanding!",
+               count(*) FILTER (WHERE state IN ('created', 'published')) AS "created!",
+               count(*) FILTER (
+                   WHERE state = 'failed' AND failure_detail IS NOT NULL
+               ) AS "failed!"
+             FROM import_batch_row
+            WHERE org_id = $1 AND batch_id = $2"#,
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(CommitCounts {
+        outstanding: attach_count_from_db(counted.outstanding)?,
+        created: attach_count_from_db(counted.created)?,
+        failed: attach_count_from_db(counted.failed)?,
+    })
+}
+
+/// A count of rows as Postgres answers one. Bounded by
+/// `tam_limits::import::ROWS_PER_UPLOAD_MAX` long before `u32` binds, so a
+/// value past it is a row set no upload could have written.
+fn attach_count_from_db(raw: i64) -> Result<u32, StorageError> {
+    u32::try_from(raw).map_err(|_| StorageError::CorruptRow {
+        reason: format!("an import batch holds {raw} rows, which no upload can have written"),
+    })
 }
 
 /// The three file columns as one value, matching

@@ -37,9 +37,9 @@ use tam_storage::{
     TptBaseRepo,
 };
 use tam_types::{
-    Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileRole, InventoryId,
-    JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile,
-    ProductId, ScanOutcome, Stamp, Timestamp, Title, Uuid,
+    Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileRole, ImportedTerm,
+    InventoryId, JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule,
+    ProductFile, ProductId, ScanOutcome, Stamp, Timestamp, Title, Uuid,
 };
 
 use tam_authoring::refusal_of;
@@ -203,7 +203,7 @@ fn resolve_named(
     Ok(file)
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     use core::fmt::Write;
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -245,10 +245,30 @@ pub enum ArchiveParam {
     KeepWhole,
 }
 
+/// What the bytes are being uploaded for, as the query parameter spells it.
+///
+/// The route is the only place the whole file is in memory and the only place
+/// nothing has been sealed or charged yet, so it is the only place a picture
+/// slot can be refused before a seller has paid for the mistake. Nothing else
+/// on the request distinguishes a thumbnail from a payload: both arrive as raw
+/// bytes, and both send `archive=keep_whole`.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadSlot {
+    /// No claim about what the bytes are for. The pipeline's own kind probe is
+    /// the whole of the gate, as it was for every upload before this.
+    #[default]
+    Any,
+    /// A cover or thumbnail slot, which holds a picture and nothing else.
+    Image,
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub struct UploadParams {
     #[serde(default)]
     pub archive: ArchiveParam,
+    #[serde(default)]
+    pub slot: UploadSlot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +281,19 @@ pub struct UploadedView {
     /// without a second call.
     pub stored_bytes: i64,
     pub storage_bytes_max: u64,
+}
+
+/// What a slot that holds a picture will accept, in the seller's own terms.
+///
+/// One sentence for the upload, the create and the edit, because a seller who
+/// meets the refusal twice about one file should not read two answers. It
+/// names the three formats [`tam_pipeline::probe::probe_kind`] admits rather
+/// than the four the read route can draw: WebP is servable and not uploadable,
+/// so naming it would send a seller to a file this server refuses. The full
+/// stop is deliberate — the console appends "Upload the file again." to an
+/// `upload_rejected` sentence.
+fn not_a_picture(slot: &str) -> String {
+    format!("{slot} has to be a picture: a JPEG, a PNG or a GIF.")
 }
 
 fn ingest_refusal(error: &IngestError) -> APIError {
@@ -307,6 +340,20 @@ pub(crate) async fn upload(
         return Err(coded(
             StatusCode::UNPROCESSABLE_ENTITY,
             "the upload carried no bytes",
+            APIErrorCode::UploadRejected,
+        ));
+    }
+    // Before the quota read rather than after it: these bytes are wrong
+    // whatever headroom the tenant has, and a quota sentence would send a
+    // seller to free space for a file that was never going to be accepted.
+    // The same probe the ingest below runs, so the upload and the create
+    // cannot come to different conclusions about one file.
+    if params.slot == UploadSlot::Image
+        && tam_pipeline::probe::probe_kind(&body) != Some(tam_types::FileKind::Image)
+    {
+        return Err(coded(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &not_a_picture("A thumbnail"),
             APIErrorCode::UploadRejected,
         ));
     }
@@ -384,6 +431,148 @@ fn quota_refusal(kind: QuotaKind, used: i64, limit: u64) -> APIError {
                 "limit": limit,
             })),
     )
+}
+
+// ------------------------------------------------------------ picture slots
+
+/// How a refusal names the resource's own thumbnail, so a seller with a cover
+/// and four TPT slots learns which one to replace.
+const COVER_SLOT: &str = "A resource's thumbnail";
+/// How a refusal names one of the sidecar's four slots, for the same reason.
+const TPT_THUMBNAIL_SLOT: &str = "A TPT thumbnail";
+
+/// The hashes a body names in a role that holds a picture, each paired with
+/// the name its refusal carries.
+///
+/// The cover and the four TPT thumbnail slots, and no other role. A payload or
+/// preview file is the seller's own product — a PDF, a PPTX, a ZIP — and the
+/// upload's kind probe is the whole of its gate. `video_preview_hash` on the
+/// same sidecar is a video slot rather than a picture one and is not checked
+/// here.
+///
+/// A thumbnail digest is already well-formed by the time this reads it, since
+/// `record_of` reads the same strings through `UploadRef::new` and refuses a
+/// malformed one as an authoring refusal, so that arm keeps the conversion
+/// total rather than catching anything a caller can reach.
+fn picture_slots(
+    cover: Option<&FileHandle>,
+    thumbnails: &[String],
+) -> Result<Vec<(ContentHash, &'static str)>, APIError> {
+    let covers = cover.into_iter().map(|handle| {
+        parse_hash(&handle.hash)
+            .map(|hash| (hash, COVER_SLOT))
+            .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))
+    });
+    let slots = thumbnails.iter().map(|digest| {
+        parse_hash(digest)
+            .map(|hash| (hash, TPT_THUMBNAIL_SLOT))
+            .ok_or_else(|| validation("a thumbnail's hash is not a 64-character hex digest"))
+    });
+    covers.chain(slots).collect()
+}
+
+/// Refuses every claimed hash this organisation has sealed no bytes for.
+///
+/// The catalogue insert upserts a `blob` row rather than requiring one, so a
+/// fabricated hash would otherwise mint a row pointing at no object and charge
+/// the tenant for storage that does not exist.
+fn refuse_unheld(
+    claimed: &[ContentHash],
+    lengths: &std::collections::HashMap<ContentHash, i64>,
+) -> Result<(), APIError> {
+    let unknown: Vec<String> = claimed
+        .iter()
+        .filter(|hash| !lengths.contains_key(hash))
+        .map(|hash| hex_encode(&hash.0))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(APIError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        APIErrorEntry::new("a file handle names bytes this organisation has not uploaded")
+            .code(APIErrorCode::UploadRejected)
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({ "hashes": unknown })),
+    ))
+}
+
+fn slot_refusal(hash: ContentHash, message: &str) -> APIError {
+    APIError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        APIErrorEntry::new(message)
+            .code(APIErrorCode::UploadRejected)
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({ "hashes": [hex_encode(&hash.0)] })),
+    )
+}
+
+/// Refuses a role grant whose bytes are not a picture.
+///
+/// The cover row and the four thumbnail slots are what a browser fetches and
+/// draws, and until this ran the only thing behind them was the client's own
+/// word: [`FileHandle::resolve`] writes the `kind` string the body sent, and a
+/// thumbnail digest carries no kind at all. The read side already refuses to
+/// stream a non-image, so a crafted call stored a slot that says filled and
+/// draws nothing.
+///
+/// The bytes are read back rather than looked up because nothing records what
+/// kind a blob is: `blob` holds a length and a sealed object, the seal is
+/// whole-file, and no prefix read is available. `lengths` is the caller's own
+/// `stored_hashes` answer, so the read is bounded before it is made and no
+/// second query is needed; the bound is
+/// [`crate::product::thumbnail_slot_bytes_max`], TPT's measured ceiling on a
+/// slot image and the only one this system has measured.
+async fn image_bytes_only(
+    state: &AppState,
+    org: OrgId,
+    slots: &[(ContentHash, &'static str)],
+    lengths: &std::collections::HashMap<ContentHash, i64>,
+) -> Result<(), APIError> {
+    if slots.is_empty() {
+        return Ok(());
+    }
+    let ceiling = crate::product::thumbnail_slot_bytes_max().ok_or_else(|| {
+        state.internal("the committed TPT capture did not parse; a slot's ceiling is unknown")
+    })?;
+    let blobs = state.blobs.clone().ok_or_else(|| {
+        APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new(
+                "this deployment holds no key-encryption key or object-store root, so a \
+                 thumbnail's bytes cannot be read back and nothing was written",
+            )
+            .code(APIErrorCode::BlobStoreUnavailable)
+            .kind(APIErrorKind::Internal),
+        )
+    })?;
+    let repo = BlobRepo::new(
+        state.pool.clone(),
+        LocalObjectStore::new(blobs.root.clone()),
+        blobs.kek.clone(),
+    );
+    for (hash, slot) in slots {
+        // A hash the caller did not find held cannot reach here — `refuse_unheld`
+        // runs first — and treating an absent length as unbounded refuses rather
+        // than reads, which is the safe direction for a total match.
+        let stored = lengths.get(hash).copied().unwrap_or(i64::MAX);
+        if u64::try_from(stored).unwrap_or(u64::MAX) > ceiling {
+            return Err(slot_refusal(
+                *hash,
+                &format!("{slot} is larger than the {ceiling} bytes a picture slot holds."),
+            ));
+        }
+        let bytes = repo
+            .get(org, *hash)
+            .await
+            // The row is held by this organisation, which the caller has just
+            // established, so a blob the store cannot produce is ours.
+            .map_err(|error| state.internal(&error.to_string()))?;
+        if tam_pipeline::probe::probe_kind(&bytes) != Some(tam_types::FileKind::Image) {
+            return Err(slot_refusal(*hash, &not_a_picture(slot)));
+        }
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------ create
@@ -479,6 +668,18 @@ pub struct CreateProductBody {
     /// which is why every read of that table is an outer join.
     #[serde(default)]
     pub tpt_base: Option<TptBaseInput>,
+    /// Source values in axes this model does not yet type, kept verbatim as
+    /// `CanonicalProduct::native_residue`.
+    ///
+    /// Defaulted and empty from the create form, which authors in this
+    /// model's own axes. The spreadsheet import is what fills it: a marketplace
+    /// tab carries a column for every native its registry declares, and most of
+    /// them — Tes `curriculum`, `mainAge`, `primaryCategory` — bind to no
+    /// equivalence axis and so have no other field here to land in. Dropping
+    /// them would lose a cell the seller filled and the parse accepted, which
+    /// is the one thing a bulk path must not do quietly.
+    #[serde(default)]
+    pub natives: Vec<ImportedTerm>,
 }
 
 const fn markdown() -> CopyFormat {
@@ -682,6 +883,37 @@ pub(crate) async fn create_product(
     context: OrgContext,
     Json(body): Json<CreateProductBody>,
 ) -> Result<(StatusCode, Json<CreatedProductView>), APIError> {
+    let product = ProductId(fresh_uuid());
+    let mappings: Vec<MappingId> = body
+        .inventories
+        .iter()
+        .map(|_| MappingId(fresh_uuid()))
+        .collect();
+    let created = create_one(&state, context.org, &body, product, &mappings).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+/// Creates one product under identifiers the caller already holds.
+///
+/// Split out of the handler above so that a second authoring path takes this
+/// one rather than a copy of it: the spreadsheet import commits a row by
+/// building a [`CreateProductBody`] and calling this, so every rule the create
+/// form meets -- the title cap, the price constructor, the required-field
+/// check, the held-bytes and picture-slot checks, the listing quota -- is one
+/// implementation with two callers rather than two that agree on the day they
+/// are written.
+///
+/// The identifiers are the caller's because the import reserves them before it
+/// creates anything: a pass resumed after a closed browser has to be able to
+/// finish the row it already claimed rather than mint a second product for it.
+/// The handler above mints its own and is unchanged by the arrangement.
+pub(crate) async fn create_one(
+    state: &AppState,
+    org: OrgId,
+    body: &CreateProductBody,
+    product: ProductId,
+    mappings: &[MappingId],
+) -> Result<CreatedProductView, APIError> {
     checked_title(&body.title)?;
     // Named before the general refusal below, because the two are different
     // situations and only this one is about something the seller just chose. A
@@ -724,11 +956,11 @@ pub(crate) async fn create_product(
 
     let now = (state.wall)();
     let products = ProductRepo::new(state.pool.clone());
-    let quota = quota_for(&state, context.org).await?;
+    let quota = quota_for(state, org).await?;
     let live = products
-        .live_count(context.org)
+        .live_count(org)
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?;
     if live >= i64::from(quota.listings_max) {
         return Err(quota_refusal(
             QuotaKind::Listings,
@@ -737,59 +969,37 @@ pub(crate) async fn create_product(
         ));
     }
 
-    // Every handle must name bytes this tenant has actually uploaded. The
-    // catalogue insert upserts a blob row rather than requiring one, so a
-    // fabricated hash would otherwise mint a row pointing at no object and
-    // charge the tenant for storage that does not exist.
-    //
-    // The sidecar's thumbnail hashes are checked here too, and were not before.
-    // They travel as bare digests rather than as `FileHandle`s, so they missed
-    // the chain below and reached `product_tpt_base` unverified: a create could
-    // name four digests this organisation never uploaded and the row would
-    // record them, leaving the TPT write pointing at bytes that do not exist.
+    // Every handle must name bytes this tenant has actually uploaded, and the
+    // roles a browser draws must name bytes that are a picture. The sidecar's
+    // thumbnail hashes travel as bare digests rather than as `FileHandle`s, so
+    // before the held check reached them they arrived at `product_tpt_base`
+    // unverified: a create could name four digests this organisation never
+    // uploaded and the row would record them, leaving the TPT write pointing
+    // at bytes that do not exist.
+    let pictures = picture_slots(
+        body.cover.as_ref(),
+        body.tpt_base
+            .as_ref()
+            .map_or(&[][..], |base| &base.thumbnail_hashes),
+    )?;
     let mut claimed: Vec<ContentHash> = body
         .payload
         .iter()
-        .chain(body.cover.iter())
         .chain(body.previews.iter())
         .map(|handle| {
             parse_hash(&handle.hash)
                 .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))
         })
         .collect::<Result<Vec<_>, APIError>>()?;
-    // The digest is already well-formed by the time this runs — `record_of`
-    // above reads the same strings through `UploadRef::new` and refuses a
-    // malformed one as an authoring refusal — so this arm exists to keep the
-    // conversion total rather than to catch anything a caller can reach today.
-    // What it does catch is the held-bytes question, which nothing asked.
-    for hash in body
-        .tpt_base
-        .iter()
-        .flat_map(|base| base.thumbnail_hashes.iter())
-    {
-        claimed
-            .push(parse_hash(hash).ok_or_else(|| {
-                validation("a thumbnail's hash is not a 64-character hex digest")
-            })?);
-    }
-    let known = products
-        .stored_hashes(context.org, &claimed)
+    claimed.extend(pictures.iter().map(|(hash, _)| *hash));
+    let lengths: std::collections::HashMap<ContentHash, i64> = products
+        .stored_hashes(org, &claimed)
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
-    let unknown: Vec<String> = claimed
-        .iter()
-        .filter(|hash| !known.contains(hash))
-        .map(|hash| hex_encode(&hash.0))
+        .map_err(|error| storage_fault(state, &error))?
+        .into_iter()
         .collect();
-    if !unknown.is_empty() {
-        return Err(APIError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new("a file handle names bytes this organisation has not uploaded")
-                .code(APIErrorCode::UploadRejected)
-                .kind(APIErrorKind::Validation)
-                .detail(serde_json::json!({ "hashes": unknown })),
-        ));
-    }
+    refuse_unheld(&claimed, &lengths)?;
+    image_bytes_only(state, org, &pictures, &lengths).await?;
 
     let mut names = std::collections::HashMap::new();
     // Non-empty by construction wherever it exists: the option carries the
@@ -845,13 +1055,12 @@ pub(crate) async fn create_product(
         }
     };
 
-    let product = ProductId(fresh_uuid());
     products
         .insert_named(
-            context.org,
+            org,
             &CanonicalProduct {
                 id: product,
-                org: context.org,
+                org,
                 title: Title(body.title.clone()),
                 body: ListingCopy {
                     body: body.body.clone(),
@@ -864,37 +1073,45 @@ pub(crate) async fn create_product(
                 grades,
                 price,
                 rights,
-                // Nothing authored here came off a marketplace, so there is no
-                // source value in an untyped axis to keep.
-                native_residue: vec![],
+                // Empty from the create form, which authors in this
+                // model's own axes and has no source values to keep. The
+                // spreadsheet import fills it: a sheet cell in an axis this
+                // model does not yet type is kept verbatim rather than
+                // dropped, which is what this field is for.
+                native_residue: body.natives.clone(),
             },
             &names,
             now,
         )
         .await
-        .map_err(|error| create_fault(&state, &error))?;
+        .map_err(|error| create_fault(state, &error))?;
 
     if let Some(record) = &sidecar {
         // After the product row, because the sidecar's foreign key names it.
         TptBaseRepo::new(state.pool.clone())
-            .upsert(context.org, product, record, now)
+            .upsert(org, product, record, now)
             .await
-            .map_err(|error| create_fault(&state, &error))?;
+            .map_err(|error| create_fault(state, &error))?;
     }
 
-    let mappings = MappingRepo::new(state.pool.clone());
+    let bindings = MappingRepo::new(state.pool.clone());
     let mut written = Vec::with_capacity(body.inventories.len());
-    for inventory in &body.inventories {
-        let mapping = MappingId(fresh_uuid());
-        mappings
+    for (slot, inventory) in body.inventories.iter().enumerate() {
+        // One identifier per inventory, by position. A caller that supplied
+        // fewer than it named is ours rather than a seller's, and answering it
+        // as an internal fault is what keeps this total without a panic.
+        let mapping = *mappings.get(slot).ok_or_else(|| {
+            state.internal("a create was handed fewer mapping identifiers than it names platforms")
+        })?;
+        bindings
             .insert(
-                context.org,
-                &unbound_mapping(context.org, product, *inventory, mapping, price),
+                org,
+                &unbound_mapping(org, product, *inventory, mapping, price),
                 0,
                 now,
             )
             .await
-            .map_err(|error| storage_fault(&state, &error))?;
+            .map_err(|error| storage_fault(state, &error))?;
         written.push(MappingView {
             inventory: *inventory,
             mapping,
@@ -929,7 +1146,7 @@ pub(crate) async fn create_product(
             .collect::<Result<Vec<_>, APIError>>()?;
         let wrote = elections
             .record_answered(
-                context.org,
+                org,
                 &AnsweredElection {
                     product,
                     inventory: election.inventory,
@@ -951,19 +1168,16 @@ pub(crate) async fn create_product(
                 | StorageError::DuplicateIdempotencyKey { .. }
                 | StorageError::AttemptInFlight
                 | StorageError::MappingAlreadyBound
-                | StorageError::ListingAlreadyBound) => storage_fault(&state, &other),
+                | StorageError::ListingAlreadyBound) => storage_fault(state, &other),
             })?;
         recorded += usize::from(wrote);
     }
 
-    Ok((
-        StatusCode::CREATED,
-        Json(CreatedProductView {
-            product,
-            mappings: written,
-            elections_recorded: recorded,
-        }),
-    ))
+    Ok(CreatedProductView {
+        product,
+        mappings: written,
+        elections_recorded: recorded,
+    })
 }
 
 /// A product insert whose one seller-reachable failure is a handle whose
@@ -1378,6 +1592,24 @@ pub(crate) async fn patch_product(
             Some(record_of(&draft)?)
         }
     };
+    // The sidecar is replaced whole, so the digests it carries are a role
+    // grant exactly as the create's are — and this route asked nothing of
+    // them. An edit could name digests this organisation never uploaded, which
+    // the create refuses, and could point a thumbnail slot at a worksheet.
+    // Refused before the update, so a rejected edit leaves the product and its
+    // stored thumbnails as they stood.
+    if let Some(base) = &body.tpt_base {
+        let pictures = picture_slots(None, &base.thumbnail_hashes)?;
+        let claimed: Vec<ContentHash> = pictures.iter().map(|(hash, _)| *hash).collect();
+        let lengths: std::collections::HashMap<ContentHash, i64> = products
+            .stored_hashes(context.org, &claimed)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            .into_iter()
+            .collect();
+        refuse_unheld(&claimed, &lengths)?;
+        image_bytes_only(&state, context.org, &pictures, &lengths).await?;
+    }
 
     let edit = ProductEdit {
         title,

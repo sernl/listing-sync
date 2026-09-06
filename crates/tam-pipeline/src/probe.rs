@@ -11,14 +11,23 @@ const PDF_MAGIC: &[u8] = b"%PDF-";
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 const JPEG_MAGIC: &[u8] = &[0xFF, 0xD8, 0xFF];
-const GIF_MAGIC: &[u8] = b"GIF8";
+/// The two signatures a GIF actually begins with. `GIF8` alone would admit
+/// `GIF8` followed by anything, and a file this probe calls an image is one
+/// the image-serving routes then have to name and a renderer has to decode.
+/// The upload admits only GIF87a and GIF89a, because those are the two
+/// signatures the blob route can name and serve.
+const GIF87A_MAGIC: &[u8] = b"GIF87a";
+const GIF89A_MAGIC: &[u8] = b"GIF89a";
 
 #[must_use]
 pub fn probe_kind(bytes: &[u8]) -> Option<FileKind> {
     if bytes.starts_with(PDF_MAGIC) {
         return Some(FileKind::Pdf);
     }
-    if bytes.starts_with(PNG_MAGIC) || bytes.starts_with(JPEG_MAGIC) || bytes.starts_with(GIF_MAGIC)
+    if bytes.starts_with(PNG_MAGIC)
+        || bytes.starts_with(JPEG_MAGIC)
+        || bytes.starts_with(GIF87A_MAGIC)
+        || bytes.starts_with(GIF89A_MAGIC)
     {
         return Some(FileKind::Image);
     }
@@ -120,6 +129,20 @@ mod tests {
     #[test]
     fn a_plain_zip_probes_as_zip_not_a_document() {
         assert_eq!(probe_kind(&plain_zip()), Some(FileKind::Zip));
+    }
+
+    #[test]
+    fn both_real_gif_signatures_probe_as_image() {
+        assert_eq!(probe_kind(b"GIF87a\x08\x00"), Some(FileKind::Image));
+        assert_eq!(probe_kind(b"GIF89a\x08\x00"), Some(FileKind::Image));
+    }
+
+    /// A four-byte `GIF8` prefix is not a GIF, and admitting one stored a file
+    /// that reported as an image and then could not be served or drawn.
+    #[test]
+    fn a_truncated_gif_signature_is_not_an_image() {
+        assert_eq!(probe_kind(b"GIF8ZZ\x08\x00"), None);
+        assert_eq!(probe_kind(b"GIF8"), None);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_batch_row SET file_hash = NULL, file_kind = NULL, file_byte_len = NULL, cover_hash = NULL, cover_kind = NULL, cover_byte_len = NULL, state = 'parsed' WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 AND state IN ('parsed', 'attached')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aa72dd800d945d5ca023dfa726e70549a85b17832b0999607529b208c872b277"
+}
