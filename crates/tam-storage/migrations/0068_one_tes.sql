@@ -43,7 +43,36 @@ END $$;
 INSERT INTO marketplace_inventory (code, marketplace, transport_class)
 VALUES ('tes', 'tes', 'seller_device');
 
--- 2. Refuse rather than merge silently.
+-- 2a. An unbound Tes mapping with nothing ever attempted is an intent tick
+--     from the retired Curriculum control, not a listing: no remote id, no
+--     write attempt, no job item, no candidate. Where a product carries such
+--     ticks beside another Tes row, the ticks go and one row survives: a
+--     bound one, else the GB one, else the oldest, because that is the row
+--     that names a listing. Two BOUND Tes rows on one product are a seller to
+--     speak to, and 2b refuses them.
+WITH ranked AS (
+    SELECT org_id, id,
+           row_number() OVER (
+               PARTITION BY org_id, product_id
+               ORDER BY (binding_state = 'bound') DESC,
+                        (inventory = 'tes_gb') DESC,
+                        created_at, id) AS place
+      FROM mapping
+     WHERE inventory IN ('tes_gb', 'tes_us', 'tes_nz')
+)
+DELETE FROM mapping tick
+ USING ranked
+ WHERE tick.org_id = ranked.org_id AND tick.id = ranked.id AND ranked.place > 1
+   AND tick.binding_state = 'unbound'
+   AND tick.remote_url IS NULL AND tick.remote_numeric_id IS NULL
+   AND NOT EXISTS (SELECT 1 FROM job_item ji
+                    WHERE ji.org_id = tick.org_id AND ji.mapping_id = tick.id)
+   AND NOT EXISTS (SELECT 1 FROM write_attempt wa
+                    WHERE wa.org_id = tick.org_id AND wa.mapping_id = tick.id)
+   AND NOT EXISTS (SELECT 1 FROM binding_candidate bc
+                    WHERE bc.org_id = tick.org_id AND bc.mapping_id = tick.id);
+
+-- 2b. Refuse rather than merge silently.
 DO $$
 DECLARE
     offenders text;

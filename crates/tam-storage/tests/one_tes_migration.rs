@@ -1,12 +1,17 @@
 //! The one-Tes migration refuses rather than merges.
 //!
-//! A seller holding one product on two Tes inventories has two live listings
-//! on Tes, and rewriting both rows to `tes` would violate
+//! A seller holding one product BOUND on two Tes inventories has two live
+//! listings on Tes, and rewriting both rows to `tes` would violate
 //! `mapping_one_per_inventory` -- or, worse, silently drop a binding to a
 //! resource that still exists on the marketplace. The migration raises and
 //! names the organisation instead, which is the behaviour
 //! `docs/design/decisions.md` ("Tes is one marketplace with no regions,
 //! 2026-09-12") records.
+//!
+//! An UNBOUND Tes row with nothing ever attempted is a different thing: the
+//! tick the retired Curriculum control left on a draft. Production held
+//! exactly that on 2026-09-12 (one product ticked GB, US and NZ, never sent),
+//! and the migration drops such ticks itself, keeping one row per product.
 //!
 //! The schema this asserts against no longer exists in the repository's head
 //! state, so the test builds it: every migration before `0068_one_tes` is
@@ -46,13 +51,12 @@ async fn schema_before_one_tes(pool: &PgPool) {
     );
 }
 
-#[sqlx::test(migrations = false)]
-async fn the_one_tes_migration_refuses_an_org_holding_one_product_on_two_tes_inventories(
-    pool: PgPool,
-) {
-    schema_before_one_tes(&pool).await;
-
-    let mut connection = pool.acquire().await.expect("a connection");
+/// The organisation, its product and one payload file, on the pre-0068 schema.
+#[expect(
+    clippy::expect_used,
+    reason = "a fixture that will not seed is a broken fixture, not a failed assertion"
+)]
+async fn seed_org_and_product(connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>) {
     connection
         .as_mut()
         .execute(
@@ -76,28 +80,101 @@ async fn the_one_tes_migration_refuses_an_org_holding_one_product_on_two_tes_inv
         )
         .await
         .expect("the organisation, its product and its payload seed");
+}
+
+enum Binding {
+    Bound,
+    Unbound,
+}
+
+/// One Tes mapping on the fixture product. A bound one carries the remote
+/// listing a Tes read-back handed over, so the migration sees a real
+/// listing; an unbound one carries nothing, which is what a form tick is.
+#[expect(
+    clippy::panic,
+    reason = "a fixture that will not seed is a broken fixture, not a failed assertion"
+)]
+async fn seed_mapping(
+    connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    id: char,
+    inventory: &str,
+    binding: Binding,
+) {
+    let (state, remote, seen) = match binding {
+        Binding::Bound => (
+            "bound",
+            format!("'tes', 'https://www.tes.com/teaching-resource/x-{id}'"),
+            "now()",
+        ),
+        Binding::Unbound => ("unbound", "NULL, NULL".to_owned(), "NULL"),
+    };
+    connection
+        .as_mut()
+        .execute(
+            format!(
+                "INSERT INTO mapping (org_id, id, product_id, inventory, marketplace,
+                                      binding_state, remote_id_kind, remote_url, first_seen_at,
+                                      verify_state, verify_stale_since, normaliser_version,
+                                      policy_title, policy_description, policy_price,
+                                      policy_taxonomy, policy_grades, policy_files,
+                                      price_rule_kind, price_explicit_kind, publish_mode,
+                                      lifecycle_state, created_at, updated_at)
+                     VALUES ('{ORG}', 'cccccccc-cccc-4ccc-8ccc-cccccccccc0{id}',
+                             '{PRODUCT}', '{inventory}', 'tes', '{state}', {remote}, {seen},
+                             'stale', {seen}, 1,
+                             'managed', 'managed', 'managed', 'managed', 'managed',
+                             'managed', 'explicit', 'free', 'dry_run', 'absent',
+                             now(), now());"
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the {inventory} mapping seeds: {error}"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_one_tes_migration_drops_unbound_ticks_and_keeps_one_row_per_product(pool: PgPool) {
+    schema_before_one_tes(&pool).await;
+    let mut connection = pool.acquire().await.expect("a connection");
+    seed_org_and_product(&mut connection).await;
+    for (id, inventory) in [('1', "tes_gb"), ('2', "tes_us"), ('3', "tes_nz")] {
+        seed_mapping(&mut connection, id, inventory, Binding::Unbound).await;
+    }
+
+    connection
+        .as_mut()
+        .execute(ONE_TES)
+        .await
+        .expect("three unbound ticks on one product are one intent, not three listings");
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id::text, inventory FROM mapping WHERE org_id = $1::uuid ORDER BY id",
+    )
+    .bind(ORG)
+    .fetch_all(connection.as_mut())
+    .await
+    .expect("the surviving mappings read");
+    assert_eq!(
+        rows,
+        vec![(
+            "cccccccc-cccc-4ccc-8ccc-cccccccccc01".to_owned(),
+            "tes".to_owned()
+        )],
+        "the GB tick survives as the one Tes row and the other two are gone"
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_one_tes_migration_refuses_an_org_holding_one_product_on_two_tes_inventories(
+    pool: PgPool,
+) {
+    schema_before_one_tes(&pool).await;
+
+    let mut connection = pool.acquire().await.expect("a connection");
+    seed_org_and_product(&mut connection).await;
 
     for (id, inventory) in [('1', "tes_gb"), ('2', "tes_nz")] {
-        connection
-            .as_mut()
-            .execute(
-                format!(
-                    "INSERT INTO mapping (org_id, id, product_id, inventory, marketplace,
-                                          binding_state, verify_state, normaliser_version,
-                                          policy_title, policy_description, policy_price,
-                                          policy_taxonomy, policy_grades, policy_files,
-                                          price_rule_kind, price_explicit_kind, publish_mode,
-                                          lifecycle_state, created_at, updated_at)
-                         VALUES ('{ORG}', 'cccccccc-cccc-4ccc-8ccc-cccccccccc0{id}',
-                                 '{PRODUCT}', '{inventory}', 'tes', 'unbound', 'stale', 1,
-                                 'managed', 'managed', 'managed', 'managed', 'managed',
-                                 'managed', 'explicit', 'free', 'dry_run', 'absent',
-                                 now(), now());"
-                )
-                .as_str(),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("the {inventory} mapping seeds: {error}"));
+        seed_mapping(&mut connection, id, inventory, Binding::Bound).await;
     }
 
     let refusal = connection
